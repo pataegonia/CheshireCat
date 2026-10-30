@@ -3,7 +3,7 @@ import unicodedata
 
 import pytest
 
-from guardrail.preprocess import normalize, skeleton
+from guardrail.preprocess import _CHO, _DOUBLE_JONG, _JONG, normalize, skeleton
 
 # 보이지 않는 문자는 소스에서 읽히도록 코드포인트로 만든다
 ZWSP, SHY, WJ, VS16, FVS1, VS17 = map(chr, (0x200B, 0x00AD, 0x2060, 0xFE0F, 0x180B, 0xE0101))
@@ -81,6 +81,12 @@ def test_normalize(raw, expected):
         # 같은 모음을 겹쳐 쓴 우회
         ("ㅈㅏㅏㅅㅏㄹ", "자살"),
         ("ㅅㅣㅣㅂㅏㄹ", "시발"),
+        # 완성 음절 뒤에 같은 모음을 늘여 쓴 우회(실제 입력기로 나오는 형태)
+        ("시ㅣ발", "시발"),
+        ("자ㅏㅏ살", "자살"),
+        ("씨ㅣㅣ발", "씨발"),
+        ("주ㅜ거", "주거"),
+        ("가ㅓ", "가ㅓ"),  # 중성이 다르면 그대로
         # 앞 단어와 뒤 초성이 공백 제거 후 합쳐지지 않는다
         ("나 ㅈㅅ할래", "나ㅈㅅ할래"),
         ("너 ㄲㅈ", "너ㄲㅈ"),
@@ -114,9 +120,30 @@ def test_random_unicode_never_crashes_and_normalize_is_idempotent():
         range(0x3131, 0x3164),
         range(0xFFA0, 0xFFDD),
         range(0x1100, 0x1200),
+        range(0x3200, 0x3280),  # 원문자 자모
+        range(0x1D400, 0x1D800),  # 수학 영숫자
+        range(0xE0000, 0xE0200),  # 태그·변형 선택자 보충
     ]
     for _ in range(3000):
         text = "".join(chr(rng.choice(rng.choice(pools))) for _ in range(rng.randint(0, 12)))
         once = normalize(text)
         assert normalize(once) == once
         skeleton(text)
+
+
+def _to_jamo(syllable: str) -> str:
+    """완성 음절을 호환 자모로 풀어 쓴다(겹받침도 두 글자로)."""
+    code = ord(syllable) - 0xAC00
+    cho, jung, jong = code // 588, code % 588 // 28, code % 28
+    double = {v: k[0] + k[1] for k, v in _DOUBLE_JONG.items()}
+    final = _JONG[jong].strip()
+    return _CHO[cho] + chr(ord("ㅏ") + jung) + double.get(final, final)
+
+
+def test_split_jamo_round_trip_on_random_syllables():
+    rng = random.Random(1)
+    for _ in range(3000):
+        word = "".join(chr(0xAC00 + rng.randrange(11172)) for _ in range(rng.randint(1, 4)))
+        split = "".join(_to_jamo(s) for s in word)
+        assert normalize(split) == word
+        assert skeleton(split) == skeleton(word)

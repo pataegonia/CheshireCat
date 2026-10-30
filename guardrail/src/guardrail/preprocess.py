@@ -116,6 +116,16 @@ def _compose_all(text: str, keep_emoticons: bool) -> str:
     return _JAMO_RUN.sub(lambda m: _compose_run(m.group(), keep_emoticons), text)
 
 
+_STRETCHED_VOWEL = re.compile("([가-힣])([ㅏ-ㅣ])")
+
+
+def _drop_stretched_vowel(m: re.Match[str]) -> str:
+    """음절 바로 뒤의 모음이 그 음절의 중성과 같으면 늘여 쓴 것으로 보고 지운다."""
+    syllable, vowel = m.groups()
+    jung = (ord(syllable) - 0xAC00) % 588 // 28
+    return syllable if ord(vowel) - ord("ㅏ") == jung else m.group()
+
+
 def normalize(text: str) -> str:
     """LLM에 보내는 형태. 보이지 않는 문자 제거 → 전각·반각 접기 → 자모 조합."""
     composed = _compose_all(_prepare(text, full_nfkc=False), keep_emoticons=True)
@@ -125,9 +135,11 @@ def normalize(text: str) -> str:
 def skeleton(text: str) -> str:
     """어휘 사전 매칭 전용 뷰. 재현율 우선이라 이모티콘 예외 없이 조합한다.
 
-    NFKC(①·²·𝟏 → 숫자) → 공백·기호·숫자 제거 → 같은 모음 반복 축약 → 자모 조합 → 소문자.
+    NFKC(①·²·𝟏 → 숫자) → 공백·기호·숫자 제거 → 같은 모음 반복 축약 → 자모 조합
+    → 음절 뒤에 늘여 쓴 같은 모음 제거(시ㅣ발) → 소문자.
     라틴 문자는 남긴다(영어 공격 문구 매칭). 지운 구분자를 넘는 매칭 규칙은 ADR-0001 참고.
     """
     s = _FILLER.sub("", _prepare(text, full_nfkc=True))
     s = _compose_all(_REPEATED_VOWEL.sub(r"\1", s), keep_emoticons=False)
+    s = _STRETCHED_VOWEL.sub(_drop_stretched_vowel, s)
     return unicodedata.normalize("NFC", s).casefold()

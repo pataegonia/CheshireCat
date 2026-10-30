@@ -15,7 +15,7 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["docs"]
+extend-exclude = ["docs"]  # 조사 메모 안의 코드 블록은 기록이라 손대지 않는다
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

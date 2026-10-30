@@ -16,6 +16,7 @@
 | [R8](R8-production-ops-and-evaluation.md) | 운영 사양(지연·장애·로그·롤아웃)과 평가 사양(표본 수·검정) |
 | [R9](R9-student-safety-and-law.md) | 위기 대응 표준, 실제 사고, 국내 법 조문, 요구사항 REQ-01–36, 응답 템플릿 |
 | [R10](R10-architecture-options.md) | 다른 LLM 가드레일 구조 비교, 병렬 2호출 구조 제안 (10/30) |
+| [R11](R11-role-split-and-output-latency.md) | LLM + Jev 역할 분담, 출력 판정 지연 줄이기, 장애 처리와 부하 (10/30) |
 | `src/guardrail/preprocess.py` | 한국어 정규화 구현 (조사 단계 참고 코드를 옮겨 고침, ADR-0001) |
 
 조사 방법: firecrawl·exa MCP가 없어 WebSearch·WebFetch로 진행. openai.com, Khan Academy 도움말 일부는 접근이 막혀 2차 자료로 대신했다(메모마다 표시).

@@ -12,4 +12,4 @@
 | [0005](0005-sentence-level-grounding-with-quote-check.md) | 문장 단위 근거 판정 + 인용 실재 확인 | proposed | 2026-10-30 |
 | [0006](0006-evaluation-scope.md) | 평가 범위: 정적 세트 + 하네스, 확장 평가는 P2 | proposed | 2026-10-30 |
 | [0007](0007-parallel-two-call-structure.md) | 입력 판정과 생성 병렬, 요청당 판정 2회, 차단 권한 4곳 | proposed | 2026-10-30 |
-| [0008](0008-jev-judge-backend-option.md) | 판정 백엔드 선택지로 TypeSafe Jev | proposed | 2026-10-30 |
+| [0008](0008-input-role-split-jev.md) | 입력 단계 역할 분담: Jev는 탈옥·인젝션 고신뢰 차단, LLM은 정책 판단 | proposed | 2026-10-30 |

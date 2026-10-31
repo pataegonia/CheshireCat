@@ -1,6 +1,6 @@
 # GP4 발표 — 세부 플랜
 
-작성 2026-10-30 · 담당 danielcho02 · 상태: v14 (적대 검토 9회차까지 반영, master v14 기준)
+작성 2026-10-30 · 담당 danielcho02 · 상태: v15 (적대 검토 10회차까지 반영, master v15 기준)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/21(토)–11/25(수, 최종 발표) · 마일스톤: Guardrail GP4 발표
 
 ## 1. 목표와 관문
@@ -73,7 +73,7 @@
 - `src/guardrail/eval/demo.py`: 시나리오 로드, 실시간 실행·녹화·재생, 화면 출력(약 150줄)
 - `data/seed/demo.yaml`: 시나리오 목록(항목 id, 제목, 돌릴 설정)
 - `data/dev/demo_items.jsonl`: 고른 항목 4–5개를 §4.6 형식 그대로 모은 로컬 전용 파일. `data/dev/*` gitignore 규칙에 걸려 커밋되지 않는다(공격·위기 원문 미커밋, [master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)). `demo.yaml`의 `data`가 이 파일을 가리키고, 실시간과 `--replay` 모두 학생 메시지를 여기서 읽는다. 발표 장비에는 git이 아니라 직접 복사하고, 발표 뒤 지운다
-- `configs/demo-outage.yaml`: `default.yaml` 복사본에 `faults: {input_judge: timeout, exchange_judge: timeout}`만 더한 판정 장애 재현 설정([master-plan §4.3](../master-plan.md#43-llm-호출-llmpy) 평가 전용 장애 주입, `mode: eval`, `stages.crisis: true`). 두 판정은 호출 없이 timeout을 돌려받고 생성만 실제로 부른다. 마감을 줄여 장애를 내지 않는다. ⑤가 실패한 상태라 이 설정의 응답에는 모두 연락처 줄이 붙고(⑤ 전에 끝나는 ③ 규칙 차단만 빼고), 위기 템플릿은 ② 위기 어휘가 잡은 항목에만 나온다([master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy))
+- `configs/demo-outage.yaml`: `default.yaml` 복사본에 `faults: {input_judge: timeout, exchange_judge: timeout, jev: timeout}`만 더한 판정 장애 재현 설정([master-plan §4.3](../master-plan.md#43-llm-호출-llmpy) 평가 전용 장애 주입, `mode: eval`, `stages.crisis: true`). 두 판정은 호출 없이 timeout을 돌려받고 생성만 실제로 부른다. 마감을 줄여 장애를 내지 않는다. ⑤가 실패한 상태라 이 설정의 응답에는 모두 연락처 줄이 붙고(⑤ 전에 끝나는 ③ 규칙 차단만 빼고), 위기 템플릿은 ② 위기 어휘가 잡은 항목에만 나온다([master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy))
 - `results/demo-replay.jsonl`: 녹화본. 화면에 나간 문자열만 담는다. 커밋 전 원문 확인(작업 순서 5)을 마친 것만 커밋한다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy) results 예외)
 - `tests/test_demo.py`
 
@@ -152,7 +152,7 @@ S4.1 합계(예산용): 안정성 확인 약 490 + 실시간 전체 실행 3회(
 1. `rule_id="RULE_SECRET"`, `reason_code="REASON_SECRET"`, `confidence=0.987`, `request_id="REQ_SECRET"`인 Verdict로 만든 화면에 그 값과 단계 이름이 없다.
 2. 입력 판정이 refuse면 화면 문구가 `templates.yaml`의 그 범주 거절 문구와 같다.
 3. `demo-outage.yaml`로 만든 Guard(생성은 FakeLLM)에서 ② 위기 어휘가 잡는 위기 항목의 화면은 위기 템플릿이고 `crisis_resources.yaml`의 T1 연락처가 모두 있다. 어휘가 놓치는(⑤만 잡는) 위기 항목과 위기가 아닌 항목(③ 규칙에 걸리지 않는 것)의 화면에도, 통과한 답변이든 기본 응답(⑧ 실패 안내)이든 짧은 연락처 줄이 붙는다([master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy) ⑤ 실패 시 모든 응답).
-4. `demo-outage.yaml`과 `default.yaml`의 차이는 `faults: {input_judge: timeout, exchange_judge: timeout}` 한 키뿐이고, 둘 다 `mode: eval`, `stages.crisis: true`다(서비스 모드는 `faults`를 거부한다).
+4. `demo-outage.yaml`과 `default.yaml`의 차이는 `faults: {input_judge: timeout, exchange_judge: timeout, jev: timeout}` 한 키뿐이고(S2.10이 Jev를 켰어도 장애 데모가 실제 Jev를 부르지 않게), 둘 다 `mode: eval`, `stages.crisis: true`다(서비스 모드는 `faults`를 거부한다).
 5. 홀드아웃 경로·`split: holdout`·NC 라이선스 항목이면 `load_scenarios`가 거부한다.
 6. `--replay`는 호출하면 예외를 내는 LLM을 넣어도 끝까지 돌고 녹화본과 같은 화면(학생 메시지는 `demo_items.jsonl`에서)을 낸다. 그 파일이 없으면 종료 2다.
 7. 생성이 `ServerError`인 시나리오만 녹화본으로 바뀌고 표시가 붙는다.
@@ -279,7 +279,7 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 
 **수용 기준**
 - [ ] "ablation 표, 임계값별 과잉 거절–공격 통과 곡선, 요청당 비용·지연 표"가 CSV·PNG·SVG로 있다([GR-15](../PRD.md#gr-15-평가-하네스-p0)).
-- [ ] 공격 차단율·과잉 거절률·근거 이탈 탐지율·근거 오탐률·출처 정확도가 `t1`에 무방비·가드 두 열로 있다([GG2](../PRD.md#2-목표와-비목표)).
+- [ ] 공격 차단율·과잉 거절률·근거 이탈 탐지율·근거 오탐률·출처 정확도가 `t1`에 무방비·가드 두 열로 있다([GG2](../PRD.md#2-목표와-비목표)). 근거 세 행의 무방비 칸은 "N/A(검사 없음)"다(무방비는 ⑧을 돌리지 않아 탐지·오탐·출처 정확도를 잴 대상이 없다. `figures --check`도 이 값을 그대로 맞춘다).
 - [ ] §7 표기: 합격선은 점추정, CI 함께, 범주별 Clopper-Pearson 하한, 씨앗 59개 미만(`n_seeds`) "주장 불가", 위기 "누락 0/N, 95% 상한 3/N", 과잉 거절 분해, 인프라 폴백률과 폭주 조건, 설정 비교는 McNemar + Holm([§7](../PRD.md#7-지표와-합격선)).
 - [ ] 근거 이탈 탐지율을 7개 오류 유형별로 보인다(§7 "함께 보고").
 - [ ] 모든 숫자 셀에 `source`가 있고 `--check` 차이 0건(관문).

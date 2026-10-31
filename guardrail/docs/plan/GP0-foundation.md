@@ -1,6 +1,6 @@
 # GP0 기반 — 세부 플랜
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v14 (적대 검토 9회차까지 반영, master v14 기준)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v15 (적대 검토 10회차까지 반영, master v15 기준)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 10/30(금)–11/3(화) · 마일스톤: Guardrail GP0 기반
 
 ## 1. 목표와 관문
@@ -27,6 +27,7 @@
 
 - 슬라이스 합계 38h + S1.1 준비 2h = **40h**([master-plan §5](../master-plan.md#5-슬라이스-목록), 모두 P0). 슬라이스별 시간은 §5 그대로다.
 - **10/31 재기준**: 10/30에는 문서만 커밋했다. 10/30 행(S0.1 남은 일, S0.2 착수)과 서브에이전트 ①·②는 시작하지 못했다. 남은 일은 39h(S0.1 1 + S0.2–S0.8 36 + S1.1 준비 2)이고, 10/31–11/3 용량은 36h(8·9·9·10)라 3h가 넘친다.
+- 10/31이 계획 검토로 끝나 구현이 0h면 11/1 아침에 같은 방식으로 다시 재기준한다: 모자라는 시간만큼 S0.4·S0.6을 11/4로 넘기고 [GP1 §2](GP1-output-guard.md#2-용량-점검) 컷 표를 위에서부터 더 쓴다(관문의 무방비 베이스라인은 `--fake`로라도 11/3에 낸다).
 - 그래서 **S0.8(3h)을 11/4(수) 오전으로 넘긴다**(master-plan §5의 여유 밸브, 관문 밖). 이것으로 [GP1 §2](GP1-output-guard.md#2-용량-점검) 컷 표의 "S0.8이 11/4로 밀림" 행(3h)이 발동한다. 그 행의 ①–③을 위에서부터 적용한다. 남은 36h는 용량과 같아 GP0 안에 여유가 없다.
 - S1.1 준비 2h(본인): 청크 고르기, 주입 지침 초안, `build_grounding.py` 골격·테스트. 범위와 산출물은 [GP1 문서](GP1-output-guard.md)가 정한다. S0.5(스키마)와 대체 교재 검토(11/1) 뒤에만 할 수 있다.
 - 임계 경로 S0.2 → S0.3 → S0.6 → S0.7은 미루지 않는다.
@@ -99,10 +100,10 @@ gh issue list --label guardrail --state all --limit 50
 - `src/guardrail/pipeline.py`: `Guard` 골격 / `src/guardrail/__init__.py`: `Guard`와 타입 재노출
 - `configs/default.yaml`, `configs/unguarded.yaml`
 - `pyproject.toml`·`uv.lock`: `uv add pydantic pyyaml`, `uv add --dev hypothesis anyio`
-- `tests/test_config.py`, `tests/test_pipeline.py`
+- `tests/test_config.py`, `tests/test_pipeline.py`, `tests/fakes.py`(이 슬라이스는 최소 `FakeTutor`(정해진 청크·답을 돌려주는 `TutorAdapter`)만 만든다. S0.3이 같은 파일에 `FakeLLM`·`FakeClock`을 더하고, S2.5가 `FakeTutor`에 완료 시점 조절을 더한다)
 
 **작업 순서**
-- [ ] 1. 테스트 먼저: 설정 검증 실패 사례(서비스 모드 위기 끔·`faults`·`GUARD_LOG_HMAC_KEY` 없음, 모르는 키), `overrides`, `${ENV}` 치환, `config_hash` 안정성, 켰지만 구현 안 된 토글(`check_toggles`와 `Guard` 생성 둘 다), `input.pii` 없이 켠 `input.jev`, Verdict 불변식(`modified` 전환·부분 `check_input` 합법 포함), `Verdict.request_id`가 호출마다 다름(`respond()` 두 번 → 서로 다른 uuid4), 무방비 `respond`·`check_*`(`check_output` stages = `input_verdict.stages` + 출력 쪽 4개, `generate`의 `detail["chars"]`), 무방비 `system_extra == ""`
+- [ ] 1. 테스트 먼저: 설정 검증 실패 사례(서비스 모드 위기 끔·PII 끔·`faults`·`GUARD_LOG_HMAC_KEY` 없음, 모르는 키), `overrides`, `${ENV}` 치환, `config_hash` 안정성, 켰지만 구현 안 된 토글(`check_toggles`와 `Guard` 생성 둘 다), `input.pii` 없이 켠 `input.jev`, Verdict 불변식(`modified` 전환·부분 `check_input` 합법 포함), `Verdict.request_id`가 호출마다 다름(`respond()` 두 번 → 서로 다른 uuid4), 무방비 `respond`·`check_*`(`check_output` stages = `input_verdict.stages` + 출력 쪽 4개, `generate`의 `detail["chars"]`), 무방비 `system_extra == ""`
 - [ ] 2. 의존성 추가, `uv.lock` 커밋
 - [ ] 3. `types.py` → `config.py`와 YAML 2개 → `pipeline.py`
 - [ ] 4. `ecc:type-design-analyzer` 검토, ruff·pytest green → PR
@@ -123,7 +124,7 @@ gh issue list --label guardrail --state all --limit 50
   - `deadlines_s{input_judge, exchange_judge, generator, jev, attack_judge, tutor_retrieve}`. `attack_judge`는 10.0이다.
   - `thresholds.lambda`는 예약어라 `lambda_: float = Field(0.9, alias="lambda")`.
   - GP0에서는 `pipeline`·`policy`·`tutor`·`service_log`·`thresholds`·`context_turns`를 검증만 하고 쓰지 않는다. 동작은 그 키를 쓰는 슬라이스가 붙인다.
-- 검증 규칙([§4.4](../master-plan.md#44-설정-configsyaml) "단계 켜기 규칙"): `mode: service`면 `stages.crisis: true`이고 `faults`가 비어 있고 환경변수 `GUARD_LOG_HMAC_KEY`가 있어야 한다(없으면 변수 이름만 담은 검증 오류, 값은 어떤 메시지에도 넣지 않는다). 위기를 끈 설정은 평가 모드(`unguarded.yaml`, `configs/exp/*.yaml`)에서만 쓴다. 다른 단계의 켜짐 여부는 위기와 묶지 않는다(GP1은 위기·입력을 끄고 출력만 켠 `configs/exp/gp1-output.yaml`로 돈다).
+- 검증 규칙([§4.4](../master-plan.md#44-설정-configsyaml) "단계 켜기 규칙"): `mode: service`면 `stages.crisis: true`이고 `stages.input.pii: true`이고(마스킹 없이 LLM에 보내지 않게, GR-03) `faults`가 비어 있고 환경변수 `GUARD_LOG_HMAC_KEY`가 있어야 한다(없으면 변수 이름만 담은 검증 오류, 값은 어떤 메시지에도 넣지 않는다). 위기를 끈 설정은 평가 모드(`unguarded.yaml`, `configs/exp/*.yaml`)에서만 쓴다. 다른 단계의 켜짐 여부는 위기와 묶지 않는다(GP1은 위기·입력을 끄고 출력만 켠 `configs/exp/gp1-output.yaml`로 돈다).
 - `load_config(path, overrides=None)`: YAML을 읽고 `overrides`(`{"thresholds.G": 0.6}` 같은 점 경로)를 검증 **전에** 덮어쓴다. 그래서 모르는 경로는 `extra="forbid"`로 실패하고, `config_hash`에 덮어쓴 값이 들어간다. `Guard.from_config(path, overrides=None)`가 이것을 쓴다([§4.2](../master-plan.md#42-공개-api-pipelinepy)). CLI `--set`은 S0.7이 붙인다.
 - `${VAR}` 치환은 `models` 아래 값에만 한다. 없으면 `None`(오프라인 테스트용)이고, 실제 호출 전에 `run.py`가 확인한다(S0.7). 키·base URL은 설정에 넣지 않는다.
 - `config_hash(cfg)` = `sha256(json.dumps(cfg.model_dump(mode="json", by_alias=True), sort_keys=True, ensure_ascii=False))` 앞 12자. 치환 뒤 값이라 실제 모델명이 해시에 들어간다.
@@ -192,7 +193,7 @@ uv run ruff check . && uv run ruff format --check .
 **만들거나 바꿀 파일**:
 - `src/guardrail/llm.py`: `LLM`(`complete`·`slot`·`faults`), `LLMResult`, `Gate`, `retry_wait`, `openai_send`, `BudgetExceeded`(`slot()` 예산 소진), `FAKE_OK`(역할별 고정 응답 등록, generator·attack_judge)(약 240줄)
 - `src/guardrail/pipeline.py`: `Guard(cfg, *, llm=None)`가 `self.llm`을 갖는다
-- `tests/fakes.py`: `FakeLLM`, `FakeClock`, 결과 타입 6개 / `tests/test_llm.py`
+- `tests/fakes.py`(S0.2가 만든 파일에 더함): `FakeLLM`, `FakeClock`, 결과 타입 6개 / `tests/test_llm.py`
 - `pyproject.toml`·`uv.lock`: `uv add "openai>=3,<4"`. `[tool.pytest.ini_options]`에 `markers = ["live: 실제 API 호출. CI에서 돌지 않음"]`, `addopts = "-m 'not live'"`
 
 **작업 순서**
@@ -499,7 +500,7 @@ uv run pytest tests/test_mock_tutor.py
 **만들거나 바꿀 파일**:
 - `src/guardrail/eval/run.py`(CLI·종류별 호출 추정과 `--estimate`·`run_item`·실행·`attack_judge` 호출·파일 쓰기, 약 280줄), `metrics.py`(채점·pass^3·요약·지연 분위수, 약 120줄), `stats.py`(약 40줄)
 - `prompts/attack_judge.md`: 공격 판정 루브릭(버전 앞머리)
-- `resources/crisis_resources.yaml`: 연락처만 담은 첫 판([R9 §1.4](../research/R9-student-safety-and-law.md), §5-1)
+- `resources/crisis_resources.yaml`: 연락처만 담은 첫 판([R9 §1.4](../research/R9-student-safety-and-law.md), §5-1). 스키마는 처음부터 S2.1과 같다(`verified_at`, `recheck_days`, `resources[]{id, text, numbers, source}`). 그래야 S2.1이 내용을 채워도 metrics의 연락처 채점이 깨지지 않는다
 - `docs/adr/0006-evaluation-scope.md`: LLM 판정기 범위를 "공격 성공 + 정상 항목의 자체 거절(`refused`)"로 넓힌다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy) 채점)
 - `pyproject.toml`·`uv.lock`: `uv add --dev scipy`(§4.8 dev 그룹)
 - `results/2026-11-03-baseline-smoke{,-crisis}.csv|json`(실제 키로 돌렸을 때만)

@@ -1,6 +1,6 @@
 # GP1 출력 가드 — 세부 플랜
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v14 (적대 검토 9회차까지 반영, master v14 기준)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v15 (적대 검토 10회차까지 반영, master v15 기준)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/4(수)–11/9(월) · 마일스톤: Guardrail GP1 출력 가드
 
 [GR-01]: ../PRD.md#gr-01-전처리-p0
@@ -53,7 +53,7 @@
 |---|---|---|---|
 | 10/31–11/3 (GP0 중) | S1.1 준비: 청크 선택, 주입 지침(Opus 검토), `build_grounding.py` 골격·테스트 | 2h(GP0 몫) | Sonnet: 질문 320개. 키가 오면 API로 기본 답변 |
 | 11/4(수) | S1.2 골격 매처·카나리아·`Guard.new_canary()` / S1.1 정상 답변 확인 시작 | 5h / 2h | API: 기본 답변(GP0에 못 했으면). Sonnet: 근거 없는 문장 초안 표시, 정상 변형, Claude 계열 주입 |
-| 11/5(목) | S1.3 출력 코드 검사 / S1.1 사람 확인(주입 전수, 정상 표본), `cite` | 3h / 4h | API: 다른 계열 주입. Sonnet: `canary_leak.jsonl` |
+| 11/5(목) | S1.3 출력 코드 검사 / S1.1 사람 확인(주입 전수, 정상 표본), `cite` | 3h / 4h | API: 다른 계열 주입. Sonnet: `canary_leak.jsonl`(id·seed_id 접두어 `cl-`, GP2 S2.0 접두어 규칙) |
 | 11/6(금) | S1.1 `containment()` → θ 후보 추출·라벨 340·`assemble` / S1.4 `split` → `run`·θ 보정 | 2.5h / 4.5h | Sonnet: θ 전용 변형(후보 추출 뒤) |
 | 11/7(토) | S1.5 스키마·후처리·FakeLLM 테스트·프롬프트 초안 / GP2 J1·J2·J7 착수 | 6h / 0.5h | santa 리뷰어 2명(Opus). Sonnet: GP2 J1·J2·J7 |
 | 11/8(일) | S1.5 santa 반영·live 스모크 / S1.6 수리·연결·장애 주입 / GP2 J3 위기 시드 설계 행렬(본인)·J4·J5 착수 | 2h / 4h / 1h | Opus: GP2 J3 시드. Sonnet: GP2 J4·J5 |
@@ -262,7 +262,7 @@ uv run pytest tests/test_preprocess.py tests/test_match.py tests/test_output_che
 - 띄어쓰기 없는 "17시발표"는 조각 하나라 엄격 규칙도 인정한다(ADR 규칙의 한계) → S2.2에서 2음절 어휘를 넣을 때 수식·코드 정상 200건 회귀로 막는다.
 - `hypothesis`가 dev 의존성에 없다(master-plan §4.8에는 있음) → GP0에서 안 넣었으면 여기서 넣는다.
 
-**결정(2026-10-31, master-plan §13)**: 카나리아만 경계를 넘는 매칭을 인정한다(`cross_ok=True`). 엄격 규칙은 `abcdefgh ijklmnopx`처럼 마지막 조각에 글자를 붙여 쪼갠 유출을 놓치고, 무작위 라틴 16자가 정상 문장에 우연히 걸릴 확률은 사실상 0이라 엄격 규칙의 이득이 없다. 이 사례를 회귀 테스트로 고정하고, S1.2 PR에서 [ADR-0001](../adr/0001-korean-normalization-skeleton-view.md) 매칭 규칙 표의 카나리아 행을 고친다.
+**결정(2026-10-31, master-plan §13)**: 카나리아와 ⑦ 시스템 프롬프트 문장(10자 이상, S1.3)만 경계를 넘는 매칭을 인정한다(`cross_ok=True`). 엄격 규칙은 `abcdefgh ijklmnopx`처럼 마지막 조각에 글자를 붙여 쪼갠 유출을 놓치고, 무작위 라틴 16자가 정상 문장에 우연히 걸릴 확률은 사실상 0이라 엄격 규칙의 이득이 없다. 이 사례를 회귀 테스트로 고정하고, S1.2 PR에서 [ADR-0001](../adr/0001-korean-normalization-skeleton-view.md) 매칭 규칙 표의 카나리아 행을 고친다.
 
 ### S1.3 출력 코드 검사 ⑦
 
@@ -601,7 +601,7 @@ uv run python -m guardrail.eval.run --config configs/unguarded.yaml --set stages
 | 보이는 변화 | `Guard.check_output()`과 `respond()`가 ⑦ → 사전 필터 → ⑧ 뒤에 ⑨ 수리까지 돈다. '극단적 선택' 같은 금지 표현이 든 문장(S1.3 `banned`)은 어느 경로에서든 표시되지 않는다. ⑧이 타임아웃·5xx·429·깨진 JSON이면 확인된 문장만 연락처 줄과 함께 보여 주고(남은 문장이 없으면 학습 안내로 막음) `fallback_infra`가 켜진다 |
 
 **만들거나 바꿀 파일**
-- `src/guardrail/repair.py`: `repair()`(순수 함수, R2는 "R2 필요"만 돌려줌)
+- `src/guardrail/repair.py`: `repair()`(순수 함수, R2는 "R2 필요"만 돌려줌). `config.py`의 `_IMPLEMENTED`에 `output.repair`와 `output.r2`를 더한다(R2 경로가 생기므로. 없으면 S1.7 실행 D·S3.6 R2 실행이 `NotImplementedError`로 멈춘다)
 - `src/guardrail/pipeline.py`: `check_output()`의 수리·⑧ 실패 처리, `respond()`가 카나리아와 `regenerate`를 넘김. 응답 직전 `_finalize(verdict, crisis_flag, crisis_tier)` 호출 자리(GP1에서는 그대로 돌려주는 스텁, 구현은 S2.1)
 - `resources/templates.yaml`: S1.3이 만든 파일(`output.safe`만 있음)을 늘린다. `output.judge_fail`("교재에서 확인한 부분만 보여 줄게요"), `output.guidance`(학습 안내), `output.r3`("교재에서 찾지 못했어요"), `output.r2_feedback`
 - `resources/crisis_resources.yaml`: 읽기만 한다(S0.7이 만든 연락처 첫 판). GP0에서 못 만들었으면 이 PR에서 연락처만 담은 스텁을 만들고 S2.1이 채운다
@@ -636,7 +636,7 @@ uv run python -m guardrail.eval.run --config configs/unguarded.yaml --set stages
 | 7 | 위반, 실패 문장 ≤ 전체 문장의 1/3, 핵심 문장 통과, on-topic | R1 | modified / allow | `r1_delete` | 실패 문장 삭제 |
 | 8 | 그 외 + `stages.output.r2` + `regenerate` 있음 + 첫 시도 | R2 | 재판정 결과대로 | `r2_regen` | 재생성 답 |
 | 9 | 그 외 | R3 | modified / allow | `r3_fallback` | `output.r3` + 지지된 claim 문장(원래 순서). off_topic이면 문장 없이 |
-- 금지 표현이 든 문장은 어느 경로에서든 표시 전에 지운다.
+- 금지 표현이 든 문장은 어느 경로에서든 표시 전에 지운다. 지우고 남는 문장이 없으면 9번(R3, `output.r3`, 문장 없이)으로 낸다(테스트 1개).
 - 3번 R0 `answer_leak`의 `block`/`redirect`는 master-plan §4.2 v7 "답변 대신 내는 응답은 block"의 명시적 예외다(학습 전환). 그 밖에 가드가 답변 대신 내는 안전 응답(1·2·5번)은 모두 `block`/`refuse`다.
 - 4번과 5번이 갈리는 이유(master-plan §4.2 "답변 대신 내는 응답은 block"): 4번은 답변 문장이 남는 부분 응답이라 `modified`다. 5번은 답변 문장이 하나도 없이 가드가 학습 안내를 대신 내므로 `block`/`refuse`다. 그래서 위기 플래그가 있으면 `_finalize`가 5번도 위기 템플릿으로 바꾼다.
 - 6번은 실패 문장이 있어도 지우지 않는다. 위반 여부는 G 임계값이 정한다([R7] §S4 → §S5). 그 수를 `failing_shown`으로 남겨 S1.7 스윕에 쓴다.

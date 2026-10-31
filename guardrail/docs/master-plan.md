@@ -1,6 +1,6 @@
 # 가드레일 master-plan
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v8 (세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, §13)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v9 (세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, 4회차 v9, §13)
 근거: [PRD.md](PRD.md)(요구사항 GR-xx, 마일스톤 §10) · [adr/](adr/README.md)(설계 결정) · [research/](research/README.md)(조사) · [skills.md](skills.md)(쓸 스킬)
 세부 플랜: [plan/GP0](plan/GP0-foundation.md) · [GP1](plan/GP1-output-guard.md) · [GP2](plan/GP2-input-crisis.md) · [GP3](plan/GP3-integration-eval.md) · [GP4](plan/GP4-presentation.md)
 
@@ -166,7 +166,7 @@ guard = Guard.from_config("configs/default.yaml", overrides={"thresholds.G": 0.6
 result: Verdict = await guard.respond(message, history, tutor, session=Session())
 
 # 튜터가 흐름을 직접 쥘 때 (GR-11 함수)
-canary = guard.new_canary()                      # output.code가 꺼져 있으면 None
+canary = guard.new_canary()                      # output.code가 꺼졌거나 tutor.obligations.canary가 거짓이면 None
 system_extra = guard.system_extra(canary)        # 켜진 단계의 가드 문구만 모은다. 튜터가 시스템 프롬프트 끝에 넣는다
 iv: Verdict  = await guard.check_input(message, history, session=None)
 chunks       = guard.guard_retrieval(chunks)
@@ -198,6 +198,7 @@ Role = Literal["input_judge", "exchange_judge", "generator", "attack_judge", "je
 class LLMResult:
     text: str | None;  parsed: BaseModel | None
     tokens_in: int;  tokens_out: int;  latency_ms: float;  attempts: int
+    finish_reason: str | None   # "length"면 max_tokens에서 잘림(live 스모크가 확인, S1.5·S2.4)
     error: None | Literal["timeout", "rate_limit", "server", "bad_json", "auth", "bad_request", "budget"]
 
 class LLM:
@@ -219,7 +220,7 @@ class LLM:
 - 구조화 출력은 `json_schema` → `json_object` → 프롬프트 지시 + 파싱 순으로 내려간다. 무엇을 쓸지는 게이트웨이 지원 여부에 따라 설정으로 정한다. 파싱 실패는 1회 재요청한다.
 - 예산: 하네스가 정한 호출 상한을 넘으면 `error="budget"`을 돌려주고 호출하지 않는다.
 - 장애 주입(실제 튜터 어댑터도 `faults.generator`를 따른다, S3.1): 평가 모드에서만 설정 `faults`가 역할별로 호출 없이 결과를 정한다. 값은 `timeout`·`rate_limit`·`server`·`bad_json`(그 오류를 돌려줌)과 `fake_ok`(역할별 고정 응답)다. `fake_ok` 고정 응답: generator = 첫 청크를 `[S1]`로 인용한 한 문장(S0.3) · attack_judge = 공격 실패·거절 아님(S0.3) · exchange_judge = 실패 문장 없음, 모든 플래그 거짓(S1.5) · input_judge = 위기 플래그가 있으면 S5·crisis·T1, 없으면 S0·allow·신뢰도 1.0(S2.4) · jev = 확률 0.0(S2.10). 각 소유 슬라이스가 `--fake` 테스트를 하나씩 둔다. 예: `{generator: fake_ok, exchange_judge: timeout}`는 생성만 가짜로 두고 ⑧ 장애를 재현한다. 모든 역할을 지정하면 API 호출 0회로 돈다. 아직 고정 응답이 등록되지 않은 역할(예: S2.10 전의 jev)을 덮을 때는 `fake_ok`가 아니라 `timeout`을 쓴다(오류 값은 등록이 필요 없다). 서비스 모드에서 `faults`가 비어 있지 않으면 설정 검증이 실패한다. 키는 S0.3이 만들고 S2.7이 장애 설정 파일을 쓴다.
-- 테스트는 `tests/fakes.py`의 `FakeLLM`로 한다. 호출마다 결과를 스크립트로 준다: `Ok(text)`, `Malformed`, `Timeout`, `RateLimited(retry_after)`, `ServerError`. 헤더 파싱만 실제 SDK에 `httpx2.MockTransport`를 끼워 1개 테스트로 확인한다(openai 3.x는 httpx2를 써서 respx가 통하지 않는다). 실제 API는 `-m live` 표시 테스트에서만 부른다. CI에는 키가 없다. 하네스의 `--fake`는 이번 실행이 부르는 역할만 `fake_ok`로 두고, `llm.py`의 `FAKE_OK` 등록표(역할별 고정 응답, 소유 슬라이스가 등록)를 쓴다. 등록 안 된 역할을 `fake_ok`로 두면 설정 오류로 멈춘다. 테스트 코드를 import하지 않는다.
+- 테스트는 `tests/fakes.py`의 `FakeLLM`로 한다. 호출마다 결과를 스크립트로 준다: `Ok(text)`, `Malformed`, `Timeout`, `RateLimited(retry_after)`, `ServerError`, `BadRequest`(json_schema 미지원 → `json_object`로 내림). 헤더 파싱만 실제 SDK에 `httpx2.MockTransport`를 끼워 1개 테스트로 확인한다(openai 3.x는 httpx2를 써서 respx가 통하지 않는다). 실제 API는 `-m live` 표시 테스트에서만 부른다. CI에는 키가 없다. 하네스의 `--fake`는 이번 실행이 부르는 역할만 `fake_ok`로 두고, `llm.py`의 `FAKE_OK` 등록표(역할별 고정 응답, 소유 슬라이스가 등록)를 쓴다. 등록 안 된 역할을 `fake_ok`로 두면 설정 오류로 멈춘다. 테스트 코드를 import하지 않는다.
 
 ### 4.4 설정 (`configs/*.yaml`)
 
@@ -253,7 +254,7 @@ faults: {}                       # 평가 전용 장애 주입. 예: {input_judg
 paths: {prompts: prompts, resources: resources}
 ```
 
-- 임계값 검증 범위는 0–1.01이다. 1.01은 "이 단계로는 아무것도 막지 않고 점수만 남김"을 뜻한다(S3.3 기록 실행).
+- 임계값 검증 범위는 0–1.01이다. 막는 쪽 임계값(`input_block`, `tau_J`)에서 1.01은 "이 단계로는 아무것도 막지 않고 점수만 남김"을 뜻한다(S3.3 기록 실행). `theta`의 1.01은 사전 필터가 아무것도 자동 통과시키지 않음, `G`의 1.01은 모든 답을 위반으로 봄이라 기록 실행에 쓰지 않는다.
 - `thresholds.input_block`: ⑤가 막으려면 넘어야 할 신뢰도. 기본 0(⑤ 판정대로), S3.3에서 스윕해 정한다(PRD §4 "⑤의 임계값을 마지막에 맞춘다"). 적용 규칙은 §4.2.
 - **임계값 격자**(한 번만 정의, S1.4·S1.7·S3.3이 함께 쓴다): θ 0.80–1.00, 0.01 간격, 근거 세트 `calibration`에서 "자동 통과가 미탐을 하나도 늘리지 않는 최솟값". G 0.50–0.90, 0.05 간격, `calibration`에서 "답변 단위 FPR ≤5% 중 재현율 최대". 보고 수치는 `report` 부분 집합에서만 낸다. `input_block` 0.50–0.95, 0.05 간격, dev에서 "과잉 거절 ≤5% 중 공격 통과 최소".
 - **단계 켜기 규칙**: 켜졌지만 아직 구현되지 않은 단계가 있으면 `NotImplementedError`로 멈춘다(조용히 건너뛰지 않는다). 검사는 순수 함수 `check_toggles(cfg: GuardConfig)` 하나가 하고(같은 함수가 `stages.input.jev`는 `stages.input.pii`가 켜졌을 때만 허용한다. Jev에는 마스킹한 글만 간다, ADR-0008), `Guard.__init__`과 하네스 `--estimate`가 같은 함수를 부른다. `--estimate`는 `Guard`·`LLM`·튜터 어댑터를 만들지 않고 튜터 의무 탐지(S3.1)도 하지 않는다(호출 0, 환경변수 불필요, `runs/` 없음). 설정 모델 이름은 `GuardConfig`다. 그래서 `default.yaml`은 **머지된 단계만** 켜고, 단계를 파이프라인에 붙이는 슬라이스가 같은 PR에서 그 토글을 켠다(표는 GP0 S0.2). 위기(`stages.crisis`)를 끈 설정은 평가 모드에서만 허용하고 서비스 모드에서는 검증이 실패한다. 평가 모드인 `default.yaml`도 S2.1이 머지되기 전까지는 위기가 꺼져 있다(PRD GR-12 "위기 탐지는 무방비 모드에서만 끈다"를 평가 모드 개발 설정까지 넓히는 것이라 S2.1 PR에서 GR-12 문구를 고친다). 서비스 모드는 `GUARD_LOG_HMAC_KEY`가 없어도 검증이 실패한다. GP1은 `configs/exp/gp1-output.yaml`(위기·입력 끔, 출력 켬)로 돈다. P1 슬라이스를 자르면 그 토글은 끈 채로 남고 ablation 표에 "꺼짐"으로 적는다.
@@ -285,6 +286,7 @@ JSONL 한 줄이 항목 하나다.
 ```
 
 - `split`: dev · holdout · organizer_test(주최측, 따로 보고, 홀드아웃에 넣지 않음) · ext(S4.5 외부 도구 생성분). `subsplit`: calibration · report(근거 세트, R7 S7의 60/40) 또는 null.
+- `category`는 필수다. 예외로 `split: organizer_test`에서 주최측 라벨에 S0–S14 대응이 없으면 null을 허용하고, `technique`가 없으면 `none`이다(S3.2). 주최측 원본은 S3.2가 이 형식의 JSONL로 한 번 변환해 두고 하네스는 그 파일을 읽는다.
 - `kind`: attack · benign · benign_risky · greeting · crisis · grounding · citation · multiturn · injection
 - `technique`: none · jamo · chosung · fullwidth · zerowidth · digit_insert · yamin · codeswitch · romaja · roundtrip · honorific · roleplay · encoding · indirect
 - `subtype`: 범주 안의 세부 유형. 위기는 direct · euphemism · evasion, 근거 세트는 주입 유형, 인젝션은 direct · indirect. 없으면 null.
@@ -310,7 +312,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
 ```
 
 - 실행 전에 예상 호출 수(상한 추정)를 출력하고 `--max-calls`가 없거나 추정보다 작으면 시작하지 않는다(종료 코드 2). `--estimate`는 설정 검증·`check_toggles`·홀드아웃 거부만 하고 추정을 출력한 뒤 끝난다(§4.4, 호출 0). **플랜의 실행 명령은 숫자를 외워 쓰지 않는다**: 먼저 `--estimate`로 추정을 보고, 그 값 이상을 `--max-calls`에 준다. 플랜에 적힌 호출 수는 예산을 잡기 위한 예상치다. 큰 세트는 고정한 층화 표본 파일(예: `data/dev/benign_burst300.jsonl`)을 쓴다. `--fake`이거나 `faults`가 모든 역할을 덮으면 추정이 0이고, 그래도 `--max-calls 0`을 붙여 실수로 실제 호출이 나가지 않게 한다(`--estimate`가 아니면 `--max-calls`는 언제나 필수). 실행 중 예산이 바닥나면(`budget`) 어느 실행이든 GR-14 폴백으로 채점하지 않고 중단한다(종료 3, 그때까지의 결과는 `incomplete`로 표시).
-- **추정 공식**(항목 1개, 상한): grounding·citation = ⑧ 1(켜졌을 때, 생성 없음), `output.r2`와 `obligations.regenerate`가 켜졌으면 재생성 1 + 재판정 1을 더한다(R2 경로). attack·benign·benign_risky·greeting·injection·crisis = 생성 1 + 켜진 판정(⑤·Jev·⑧) 수 + 재생성 1(⑤가 켜졌을 때) + attack_judge 1(attack·benign·benign_risky·greeting만. injection은 마커, crisis는 템플릿으로 코드 채점). multiturn = 학생 턴마다 위 값 + 대화당 attack_judge 1. 여기에 반복 횟수 × 1.1(재시도)을 곱하고 올림(정수 계산). `--system nemo`(S4.5, P2)는 NeMo 레일이 쓰는 `input_judge`·`exchange_judge` 호출을 같은 방식으로 더하고, 공식은 S4.5가 run.py에 함께 넣는다.
+- **추정 공식**(항목 1개, 상한): grounding·citation = ⑧ 1(켜졌을 때, 생성 없음), `output.r2`와 `obligations.regenerate`가 켜졌으면 재생성 1 + 재판정 1을 더한다(R2 경로). attack·benign·benign_risky·greeting·injection·crisis = 생성 1 + 켜진 판정(⑤·Jev·⑧) 수 + 재생성 1(⑤가 켜졌을 때) + attack_judge 1(attack·benign·benign_risky·greeting만. injection은 마커, crisis는 템플릿으로 코드 채점). `output.r2`와 `obligations.regenerate`가 켜졌으면 이 종류들도 재생성 1 + ⑧ 재판정 1을 더한다. multiturn = 학생 턴마다 위 값 + 대화당 attack_judge 1. 여기에 반복 횟수 × 1.1(재시도·형식 재요청 몫)을 곱하고 올림(정수 계산). 그래도 넘으면 예산 소진으로 실행이 중단된다(아래). `--system nemo`(S4.5, P2)는 NeMo 레일이 쓰는 `input_judge`·`exchange_judge` 호출을 같은 방식으로 더하고, 공식은 S4.5가 run.py에 함께 넣는다.
 - `--data`는 여러 번 줄 수 있고(`action="extend"`, `nargs="+"`), 디렉터리를 주면 그 안의 `*.jsonl`을 모두 읽는다. `--set`은 S0.7에서 만든다.
 - `runs/<날짜>-<이름>/`에 `responses.jsonl`, `trace.jsonl`, `metrics.json`, `report.csv`를 만든다(gitignore).
 - 발표·보고에 쓸 요약은 `results/<날짜>-<이름>.csv|json`으로 복사해 커밋한다. 요약에는 범주·우회 기법·주입 유형별 k와 n을 넣는다(GP4 표가 다시 계산할 수 있게). 예외로 `results/figures/`, 원문 확인을 마친 `results/demo-replay.jsonl`, `results/FROZEN.txt`도 커밋한다.
@@ -390,11 +392,11 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 
 | GR | 슬라이스 | GR | 슬라이스 |
 |---|---|---|---|
-| GR-01 전처리 | (구현됨) S1.2, S2.2 | GR-10 거절·위기 응답 | S2.1, S2.6, S2.7, S3.5 |
-| GR-02 위기 | S2.1, S2.4, S2.5, S2.7, S3.5 | GR-11 연결 계약 | S0.2, S0.7, S0.8, S3.1 |
+| GR-01 전처리 | (구현됨) S1.2, S2.1, S2.2 | GR-10 거절·위기 응답 | S2.1, S2.6, S2.7, S3.5 |
+| GR-02 위기 | S2.1, S2.4, S2.5, S2.7, S3.5, S4.1 | GR-11 연결 계약 | S0.2, S0.6, S0.7, S0.8, S3.1 |
 | GR-03 PII | S2.3 | GR-12 설정·토글 | S0.2, S2.1, S3.4, S4.1 |
-| GR-04 입력 판정 | S2.2, S2.4, S2.5, S2.7, S2.10, S3.3, S3.6 | GR-13 로깅 | S0.4, S2.3, S2.7 |
-| GR-05 세션 위험 | S2.8, S3.3, S3.4 | GR-14 장애 처리 | S0.3, S1.6, S2.1, S2.3, S2.5, S2.7, S3.5, S3.6, S3.7, S4.3 |
+| GR-04 입력 판정 | S2.2, S2.4, S2.5, S2.7, S2.10, S3.3, S3.6 | GR-13 로깅 | S0.4, S0.7, S2.3, S2.7, S3.7 |
+| GR-05 세션 위험 | S2.8, S3.3, S3.4 | GR-14 장애 처리 | S0.3, S1.6, S2.1, S2.3, S2.5, S2.7, S3.5, S3.6, S3.7, S4.1, S4.3 |
 | GR-06 검색 가드 | S2.9, S3.4 | GR-15 하네스 | S0.5, S0.6, S0.7, S1.7, S2.0, S2.7, S3.2–S3.6, S4.2 |
 | GR-07 출력 코드 검사 | S1.2, S1.3, S1.7, S3.5 | GR-16 확장 평가 | S4.5, S4.4(미실행 명시) |
 | GR-08 교환 판정 | S1.1, S1.4, S1.5, S1.7, S3.3, S3.6 | GR-17 운영 사양 | S4.3 |
@@ -408,8 +410,8 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 |---|---|
 | 기반 | S0.1 → S0.2 → {S0.3, S0.5, S0.8, S1.2} · S0.3 → {S0.4, S0.6, S1.5, S2.4} · {S0.4, S0.5, S0.6} → S0.7 |
 | 출력 | {S0.5, S0.6} → S1.1(`containment()` 포함) → S1.4 → S1.5 → S1.6 · S1.2 → S1.3 → S1.6 · {S1.1, S1.6, S0.7} → S1.7 |
-| 입력 | S0.5 → S2.0 → {S2.2, S2.4} · S1.2 → S2.2 → S2.1 → S2.6 → {S2.4, S2.5} · {S0.4, S1.3, S2.1} → S2.3 · S2.1 → S2.6 · {S1.6, S2.1, S2.4} → S2.5 → {S2.7(+S2.6), S2.10, S3.1} · S2.7 → {S2.8, S2.9} |
-| 평가 | S2.7 → S3.6(실제 폭주, 11/16) → S3.3 → S3.4 → S3.5 → S3.6(비용) → S3.7 · S3.1 → {S3.6(지연), S3.4, 홀드아웃 허용 목록} → S3.5 · S0.5 → S3.2 |
+| 입력 | S0.5 → S2.0 → {S2.2, S2.4} · S1.2 → S2.2 → S2.1 → S2.6 → {S2.4, S2.5} · {S0.4, S1.3, S2.1} → S2.3 · S2.1 → S2.6 · {S1.6, S2.1, S2.4} → S2.5 → {S2.7(+S2.6), S2.10, S3.1} · S2.3 → S2.10 · S2.7 → {S2.8, S2.9} |
+| 평가 | S2.7 → S3.6(실제 폭주, 11/16) → S3.3 → S3.4 → S3.5 → S3.6(비용) → S3.7 · S3.1 → {S3.6(지연), S3.4, 홀드아웃 허용 목록} → S3.5 · S0.5 → S3.2 · S1.7 → S3.3 |
 | 발표 | S3.7 → {S4.1, S4.5} · {S3.3, S3.4, S3.5, S3.6} → S4.2 → S4.4 · S3.6 → S4.3 |
 
 **임계 경로**(시간 합이 가장 긴 선행 사슬): S0.1 → S0.2 → S0.3 → S0.6 → S1.1 → S1.4 → S1.5 → S1.6 → S2.5 → S2.7 → S3.6(폭주) → S3.3 → S3.4 → S3.5 → S3.7 → S4.1. S2.5는 S2.4(← S2.0)와 S2.1도 기다리므로 S2.0 데이터가 늦으면 이쪽이 임계가 된다.
@@ -569,3 +571,7 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 - 설계 변경 예정에 추가: GR-08의 세트 크기(≥250·≥300·≥100)는 calibration+report 전체 크기이고 합격선 판정은 report 부분 집합(약 40%)에서 n·CI와 함께 낸다(S1.7 PR에서 PRD GR-08 문구를 고침). PRD §6 낭비 지표 정의(S3.6 PR).
 - 미뤄질 수 있는 실행(GP1 실행 B, GP2 컷 선 A의 S2.4 라벨·κ)을 GP3 S3.3이 조건부로 받는다. §3 소유 표기, 선행(S2.3 ← S2.1, S2.10 ← S2.3), GP4 예산을 맞춤.
 - 마무리(council 결정): 전체 재검토는 멈추고 이 회차 수정분만 따로 검토했다. 나온 2건(재시도의 게이트 대기도 마감에서 뺌, `faults`에 있는 역할은 `slot()`이 세지 않음)을 고쳤고, Phase 끝 계약 대조 규칙을 §10에 더했다.
+
+**v9 (2026-10-31, 적대 검토 4회차)**: 엘리스 답을 기다리는 동안 치명 0건까지 계속하기로 했다(사용자). 새 리뷰어 2명이 같은 치명 1건만 냈다(S3.6 R2 대체 실행 명령이 S3.1 의무 고정 규칙에 걸려 종료 2). 그것과 다음 회차에 치명이 될 만한 제안을 함께 고쳤다:
+- §4.2 `new_canary()`는 `tutor.obligations.canary`가 거짓이어도 None. §4.3 FakeLLM `BadRequest`. §4.4 1.01의 뜻을 막는 쪽 임계값으로 한정. §4.6 `organizer_test`만 `category` null 허용, 주최측 원본은 S3.2가 JSONL로 변환. §4.7 추정 공식에 respond() 항목의 R2 항.
+- GR 추적표·§6 선행 간선 보강(S2.3 → S2.10, S1.7 → S3.3).

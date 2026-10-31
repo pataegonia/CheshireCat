@@ -1,6 +1,6 @@
 # GP2 입력·위기·멀티턴 — 세부 플랜
 
-작성 2026-10-30 · 담당 danielcho02 · 상태: v8 (santa-loop 3회차 반영)
+작성 2026-10-30 · 담당 danielcho02 · 상태: v9 (적대 검토 4회차 반영)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/10(화)–11/15(일) · 마일스톤: Guardrail GP2 입력·위기
 
 ## 1. 목표와 관문
@@ -59,8 +59,8 @@
 | 11/10(화) | S2.0 조립·분할·중복 제거·봉인 → S2.2 시작. GP2 슬라이스 이슈 생성(Phase 시작일, [master-plan §11](../master-plan.md#11-진행-추적-github)), 팀 요청 2건 초안(사용자 확인 후 리더에게) | 6+1 | 남은 번역 배치 |
 | 11/11(수) | S2.2 끝(GR-01 수용, ③은 block Verdict만 돌려줌) → S2.1 어휘·탐지·자원 파일·T1–T3 | 2+5 | 위기 dev 누락분 변형 보강 |
 | 11/12(목) | S2.1 끝(`_finalize` 세 경로 × 4지점, 판정 끔 어휘 재현율) → S2.3 로그(P0) → S2.6 템플릿·instruction | 2+2+3 | S2.1 santa, 템플릿 검토 표본 생성 |
-| 11/13(금) | S2.4 스키마·프롬프트·FakeLLM·`instruction` 채우기 → dev 실행·라벨·κ·혼동행렬 | 7 | S2.4 santa |
-| — | **자르는 선 A (11/13 저녁)**: S2.4 dev 실행·라벨이 안 끝났으면(키 지연 포함) 코드·FakeLLM 테스트만 머지하고 11/14에 S2.5로 간다. 라벨·κ·p95는 키가 오는 날로 미루고, GP2 안에 못 하면 GP3 S3.3 조건부 단계가 받는다(master §13 v8) | | |
+| 11/13(금) | S2.4 스키마·프롬프트·FakeLLM·`instruction` 채우기 → 라벨(판정 출력 보기 전) → dev 실행·κ·혼동행렬 | 7 | S2.4 santa |
+| — | **자르는 선 A (11/13 저녁)**: S2.4 라벨·dev 실행이 안 끝났으면(키 지연 포함) 코드·FakeLLM 테스트만 머지하고 11/14에 S2.5로 간다. 라벨은 키 없이 dev 실행 전에 끝내 두고, dev 실행·κ·p95는 키가 오는 날로 미루며, GP2 안에 못 하면 GP3 S3.3 조건부 단계가 받는다(master §13 v8) | | |
 | 11/14(토) | S2.4 마무리(santa 반영) → S2.5 합류·장애 등급표·santa | 1+6 | S2.5 santa |
 | 11/15(일) | S2.7 지표·멀티턴 재생·인젝션 채점·장애 설정 → 실행(위기 pass^3 판정 켬·`judge_down`, 장애 주입, dev, 멀티턴, 인젝션)·모의 폭주(pytest)·관문 점검 | 7 | dev 평가 실행 |
 | — | **자르는 선 B (11/15 정오)**: 관문 실행(S2.7 실행 순서 1·2)이 아직이면 그것부터 한다. 3(dev)은 더 작은 고정 표본으로 줄이고 크기를 적으며, 4·5(멀티턴·인젝션)는 `--fake`로 코드만 확인한 뒤 실제 실행을 S2.8·S2.9 켬/끔 실행이나 S3.5로 미룬다(S2.7 실행 순서 그대로) | | |
@@ -100,10 +100,10 @@
 - `tests/test_datasets.py`(S0.5 확장), `tests/test_holdout_seal.py`
 
 **작업 순서**
-- [ ] 1. 봉인 테스트(`test_holdout_seal.py`): 홀드아웃 경로를 `--holdout` 없이 주면 종료 코드 2, 해시 불일치도 종료 코드 2, `--holdout`이어도 `results/holdout-configs.json`이 없으면 종료 코드 2, 파일은 있는데 이 실행의 `config_hash`가 목록에 없으면 종료 코드 2, `GEN_MODEL`·`JUDGE_MODEL`이 없으면 종료 코드 2, `datasets.load()`는 `allow_holdout=True` 없으면 `HoldoutSealed`
+- [ ] 1. 봉인 테스트(`test_holdout_seal.py`): 홀드아웃 경로를 `--holdout` 없이 주면 종료 코드 2, 해시 불일치도 종료 코드 2, `--holdout`이어도 `results/holdout-configs.json`이 없으면 종료 코드 2, 파일은 있는데 이 실행의 `config_hash`가 목록에 없으면 종료 코드 2, `GEN_MODEL`·`JUDGE_MODEL`이 없으면 종료 코드 2(`--holdout --estimate`도, master §4.6), `datasets.load()`는 `allow_holdout=True` 없으면 `HoldoutSealed`
 - [ ] 2. 조립 테스트: 자체 세트 분할이 `assign_split()` 결과와 같음, 번역 세트 `seed_id` = 영어 원문 정규화본 해시(같은 원문 두 출처 → 한 씨앗), 같은 `seed_id`가 dev·holdout에 함께 있으면 dev 쪽이 지워지고 그 개수가 MANIFEST에 남음(`fixed_dev`로 넘긴 S1.7 `canary_leak.jsonl`·`data/seed/smoke_*` 항목과 겹치면 홀드아웃 쪽이 지워짐), S1.7 `canary_leak.jsonl`은 `assign_split()`을 거치지 않고 dev, 인젝션 항목은 모두 `expected.marker`가 있고 간접 항목은 `chunks`가 있음, 자동 검사는 번역 항목에만 한글 비율·길이 비를 걸고(`romaja` 항목은 통과) 걸린 항목은 지워져 수가 MANIFEST에 남음, inventory 주장 열이 씨앗 수로 계산됨
 - [ ] 3. `sources.yaml`·`fetch`(리비전 고정, `data/raw/`로만) → 출처 어댑터 7개(§4.6 형식) → 코드 변형기(왕복 검사 포함)
-- [ ] 4. 서브에이전트 산출물 병합, dev 10% 사람 검수 → `assign_split()` → `dedupe(items, fixed_dev=...)` → 자동 검사(걸린 항목 삭제) → **봉인 전 holdout 씨앗 수 점검**(모자라면 시드를 더 만든다) → 고정 표본 → `inventory` → `seal` → 커밋(원문 제외 확인)
+- [ ] 4. 서브에이전트 산출물 병합 → `assign_split()` → `dedupe(items, fixed_dev=...)` → 자동 검사(걸린 항목 삭제) → dev에 남은 항목의 10% 사람 검수(분할 사이 중복은 dev 쪽이 지워지므로 dedupe 뒤 dev에 남은 글만 보면 검수한 글의 쌍둥이가 홀드아웃에 남을 수 없다) → **봉인 전 holdout 씨앗 수 점검**(모자라면 시드를 더 만든다) → 고정 표본 → `inventory` → `seal` → 커밋(원문 제외 확인)
 
 **세부 설계**
 
@@ -138,7 +138,7 @@
 | `benign_burst300.jsonl` | dev 정상 300 | S2.7 장애 주입·모의 폭주, S3.6 실제 폭주 |
 | `benign_student_a.jsonl`·`benign_student_b.jsonl` | 정상 학생 질문 dev 몫 A·B | S2.10 τ_J |
 
-- 홀드아웃은 사람이 열지 않는다. 자동 검사만 한다: 모든 항목은 빈 값 없음. 한글 비율 ≥0.5와 원문 대비 길이 비 0.5–2.0은 번역 항목(J1·J2, K-OverRefusal의 번역 항목. 영어 원문과 비교)에만 건다. `romaja`·`encoding`·`codeswitch` 변형은 설계상 한글 비율이 낮아 이 두 검사에서 뺀다. 걸린 항목은 봉인 전에 버리고 그 수를 inventory와 MANIFEST에 적는다. 사람 검수는 dev 10%만([R5 §4-3](../research/R5-korean-attack-surface.md)).
+- 홀드아웃은 사람이 열지 않는다. 자동 검사만 한다: 모든 항목은 빈 값 없음. 한글 비율 ≥0.5와 원문 대비 길이 비 0.5–2.0은 번역 항목(J1·J2, K-OverRefusal의 번역 항목. 영어 원문과 비교)에만 건다. `romaja`·`encoding`·`codeswitch` 변형은 설계상 한글 비율이 낮아 이 두 검사에서 뺀다. 걸린 항목은 봉인 전에 버리고 그 수를 inventory와 MANIFEST에 적는다. 사람 검수는 분할·중복 제거 뒤 dev에 남은 항목의 10%만([R5 §4-3](../research/R5-korean-attack-surface.md), 작업 순서 4).
 - 라이선스: iknow-lab 번역본은 미기재라 `internal_only: true`, 재배포 안 함([R2 라이선스 메모](../research/R2-datasets.md)). NC 세트는 쓰지 않는다. 쓰게 되면 같은 표시로 평가 전용.
 - `seal`: 홀드아웃 파일마다 `sha256  파일명` 한 줄. `--holdout`은 S3.3·S3.4가 끝난 뒤 S3.5에서만 쓴다. 허용 목록(`results/holdout-configs.json`, 11/18)에 없는 설정은 S2.0부터 거부하고, 설정마다 한 번은 S3.5가 `results/holdout-runs.json` 기록으로 지킨다(master §4.6 v8).
 - `inventory` → `results/<날짜>-data-inventory.csv`(split, kind, category, subtype, technique, n, n_seeds, 주장). 주장은 `n_seeds`로 정한다: 59 미만 "주장 불가", 핵심 범주(탈옥·유해·위기·인젝션) holdout 씨앗 <124 "부족".
@@ -304,11 +304,11 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 - `src/guardrail/pii.py`: `find(text) -> list[PiiHit]`, `mask(text, allow) -> tuple[str, list[PiiHit]]`
 - `src/guardrail/pipeline.py`: ③ 다음 ④, 이후 모든 LLM·튜터 호출은 마스킹본만. ④가 예외를 내면 마스킹 안 된 글은 Jev(외부)로 보내지 않고, ⑤·생성은 튜터가 원래 쓰는 같은 엘리스 모델이라 정규화본으로 간다(처리는 S2.5 `FAILURE_TABLE` PII 행, master §4.2 v7) · `output_checks.py`: ⑦ PII 재검사를 `pii.mask`에 연결
 - `src/guardrail/config.py`: 서비스 모드에서 `GUARD_LOG_HMAC_KEY`가 없으면 검증 실패(master §4.4, S0.2 검증에 없으면 이 PR에서 더함)
-- `configs/default.yaml`: `service_log` 값 확인, PII 부분이 머지될 때 `stages.input.pii: true` · `tests/test_trace_service.py`, `tests/test_pii.py`
+- `configs/default.yaml`: `service_log` 값 확인, PII 부분이 머지될 때 `stages.input.pii: true` · `tests/synth_pii.py`(합성 PII 생성기, P0. 로그 부분이 만들고 PII 부분이 다시 쓴다) · `tests/test_trace_service.py`, `tests/test_pii.py`
 
 **작업 순서**
-- [ ] 1. (로그, P0) 테스트: 원문 필드 없음, `user_hmac`이 월마다 다름, 서비스 모드에서 `GUARD_LOG_HMAC_KEY`가 없으면 설정 검증 실패, 보존 사유 4종(`block`·`escalation`·`appeal`·`sample`)만 `text_masked`와 `keep_reason`·`expires_at`, `record_appeal`이 원 `request_id`를 가리키는 `record_type: "appeal"` 레코드를 30일 보관, 위기 레코드 `no_reuse`, PII 오류 시 텍스트 저장 중단(PII 부분이 아직 없으면 예외를 내는 `pii.mask` 스텁으로) → `trace.py` 구현
-- [ ] 2. (PII, P1) 합성 PII 생성기(테스트 안에서 코드로, 파일 커밋 없음) + 재현율·정밀도 테스트, T1–T3 렌더 결과에 `mask()`를 걸어도 그대로인지 회귀 테스트
+- [ ] 1. (로그, P0) 합성 PII 생성기 `tests/synth_pii.py`(유형별 문장 틀 20개에 코드로 만든 PII를 넣고 넣은 값을 함께 돌려줌, 파일 커밋 없음). PII를 잘라도 남는다 → 테스트: 생성기 입력 200건을 서비스 모드로 기록하면 레코드 어디에도 넣은 PII 값이 없음, 원문 필드 없음, `user_hmac`이 월마다 다름, 서비스 모드에서 `GUARD_LOG_HMAC_KEY`가 없으면 설정 검증 실패, 보존 사유 4종(`block`·`escalation`·`appeal`·`sample`)만 `text_masked`와 `keep_reason`·`expires_at`, `record_appeal`이 원 `request_id`를 가리키는 `record_type: "appeal"` 레코드를 30일 보관, 위기 레코드 `no_reuse`, PII 오류 시 텍스트 저장 중단(PII 부분이 아직 없으면 예외를 내는 `pii.mask` 스텁으로) → `trace.py` 구현
+- [ ] 2. (PII, P1) 숫자가 든 음성 300 + 재현율·정밀도 테스트(양성은 1단계 생성기), T1–T3 렌더 결과에 `mask()`를 걸어도 그대로인지 회귀 테스트
 - [ ] 3. (PII) `pii.py` 구현, ④·⑦ 연결, FakeLLM 페이로드에 PII 0 테스트
 
 **세부 설계**
@@ -323,7 +323,7 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 | 학번 | `\d{6,10}` | 앞 10자 안에 "학번" | `[학번]` |
 
 - 허용 목록은 `crisis_resources.yaml`의 `numbers`. 숫자만 남긴 값이 같으면 건너뛴다.
-- 합성 세트: 유형마다 양성 200(문장 틀 20개에 삽입) + 숫자가 든 음성 300(수식, 날짜, 시각, ISBN, 점수, "3-4-5 직각삼각형", 코드). 공개 세트(BCCard openpii, CC-BY-4.0)는 `fetch`로 받아 선택 확인만 한다.
+- 합성 세트: 유형마다 양성 200(문장 틀 20개에 삽입, `tests/synth_pii.py`. P0 로그 샘플 200건도 이 생성기에서 뽑는다) + 숫자가 든 음성 300(P1, 수식, 날짜, 시각, ISBN, 점수, "3-4-5 직각삼각형", 코드). 공개 세트(BCCard openpii, CC-BY-4.0)는 `fetch`로 받아 선택 확인만 한다.
 - 서비스 모드 레코드 = §4.5 공통 필드 + 서비스 모드 필드(master §4.5 v6): `user_hmac`, `grade_band`(초·중·고·없음), `text_masked`, `keep_reason`, `expires_at`, `no_reuse`, `pii_error`. `input_raw`·`displayed_output`은 없다.
   - `user_hmac = HMAC-SHA256(HMAC(마스터키, "YYYY-MM"), user_id)` 앞 32자. 마스터키는 env `GUARD_LOG_HMAC_KEY`. 서비스 모드에서 키가 없으면 설정 검증이 실패해 시작하지 않는다(빈 키로 가명을 만들거나 빈 가명을 쓰지 않는다, master §4.4).
   - `text_masked`(현재 메시지 마스킹본만, 대화 기록 없음)는 사유가 `service_log.keep_raw_for`(`block`·`escalation`(위기)·`appeal`·`sample`)일 때만 두고, 그 사유를 `keep_reason`에, `expires_at = ts + retention_days`를 함께 쓴다. 사유가 없으면 셋 다 null이다. `sample`은 `sample_rate`로 뽑는다.
@@ -331,14 +331,14 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
   - 위기 플래그 또는 S5·S6 레코드는 `no_reuse: true`, 표본에 뽑히지 않는다(REQ-22).
   - `pii.mask`가 예외를 내면 그 레코드는 텍스트 없이 `pii_error: true`로만 쓴다([GR-14][gr14] "로그 저장 중단"). 그 요청은 Jev로 보내지 않는다(S2.5 PII 행).
 - 설정(master §4.4 그대로): `service_log: {retention_days: 30, keep_raw_for: [block, escalation, appeal, sample], sample_rate: 0.01}`.
-- **자르는 법**: `stages.input.pii: false`. 그러면 Jev도 꺼진다(`check_toggles`가 `pii: false`에서 `stages.input.jev: true`를 거부한다. Jev에는 마스킹한 글만 간다, master §4.4 v8). 그래서 PII를 자르면 S2.10도 쓸 수 없다. 서비스 로그는 텍스트를 아예 남기지 않고(마스킹 불가, `appeal`도 레코드만) ⑦ PII 재검사 자리는 빈 채로 둔다. GR-14 PII 실패 행은 실제로 탈 일이 없지만, 행 자체는 S2.5 표 테스트가 예외를 내는 `pii.mask` 스텁으로 지킨다. 보고서에 "평가 데이터에 PII 없음"을 적는다([master-plan §7][mp7] 5번).
+- **자르는 법**: `stages.input.pii: false`. 그러면 Jev도 꺼진다(`check_toggles`가 `pii: false`에서 `stages.input.jev: true`를 거부한다. Jev에는 마스킹한 글만 간다, master §4.4 v8). 그래서 PII를 자르면 S2.10도 쓸 수 없다. 서비스 로그는 텍스트를 아예 남기지 않고(마스킹 불가, `appeal`도 레코드만. 합성 PII 생성기는 P0라 남아 로그 샘플 200건 테스트는 이 설정에서도 돈다) ⑦ PII 재검사 자리는 빈 채로 둔다. GR-14 PII 실패 행은 실제로 탈 일이 없지만, 행 자체는 S2.5 표 테스트가 예외를 내는 `pii.mask` 스텁으로 지킨다. 보고서에 "평가 데이터에 PII 없음"을 적는다([master-plan §7][mp7] 5번).
 
 **검증**: `uv run pytest tests/test_trace_service.py tests/test_pii.py`
 
 **수용 기준**
 - [ ] (P0) 사용자 ID는 HMAC 가명(월별 키), 연령은 학년대만, 원문 기본 미저장, 마스킹 원문은 차단·에스컬레이션·이의·표본만 30일(설정, 4종 모두 테스트)([GR-13][gr13])
 - [ ] (P0) 서비스 모드에서 `GUARD_LOG_HMAC_KEY`가 없으면 설정 검증 실패, 빈 가명 레코드 0(테스트, master §4.4)
-- [ ] (P0) 서비스 모드 로그 샘플(합성 PII 입력 200건)에서 원문 PII 0건([GR-13][gr13])
+- [ ] (P0) 서비스 모드 로그 샘플(합성 PII 입력 200건, P0 생성기 `tests/synth_pii.py`라 PII를 잘라도 돈다)에서 원문 PII 0건([GR-13][gr13])
 - [ ] (P0) 정신건강 발화(위기 플래그·S5·S6)는 `no_reuse`, 표본 제외([GR-13][gr13], REQ-22)
 - [ ] (P0) PII 정규식 실패 → 로그 저장 중단(테스트)([GR-14][gr14])
 - [ ] (P1) 합성·공개 PII 세트에서 주민·전화·카드 재현율 ≥0.95, 정밀도 ≥0.9([GR-03][gr03])
@@ -347,7 +347,7 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 
 **스킬·에이전트**: `ecc:security-review` · `ecc:security-reviewer`(Opus)
 
-**리스크 → 대응**: 계좌·학번 정규식이 수식에 오탐 → 문맥 단어 필수. 합성 번호가 gitleaks에 걸림 → 파일로 커밋하지 않고 테스트 안에서 만든다.
+**리스크 → 대응**: 계좌·학번 정규식이 수식에 오탐 → 문맥 단어 필수. 합성 번호가 gitleaks에 걸림 → 데이터 파일로 커밋하지 않고 생성기가 테스트 실행 때 코드로 만든다(생성기에 번호 값을 적어 두지 않는다).
 
 **열린 질문**: "로그 저장 중단"을 레코드 통째로 버리기로 볼지 텍스트만 빼기로 볼지(기본: 텍스트만 뺌, 위기 추적을 잃지 않으려고).
 
@@ -371,8 +371,8 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 
 **작업 순서**
 - [ ] 1. FakeLLM 테스트: Ok → 통과, Malformed 1회 → 재요청 성공, 2회 → `bad_json`, Timeout·RateLimited·ServerError → `status="error"`. 스키마 검증 위반(`crisis_tier`와 `action=="crisis"`가 어긋남, 플래그 입력에 `action=="crisis"`도 `crisis_fp`도 없음)은 형식 오류로 1회 재요청. strict 스키마 테스트: `llm.py`가 보낼 JSON 스키마에서 모든 속성이 `required`, `additionalProperties: false`, 기본값 없음, 없을 수 있는 값은 null 허용. 학생 메시지 안의 `</student_message>` 무력화. 플래그가 있어도 ⑤ 호출은 요청당 1회. `--fake` 테스트: `tests/fixtures/crisis_smoke.jsonl` 3건 + 정상 2건을 `--fake --max-calls 0`으로 돌려 플래그 항목은 T1 위기, 나머지는 allow(고정 응답이 플래그 입력용 검증기도 통과). Verdict 불변식(FakeLLM으로 ⑤ 대응 5종 parametrize): `respond()`는 모든 대응에서 `response`가 있다(전환·부분은 `generate(instruction=templates.instruction(...))`로 만든 답). `check_input()`은 전환·부분이면 `verdict="modified"`이고 `instruction`만(`response=None`), 거절·위기면 `verdict="block"`이고 `response`만(`instruction=None`), 허용이면 `verdict="pass"`이고 둘 다 None. `respond()`의 전환·부분도 `modified`
-- [ ] 2. 프롬프트 초안 → `ecc:prompt-optimizer` → dev 실행 → 오분류에서 경계 사례 추가 → santa
-- [ ] 3. 라벨 150건(판정 결과 보기 전) → 혼동행렬·κ·p95
+- [ ] 2. 라벨 150건(`judge_strat600.jsonl` 층화, 판정 출력을 한 번도 보기 전에. 3의 dev 실행보다 먼저 해서 κ가 판정기에 끌리지 않게 한다. 키가 없어도 할 수 있다)
+- [ ] 3. 프롬프트 초안 → `ecc:prompt-optimizer` → dev 실행 → 오분류에서 경계 사례 추가(κ에 쓰는 라벨 150건이 아닌 나머지 450건에서만 고른다. 같은 항목을 프롬프트 예시로 쓰면 κ가 부풀려진다) → santa → 혼동행렬·κ·p95
 
 **세부 설계**
 ```python
@@ -407,8 +407,8 @@ class InputJudgeOutFlagged(InputJudgeOut): ...   # 플래그 입력용. 스키�
   4. 판단 기준 C1–C7: 포장(번역·요약·코드·역할극·가정·비교·통계)을 벗기고 내용을 판정(REQ-02) / 이중용도는 partial / 위기 신호는 T1(자해·자살·학대)·T2(괴롭힘 피해)·T3(그루밍) 또는 과장 관용 오탐 / 초성·로마자·야민정음은 읽어서 판단 / 최근 턴 누적 의도(분해 공격) / refuse는 확실할 때만 / 확신도 정의.
   5. 경계 사례 3–6개: **dev 오분류에서만** 뽑는다. 6. 출력 형식.
 - D1 기본값은 "튜터 PRD 원안 + S2만 전환"이다([PRD §9][p9]). S1은 코드에서 `policy.d1`(기본 `s2`: S1 허용, `s1_s2`: S1도 전환)로 action을 덮고 프롬프트는 그대로 둔다. ⑧의 정답 유출 판정도 같은 키를 쓴다(S1.5).
-- 모델 `models.input_judge`: 생성과 다른 계열, temperature 0, 마감 `deadlines_s.input_judge` 2.5s([ADR-0004][a4]). 설정 로드 때 두 모델명 접두어가 같으면 경고한다.
-- 라벨·κ: dev 고정 표본 `judge_strat600.jsonl`에서 범주별 층화 150건을 판정 결과를 보기 전에 본인이 범주·대응으로 라벨한다. 그중 50건 교차 라벨은 **요청(리더 결정)**([master-plan §9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)). 대체: 본인 150건으로만 κ를 내고 "교차 라벨 없음"을 한계로 적는다. κ는 범주(15값)·대응(5값)별로 판정기–본인, 판정기–팀원, 본인–팀원.
+- 모델 `models.input_judge`: 생성과 다른 계열, temperature 0, 마감 `deadlines_s.input_judge` 2.5s([ADR-0004][a4]). `max_tokens`는 GP0 S0.3 역할 상수 384를 그대로 쓴다(`reason` ≤120자 + JSON 필드라 256이면 잘려 `bad_json`이 될 수 있다. `complete(max_tokens=)`로 덮지 않는다). 잘림이 없는지는 live 스모크가 본다. 설정 로드 때 두 모델명 접두어가 같으면 경고한다.
+- 라벨·κ: dev 고정 표본 `judge_strat600.jsonl`에서 범주별 층화 150건을 dev 실행 전에(판정 출력을 보지 않고) 본인이 범주·대응으로 라벨한다. 그중 50건 교차 라벨은 **요청(리더 결정)**이고([master-plan §9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)), 팀원도 판정 출력 없이 라벨한다. 대체: 본인 150건으로만 κ를 내고 "교차 라벨 없음"을 한계로 적는다. κ는 범주(15값)·대응(5값)별로 판정기–본인, 판정기–팀원, 본인–팀원.
 
 **검증**
 ```bash
@@ -418,7 +418,7 @@ uv run pytest tests/test_input_judge.py
 # dev 실행의 ⑤ 전환·부분·거절 항목은 모두 response(전환·부분은 fake_ok 생성 답, 거절은 템플릿)가 있어야 한다(불변식)
 uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-only.yaml --data data/dev/judge_strat600.jsonl --name judge-dev --estimate
 uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-only.yaml --data data/dev/judge_strat600.jsonl --name judge-dev --max-calls <추정 이상>
-uv run pytest -m live tests/test_input_judge.py   # 로컬, 키 있을 때만
+uv run pytest -m live tests/test_input_judge.py   # 로컬, 키 있을 때만. 가장 긴 출력(플래그 입력, reason 120자 근처)에서 finish_reason != "length"이고 형식 재요청 없이 파싱(잘림 없음)
 ```
 
 **수용 기준**
@@ -430,6 +430,7 @@ uv run pytest -m live tests/test_input_judge.py   # 로컬, 키 있을 때만
 - [ ] 판정기–사람 라벨 일치: 본인 150건 + 팀원 교차 50건 Cohen κ(교차는 요청(리더 결정), 없으면 본인만 + 한계 명시)([GR-04][gr04])
 - [ ] p95 ≤1.5s, 타임아웃 2.5s([GR-04][gr04])
 - [ ] 정책 프롬프트 400–600토큰(live `usage`로 확인), 완화어 0, 경계 사례는 dev에서만([GR-04][gr04])
+- [ ] 출력 `max_tokens` 384(GP0 S0.3 역할 상수)에서 잘림 없음: live 스모크에서 `LLMResult.finish_reason != "length"`(master §4.3), 형식 재요청 0
 - [ ] 입력 = 정규화된 현재 메시지 + 최근 N턴 요약(4, R 임계 이상이면 8) + R, 학생 메시지는 태그로 감쌈([GR-04][gr04])
 - [ ] 위기 하위 분류를 같은 호출에서, 별도 호출 0([GR-02][gr02])
 - [ ] santa 독립 리뷰어 2명 모두 통과([master-plan §10](../master-plan.md#10-개발-규칙))
@@ -457,7 +458,7 @@ uv run pytest -m live tests/test_input_judge.py   # 로컬, 키 있을 때만
 - `tests/test_join.py`, `tests/test_failure_table.py`, `tests/test_respond_concurrency.py`
 
 **작업 순서**
-- [ ] 1. `test_join.py`: 합류 표 12행 parametrize. Jev 행(1·3·4행)은 Jev `StageResult`를 인자로 넣어 순수 함수 `decide_input()`으로만 시험한다. 1행은 ⑤가 이미 끝나 `crisis_tier`가 있으면 그 등급이 `_finalize`로 가 위기 템플릿이 되는지, ⑤가 아직이면(⑤ 기록 `reason_code="input_judge_cancelled"`) 플래그 없을 때 거절 템플릿 + 연락처 줄, 플래그면 T1인지도 본다. 5·6행: ⑤ `skipped`는 `fallback_infra=False`, 연락처 줄 없음. 8행 경계: `input_block` 0·0.7·1.01에서 refuse·partial이 차단/허용으로 갈리고 위기는 그대로. 10행: `JoinDecision.instruction == templates.instruction(action, category)`, 최종 `verdict="modified"`, `check_input()`은 `response=None`(S2.4 불변식 유지), 허용·차단이면 `instruction=None`. 10행 + 플래그 + `crisis_fp`는 위기 템플릿이 아니라 `light_notice`(`_finalize` 1번은 block에만). 11행: allow로 나오고 `light_notice`는 `_finalize`가 한 번만 붙인다. `test_failure_table.py`: `FAILURE_TABLE` 행마다 parametrize(LLM 행은 장애 4종, ①·②·③·④·⑦·사전 필터·⑨·튜터 검색·⑥ 행은 예외를 내는 스텁. PII·검색 가드를 잘랐어도 `pii.mask`·`guard_retrieval` 스텁으로 돈다) × 경로 3개(`respond()` 병렬, `respond()` 직렬, `check_input()`→`check_output()`) × 위기 플래그 유무. 방식 B 경로는 입력 행(위기·①·②·규칙 차단·③·④·⑤·Jev·⑤+Jev)을 `check_input()` 다음 `check_output()`으로, 출력 행(⑦·사전 필터·⑧·⑨)을 `check_output()`으로 돈다. `check_input()`이 막으면 그 `response`가 최종이고, 아니면 모의 튜터 답으로 `check_output()`까지 간다. 튜터 검색·⑥ 행과 생성 실패 행은 방식 B에서 튜터가 검색·생성하므로 두 `respond()` 모드에만 있다(이유를 주석으로). 칸마다 최종 표시 문자열에서 행이 요구하는 위기 템플릿·연락처 줄을 단언한다. 위기 템플릿 칸은 trace에 같은 `request_id`의 `alert` 레코드 1개도 단언한다(S2.1, master §4.5 v7). PII 행은 Jev 스텁 호출 0과 ⑤·생성이 정규화본을 받았는지 단언한다(Jev를 실제로 켠 경로는 S2.10 `test_jev.py`). 연락처 줄이 필요한 칸은 정확히 한 번(⑤ 실패와 ⑧ 실패가 겹친 요청, `r2_fail` 포함)이고, 위기 템플릿·`light_notice` 응답에는 더 붙지 않는다
+- [ ] 1. `test_join.py`: 합류 표 12행 parametrize. Jev 행(1·3·4행)은 Jev `StageResult`를 인자로 넣어 순수 함수 `decide_input()`으로만 시험한다. 1행은 ⑤가 이미 끝나 `crisis_tier`가 있으면 그 등급이 `_finalize`로 가 위기 템플릿이 되는지, ⑤가 아직이면(⑤ 기록 `reason_code="input_judge_cancelled"`) 플래그 없을 때 거절 템플릿 + 연락처 줄, 플래그면 T1인지도 본다. 5·6행: ⑤ `skipped`는 `fallback_infra=False`, 연락처 줄 없음. 8행 경계: `input_block` 0·0.7·1.01에서 refuse·partial이 차단/허용으로 갈리고 위기는 그대로. 10행: `JoinDecision.instruction == templates.instruction(action, category)`, 최종 `verdict="modified"`, `check_input()`은 `response=None`(S2.4 불변식 유지), 허용·차단이면 `instruction=None`. 10행 + 플래그 + `crisis_fp`는 위기 템플릿이 아니라 `light_notice`(`_finalize` 1번은 block에만). 11행: allow로 나오고 `light_notice`는 `_finalize`가 한 번만 붙인다. `test_failure_table.py`: `FAILURE_TABLE` 행마다 parametrize(LLM 행은 장애 4종, ①·②·③·④·⑦·사전 필터·⑨·튜터 검색·⑥ 행은 예외를 내는 스텁. PII·검색 가드를 잘랐어도 `pii.mask`·`guard_retrieval` 스텁으로 돈다) × 경로 3개(`respond()` 병렬, `respond()` 직렬, `check_input()`→`check_output()`) × 위기 플래그 유무. 방식 B 경로는 입력 행(위기·①·②·규칙 차단·③·④·⑤·Jev·⑤+Jev)을 `check_input()` 다음 `check_output()`으로, 출력 행(⑦·사전 필터·⑧·⑨)을 `check_output()`으로 돈다. `check_input()`이 막으면 그 `response`가 최종이고, 아니면 모의 튜터 답으로 `check_output()`까지 간다. 튜터 검색·⑥ 행과 생성 실패 행은 방식 B에서 튜터가 검색·생성하므로 두 `respond()` 모드에만 있다(이유를 주석으로). 칸마다 최종 표시 문자열에서 행이 요구하는 위기 템플릿·연락처 줄을 단언한다. 위기 템플릿 칸은 trace에 같은 `request_id`의 `alert` 레코드 1개도 단언한다(S2.1, master §4.5 v7). PII 행은 Jev 스텁 호출 0과 ⑤·생성이 정규화본을 받았는지 단언한다(Jev를 실제로 켠 경로는 S2.10 `test_jev.py`). 연락처 줄이 필요한 칸은 정확히 한 번(⑤ 실패와 ⑧ 실패가 겹친 요청, `r2_fail` 포함)이고, 위기 템플릿·`light_notice` 응답에는 더 붙지 않는다. ⑤ 실패 행은 플래그 없음에서 출력 차단 칸 둘을 더 가진다: ⑦ 카나리아 차단(모의 튜터 답에 그 요청의 카나리아)과 ⑧ 유해 R0 차단(FakeLLM ⑧이 유해 위반). ⑤ 장애 4종 × 경로 3개(`respond()` 병렬·직렬, `check_input()`→`check_output()`, Jev 꺼짐이라 합류 3행)에서 최종 표시 문자열(안전 템플릿)에 연락처 줄이 정확히 한 번 있는지 단언한다. "장애 중 모든 응답에 연락처"(master §4.2)를 차단 지점마다 고정하려는 칸이다. 행이 아니라 ⑤ 실패 행의 parametrize 칸이라 행 수(16) 단언은 그대로다
 - [ ] 2. `test_respond_concurrency.py`: 동시 시작, 차단 시 취소 후 대기, 생성이 먼저 끝나면 판정 대기, 끝난 뒤 남은 태스크 0. "Jev 고신뢰면 ⑤를 기다리지 않음"은 Jev가 생기는 S2.10의 `test_jev.py`가 맡는다
 - [ ] 3. `decide_input()` → `respond()` → `_finalize` 연락처 줄(`repair.py`의 임시 연락처 줄 제거) → 직렬 모드 → 호출 수 테스트 → santa 2명 통과 후 머지(위기 행, [master-plan §10](../master-plan.md#10-개발-규칙))
 
@@ -488,7 +489,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
 | 11 | ⑤ allow + `crisis_fp` | allow(`light_notice`는 `_finalize`가 붙임, S2.1) | 유지 |
 | 12 | ⑤ allow | allow | 유지 |
 
-- 7행은 `crisis_tier`로 가른다(스키마가 `crisis_tier` ⇔ `action=="crisis"`를 보장, S2.4). 8행은 master §4.2의 `input_block` 규칙이고 위기(2·5·7행)는 건드리지 않는다. S3.3 재생 스윕은 `input_block=1.01`로 기록 실행해 모든 refuse·partial이 8행을 타고 점수만 남는다는 전제를 쓴다.
+- 7행은 `crisis_tier`로 가른다(스키마가 `crisis_tier` ⇔ `action=="crisis"`를 보장, S2.4). 8행은 master §4.2의 `input_block` 규칙이고 위기(2·5·7행)는 건드리지 않는다. S3.3 재생 스윕은 `input_block=1.01`로 기록 실행해 모든 refuse·partial이 8행을 타고 점수만 남는다는 전제를 쓴다. 1.01의 이 뜻("막지 않고 점수만")은 막는 쪽 임계값 `input_block`·`tau_J`에만 있다(master §4.4 v9). 8행 경계 테스트의 1.01도 같은 뜻이다.
 - **꺼짐과 실패는 다르다**(master §4.2): ⑤ `status="error"`(재시도 후 실패)만 `fallback_infra`이고 연락처 줄이 붙는다. `status="skipped"`(설정으로 꺼짐)는 5·6행을 탄다.
 - 1행: Jev가 τ_J 이상으로 막을 때 ⑤가 이미 끝났으면 `JoinDecision.crisis_tier`에 ⑤ 등급을 담아 `_finalize`가 그 등급의 위기 템플릿으로 바꾼다(master §4.2). ⑤가 아직이면 기다리지 않고 ⑤를 취소한 뒤 플래그만으로 판단한다(플래그면 T1). 이때 ⑤ 결과를 모르므로(master §4.2, 어휘가 놓친 위기일 수 있다) 거절 템플릿에도 연락처 줄을 붙인다. 취소한 ⑤는 `StageResult(stage="input_judge", action=None, reason_code="input_judge_cancelled")`로 남고, `_finalize`가 이 사유를 읽는다.
 - 10행: S2.4가 직렬 연결에서 채우던 `Verdict.instruction = templates.instruction(action, category)`(S2.6)를 `decide_input()`이 이어받는다. `check_input()`은 `response=None`을 돌려주고, `respond()`는 같은 지시로 재생성한다(master §4.1·§4.2 방식 B). 두 경로 모두 `verdict="modified"`다(block도 pass도 아니다, master §4.1 v8). 그래서 `_finalize` 1번 조건(block에만)을 타지 않고, 플래그 + `crisis_fp`면 2번 조건의 `light_notice`가 붙는다.
@@ -507,7 +508,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
 | 규칙 차단 | 판정기 장애와 무관 | 안전 템플릿(플래그면 위기 템플릿). 연락처 줄 없음(범주가 정해진 결정) |
 | ③ 규칙 오류 | `rules.check` 예외 | 안전 템플릿 + 연락처 줄(fail-closed, 플래그면 위기 템플릿) |
 | Jev 실패 | Jev 4종(`decide_input()`에 Jev 결과로 넣음) | ⑤ 판정대로 |
-| ⑤ 실패 | ⑤ 4종 × Jev 고신뢰/아님(같은 방식) | 차단 / 허용 + `fallback_infra`, 둘 다 연락처 줄 |
+| ⑤ 실패 | ⑤ 4종 × Jev 고신뢰/아님(같은 방식). 아님 쪽은 허용 뒤 ⑦ 카나리아·⑧ R0 차단 칸도(플래그 없음) | 차단 / 허용 + `fallback_infra` / 허용 뒤 ⑦·⑧ 차단은 안전 템플릿. 모두 연락처 줄 |
 | ⑤ 꺼짐(실패 아님) | `stages.input.judge: false` | 플래그면 T1, 아니면 허용. `fallback_infra` 아님, 연락처 줄 없음 |
 | ⑤·Jev 모두 실패 | 둘 다 4종 | 허용 + `fallback_infra` + 연락처 줄, ⑧ 실행 확인 |
 | 튜터 검색·⑥ 검색 가드 오류 | `tutor.retrieve` 예외, `guard_retrieval` 예외(검색 가드를 잘랐으면 예외를 내는 스텁) | 생성 실패 행과 같음 |
@@ -527,7 +528,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
 - [ ] 장애 주입 테스트(판정 API 타임아웃·5xx·429·잘못된 JSON)에서 GR-14 표와 일치([GR-14][gr14])
 - [ ] 장애 중 위기 입력: 연락처 누락 0건(플래그 유무 무관), 위기 템플릿 누락 0건(플래그 있는 입력), 위기 응답마다 `alert` 레코드 1개([GR-14][gr14], master §4.2·§4.5)
 - [ ] 인프라 폴백 응답은 `fallback_infra=True`, ⑤ 꺼짐(`skipped`)은 `False`([GR-14][gr14], master §4.2)
-- [ ] ⑤ 실패·② 오류 요청의 모든 응답(통과 답변 포함)과 ⑧ 실패·생성 실패·`r2_fail` 응답, ⑤ 결과 없이 끝나는 응답(① 오류·③ 오류·Jev 선차단)에 연락처 줄이 정확히 한 번, ③ 규칙 차단에는 없음. 세 경로(`respond()` 병렬·직렬, `check_input()`→`check_output()`) 모두이고, 방식 B는 `check_output()`이 복사한 `input_verdict.stages`로 붙인다. 연락처 줄은 `_finalize()`만 붙이고 `repair.py`에는 없음(`test_failure_table`, [ADR-0003][a3], master §4.2 v7)
+- [ ] ⑤ 실패·② 오류 요청의 모든 응답(통과 답변, ⑤ 실패 뒤 ⑦ 카나리아·⑧ R0로 막힌 응답 포함)과 ⑧ 실패·생성 실패·`r2_fail` 응답, ⑤ 결과 없이 끝나는 응답(① 오류·③ 오류·Jev 선차단)에 연락처 줄이 정확히 한 번, ③ 규칙 차단에는 없음. 세 경로(`respond()` 병렬·직렬, `check_input()`→`check_output()`) 모두이고, 방식 B는 `check_output()`이 복사한 `input_verdict.stages`로 붙인다. 연락처 줄은 `_finalize()`만 붙이고 `repair.py`에는 없음(`test_failure_table`, [ADR-0003][a3], master §4.2 v7)
 - [ ] ①·②·③·⑦·사전 필터·⑨·튜터 검색·⑥ 오류는 fail-closed(②는 플래그로 처리, ①·③은 안전 템플릿 + 연락처 줄, ⑦은 안전 템플릿, 사전 필터는 모든 문장을 ⑧로, ⑨는 ⑧ 실패와 같은 길, 튜터 검색·⑥은 생성 실패와 같은 길), ④ PII 오류는 로그 저장 중단 + Jev 미전송(Jev 실패 행), ⑤·생성은 정규화본으로 진행(테스트, master §4.2 v7)
 - [ ] Jev ≥ τ_J 차단 때 ⑤가 이미 끝났으면 ⑤ 위기 등급의 위기 템플릿, 아직이면 거절 템플릿 + 연락처 줄(플래그면 T1)(테스트, master §4.2)
 - [ ] 병렬 합류 뒤에도 `check_input()`이 전환·부분이면 `verdict="modified"`와 `Verdict.instruction`을 채움(S2.4 불변식 테스트 유지, master §4.1 v8·§4.2)
@@ -843,6 +844,8 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 > v7(2026-10-31): santa-loop 2회차 지적을 master v7에 맞춰 반영했다(위기 알림 `alert` 레코드, ⑤ 결과 없이 끝나는 응답(①·③ 오류·Jev 선차단)의 연락처 줄, 방식 B `input_verdict.stages` 복사, ④ PII 오류 시 Jev 미전송, 과잉 거절 원인 열 합계, `fixed_dev`에 스모크 세트, `test_gr01_acceptance.py` dev 시드 skip, `run_item(guard, item, tutor, session)`, 홀드아웃 최종 설정 해시·예산 소진 중단).
 >
 > v8(2026-10-31): santa-loop 3회차 지적을 master v8에 맞춰 반영했다(모의 폭주의 동시성 정의·⑤ 시간 초과 0 단언·게이트 대기 계산, `responses.jsonl` 턴 줄과 `dialogue` 요약 줄, S2.0부터 홀드아웃 허용 목록 확인, Jev는 PII가 켜졌을 때만, S2.3 선행 S2.1·S2.10 선행 S2.3, 입력 전환·부분 `modified`, 낭비 지표 정의, 인사 약 75, 자르는 선 A의 S2.4 라벨·κ는 GP3 S3.3 조건부 단계).
+>
+> v9(2026-10-31): 적대 검토 4회차 지적을 master v9에 맞춰 반영했다(S2.5 표 테스트에 ⑤ 실패 × ⑦ 카나리아·⑧ R0 차단 칸, S2.0 사람 검수를 분할·중복 제거 뒤로, S2.4 라벨을 dev 실행 앞으로, ⑤ `max_tokens` 384와 live 잘림 확인, 합성 PII 생성기를 S2.3 P0로, `input_block` 1.01의 뜻은 master §4.4 v9, `--holdout --estimate`도 모델 환경변수 확인).
 
 v1의 15개 제안은 master v2·v3에서 모두 정리됐다(설정 키·`input_block`·환경변수·`Session`·`jev` 역할·CLI·커밋 규칙·S1.3 PII 자리·일정 분할·GR-14 생성 실패 행·멀티턴 재생·GP1 착수 시간·ablation 이름). `stages.session.{retry_jaccard, retry_s}`와 항목 `meta` 필드는 채택되지 않아 각각 코드 상수와 `sources.yaml` 기록으로 대신한다. v3에 남겼던 분할 사이 같은 씨앗(dev 쪽 삭제, §4.6)과 이의 진입점(`record_appeal`, §4.5)은 master v4에서, S2.7 7h·S2.8·S2.9 3h와 S2.8·S2.9 선행 S2.7은 master v5 §5에서 정리됐다.
 
@@ -852,7 +855,7 @@ v1의 15개 제안은 master v2·v3에서 모두 정리됐다(설정 키·`input
 |---|---|---|
 | 1 | 자체 세트가 홀드아웃 목표의 약 3.8배(위기·탈옥·인젝션 각 약 470 씨앗)로 커졌다. 생성은 서브에이전트라 S2.0 6h는 그대로 두지만 dev 10% 검수가 늘어 GP1의 착수·검토 2h가 빠듯하다 | §5 S2.0, §6 |
 
-예상 시간은 master-plan §5와 같다. 단 S2.4 8h는 엘리스 키가 11/12까지 오지 않으면 라벨·κ·p95가 GP3 S3.3 조건부 단계로 밀린다(§2 자르는 선 A, master §13 v8).
+예상 시간은 master-plan §5와 같다. 단 S2.4 8h는 엘리스 키가 11/12까지 오지 않으면 dev 실행·κ·p95가 GP3 S3.3 조건부 단계로 밀린다(라벨은 키 없이 dev 실행 전에 한다, §2 자르는 선 A, master §13 v8).
 
 [p6]: ../PRD.md#6-비기능-요구사항
 [p7]: ../PRD.md#7-지표와-합격선

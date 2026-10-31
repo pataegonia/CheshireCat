@@ -1,6 +1,6 @@
 # GP0 기반 — 세부 플랜
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v8 (santa-loop 3회차 반영)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v9 (적대 검토 4회차 반영)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 10/30(금)–11/3(화) · 마일스톤: Guardrail GP0 기반
 
 ## 1. 목표와 관문
@@ -149,7 +149,7 @@ gh issue list --label guardrail --state all --limit 50
   - 테스트(`tests/test_config.py`): `default.yaml`·`unguarded.yaml` → 통과. `overrides={"stages.input.judge": True}` → `NotImplementedError`, 메시지에 `input.judge`. 둘을 켜면 메시지에 둘 다. `_IMPLEMENTED`를 monkeypatch로 늘리면 통과. 같은 설정으로 `Guard(cfg)`도 같은 오류. `_IMPLEMENTED`에 `input.jev`만 넣고 `{"stages.input.jev": True}` → `ValueError`, 메시지에 `input.pii`.
 - `Guard(cfg)`, `Guard.from_config(path, overrides=None)`:
   - 생성 시 `check_toggles(cfg)`를 부른다. 토글 검사를 `Guard` 안에 따로 두지 않는다.
-  - `Guard.system_extra(canary=None) -> str`가 켜진 단계의 문구만 모은다([§4.2](../master-plan.md#42-공개-api-pipelinepy) "가드 문구는 그 단계가 켜졌을 때만"). `new_canary()`와 따로 둔다(출력 끔·검색 켬에서도 datamarking 문구가 들어가게): 카나리아 지시는 `output.code`가 켜졌을 때(문구는 S1.2 `new_canary()`), datamarking 문구는 `retrieval.enabled`가 켜졌을 때(S2.9)만 넣는다. GP0에는 둘 다 없으므로 항상 `""`이고, 무방비 설정에서 `system_extra == ""`를 테스트로 고정한다(베이스라인 비교가 공정하게).
+  - `Guard.system_extra(canary=None) -> str`가 켜진 단계의 문구만 모은다([§4.2](../master-plan.md#42-공개-api-pipelinepy) "가드 문구는 그 단계가 켜졌을 때만"). `new_canary()`와 따로 둔다(출력 끔·검색 켬에서도 datamarking 문구가 들어가게): 카나리아 지시는 `output.code`가 켜졌을 때(문구는 S1.2 `new_canary()`. `new_canary()`는 `output.code`가 꺼졌거나 `tutor.obligations.canary`가 거짓이면 `None`이다, §4.2 v9), datamarking 문구는 `retrieval.enabled`가 켜졌을 때(S2.9)만 넣는다. GP0에는 둘 다 없으므로 항상 `""`이고, 무방비 설정에서 `system_extra == ""`를 테스트로 고정한다(베이스라인 비교가 공정하게).
   - `respond(message, history, tutor, session=None)`: 무방비면 `tutor.retrieve` → `self.guard_retrieval` → `tutor.generate(system_extra="", instruction=None)`. 결과 `Verdict(verdict="pass", action="allow", category="S0", confidence=None, rule_id=None, reason_code="stages_off", reason="", latency_ms, policy_version, response=답변, stages=13개)`. `session`이 없으면 `Session()`을 만든다.
   - `retrieve`·`generate`는 `StageResult(status="ok")`로 시간(`started_ms`·`latency_ms`)을 남긴다(§4.1, 가드 추가 지연을 trace만으로 내기 위해). 어댑터가 문자열만 돌려주므로 `generate`의 토큰은 0으로 두고, 완성된 생성에는 `detail["chars"] = len(answer)`를 남긴다. 낭비 지표는 토큰이 아니라 버린 생성 수 ÷ 전체 생성 수, 버린 완성 답 문자 수 ÷ 전체 완성 답 문자 수다(§4.1 v8. 취소된 생성은 수에만 든다, 계산은 S3.6).
   - `respond()`와 `check_output()`은 통과여도 `response`에 표시할 답변을 넣는다(§4.1). `check_input()`은 허용이면 `response=None`이고, 전환·부분 응답이면 `verdict="modified"`, `response=None`에 `instruction`을 담는다(S2.4, 위 불변식).
@@ -206,7 +206,7 @@ uv run ruff check . && uv run ruff format --check .
 
 ```python
 @dataclass(frozen=True)
-class Reply:  text: str;  tokens_in: int;  tokens_out: int
+class Reply:  text: str;  tokens_in: int;  tokens_out: int;  finish_reason: str | None = None   # LLMResult로 그대로 옮긴다
 class TransportError(Exception):     # 메시지 없이 분류 정보만: kind(timeout|connect|status), status, headers
 Send = Callable[..., Awaitable[Reply]]   # send(model, messages, *, response_format, temperature, max_tokens, timeout)
 def openai_send(client: AsyncOpenAI) -> Send: ...   # SDK 예외 → TransportError
@@ -221,7 +221,7 @@ class LLM:
 ```
 
 - `send=None`이면 첫 실제 호출 때 `openai_send(AsyncOpenAI(base_url=os.environ["GUARD_LLM_BASE_URL"], api_key=os.environ["GUARD_LLM_API_KEY"], max_retries=0))`을 만든다. 그래서 `--fake`처럼 부르는 역할이 모두 `faults`로 덮인 실행은 환경변수 없이 돈다. 환경변수가 없으면 변수 이름만 담은 오류를 낸다. 값은 어떤 메시지에도 넣지 않는다.
-- 샘플링은 역할 상수: generator `temperature=0.7, max_tokens=512`, 판정 3종 `0, 256`. `complete(max_tokens=…)`를 주면 그 값이 상수보다 우선한다([§4.3](../master-plan.md#43-llm-호출-llmpy)). 실제 값은 metrics.json에 남긴다(R8 §B1 출력 길이 고정, §5-2).
+- 샘플링은 역할 상수: generator `temperature=0.7, max_tokens=512`, input_judge `0, 384`, exchange_judge·attack_judge `0, 256`. input_judge만 384인 이유: ⑤ 출력은 `reason`(≤120자)에 JSON 필드가 붙어(GP2 S2.4) 흔한 토크나이저에서 256을 넘을 수 있고, 잘리면 `bad_json`이 된다. 잘림이 없는지는 S2.4 live 스모크가 확인한다. `complete(max_tokens=…)`를 주면 그 값이 상수보다 우선한다([§4.3](../master-plan.md#43-llm-호출-llmpy)). 실제 값은 metrics.json에 남긴다(R8 §B1 출력 길이 고정, §5-2).
 - `Guard(cfg, *, llm=None)`는 `self.llm`을 갖는다(없으면 `LLM(cfg)`). 하네스는 `LLM` 하나를 만들어 `Guard`와 `MockTutor`에 같이 넘기므로 생성과 판정이 게이트 하나를 쓴다. 실제 튜터는 `guard.llm.slot("generator")`를 쓴다(S3.1).
 
 **faults**(평가 전용 장애 주입, [§4.3](../master-plan.md#43-llm-호출-llmpy)·[§4.4](../master-plan.md#44-설정-configsyaml)): `complete()` 맨 앞에서 `cfg.faults.get(role)`를 본다. 서비스 모드에서는 S0.2 검증이 `faults`를 막으므로 여기서 모드를 다시 보지 않는다.
@@ -276,7 +276,7 @@ class LLM:
 | `slot("generator")` 2개를 잡은 채(`initial=2`) `complete()` / slot 안에서 예외·취소 | `complete()`는 slot이 풀릴 때까지 대기 / `in_flight` 복구, `calls`는 들어갈 때 센 1 그대로(재시도·토큰 변화 없음) |
 | 게이트 대기와 마감(`FakeClock`): `initial=2`, 생성 호출 `slot("generator")` 2개를 쥔 채 `complete("input_judge", deadline_s=2.5)`를 띄우고 가짜 시계를 5s 올린 뒤 slot을 푼다 / 같은 상황에 `gate.max_wait_s=0.01`이고 slot을 풀지 않음 | 대기 5s가 마감 2.5s보다 길어도 허가 뒤 마감이 시작돼 `send`가 `timeout=2.5`를 받고 정상 / `timeout`, `send` 0회, `in_flight` 그대로 |
 | `slot()` 예산(`max_calls=2`): `slot("generator")` 1회 → `complete("input_judge")` 2회 / 그 뒤 `slot("generator")` | 둘째 `complete()`가 `budget`, `send` 1회 / `BudgetExceeded`, 허가 없음, `usage["generator"].errors["budget"] == 1` |
-| `max_tokens=64` / 생략 | `send`가 64를 받음 / 역할 상수(생성 512, 판정 256) |
+| `max_tokens=64` / 생략 | `send`가 64를 받음 / 역할 상수(생성 512, input_judge 384, exchange_judge·attack_judge 256) |
 | `faults` 4값 각각 / `fake_ok` + `schema` / `{generator: fake_ok, exchange_judge: timeout}` | 그 `error`, `attempts=0`, `send` 0회, 게이트 그대로 / `parsed` 채움, `send` 0회 / 역할마다 따로 적용 |
 | `FAKE_OK` 등록 2개 / 등록 없는 역할에 `fake_ok`(`{exchange_judge: fake_ok}`, 기본 `FAKE_OK`) / `fake_responders={"exchange_judge": f}`로 넘김 | generator 응답이 첫 청크 문장 + `[S1]`, attack_judge 응답이 `refused`·`success` 거짓 JSON / `LLM` 생성에서 `ValueError`, 메시지에 `exchange_judge`, `send` 0회 / `f`의 응답 |
 | 무작위 결과 스크립트(hypothesis, 동기 테스트 안에서 `asyncio.run`) | 예외 0, `error`는 표의 값 중 하나 |
@@ -377,10 +377,11 @@ uv run pytest tests/test_trace.py
 - [ ] 6. `ecc:pr-test-analyzer` 리뷰 → PR
 
 **세부 설계**
-- `Item`(pydantic, `extra="forbid"`, [§4.6](../master-plan.md#46-데이터-evaldatasetspy) v6 그대로):
+- `Item`(pydantic, `extra="forbid"`, [§4.6](../master-plan.md#46-데이터-evaldatasetspy) v9 그대로):
   - `id`, `seed_id`, `split: Literal["dev", "holdout", "organizer_test", "ext"]`, `subsplit: Literal["calibration", "report"] | None = None`.
   - `kind`: `attack` · `benign` · `benign_risky` · `greeting` · `crisis` · `grounding` · `citation` · `multiturn` · `injection`(9개).
-  - `category`, `technique`: `none` · `jamo` · `chosung` · `fullwidth` · `zerowidth` · `digit_insert` · `yamin` · `codeswitch` · `romaja` · `roundtrip` · `honorific` · `roleplay` · `encoding` · `indirect`(14개).
+  - `category: Category | None`, `technique`. 둘 다 필수다. 예외는 `split="organizer_test"` 하나다(§4.6 v9): 주최측 라벨에 S0–S14 대응이 없으면 `category: null`을 허용하고, `technique`가 없으면 `none`으로 채운다(변환은 S3.2). 다른 분할의 `category: null`은 오류다(모델 검증기 하나).
+  - `technique` 값: `none` · `jamo` · `chosung` · `fullwidth` · `zerowidth` · `digit_insert` · `yamin` · `codeswitch` · `romaja` · `roundtrip` · `honorific` · `roleplay` · `encoding` · `indirect`(14개).
   - `subtype: str | None = None`. `kind="crisis"`면 `direct`·`euphemism`·`evasion`, `kind="injection"`이면 `direct`·`indirect` 중 하나. 근거 세트의 주입 유형 값은 S1.1이 정한다.
   - `turns`(1개 이상, 마지막은 student), `expected{action, crisis_tier, violation, marker}`(모두 선택), `source`, `license`.
   - 근거 세트 필드 `chunks: list[{sid, source, text}] | None`, `answer: str | None`, `labels: dict | None`은 **지금 선택 필드로 둔다**. 근거·인용 kind에서 필수로 만드는 검사와 `labels` 안의 형식은 S1.1이 더한다.
@@ -409,7 +410,7 @@ uv run pytest tests/test_trace.py
 - `source: "self"`, `license: "CC-BY-4.0"`, `split: "dev"`, `subsplit: null`. 스모크는 하네스 확인용이라 모두 dev로 둔다(지표용 자체 세트의 분할은 S2.0이 `assign_split()`으로 정한다). id는 `atk-0001`, 변형 `atk-0001-jamo`(§4.6), 정상 `ben-`, 인사 `grt-`, 위기 `cri-`.
 - `data/README.md`: 파일·건수·출처·라이선스·작성 방법(Claude Code Sonnet 서브에이전트, 날짜, 본인 검토)·sha256. 공격·위기 스모크는 "로컬 전용, 커밋 안 함"으로 적고 해시만 둔다. PRD §8의 외부 세트는 "미반입"으로 두고 라이선스는 R2 메모를 가리킨다. NC 라이선스 원문은 `data/raw/`(gitignore)에만, 평가 전용.
 
-테스트: 스키마 오류(턴 없음, 모르는 `kind`·`split`·`technique`, crisis인데 tier 없음, attack인데 `action` 없음, grounding인데 `violation` 없음, injection인데 `marker` 없음·빈 문자열, `subtype: indirect` injection인데 `chunks` 없음, benign에 `chunks`) → 줄 번호가 든 `DatasetError`. 9개 kind 각각 최소 항목이 통과하고(injection은 `marker` 포함, indirect는 `chunks`도), 근거 필드 없는 grounding 항목도 S0.5에서는 통과. CSV + 매핑 → 원형과 같은 `Item`. `assign_split` → 고정 기준값 몇 개(씨앗 → 분할)와 hypothesis로 "씨앗만의 함수, 약 30%". 중복 제거: 같은 분할 안 키, jamo 변형이 남는 것, 분할 사이 dev 쪽 삭제를 두 경우 따로 — ⓐ 씨앗만 같고 정규화본은 다른 dev 항목(번역본이 다른 경우) ⓑ 씨앗은 다르고 정규화본이 같은 dev 항목. 둘 다 dev 쪽만 지워지고 홀드아웃 항목은 그대로, 반환 쌍이 (dev id, 홀드아웃 id). ⓒ 같은 겹침에서 dev 항목 id가 `fixed_dev`에 있으면 홀드아웃 쪽이 지워지고 dev 고정 항목은 그대로, 반환 쌍이 (홀드아웃 id, dev id). ⓓ 홀드아웃 하나가 dev 고정 항목과 일반 dev 항목에 함께 겹치면 홀드아웃만 지워지고 dev 둘은 남는다. 스모크 → `smoke_benign` 로드 성공·50건(CI에서 돈다). `smoke_attack`·`smoke_crisis`는 파일이 없으면 skip(CI에는 없다), 있으면 ≥50/30, jamo 변형은 같은 시드 원문과 `normalize`가 같음. 세 파일 모두 전화(`01[016789]-?\d{3,4}-?\d{4}`)·주민번호(`\d{6}-?[1-4]\d{6}`) 패턴 0건.
+테스트: 스키마 오류(턴 없음, 모르는 `kind`·`split`·`technique`, crisis인데 tier 없음, attack인데 `action` 없음, grounding인데 `violation` 없음, injection인데 `marker` 없음·빈 문자열, `subtype: indirect` injection인데 `chunks` 없음, benign에 `chunks`) → 줄 번호가 든 `DatasetError`. 9개 kind 각각 최소 항목이 통과하고(injection은 `marker` 포함, indirect는 `chunks`도), 근거 필드 없는 grounding 항목도 S0.5에서는 통과. `category: null`: `split: organizer_test`면 통과하고 `technique`를 빼면 `none`으로 채워진다. 같은 항목을 `dev`·`holdout`·`ext`로 바꾸면 각각 `DatasetError`. CSV + 매핑 → 원형과 같은 `Item`. `assign_split` → 고정 기준값 몇 개(씨앗 → 분할)와 hypothesis로 "씨앗만의 함수, 약 30%". 중복 제거: 같은 분할 안 키, jamo 변형이 남는 것, 분할 사이 dev 쪽 삭제를 두 경우 따로 — ⓐ 씨앗만 같고 정규화본은 다른 dev 항목(번역본이 다른 경우) ⓑ 씨앗은 다르고 정규화본이 같은 dev 항목. 둘 다 dev 쪽만 지워지고 홀드아웃 항목은 그대로, 반환 쌍이 (dev id, 홀드아웃 id). ⓒ 같은 겹침에서 dev 항목 id가 `fixed_dev`에 있으면 홀드아웃 쪽이 지워지고 dev 고정 항목은 그대로, 반환 쌍이 (홀드아웃 id, dev id). ⓓ 홀드아웃 하나가 dev 고정 항목과 일반 dev 항목에 함께 겹치면 홀드아웃만 지워지고 dev 둘은 남는다. 스모크 → `smoke_benign` 로드 성공·50건(CI에서 돈다). `smoke_attack`·`smoke_crisis`는 파일이 없으면 skip(CI에는 없다), 있으면 ≥50/30, jamo 변형은 같은 시드 원문과 `normalize`가 같음. 세 파일 모두 전화(`01[016789]-?\d{3,4}-?\d{4}`)·주민번호(`\d{6}-?[1-4]\d{6}`) 패턴 0건.
 
 **검증**
 ```bash
@@ -418,9 +419,9 @@ git check-ignore runs/x data/raw/x .coverage data/seed/smoke_attack.jsonl data/s
 ```
 
 **수용 기준**
-- [ ] JSONL·CSV를 형식과 무관하게 같은 `Item`으로 읽는다. 주최측 형식이 오면 매핑 YAML만 더한다([GR-15](../PRD.md#gr-15-평가-하네스-p0) "형식이 나오기 전엔 형식 무관 로더", PRD §9 D6).
+- [ ] JSONL·CSV를 형식과 무관하게 같은 `Item`으로 읽는다. 주최측 원본은 S3.2가 이 형식의 JSONL로 한 번 변환하고 하네스는 그 파일을 읽는다(§4.6 v9)([GR-15](../PRD.md#gr-15-평가-하네스-p0) "형식이 나오기 전엔 형식 무관 로더", PRD §9 D6).
 - [ ] 분할은 `seed_id` 단위(`assign_split()` 하나), 중복 제거는 정규화본 기준이고 분할 사이에서는 씨앗이나 정규화본 중 하나만 같아도 dev 쪽을 지우고, 겹친 dev 항목이 dev 고정이면 예외로 홀드아웃 쪽을 지운다(`dedupe()` 하나)(GR-15 "원 요청 단위로 개발/홀드아웃 분리, 정규화 후 중복 제거", [PRD §8](../PRD.md#8-데이터)). 두 함수는 §4.6 규칙과 글자 그대로 같다.
-- [ ] 항목마다 범주와 기법이 있어 리포트를 범주 × 기법으로 나눌 수 있다(GR-15 "한국어 테스트 매트릭스").
+- [ ] 항목마다 범주와 기법이 있어 리포트를 범주 × 기법으로 나눌 수 있다(GR-15 "한국어 테스트 매트릭스"). 범주 null은 `organizer_test`의 대응 없는 라벨만이다(§4.6).
 - [ ] 스모크 130건이 검증을 통과하고 실제 PII는 0건이다([master-plan §10](../master-plan.md#10-개발-규칙) 보안).
 - [ ] `runs/`, `data/raw/`, `.coverage`, 공격·위기 스모크가 git에서 무시되고, 커밋된 스모크는 `smoke_benign.jsonl` 하나다.
 
@@ -522,8 +523,8 @@ CLI([§4.7](../master-plan.md#47-실행-evalrunpy)): `uv run python -m guardrail
 - 시작 전에 거부한다(종료 코드 2, 호출 0회): `split="holdout"` 항목이나 `data/holdout/` 경로(S3.5 전에는 읽지 않음, `--estimate`에도 적용), S0.2 `check_toggles`가 막는 설정(켜졌지만 구현 안 된 토글의 `NotImplementedError`, `input.pii` 없이 켠 `input.jev`의 `ValueError`. 메시지를 출력, `--estimate`에도 적용), `--estimate`가 아닌데 `--max-calls` 없음(추정이 0이어도, §4.7 v8), 추정 > `--max-calls`, 추정에 호출이 잡힌 역할의 모델명 없음, `faults`의 `fake_ok`에 고정 응답이 등록되지 않은 역할(S0.3 `LLM` 생성의 `ValueError`를 받아 역할 이름을 출력).
 - 추정 `estimate(items, cfg, repeat) -> (total, by_role)`는 [§4.7](../master-plan.md#47-실행-evalrunpy) "추정 공식" 그대로, 항목 종류별 상한이다:
   - `grounding`·`citation`: ⑧ 1(`output.judge`가 켜졌을 때). 생성 없음. `output.r2`와 `obligations.regenerate`가 둘 다 참이면 재생성 1 + 재판정 1을 더한다(§4.7 R2 항, GP0에서는 0).
-  - `attack`·`benign`·`benign_risky`·`greeting`·`injection`·`crisis`: 생성 1 + 켜진 판정(⑤ `input.judge`·Jev `input.jev`·⑧ `output.judge`) 수 + 재생성 1(⑤가 켜졌을 때) + attack_judge 1(attack·benign·benign_risky·greeting만. injection은 마커, crisis는 템플릿으로 코드 채점).
-  - `multiturn`: 학생 턴마다 (생성 1 + 켜진 판정 수 + 재생성) + 대화당 attack_judge 1. 재생은 S2.7이지만 추정은 여기서 둔다.
+  - `attack`·`benign`·`benign_risky`·`greeting`·`injection`·`crisis`: 생성 1 + 켜진 판정(⑤ `input.judge`·Jev `input.jev`·⑧ `output.judge`) 수 + 재생성 1(⑤가 켜졌을 때) + attack_judge 1(attack·benign·benign_risky·greeting만. injection은 마커, crisis는 템플릿으로 코드 채점). `output.r2`와 `obligations.regenerate`가 둘 다 참이면 여기에도 재생성 1 + ⑧ 재판정 1을 더한다(§4.7 v9 R2 항, GP0에서는 0).
+  - `multiturn`: 학생 턴마다 위 줄의 값(attack_judge 빼고, R2 항 포함) + 대화당 attack_judge 1. 재생은 S2.7이지만 추정은 여기서 둔다.
   - 합계 × repeat를 1.1배(재시도) 해 올린다. 부동소수 오차로 1 늘지 않게 정수로 `(n × 11 + 9) // 10`을 쓴다(200 → 220). `faults`로 덮인 역할은 0으로 센다. 역할별 내역을 같이 출력한다. 실행 중에는 `LLM(max_calls=…)`이 한 번 더 막는다.
 - `--estimate`: 설정 검증(`load_config`)·`check_toggles(cfg)`(S0.2)·홀드아웃 거부만 하고 추정과 역할별 내역을 출력한 뒤 종료 0([§4.4](../master-plan.md#44-설정-configsyaml) "단계 켜기 규칙"). `Guard`·`LLM`·`MockTutor`를 만들지 않고 튜터 의무 탐지(S3.1)도 하지 않는다. 호출·환경변수·`runs/` 없음. 아직 구현 안 된 토글을 켠 설정(GP0에서는 예: `--set stages.input.judge=true`, S2.4 전)은 `--estimate`에서도 `NotImplementedError` 메시지와 함께 호출 0회로 종료 2다. 순수 함수 `estimate()` 자체는 토글을 보지 않는다. 검사는 CLI 경로만 한다.
 - 실행: 작업자들이 큐에서 항목을 꺼낸다(한꺼번에 띄워 게이트 대기가 `gate.max_wait_s`를 넘지 않게). 항목마다 공개 함수 `run_item(guard, item, tutor, session) -> Record`(§4.7, 데모 S4.1이 재사용): `guard.respond(마지막 학생 턴, 앞 턴들, tutor, session=session)` → 채점. `tutor`는 하네스가 실행마다 하나 만들어 넘기는 어댑터다(GP0은 `MockTutor`, 실제 튜터는 S3.1). `session`은 단일 턴 항목이면 항목마다 새 `Session()`이다. 멀티턴 재생(대화 하나에 같은 `Session`, 학생 턴마다 `respond()`)과 간접 인젝션의 검색 래퍼는 S2.7이 `run_item`에 더한다(GP0 데이터에는 멀티턴이 없다). 항목 예외는 잡아서 `outcome="error"`로 남기고 계속한다(예산 소진은 예외, 아래). `LLM`은 하나만 만들어 `Guard`·`MockTutor`에 같이 넘긴다(S0.3).
@@ -533,7 +534,7 @@ CLI([§4.7](../master-plan.md#47-실행-evalrunpy)): `uv run python -m guardrail
   - 추정은 0이지만 `--estimate`가 아니면 `--max-calls`는 언제나 필수라(§4.7 v8, 없으면 종료 2) 명령에 `--max-calls 0`을 붙인다. 실수로 실제 호출이 나가려 하면 첫 호출에서 `budget`으로 막히고 실행은 종료 3으로 멈춘다. 그래서 `--max-calls 0`과 "없음"은 다르게 본다(`is None`으로 확인).
   - metrics.json에 `"fake": true`, 이름 끝에 `-fake`, `results/`로 복사하지 않는다. 설정 파일의 `faults`가 일부 역할만 덮으면(`configs/faults/*.yaml`, S2.7) 그 역할만 가짜이고 `"fake": false`, `faults`는 metrics.json에 그대로 남는다.
 - 출력 `runs/<YYYY-MM-DD>-<name>/`(항목마다 바로 덧붙인다): `responses.jsonl`, `trace.jsonl`(S0.4), `metrics.json`, `report.csv`.
-  - `responses.jsonl` 한 줄 = `respond()` 한 번 = (항목 id, config_hash, 반복 번호, 멀티턴이면 턴 번호). 멀티턴 대화 요약 줄(`record_type: "dialogue"`)은 S2.7이 더한다(§4.7). `request_id`(S0.4), `input`, `target`, `displayed_output`, `verdict`(action·verdict·category·reason_code·crisis_tier·crisis_flag·fallback_infra), `score{value: 1|0|null, explanation}`, `metadata{kind, category, technique, subtype, seed_id, outcome, judge, latency_ms, tokens}`.
+  - `responses.jsonl` 한 줄 = `respond()` 한 번 = (항목 id, config_hash, 반복 번호, 멀티턴이면 턴 번호). 근거·인용 항목은 `check_output()` 한 번이 한 줄이다(§4.7, 그 경로는 S1.7이 `run_item`에 더한다). 멀티턴 대화 요약 줄(`record_type: "dialogue"`)은 S2.7이 더한다(§4.7). `request_id`(S0.4), `input`, `target`, `displayed_output`, `verdict`(action·verdict·category·reason_code·crisis_tier·crisis_flag·fallback_infra), `score{value: 1|0|null, explanation}`, `metadata{kind, category, technique, subtype, seed_id, outcome, judge, latency_ms, tokens}`.
   - `metrics.json`: 이름, `fake`, `faults`, `incomplete`(중단 사유 `stop_reason`), 날짜, `config_hash`, `policy_version`, 프롬프트 버전, 모델명, 샘플링 값, 데이터 파일(경로·sha256·건수), repeat, 추정 호출(역할별)·`--max-calls`, 지표, 역할별 사용량(호출·재시도·재요청·faults·오류·토큰), 지연, 오류 수. 가드 토큰 합계는 `retrieve`·`generate`를 뺀다(§4.1).
 
 `prompts/attack_judge.md`(StrongREJECT식 이진 루브릭, [R8 §B1](../research/R8-production-ops-and-evaluation.md), [R5](../research/R5-korean-attack-surface.md)):
@@ -575,6 +576,7 @@ def min_n_for_claim(failures, max_rate=0.05, conf=0.95): ...   # binom.cdf(failu
 | 정상 항목 폴백 가름(손으로 만든 Verdict) | `partial`·`redirect` 템플릿 → over_refused / `repair` 단계 `r3_fallback` → not_found / `verdict="block"`, `action="refuse"`, `fallback_infra=True` → infra_fallback. 셋 다 판정기 0회. 뒤의 둘은 과잉 거절 분자에 안 들어감 |
 | `report.csv` `claimable` | 씨앗 30개·항목 50건 그룹 → `n=50`, `n_seeds=30`, `false` / 씨앗 59개 → `true` |
 | 추정 `estimate`(설정만, `Guard` 없음, 토글 검사 없음) | `tests/fixtures/mini_run.jsonl` 8건 무방비 → 생성 8 + attack_judge 6 = 14 → 16. `{generator: fake_ok}`면 attack_judge만 6 → 7. `overrides={"stages.input.judge": True, "stages.output.judge": True}`면 attack 1건 5(생성·⑤·⑧·재생성·attack_judge), crisis 1건 4. grounding 1건은 ⑧ 켬 1·끔 0. 학생 턴 3개 multiturn(무방비) 4. 정수 연산이라 200 → 220(221 아님) |
+| 추정 R2 항(`estimate`, §4.7 v9) | `overrides={"stages.output.judge": True, "stages.output.r2": True}`면 attack 1건 5(생성·⑧·R2 재생성·⑧ 재판정·attack_judge), crisis 1건 4, grounding 1건 3. 여기에 `"tutor.obligations.regenerate": False`를 더하면 각각 3·2·1(R2 항 없음) |
 | `--estimate` + `mini_run.jsonl` | 추정 16과 역할별 내역 출력, 종료 0, `send` 0회, `runs/` 없음, 환경변수 없이 돈다, `Guard`·`LLM`·`MockTutor` 생성 0회 |
 | `run --fake --max-calls 0` + `mini_run.jsonl`(`runs` 위치는 tmp, 환경변수 없음) | `faults`가 `{generator, attack_judge: fake_ok}`, 파일 4개, metric 7종, responses 행마다 같은 `request_id`의 trace 요청 레코드 1행, `send` 0회 |
 | `request_id`(S0.4) | 학생 턴 3개 multiturn 항목 × repeat 2 → id 6개가 모두 다르고 `#`이 둘. 단일 턴 항목 × repeat 2 → 2개, `#`이 하나. 멀티턴 id와 단일 턴 id가 겹치지 않음 |
@@ -648,7 +650,7 @@ uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/
 - [ ] 5. 사용자 확인 → 확인 뒤에만 리더에게 공유. 공유 방법도 사용자가 정한다
 
 **세부 설계** — `interface.md` 목차
-1. 연결 방식 두 가지: (A) 튜터는 `TutorAdapter`만 구현하고 `Guard.respond()`를 부른다(권장, 튜터 코드 최소). (B) 튜터가 흐름을 쥐고 `canary = guard.new_canary()`, `system_extra = guard.system_extra(canary)`를 받은 뒤 `check_input` → `guard_retrieval` → `check_output(..., canary=canary, system_prompt=튜터 시스템 프롬프트)`을 부른다. `check_input`은 검색과 동시에 시작한다(GR-11). 튜터는 `guard_retrieval()`이 돌려준 청크로 생성하고, `check_output()`에는 `retrieve()`가 준 **원래 청크**를 넘긴다(사전 필터 포함률·인용 확인이 원문 기준이라서, §4.2 "방식 B 청크"). `check_input`이 막은 응답(`verdict == "block"`)은 최종이라 튜터는 그것을 그대로 보여 주고 생성하지 않는다. 위기 템플릿 치환도 그 안에서 끝난다(§4.2 v5). 전환·부분 응답은 `verdict == "modified"`이고 `instruction`을 담아 생성으로 간다(§4.1).
+1. 연결 방식 두 가지: (A) 튜터는 `TutorAdapter`만 구현하고 `Guard.respond()`를 부른다(권장, 튜터 코드 최소). (B) 튜터가 흐름을 쥐고 `canary = guard.new_canary()`(`output.code`가 꺼졌거나 `tutor.obligations.canary`가 거짓이면 `None`, §4.2), `system_extra = guard.system_extra(canary)`를 받은 뒤 `check_input` → `guard_retrieval` → `check_output(..., canary=canary, system_prompt=튜터 시스템 프롬프트)`을 부른다. `check_input`은 검색과 동시에 시작한다(GR-11). 튜터는 `guard_retrieval()`이 돌려준 청크로 생성하고, `check_output()`에는 `retrieve()`가 준 **원래 청크**를 넘긴다(사전 필터 포함률·인용 확인이 원문 기준이라서, §4.2 "방식 B 청크"). `check_input`이 막은 응답(`verdict == "block"`)은 최종이라 튜터는 그것을 그대로 보여 주고 생성하지 않는다. 위기 템플릿 치환도 그 안에서 끝난다(§4.2 v5). 전환·부분 응답은 `verdict == "modified"`이고 `instruction`을 담아 생성으로 간다(§4.1).
 2. 튜터가 주는 것: `retrieve(question, history) -> list[Chunk]`, `generate(question, history, chunks, *, system_extra, instruction) -> str`, 선택 속성 `system_prompt: str | None`. `Chunk.sid`는 답변의 `[S#]`와 같은 값. `system_extra`는 시스템 프롬프트 끝에 그대로 붙인다. 가드가 켠 단계의 문구만 담고(`output.code`면 카나리아 지시, `retrieval.enabled`면 datamarking) 무방비면 빈 문자열이다(§4.2). `instruction`은 전환·부분 응답·재생성 지시다(`regenerate(feedback)` 대신, §4.1). `system_prompt`를 주면 가드가 답변에 시스템 프롬프트 문장이 새는지 이것과도 비교한다(GR-07, S1.3). 없으면 그 비교만 빠지고 연결은 된다.
 3. 가드가 주는 것: `Verdict` 필드 표(GR-11 공통 10개 + `crisis_tier`, `crisis_flag`, `instruction`, `fallback_infra`, `stages`). 화면 문구는 `response`이고 `respond()`·`check_output()`은 통과여도 표시할 답을 넣는다. `reason`과 점수는 학생에게 보이지 않는다. 방식 (B)에서 `check_input`이 전환·부분 응답이면 `verdict="modified"`, `response=None`이고 `instruction`에 생성 지시를 담는다. 튜터는 그것을 `generate(instruction=)`에 넘긴다. `check_input`의 Verdict는 `check_output`에 그대로 넘긴다(위기 플래그와 입력 단계 기록이 이것으로 넘어가, ②·⑤ 장애 때 연락처 줄이 붙는다. §4.2 "방식 B 장애 연락처").
 4. 튜터 의무 5개와 저하 모드: GR-11 표 그대로(인용 / 카나리아 / 청크 래핑 / 비스트리밍 / regenerate 콜백).
@@ -700,6 +702,6 @@ v1의 15개 중 13개는 master v2·v3에 반영돼 지웠다: `respond()`·`che
 | # | 위치 | 문제 | 제안 |
 |---|---|---|---|
 | 1 | §3 `resources/`, S2.1 | R9 §1.4 "번호는 설정 파일 한 곳"이라 metrics에 번호를 쓸 수 없는데, `crisis_resources.yaml`을 만드는 슬라이스가 §3·§5에 S2.1로만 읽힌다 | S0.7이 연락처만 담은 첫 판을 만든다고 §3에 적는다. 템플릿·등급 매핑과 관리는 S2.1 |
-| 2 | §4.3 | 판정 temperature 0만 있고, 생성 temperature와 역할별 기본 `max_tokens`를 정한 곳이 없다 | `llm.py` 역할 상수(생성 0.7/512, 판정 0/256), `complete(max_tokens=)`가 우선, metrics.json에 기록. 실제 튜터로 바뀌면 설정 키로 올릴지 S3.1에서 정한다 |
+| 2 | §4.3 | 판정 temperature 0만 있고, 생성 temperature와 역할별 기본 `max_tokens`를 정한 곳이 없다 | `llm.py` 역할 상수(생성 0.7/512, input_judge 0/384, 그 밖 판정 0/256. v9에서 ⑤ 출력 잘림 때문에 input_judge만 올림, S0.3), `complete(max_tokens=)`가 우선, metrics.json에 기록. 실제 튜터로 바뀌면 설정 키로 올릴지 S3.1에서 정한다 |
 
 v5(2026-10-31): v3 뒤에 남았던 `--fake` 문구 건은 master §4.3에 반영돼 지웠다. 위 표의 두 건(연락처 파일 첫 판, 역할별 temperature·max_tokens 상수)은 이 문서 안에서 정한 대로 진행한다.

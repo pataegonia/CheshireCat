@@ -1,6 +1,6 @@
 # GP4 발표 — 세부 플랜
 
-작성 2026-10-30 · 담당 danielcho02 · 상태: v13 (적대 검토 8회차까지 반영, master v13 기준)
+작성 2026-10-30 · 담당 danielcho02 · 상태: v14 (적대 검토 9회차까지 반영, master v14 기준)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/21(토)–11/25(수, 최종 발표) · 마일스톤: Guardrail GP4 발표
 
 ## 1. 목표와 관문

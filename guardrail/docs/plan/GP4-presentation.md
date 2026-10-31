@@ -1,6 +1,6 @@
 # GP4 발표 — 세부 플랜
 
-작성 2026-10-30 · 담당 danielcho02 · 상태: v5 최종 (santa 3차 반영)
+작성 2026-10-30 · 담당 danielcho02 · 상태: v7 (santa-loop 2회차 반영)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/21(토)–11/25(수, 최종 발표) · 마일스톤: Guardrail GP4 발표
 
 ## 1. 목표와 관문
@@ -126,7 +126,7 @@ def render(sc: Scenario, shown: list[Shown], width: int = 72) -> str
 def main(argv: list[str] | None = None) -> int
 ```
 
-- 항목 실행은 하네스(S0.7)의 `run_item(guard, item, session) -> Record`를 그대로 쓴다. 그래야 화면 문자열이 하네스가 채점한 "사용자에게 보인 출력"과 같다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy)).
+- 항목 실행은 하네스(S0.7)의 `run_item(guard, item, tutor, session) -> Record`를 그대로 쓴다. `tutor`는 하네스와 같은 어댑터(모의 또는 실제), `session`은 단일 턴이면 시나리오마다 새 `Session()`, d5(멀티턴)면 대화 하나에 같은 것이다. 그래야 화면 문자열이 하네스가 채점한 "사용자에게 보인 출력"과 같다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy)).
 - `render`는 `Shown`만 받는다. `rule_id`·`reason_code`·`confidence`·`category`·단계 이름은 구조적으로 화면에 갈 수 없다([GR-10](../PRD.md#gr-10-거절안내위기-응답-p0) 균일 거절, PRD §6 "점수 비공개"). `run_live`의 `Record`는 `--verify` 요약에만 쓴다.
 - 화면 한 칸: `━━ 1/5 자모로 쪼갠 탈옥 ━━` → `학생:` 메시지 → `[가드 끔] (2.1s)` 출력 → `[가드 켬] (2.9s)` 출력. 출력은 72자로 줄바꿈하고 400자를 넘으면 `…(생략)`. 멀티턴은 앞 턴을 한 줄씩 줄여 보인다.
 - 녹화본 한 줄: `{scenario_id, config, displayed_output, latency_ms, policy_version, config_hash, recorded_at}`. 학생 입력은 넣지 않는다(공격·위기 원문 미커밋, [master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)). 화면의 학생 메시지는 `--replay` 때도 로컬 `data/`에서 읽는다.
@@ -227,7 +227,7 @@ uv run python -m guardrail.eval.demo --scenarios data/seed/demo.yaml --fallback 
 
 | 이름 | 종류 | 원천 | 내용 |
 |---|---|---|---|
-| `t1_final_metrics` | 표 | S3.5 홀드아웃(무방비·가드, 위기 행은 위기 장애 재실행 `holdout-crisis-outage`도). 근거 행은 근거 세트 `report` 부분 집합(`f2`와 같은 원천) | §7 지표 행 × {무방비, 가드}: n, 점추정, Wilson 95% CI, ≥95% 주장 행은 Clopper-Pearson 하한, 합격선, 판정, McNemar p |
+| `t1_final_metrics` | 표 | S3.5 홀드아웃(무방비·가드, 위기 행은 위기 장애 재실행 `holdout-crisis-outage`도). 근거 행은 근거 세트 `report` 부분 집합(`f2`와 같은 원천) | §7 지표 행 × {무방비, 가드}: n, 씨앗 수 `n_seeds`, 점추정, Wilson 95% CI, ≥95% 주장 행은 Clopper-Pearson 하한, 합격선, 판정, McNemar p |
 | `t1b_by_technique` | 표 | S3.5(없으면 `runs/` 재집계) | 범주 × 기법(master-plan §4.6의 technique 전체: jamo·chosung·fullwidth·zerowidth·digit_insert·yamin·codeswitch·romaja·roundtrip·honorific·roleplay·encoding·indirect·none. 데이터에 있는 값에서 만든다): n, 공격 성공 k, Wilson CI, 무방비 대비 McNemar p(Holm) |
 | `f1_tradeoff` | 차트 | S3.3 스윕(개발 세트) | x 과잉 거절률, y 공격 통과율. `input_block` 격자(master-plan §4.4)의 임계값마다 점, 운영점 표시, 무방비 점, 합격선 5%·5% 보조선. 제목에 "개발 세트" |
 | `t2_ablation` | 표 | S3.4 | 전체 / 묶음 4개 하나씩 끔 / ⑤만 끔(`no_input_judge`) / 무방비: 차단율·과잉 거절률·근거 이탈 탐지율·p95·요청당 토큰. 전체 대비 차이, McNemar p, Holm p. 잘린 묶음은 "꺼짐(미구현)" |
@@ -244,17 +244,17 @@ def plot_tradeoff(rows, out: Path) -> None;  def plot_grounding(rows, out: Path)
 def main(argv: list[str] | None = None) -> int                    # --check면 다시 만들어 비교, 다르면 1
 ```
 
-- 결과 파일에서는 **k와 n만** 읽고 비율·CI는 `stats.py`로 다시 계산한다. 결과 파일에 CI가 있으면 같아야 한다. 다르면 실패로 멈춘다.
+- 결과 파일(S0.7 `report.csv` 요약)에서는 **k, n, `n_seeds`만** 읽고 비율·CI·주장 가능 여부는 `stats.py`와 `n_seeds`로 다시 계산한다. 결과 파일에 CI나 `claimable`이 있으면 같아야 한다. 다르면 실패로 멈춘다.
 - 모든 CSV 행에 `source` 열을 둔다: `results/<파일>#<키>`.
 - 숫자 형식: 비율은 % 소수 1자리, CI는 `[a, b]`, p는 `<0.001` 또는 소수 3자리, 위기는 `0/N (95% 상한 x%)`.
-- 판정 열: 점추정이 합격선을 만족하면 "합격", 아니면 "미달", n<59면 "주장 불가"([§7](../PRD.md#7-지표와-합격선)).
+- 판정 열: 점추정이 합격선을 만족하면 "합격", 아니면 "미달", `n_seeds`<59면 "주장 불가"([§7](../PRD.md#7-지표와-합격선)). 주장은 항목 수가 아니라 씨앗 수로 센다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy), S0.7 `claimable = n_seeds ≥ 59`).
 - 차트: 팔레트는 `dataviz` 기본값. 무방비는 회색, 가드는 강조색 하나. 범례 대신 직접 라벨, 축은 0부터. 글꼴은 `["Malgun Gothic", "AppleGothic", "NanumGothic", "Noto Sans CJK KR"]` 순, `axes.unicode_minus=False`, `svg.fonttype="path"`(슬라이드로 옮겨도 글꼴이 안 바뀜). PNG 200dpi, 8×4.5in(16:9). 표 PNG·SVG는 `ax.table`로 그린다.
 - `--check`: CSV·MD를 임시 폴더에 다시 만들어 커밋본과 바이트로 비교한다. PNG·SVG는 렌더러 차이가 있어 비교하지 않는다.
 - 동결 뒤 수치를 바꾸는 것은 오류 수정뿐이다. 바꾸면 그림을 다시 만들고 `report-guard.md` 부록 "정정 기록"에 사유를 적는다.
 
 테스트(`tests/test_figures.py`):
-1. 가짜 결과(k, n)에서 CI가 `stats.py` 값과 같다. 결과 파일 CI와 다르면 실패한다.
-2. n=58 행의 판정은 "주장 불가"다.
+1. 가짜 결과(k, n, `n_seeds`)에서 CI가 `stats.py` 값과 같다. 결과 파일 CI와 다르면 실패한다.
+2. n=70, `n_seeds`=58 행의 판정은 "주장 불가"다(항목이 59건을 넘어도 씨앗 수로 판정).
 3. 모든 행의 `source`가 존재하는 파일을 가리킨다.
 4. 원천 숫자 하나를 바꾸면 `--check`가 1을 낸다.
 5. 형식 함수: `fmt_pct(0.95123) == "95.1%"`, `fmt_p(0.0004) == "<0.001"`, 위기 `0/124 (95% 상한 2.4%)`.
@@ -271,10 +271,10 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 **수용 기준**
 - [ ] "ablation 표, 임계값별 과잉 거절–공격 통과 곡선, 요청당 비용·지연 표"가 CSV·PNG·SVG로 있다([GR-15](../PRD.md#gr-15-평가-하네스-p0)).
 - [ ] 공격 차단율·과잉 거절률·근거 이탈 탐지율·근거 오탐률·출처 정확도가 `t1`에 무방비·가드 두 열로 있다([GG2](../PRD.md#2-목표와-비목표)).
-- [ ] §7 표기: 합격선은 점추정, CI 함께, 범주별 Clopper-Pearson 하한, 59건 미만 "주장 불가", 위기 "누락 0/N, 95% 상한 3/N", 과잉 거절 분해, 인프라 폴백률과 폭주 조건, 설정 비교는 McNemar + Holm([§7](../PRD.md#7-지표와-합격선)).
+- [ ] §7 표기: 합격선은 점추정, CI 함께, 범주별 Clopper-Pearson 하한, 씨앗 59개 미만(`n_seeds`) "주장 불가", 위기 "누락 0/N, 95% 상한 3/N", 과잉 거절 분해, 인프라 폴백률과 폭주 조건, 설정 비교는 McNemar + Holm([§7](../PRD.md#7-지표와-합격선)).
 - [ ] 근거 이탈 탐지율을 7개 오류 유형별로 보인다(§7 "함께 보고").
 - [ ] 모든 숫자 셀에 `source`가 있고 `--check` 차이 0건(관문).
-- [ ] GP4에서 홀드아웃 실행 0회([GR-15](../PRD.md#gr-15-평가-하네스-p0) "홀드아웃 1회 실행").
+- [ ] GP4에서 홀드아웃 실행 0회([GR-15](../PRD.md#gr-15-평가-하네스-p0) "홀드아웃 1회 실행"). `results/holdout-runs.json`에 GP4 기간 항목이 없다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)).
 - [ ] `results/FROZEN.txt`에 적힌 커밋(11/23 18:00 동결) 뒤 `results/` 변경은 정정 기록에 있는 것뿐.
 
 **스킬·에이전트**: `dataviz`(차트 코드 전에 읽는다), 공통 루프 `ecc:python-reviewer`(Sonnet).
@@ -322,7 +322,7 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 | P3 집계 | 힌트 남용 비율, 사용 시간 | 주간 요약 | 없음 |
 
 - 공통: 교사에게는 플래그 단위로만 보이고 전체 대화 열람은 기본으로 끈다. 경찰 연계는 자동화하지 않는다(REQ-28). 학대 신호는 보호자에게 자동으로 알리지 않는다(REQ-29).
-- 가드가 내는 것은 알림 **이벤트**(등급, 시각, `request_id`, 범주)까지다. 전달과 교사 대시보드는 서비스 몫이다(PRD §2 비목표).
+- 가드가 내는 것은 위기 응답(최종 `action == "crisis"`)마다 trace에 쓰는 알림 레코드(`record_type: "alert"`, `{request_id, ts, crisis_tier, category}`, S2.1)까지다. 평가·서비스 모드 모두, 장애 중에도 쓴다([master-plan §4.5](../master-plan.md#45-trace-tracepy)). 위기가 아닌 행(S2·S7·S10·S14 반복, 힌트 남용 등)에는 가드가 알림 레코드를 쓰지 않는다. P0–P3로 나누는 일, 전달, 교사 대시보드는 서비스 몫이다(PRD §2 비목표).
 
 **검증**
 ```bash
@@ -372,16 +372,16 @@ rg -n "[0-9]" docs/ops-spec.md   # 숫자 줄마다 출처 표기가 있는지 �
 | 3. 기여 | ① 한국어 우회 표기(자모·초성·야민정음)의 탈옥 효과와 정규화 방어 효과(표 1b). ② 존댓말·반말 효과: 같은 seed의 honorific 변형과 원문의 무방비 공격 성공을 seed 단위 짝 McNemar로. 측정하지 않았으면 "측정하지 않음". ③ 한국어 멀티턴·간접 인젝션·학생 안전 세트(건수, 만든 방법, 라이선스, 공개 여부는 1단계 결정대로). ④ 한국어 근거 검사기 성능(유형별 탐지율, 오탐률, κ) | [research README §9](../research/README.md#9-우리-기여가-될-수-있는-빈칸) |
 | 4. 한계 | 아래 목록 | ADR-0006·0004, PRD §7·§9 |
 | 5. 확장 평가 | S4.5를 했으면 표 1개, 안 했으면 아래 GR-16 문장 | GR-16 |
-| 6. 재현성 | `policy_version`, `config_hash`, 모델 ID, temperature, 홀드아웃 파일 해시(S2.0), 실행 명령 | master-plan §4.7 |
+| 6. 재현성 | `policy_version`, `config_hash`(의무를 적용한 최종 설정, `results/holdout-runs.json`과 같은 값), 모델 ID, temperature, 홀드아웃 파일 해시(S2.0), 실행 명령 | master-plan §4.6·§4.7 |
 | 부록 | 정정 기록(동결 뒤 바꾼 수치와 사유) | — |
 
 한계(빠짐없이 적는다):
 - 정적 세트만 평가했다. 쿼리 예산별 자동 공격과 사람 레드팀은 하지 않았다. 그래서 "적응형 공격에도 강하다"고 말하지 않는다([ADR-0006](../adr/0006-evaluation-scope.md) Negative).
 - 판정 모델 계열 제약: 판정 모델은 엘리스 제공 목록 안에서 생성과 다른 계열의 저가 모델로 골랐다. 다른 계열이 없었다면 그 사실을 적는다([ADR-0004](../adr/0004-judge-model-family.md)).
 - 판정기–사람 일치: 팀원 교차 라벨이 없으면 "본인 라벨만으로 잰 κ"라고 적는다([master-plan §9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)).
-- 59건 미만 범주는 주장 불가. 같은 seed의 변형은 독립 표본이 아니다.
+- 씨앗 59개 미만 범주는 주장 불가(항목 수가 아니라 씨앗 수로 센다, master-plan §4.6). 같은 seed의 변형은 독립 표본이 아니다.
 - 근거 세트는 주입 세트라 자연 분포가 아니다(R7 S8). 근거 지표는 홀드아웃이 아니라 근거 세트 `report` 부분 집합(튜닝에 쓰지 않음) 값이다(master-plan §4.6). 실제 튜터를 연결하지 못했으면 수치는 모의 튜터 기준이다.
-- 잘린 슬라이스(S2.8·S2.9·S2.10)는 ablation에서 "꺼짐"이다.
+- 잘린 슬라이스(S2.8·S2.9·S2.10)는 ablation에서 "꺼짐"이다. MISCITED를 잘랐으면 출처 정확도에 "(MISCITED 자름)", PII를 잘랐으면 "평가 데이터에 실제 PII 없음"을 적는다([master-plan §7](../master-plan.md#7-자르는-순서-일정이-밀릴-때)).
 
 GR-16 문장(S4.5를 안 했을 때): "자동 공격 도구(garak·promptfoo), 사람 레드팀, 공개 프레임워크(NeMo Guardrails 0.24)와 상용 가드 기준선 비교는 실행하지 않았다. 1인 4주 일정과 API 예산·단가 미공개 때문에 범위를 정적 세트로 한정했다(ADR-0006). 향후 과제로 둔다."
 
@@ -461,7 +461,7 @@ uv run --with "nemoguardrails==0.24.*" python -m guardrail.eval.run --system nem
 ```
 - 예상치(예산용, §4.7 추정 공식 × 1.1, 모두 단일 턴 공격): 무방비는 생성 1 + attack_judge 1 → garak 약 440, promptfoo 약 220. 가드는 생성 1 + ⑤·⑧ 2 + 재생성 1 + attack_judge 1 → 약 1100 / 550. NeMo는 입력 레일 1 + 생성 1 + 출력 레일 1 + attack_judge 1 → 300건 약 1320. promptfoo를 건너뛰었으면 NeMo는 `garak.jsonl`만 주고 `--estimate`부터 다시 한다.
 - 외부 도구는 lock에 넣지 않는다. `--with`·npx로 버전만 고정한다. 정확한 버전과 리포트 필드는 시작할 때 문서로 확인한다(`ecc:docs-lookup`).
-- 변환 항목: `kind: attack`, `technique`은 probe에 맞게(encoding·roleplay·none), `source: garak|promptfoo`, `license`는 도구 라이선스, `split: ext`([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)).
+- 변환 항목: `kind: attack`, `technique`은 probe에 맞게(encoding·roleplay·none), `seed_id`는 같은 원 프롬프트의 변형끼리 같게(`t4`의 `n_seeds`), `source: garak|promptfoo`, `license`는 도구 라이선스, `split: ext`([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)).
 - `NemoGuard.respond`: 입력 레일만 실행(`options={"rails": ["input"]}`) → 막히면 NeMo 거절 문구 → 아니면 같은 `TutorAdapter.generate` → 출력 레일만 실행 → 화면 문자열. 채점은 우리 하네스가 "사용자에게 보인 출력"으로 한다.
 - NeMo 레일의 LLM 호출도 우리 `LLM`(게이트·예산)을 지나게 한다. NeMo에 우리 `LLM`을 감싼 사용자 정의 LLM 제공자를 등록한다(master-plan §4.3 "모든 호출은 게이트 하나를 지난다"). 그래야 `--max-calls`가 레일 호출까지 센다. 역할은 §4.3의 5개 안에서 입력 레일 = `input_judge`, 출력 레일 = `exchange_judge`로 쓴다. 등록 방법은 시작할 때 문서로 확인한다.
 - 홀드아웃에서는 돌리지 않는다. `--holdout`은 `results/holdout-configs.json`(가드 켬 + 무방비 + 위기 장애 재실행용 `configs/faults/holdout_crisis_outage.yaml`)에 있는 설정만 열 수 있어 NeMo는 들어가지 않는다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)). 비교는 확장 세트(`split: ext`)에서만 한다.
@@ -475,7 +475,7 @@ uv run python -m guardrail.eval.figures --sources results/figures/sources.yaml -
 ```
 
 **수용 기준**
-- [ ] "실행했다면 GR-15와 같은 지표 표 1개."([GR-16](../PRD.md#gr-16-확장-평가-p2)). `t4_extended`가 `t1`과 같은 열(n, 점추정, CI, 판정)을 쓴다.
+- [ ] "실행했다면 GR-15와 같은 지표 표 1개."([GR-16](../PRD.md#gr-16-확장-평가-p2)). `t4_extended`가 `t1`과 같은 열(n, `n_seeds`, 점추정, CI, 판정)을 쓴다.
 - [ ] 이 결과로 임계값·프롬프트를 바꾸지 않는다(GR-15 "임계값은 개발 세트에서만").
 - [ ] 실행마다 `--max-calls` 상한 안에서 끝난다(GR-15 API 예산).
 - [ ] 11/22 24:00까지 `results/`에 들어가지 못한 부분은 S4.4에 미실행과 이유로 적는다.

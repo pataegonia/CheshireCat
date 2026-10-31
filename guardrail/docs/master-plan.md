@@ -1,6 +1,6 @@
 # 가드레일 master-plan
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v6 (세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, §13)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v7 (세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, §13)
 근거: [PRD.md](PRD.md)(요구사항 GR-xx, 마일스톤 §10) · [adr/](adr/README.md)(설계 결정) · [research/](research/README.md)(조사) · [skills.md](skills.md)(쓸 스킬)
 세부 플랜: [plan/GP0](plan/GP0-foundation.md) · [GP1](plan/GP1-output-guard.md) · [GP2](plan/GP2-input-crisis.md) · [GP3](plan/GP3-integration-eval.md) · [GP4](plan/GP4-presentation.md)
 
@@ -178,10 +178,11 @@ ov: Verdict  = await guard.check_output(question, history, chunks, answer, iv,
 - 차단이 정해지면 아직 도는 생성 태스크를 취소하고, **취소가 끝날 때까지 기다린 뒤** 응답한다(OpenAI Agents SDK와 같은 방식). 생성이 먼저 끝나면 결과를 들고 판정을 기다린다(NeMo speculative generation과 같은 방식). 입력을 바꾸는 ①·④는 분기 전에 끝낸다.
 - 단계 하나가 예외를 내도 파이프라인은 멈추지 않는다. 그 단계는 `status="error"`로 기록되고, 실패 처리는 GR-14 등급표 한 곳(`pipeline.py`의 표 상수 하나)에서만 정한다.
 - **위기 우선**: `_finalize(verdict, crisis_flag, crisis_tier)` 하나가 모든 응답의 마지막에 돈다. 위기 플래그나 위기 등급이 있으면 막는 지점 4곳(③·⑤/Jev·⑦·⑧) 어디서 막혀도 위기 템플릿으로 바꾼다. `respond()`·`check_input()`·`check_output()` 세 경로 모두의 끝에서 돌고, 세 경로 × 4지점 × 플래그를 테스트로 고정한다(S2.1). 방식 B에서 `check_input()`이 막은 응답은 최종이다(튜터는 그대로 보여 주고 생성하지 않는다). `check_output()`은 `input_verdict.crisis_flag`로 플래그를 받는다. 위기 오탐(플래그는 있는데 ⑤가 등급 없이 허용)이면 `_finalize`가 표시 문구 끝에 짧은 안내(연락처 한 줄 포함)를 붙인다. 방식 B에서는 `check_output()`이 이 일을 한다.
-- **답변 대신 내는 응답은 block**: 가드가 튜터 답변 대신 내는 안전 응답(안전 템플릿, 생성 실패 안전 응답, ⑧ 실패에서 남은 문장이 없을 때의 학습 안내)은 `verdict="block"`, `action="refuse"`이고 장애 때문이면 `fallback_infra=True`다. 그래서 플래그가 있으면 `_finalize`가 위기 템플릿으로 바꾼다. 근거 폴백 R3와 답변 문장이 남는 응답(R1, ⑧ 실패 부분 응답, R2 실패 `r2_fail`)은 `modified`다. 채점은 `fallback_infra`와 `r3_fallback`을 trace로 먼저 가르므로 과잉 거절에 들어가지 않는다(§4.7).
+- **답변 대신 내는 응답은 block**: 가드가 튜터 답변 대신 내는 안전 응답(안전 템플릿, 생성 실패 안전 응답, ⑧ 실패에서 남은 문장이 없을 때의 학습 안내)은 `verdict="block"`, `action="refuse"`이고 장애 때문이면 `fallback_infra=True`다. 그래서 플래그가 있으면 `_finalize`가 위기 템플릿으로 바꾼다. 예외로 R0 `answer_leak`은 `block`/`redirect`다(학습 전환). 근거 폴백 R3와 답변 문장이 남는 응답(R1, ⑧ 실패 부분 응답, R2 실패 `r2_fail`)은 `modified`다. 채점은 `fallback_infra`와 `r3_fallback`을 trace로 먼저 가르므로 과잉 거절에 들어가지 않는다(§4.7).
 - **장애 시 연락처**: ⑤가 실패했거나(재시도 후) ② 위기 탐지가 오류를 낸 요청의 응답에는, 그것이 통과한 답변이든 기본 응답이든 `crisis_resources.yaml`의 짧은 연락처 줄을 붙인다. ⑧ 실패 안내와 생성 실패 안전 응답, `r2_fail`에도 붙인다. 붙이는 곳은 S2.5부터 `_finalize()` 하나이고(S1.6이 `repair.py`에 임시로 붙인 것은 S2.5가 옮긴다), 이미 연락처 줄이나 연락처를 담은 위기 템플릿·`light_notice`가 있으면 다시 붙이지 않는다. 어휘가 놓친 위기 발화도 장애 중에 연락처는 받게 하려는 것이다(ADR-0003 "범주를 모를 때의 기본 응답"). 그래서 장애 중 위기 지표는 "연락처 누락 0/N(위기 항목 전체)"와 "위기 템플릿 누락 0/N(어휘가 잡은 항목)"으로 나눠 보고한다. GR-14 표 테스트가 이것을 확인한다.
-- **결정적 단계 오류**: ② 오류 → 위기 플래그가 있는 것으로 보고 위 연락처 규칙 적용. ③ 오류 → 안전 템플릿으로 막음. ⑦ 오류 → 안전 템플릿으로 막음. ④ PII 오류 → 로그 저장 중단(GR-14). ① 정규화 오류 → 안전 템플릿 + 연락처. 사전 필터 오류 → 자동 통과 없이 모든 문장을 ⑧로. ⑨ 수리 오류 → ⑧ 실패와 같은 길(확인된 문장만 + 연락처). 튜터 검색·⑥ 오류 → 생성 실패 행. 모두 fail-closed이고 GR-14 표(`pipeline.py`의 상수 하나)에 행으로 둔다. 이 행들은 새 판정 권한이 아니라 장애 처리다(막는 지점은 ③·⑤/Jev·⑦·⑧ 4곳 그대로). S2.5 PR에서 PRD GR-14 표에 생성 실패 행과 함께 적는다.
-- **방식 B 장애 연락처**: `check_input()`은 허용이면 `response=None`이라 연락처 줄을 붙일 곳이 없다. 그래서 `check_output()`의 `_finalize()`가 `input_verdict.stages`의 ②·⑤ 오류를 읽어 붙인다. S2.5 표 테스트가 이 경로도 돈다.
+- **결정적 단계 오류**: ② 오류 → 위기 플래그가 있는 것으로 보고 위 연락처 규칙 적용. ③ 오류 → 안전 템플릿 + 연락처 줄로 막음. ⑦ 오류 → 안전 템플릿으로 막음. ④ PII 오류 → 로그 저장 중단(GR-14), 마스킹되지 않은 글은 외부 API(Jev)로 보내지 않는다(Jev 실패 행으로 처리. ⑤·생성은 튜터가 원래 쓰는 같은 엘리스 모델이라 그대로 간다). ① 정규화 오류 → 안전 템플릿 + 연락처. 사전 필터 오류 → 자동 통과 없이 모든 문장을 ⑧로. ⑨ 수리 오류 → ⑧ 실패와 같은 길(확인된 문장만 + 연락처). 튜터 검색·⑥ 오류 → 생성 실패 행. 모두 fail-closed이고 GR-14 표(`pipeline.py`의 상수 하나)에 행으로 둔다. 이 행들은 새 판정 권한이 아니라 장애 처리다(막는 지점은 ③·⑤/Jev·⑦·⑧ 4곳 그대로). S2.5 PR에서 PRD GR-14 표에 생성 실패 행과 함께 적는다.
+- **⑤ 결과 없이 끝나는 응답**: ⑤가 돌기 전에 끝나는 응답(① 오류, ③ 오류, ⑤보다 먼저 Jev가 막음)은 범주를 모르므로 연락처 줄을 붙인다(ADR-0003 "범주를 모를 때의 기본 응답"). ③ 규칙 **차단**은 범주가 정해진 결정이라 붙이지 않는다.
+- **방식 B 장애 연락처**: `check_input()`은 허용이면 `response=None`이라 연락처 줄을 붙일 곳이 없다. 그래서 `check_output()`은 `_finalize()`를 부르기 전에 `input_verdict.stages`를 자기 `Verdict.stages` 앞에 복사하고, `_finalize()`는 그 안의 ②·⑤ 오류를 읽어 붙인다(`_finalize` 서명은 그대로). S2.5 표 테스트가 이 경로도 돈다.
 - **꺼진 단계와 실패한 단계는 다르다**: `status="skipped"`(설정으로 꺼짐)는 `fallback_infra`가 아니다. ⑤가 꺼져 있고 위기 플래그가 있으면 T1 위기 응답, 플래그가 없으면 허용으로 진행한다. Jev가 τ_J 이상으로 막을 때 ⑤가 이미 끝났다면 ⑤의 위기 등급을 `_finalize`에 넘긴다.
 - **가드 문구는 그 단계가 켜졌을 때만**: `Guard.system_extra(canary)` 하나가 문구를 모은다. 카나리아 지시는 `output.code`가 켜졌을 때, datamarking 문구는 `retrieval.enabled`가 켜졌을 때만 넣는다(둘은 서로 독립, 예: 출력 끔·검색 켬 ablation). 무방비 설정에서 `system_extra == ""`를 테스트로 고정한다(베이스라인 비교가 공정하게).
 - **⑤ 판정 규칙**: `check_input`이 전환·부분 응답이면 `Verdict.instruction`에 생성 지시를 담는다(방식 B). `crisis_tier`가 있으면 `action`은 반드시 `crisis`다(스키마 검증, 어기면 형식 오류로 1회 재요청). ⑤의 `refuse`·`partial`은 `confidence ≥ thresholds.input_block`일 때만 그대로 쓰고, 미만이면 `allow`로 내린다(⑧이 다시 본다). 위기는 이 임계값과 무관하다.
@@ -241,7 +242,7 @@ thresholds: {input_block: 0.0, tau_J: null, tau_m: null, theta: 0.9, G: 0.7, R_e
 context_turns: {base: 4, expanded: 8}
 deadlines_s: {input_judge: 2.5, exchange_judge: 3.0, generator: 20.0, jev: 1.5, attack_judge: 10.0, tutor_retrieve: 5.0}
 gate: {initial: 4, min: 1, max: 16, increase_after: 10, structured_output: json_schema}
-tutor:                           # GR-11 튜터 쪽 의무. 없는 의무는 저하 모드로 자동 전환
+tutor:                           # GR-11 튜터 쪽 의무. 없는 의무는 저하 모드로 자동 전환(11/18 고정 뒤에는 하네스가 바뀐 설정으로 돌지 않고 멈춤, S3.1)
   adapter: mock                  # mock | real
   obligations: {cites: true, canary: true, wraps_chunks: true, non_streaming: true, regenerate: true}   # 모의 튜터는 다 지원. R2는 이것과 output.r2가 둘 다 참일 때만
 service_log: {retention_days: 30, keep_raw_for: [block, escalation, appeal, sample], sample_rate: 0.01}
@@ -264,7 +265,8 @@ paths: {prompts: prompts, resources: resources}
 - 평가 모드에만 `input_raw`, `displayed_output`을 더한다(학생 데이터 없음).
 - 서비스 모드는 원문을 저장하지 않고 `user_hmac`, `grade_band`만 둔다. 마스킹 원문은 `service_log.keep_raw_for`에 해당할 때만 30일 보관한다. 정신건강 발화는 어떤 재사용에도 쓰지 않는다(S2.3, REQ-22). PII 정규식이 실패하면 저장을 멈춘다.
 - 서비스 모드 필드(S2.3): `user_hmac`, `grade_band`, `text_masked`(현재 메시지 마스킹본, `keep_raw_for` 사유일 때만), `keep_reason`, `expires_at`, `no_reuse`(위기 플래그·S5·S6), `pii_error`(마스킹 실패 시 텍스트 없이). 이의는 원 `request_id`를 가리키는 `appeal` 레코드(`record_type: "appeal"`)로 쓴다.
-- `StageResult.detail`에는 원문을 넣지 않는다(문장 번호·라벨·점수만).
+- `StageResult.detail`에는 원문을 넣지 않는다(문장 번호·라벨·점수만). 예외: 평가 모드에서만 `output_code` 단계 `detail["canary"]`에 그 요청의 카나리아를 남긴다(하네스가 `canary_leaked`로 채점, S1.2). 서비스 모드는 남기지 않는다.
+- **위기 알림 이벤트**(GR-14 위기 행 "교사 알림 이벤트 대기", R9 REQ-12): 최종 `action == "crisis"`인 응답마다 trace에 `record_type: "alert"` 레코드 `{request_id, ts, crisis_tier, category}`를 하나 더 쓴다. 평가·서비스 모드 모두, 장애 중에도 쓴다. 전달·대시보드는 서비스 몫이다(GR-17 문서, S4.3). S2.1이 만들고, S2.5 표 테스트의 위기 행이 확인한다.
 - 이의 제기: 서비스 모드에서 `trace.record_appeal(request_id, message)`가 그 요청을 `appeal` 보관 대상으로 표시한다(GR-13 "이의"). 튜터 쪽 연결 방법은 S0.8 인터페이스 제안서에 적는다.
 - 키·Authorization 헤더는 어떤 모드에서도 남기지 않는다. 이것을 테스트로 고정한다(S0.4).
 
@@ -289,7 +291,7 @@ JSONL 한 줄이 항목 하나다.
 - **중복 제거**(S0.5의 `dedupe()` 하나만 쓴다): 같은 분할 안에서 키 (`seed_id`, technique, 학생 턴 정규화본 연결)가 같으면 하나만 남긴다. 같은 씨앗의 우회 표기 변형은 technique가 달라 남는다. 분할 사이에서는 `seed_id`가 같거나 학생 턴 정규화본이 같은 항목이 dev와 holdout에 함께 있으면 **dev 쪽을 지우고** 개수를 MANIFEST에 적는다(홀드아웃은 건드리지 않는다). 번역본이 달라도 영어 원문이 같으면 씨앗이 같아 여기서 걸린다.
 - 주장(≥59, ≥124 등)은 항목 수가 아니라 **씨앗 수**로 센다. 30% 해시 분할은 씨앗 수가 흔들리므로 홀드아웃 목표 씨앗 수의 약 3.8배(124 → 약 470)를 만들고, 봉인 전에 수를 확인한다.
 - **이미 본 항목은 dev 고정**: 봉인 전에 실행·분석한 항목(예: S1.7의 `canary_leak.jsonl`)은 `split: dev`로 고정하고 `assign_split()`을 거치지 않는다. 홀드아웃용은 S2.0에서 새로 만든다. 분할 사이 중복 제거에서 dev 고정 항목과 겹치는 홀드아웃 항목은 예외로 **홀드아웃 쪽을 지운다**(봉인 전, 이미 본 글이 홀드아웃에 남지 않게).
-- **홀드아웃**은 S2.0에서 봉인한다(`data/holdout/SEALED.sha256`). `--holdout` 없이 홀드아웃 경로를 주면 하네스가 멈춘다. `--holdout`은 설정 해시가 `results/holdout-configs.json`(S3.1 결정 뒤 11/18에 확정하는 허용 목록: 가드 켬 + 무방비 + 위기 장애 재실행용 `configs/faults/holdout_crisis_outage.yaml`)에 있을 때만 시작한다. S3.3·S3.4가 끝난 뒤 S3.5에서 설정마다 한 번만 연다. 한 번만은 기록으로 지킨다: `--holdout` 실행은 시작할 때 `results/holdout-runs.json`(커밋)에 `{config_hash, data_sha256, started}`를 적고 끝나면 `done`을 적는다. 같은 `config_hash`에 `done`이 있으면 시작하지 않는다. `done` 없이 끝난 실행(인프라 중단)만 다시 돌 수 있고 그 사유를 같은 항목에 적는다(S3.5). 근거 세트는 홀드아웃을 따로 두지 않고 `report` 부분 집합을 보고용으로 쓴다(튜닝에 쓰지 않음).
+- **홀드아웃**은 S2.0에서 봉인한다(`data/holdout/SEALED.sha256`). `--holdout` 없이 홀드아웃 경로를 주면 하네스가 멈춘다. `--holdout`은 설정 해시가 `results/holdout-configs.json`(S3.1 결정 뒤 11/18에 확정하는 허용 목록: 가드 켬 + 무방비 + 위기 장애 재실행용 `configs/faults/holdout_crisis_outage.yaml`)에 있을 때만 시작한다. S3.3·S3.4가 끝난 뒤 S3.5에서 설정마다 한 번만 연다. 한 번만은 기록으로 지킨다: `--holdout` 실행은 시작할 때 `results/holdout-runs.json`(커밋)에 `{config_hash, data_sha256, started}`를 적고 끝나면 `done`을 적는다. 같은 `config_hash`에 `done`이 있으면 시작하지 않는다. `done` 없이 끝난 실행(인프라 중단)만 다시 돌 수 있고 그 사유를 같은 항목에 적는다(S3.5). `--holdout` 실행 중 `LLM(max_calls)` 예산이 바닥나면 GR-14 폴백으로 넘기지 않고 실행을 중단으로 끝낸다(`done`을 쓰지 않음). 같은 해시 확인은 의무를 적용한 최종 설정의 `config_hash`로 하고, 11/18 고정 때 의무의 효과(예: `stages.retrieval.enabled`)까지 YAML에 적어 `apply_obligations`가 아무것도 바꾸지 않게 한다(S3.1). 근거 세트는 홀드아웃을 따로 두지 않고 `report` 부분 집합을 보고용으로 쓴다(튜닝에 쓰지 않음).
 - **커밋 규칙**(공개 저장소):
   - 커밋함: 빌드 스크립트, `data/sources.yaml`(출처·라이선스·받는 법), `data/dev/MANIFEST.csv`·`data/holdout/MANIFEST.csv`(id·씨앗·범주·해시), `data/holdout/SEALED.sha256`, 정상 스모크 세트(`data/seed/smoke_benign.jsonl`).
   - 커밋 안 함(`guardrail/.gitignore`): `data/raw/`, `data/dev/`·`data/holdout/`의 본문, 공격·위기 원문, `runs/`. 비상업 라이선스 원문은 받는 스크립트만 둔다.
@@ -309,7 +311,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
 - `--data`는 여러 번 줄 수 있고(`action="extend"`, `nargs="+"`), 디렉터리를 주면 그 안의 `*.jsonl`을 모두 읽는다. `--set`은 S0.7에서 만든다.
 - `runs/<날짜>-<이름>/`에 `responses.jsonl`, `trace.jsonl`, `metrics.json`, `report.csv`를 만든다(gitignore).
 - 발표·보고에 쓸 요약은 `results/<날짜>-<이름>.csv|json`으로 복사해 커밋한다. 요약에는 범주·우회 기법·주입 유형별 k와 n을 넣는다(GP4 표가 다시 계산할 수 있게). 예외로 `results/figures/`, 원문 확인을 마친 `results/demo-replay.jsonl`, `results/FROZEN.txt`도 커밋한다.
-- `run_item(guard, item, session) -> Record`를 공개해 데모(S4.1)가 같은 경로를 쓴다.
+- `run_item(guard, item, tutor, session) -> Record`를 공개해 데모(S4.1)가 같은 경로를 쓴다. `tutor`는 하네스가 하나 만든 어댑터(모의 또는 실제, S3.1)이고, 간접 인젝션 항목이면 `run_item`이 그 위에 검색 래퍼를 씌운다(S2.7). `session`은 단일 턴이면 항목마다 새 `Session()`, 멀티턴이면 대화 하나에 같은 것을 쓴다.
 - 하네스는 직접 만든다(약 300줄). Inspect AI는 쓰지 않는다. 우리 파이프라인은 Inspect 모델이 아니고, 예산 상한이 전역이며, ablation이 설정 토글이고, 채점 대상이 사용자에게 보인 문자열이기 때문이다. 기록 형태만 Inspect를 따른다.
   - `responses.jsonl` 한 줄 = (항목 id, config_hash, 반복 번호). 필드: `input`, `target`(expected), `displayed_output`, `verdict`, `score{value, explanation}`, `metadata`.
   - 반복 3회는 "3번 모두 통과해야 통과"(pass^3)로 묶는다. 지표용 반복은 홀드아웃·위기 세트에만 쓴다(ADR-0006). 데모 안정성 확인(S4.1)의 반복은 지표가 아니라고 표시한다.
@@ -343,7 +345,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
 | **S0.1** | CI·이슈 추적 설정 | — | P0 | 2h | — |
 | **S0.2** | 계약·설정·파이프라인 골격(무방비 모드 통과) | GR-11·12 | P0 | 5h | S0.1 |
 | **S0.3** | LLM 게이트웨이(게이트·재시도·예산·faults·slot·FakeLLM) | GR-14 일부, ADR-0004·0007 | P0 | 6h | S0.2 |
-| **S0.4** | trace·평가 모드 로깅 | GR-13 | P0 | 3h | S0.2 |
+| **S0.4** | trace·평가 모드 로깅 | GR-13 | P0 | 3h | S0.2·S0.3 |
 | **S0.5** | 데이터 스키마·로더·분할, 스모크 세트 | GR-15 | P0 | 5h | S0.2 |
 | **S0.6** | 모의 튜터 | GR-15 | P0 | 6h | S0.3 |
 | **S0.7** | 하네스 v0·통계·attack_judge·무방비 베이스라인 | GR-15, ADR-0006 | P0 | 8h | S0.4·S0.5·S0.6 |
@@ -389,8 +391,8 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 | GR-02 위기 | S2.1, S2.4, S2.5, S2.7, S3.5 | GR-11 연결 계약 | S0.2, S0.7, S0.8, S3.1 |
 | GR-03 PII | S2.3 | GR-12 설정·토글 | S0.2, S2.1, S3.4, S4.1 |
 | GR-04 입력 판정 | S2.2, S2.4, S2.5, S2.7, S2.10, S3.3, S3.6 | GR-13 로깅 | S0.4, S2.3, S2.7 |
-| GR-05 세션 위험 | S2.8, S3.3, S3.4 | GR-14 장애 처리 | S0.3, S1.6, S2.1, S2.3, S2.5, S2.7, S3.5, S3.6, S3.7 |
-| GR-06 검색 가드 | S2.9, S3.4 | GR-15 하네스 | S0.5, S0.7, S1.7, S2.0, S2.7, S3.2–S3.6 |
+| GR-05 세션 위험 | S2.8, S3.3, S3.4 | GR-14 장애 처리 | S0.3, S1.6, S2.1, S2.3, S2.5, S2.7, S3.5, S3.6, S3.7, S4.3 |
+| GR-06 검색 가드 | S2.9, S3.4 | GR-15 하네스 | S0.5, S0.6, S0.7, S1.7, S2.0, S2.7, S3.2–S3.6, S4.2 |
 | GR-07 출력 코드 검사 | S1.2, S1.3, S1.7, S3.5 | GR-16 확장 평가 | S4.5, S4.4(미실행 명시) |
 | GR-08 교환 판정 | S1.1, S1.4, S1.5, S1.7, S3.3, S3.6 | GR-17 운영 사양 | S4.3 |
 | GR-09 수리 | S1.6, S1.7, S3.6 | | |
@@ -401,7 +403,7 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 
 | 묶음 | 선행 → 후행 |
 |---|---|
-| 기반 | S0.1 → S0.2 → {S0.3, S0.4, S0.5, S0.8, S1.2} · S0.3 → {S0.6, S1.5, S2.4} · {S0.4, S0.5, S0.6} → S0.7 |
+| 기반 | S0.1 → S0.2 → {S0.3, S0.5, S0.8, S1.2} · S0.3 → {S0.4, S0.6, S1.5, S2.4} · {S0.4, S0.5, S0.6} → S0.7 |
 | 출력 | {S0.5, S0.6} → S1.1(`containment()` 포함) → S1.4 → S1.5 → S1.6 · S1.2 → S1.3 → S1.6 · {S1.1, S1.6, S0.7} → S1.7 |
 | 입력 | S0.5 → S2.0 → {S2.2, S2.4} · S1.2 → S2.2 → S2.1 → S2.6 → {S2.4, S2.5} · {S0.4, S1.3} → S2.3 · S2.1 → S2.6 · {S1.6, S2.1, S2.4} → S2.5 → {S2.7(+S2.6), S2.10, S3.1} · S2.7 → {S2.8, S2.9} |
 | 평가 | S2.7 → S3.6(실제 폭주, 11/16) → S3.3 → S3.4 → S3.5 → S3.6(비용) → S3.7 · S3.1 → {S3.6(지연), S3.4, 홀드아웃 허용 목록} → S3.5 · S0.5 → S3.2 |
@@ -422,7 +424,9 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 3. S2.9 검색 가드 → ablation 표에 "꺼짐"으로 표시
 4. S2.8 세션 위험 → 멀티턴은 문맥 4턴 고정으로 보고
 5. S2.3의 PII 부분(P1) → 서비스 모드 로그(P0)만 남기고 "평가 데이터에 실제 PII 없음"을 명시
-6. S1.5의 인용 지지 판정(MISCITED) → 출처 정확도는 인용 id 실재(S1.3)만 보고
+6. S1.5의 인용 지지 판정(MISCITED) → 출처 정확도는 인용 id 실재(S1.3 `unknown_cites`)와 사전 필터 `cite_error`만으로 내고 "(MISCITED 자름)"으로 표시한다(S1.5)
+
+Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은 각 세부 플랜에 있고 위 순서와 별개다.
 
 자르지 않는 것: 위기 경로(S2.1, GR-14 위기 행), 홀드아웃 1회 규칙, 키·PII 로그 금지, 무방비 베이스라인, attack_judge 일치도.
 
@@ -546,3 +550,9 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 - 홀드아웃 1회를 `results/holdout-runs.json` 기록으로 기계적으로 지킨다(§4.6, S3.5). dev 고정 항목과 겹치는 홀드아웃 항목은 홀드아웃 쪽을 지운다.
 - §4.5에 서비스 모드 필드를 적는다(S2.3). §8 예산에 GP2 예상(약 2.1만 회)을 더한다. GR 추적표 보강.
 - 설계 변경 예정에 추가: GR-14 표의 오류 행(①·②·③·⑦·사전 필터·⑨·튜터 검색·⑥)은 장애 처리로 PRD에 적는다(S2.5 PR). 막는 지점 4곳은 그대로다.
+
+**v7 (2026-10-31, santa-loop 2회차)**: 새 리뷰어 2명이 FAIL(치명 2건·2건, 겹침 없음). 고친 것:
+- 위기 알림 이벤트: 위기 응답마다 trace `alert` 레코드(§4.5). PRD GR-14 위기 행의 "교사 알림 이벤트 대기"를 S2.1이 만들고 S2.5 표 테스트가 확인한다.
+- ⑤ 결과 없이 끝나는 응답(①·③ 오류, Jev 선차단)은 연락처 줄(§4.2, ADR-0003). ④ PII 오류면 Jev로 보내지 않는다.
+- 주장 가능 여부는 GP4 그림·표에서도 씨앗 수로(§4.6과 같게). §7 6번의 출처 정확도 대체 정의를 GP1 S1.5와 맞춤.
+- 계약 보강: 요청별 카나리아는 평가 모드 `output_code.detail["canary"]`, `run_item`에 `tutor` 인자, 방식 B에서 `check_output`이 입력 단계 기록을 복사, 홀드아웃 중 예산 소진은 중단, 홀드아웃 해시는 의무 적용 뒤 최종 설정, R0 `answer_leak`은 `redirect` 예외, S0.4 선행에 S0.3.

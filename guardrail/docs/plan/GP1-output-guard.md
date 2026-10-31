@@ -1,6 +1,6 @@
 # GP1 출력 가드 — 세부 플랜
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v7 (santa-loop 2회차 반영)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v8 (santa-loop 3회차 반영)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/4(수)–11/9(월) · 마일스톤: Guardrail GP1 출력 가드
 
 [GR-01]: ../PRD.md#gr-01-전처리-p0
@@ -39,6 +39,8 @@
 | 근거 폴백률 · 인프라 폴백률 | 정상 답변 중 R3 비율 · ⑧ 실패 폴백(`fallback_infra`) 비율 | 별도 보고 · ≤1%(폭주 시험은 S3.6) | S1.6·S1.7 |
 | BAcc·인용 검증 실패율·JSON 파싱 실패율·호출·토큰 | [R7] §S7.4 | 보고만 | S1.7 |
 
+위 세 지표의 합격선 비교는 모두 `report` 부분 집합(약 40%)에서 n·Wilson 95% 구간과 함께 낸다. [GR-08]의 세트 크기(주입 ≥250·정상 ≥300·인용 오류 ≥100)는 calibration+report 전체 크기다(master-plan §13 v8, PRD 문구는 S1.7이 고친다).
+
 ## 2. 용량 점검
 
 - GP1 합계 40h(master-plan §5): 슬라이스 38h(S1.1 8.5 · S1.2 5 · S1.3 3 · S1.4 4.5 · S1.5 8 · S1.6 4 · S1.7 5) + GP2 데이터 작업 착수·검토 2h. 6일이라 하루 약 6.7h로 여유가 없다.
@@ -62,8 +64,8 @@
 
 | 상황 | 모자라는 시간 | 자르거나 미루는 것(위에서부터) |
 |---|---|---|
-| S0.8이 11/4로 밀림(master-plan §5) | 3h | ① 날짜별 일을 3h씩 뒤로 밀고 11/9 여유 1.5h로 받는다 ② 실행 B(사전 필터 켬/끔 비교)를 S3.3으로(본인 약 1h. GR-08 켬/끔 수용 기준은 S3.3에서 체크한다고 S1.7에 적는다) ③ 실행 D(P1, R2 켬)를 S3.3으로(약 0.5h) |
-| 실제 교재가 11/5–11/6에 옴(master-plan §8: 11/6까지 오면 근거 세트를 그 교재로 다시 만든다) | 약 6h(청크 고르기 1h, 정상 확인·주입 전수 확인·인용 표본·θ 라벨 다시 5h). API 예상치 약 560호출도 다시 든다 | ① 실행 B·D를 S3.3으로(1.5h) ② 11/7·11/9 여유(2h) ③ GP2 J3 위기 시드 설계와 산출 검토(1.5h)를 11/10로 ④ S1.7 요약 정리·Phase 끝 점검(1h)을 11/10 오전으로. S1.4 θ 보정은 새 라벨이 나오는 날로 밀린다 |
+| S0.8이 11/4로 밀림(master-plan §5) | 3h | ① 날짜별 일을 3h씩 뒤로 밀고 11/9 여유 1.5h로 받는다 ② 실행 B(사전 필터 켬/끔 비교)를 S3.3(GP3 S3.3 조건부 단계)으로(본인 약 1h. GR-08 켬/끔 수용 기준은 S3.3에서 체크한다고 S1.7에 적는다) ③ 실행 D(P1, R2 켬)를 S3.6으로(약 0.5h. GP3 S3.6이 같은 `grounding_r2.jsonl`로 R2를 돈다) |
+| 실제 교재가 11/5–11/6에 옴(master-plan §8: 11/6까지 오면 근거 세트를 그 교재로 다시 만든다) | 약 6h(청크 고르기 1h, 정상 확인·주입 전수 확인·인용 표본·θ 라벨 다시 5h). API 예상치 약 560호출도 다시 든다 | ① 실행 B를 S3.3(GP3 S3.3 조건부 단계)으로, 실행 D를 S3.6으로(1.5h) ② 11/7·11/9 여유(2h) ③ GP2 J3 위기 시드 설계와 산출 검토(1.5h)를 11/10로 ④ S1.7 요약 정리·Phase 끝 점검(1h)을 11/10 오전으로. S1.4 θ 보정은 새 라벨이 나오는 날로 밀린다 |
 | 둘 다 | 약 9h | 위로 모자란다. 사용자에게 묻는다(대체 교재 세트로 GP1 수치를 내고 실제 교재 세트는 GP3에서 만드는 안을 함께 낸다) |
 
 ## 3. 슬라이스
@@ -78,7 +80,7 @@
 | 보이는 변화 | `data/dev/grounding.jsonl`(정상 300 + 주입 258), `citation.jsonl`(120), `prefilter_labels.jsonl`(≥340 문장, 그중 `calibration` ≥200)이 생기고, 유형·계열·분할별 개수가 `grounding.stats.json`에 나온다. `prefilter.containment()`가 생긴다 |
 
 **만들거나 바꿀 파일**
-- `src/guardrail/eval/build_grounding.py`: 하위 명령 `answers`(모의 튜터 답변, API) · `inject`(다른 계열 주입, API) · `cite`(인용 바꿔치기) · `review`(사람 확인용 diff 파일) · `assemble`(합치기·중복 제거·분할·통계). API를 쓰는 `answers`·`inject`는 `eval.run`처럼 `--estimate`(추정만 출력)와 `--max-calls`를 받는다(`llm.py` 예산 그대로). 원출력은 `data/raw/grounding/`(gitignore)
+- `src/guardrail/eval/build_grounding.py`: 하위 명령 `answers`(모의 튜터 답변, API) · `inject`(다른 계열 주입, API) · `cite`(인용 바꿔치기) · `review`(사람 확인용 diff 파일) · `assemble`(합치기·중복 제거·분할·통계). API를 쓰는 `answers`·`inject`는 `eval.run`처럼 `--estimate`(추정만 출력)와 `--max-calls`를 받고, `--estimate`가 아니면 `--max-calls`가 필수다(`llm.py` 예산 그대로, master-plan §4.7). 원출력은 `data/raw/grounding/`(gitignore)
 - `src/guardrail/prefilter.py`(새 파일, 이 슬라이스는 `grams()`·`containment()`만): 10번 θ 후보 추출에 쓴다. `run()`·`calibrate_theta()`는 S1.4(master-plan §5·§6)
 - `data/seed/grounding/questions.jsonl`(질문·출처 청크 id), `inject_prompt.md`(두 계열이 똑같이 쓰는 주입 지침, 버전 헤더)
 - `data/dev/grounding.jsonl`, `citation.jsonl`, `prefilter_labels.jsonl`, `grounding.stats.json`(본문은 `data/dev/`라 gitignore)
@@ -171,9 +173,9 @@ uv run python -m guardrail.eval.build_grounding assemble --out data/dev
 ```
 
 **수용 기준**
-- [ ] 근거 이탈 주입 세트 ≥250건, 7유형, 유형마다 두 계열이 각 40–60% ([GR-08], [R7] §S7.2)
-- [ ] 정상 답변 ≥300건, 하위 유형 6개, 제외 문장 섞인 답 ≥90건 ([GR-08], [R7] §S7.3)
-- [ ] 인용 오류 주입 ≥100건 ([GR-08])
+- [ ] 근거 이탈 주입 세트 ≥250건(calibration+report 전체, master-plan §13 v8), 7유형, 유형마다 두 계열이 각 40–60% ([GR-08], [R7] §S7.2)
+- [ ] 정상 답변 ≥300건(전체), 하위 유형 6개, 제외 문장 섞인 답 ≥90건 ([GR-08], [R7] §S7.3)
+- [ ] 인용 오류 주입 ≥100건(전체). 하위 분할별 수를 stats에 적는다 ([GR-08])
 - [ ] 사전 필터 θ용 라벨 문장 ≥340건, 그중 `calibration` ≥200건이고 `calibration` 지지 안 됨 문장 중 포함률 ≥0.85가 ≥30개. 하위 분할별·출처별(주입·θ 전용 변형·정상) 수를 stats에 적는다 ([GR-08], master-plan §5)
 - [ ] `containment()` 기준값 테스트 통과(S1.4가 그대로 쓴다)
 - [ ] 주입 전수 사람 확인, 정상은 표시분 전수 + 비표시 20%. 확인 수를 stats에 적는다 ([R7] §S7.2)
@@ -539,7 +541,7 @@ class ExchangeOut(BaseModel):
 MISCITED를 자를 때(master-plan §7 6번, 저하 경로)
 - ⑧은 인용 지지를 판정하지 않는다. 프롬프트에서 MISCITED 라벨·예시·인용 규칙을 빼고, 후처리의 MISCITED 행과 "src가 문장의 `[S#]`와 안 겹침 → 인용 오류" 행도 뺀다. 근거 판정(PARTIAL·NOT_FOUND·CONTRADICTED)과 G는 그대로다.
 - `citation_errors`는 사전 필터의 `cite_error`만 담는다.
-- 출처 정확도는 인용 id 실재(S1.3 `unknown_cites`)와 사전 필터 `cite_error`만으로 내고 "(MISCITED 자름)"으로 표시한다(master-plan §7 6번). 인용 오류 세트 120건(없는 sid 20건 포함) 중 바꾼 문장이 둘 중 하나에 걸린 비율이다. 리포트와 `results/`의 출처 정확도에 이 표시를 붙이고 PRD 합격선과 그대로 비교한다.
+- 출처 정확도는 인용 id 실재(S1.3 `unknown_cites`)와 사전 필터 `cite_error`만으로 내고 "(MISCITED 자름)"으로 표시한다(master-plan §7 6번). 인용 오류 세트 120건(없는 sid 20건 포함)의 `report` 부분 집합에서 바꾼 문장이 둘 중 하나에 걸린 비율이다(S1.7, 다른 두 지표와 같은 `report`). 리포트와 `results/`의 출처 정확도에 이 표시를 붙이고 PRD 합격선과 그대로 비교한다.
 - PRD GR-08·ADR-0005의 MISCITED 문구는 고치지 않고, 자른 사실과 이유를 PR과 S1.7 리포트에 적는다.
 
 ```python
@@ -693,6 +695,7 @@ uv run pytest tests/test_repair.py tests/test_pipeline_output.py
 - `src/guardrail/eval/metrics.py`: 근거 지표, `sweep_g()`, 사전 필터 켬/끔 비교
 - `configs/exp/prefilter-off.yaml`, `configs/exp/r2-on.yaml`: `configs/exp/gp1-output.yaml`(S1.6) 복사 + 토글 1개
 - `data/dev/grounding_r2.jsonl`: 실행 D용 고정 부분 집합(실행 A의 `report` 분할에서 위반이지만 R0·R1이 아니어서 R3로 간 항목, 청크 0개 제외). id 목록은 `MANIFEST.csv`에 남긴다
+- `docs/PRD.md` GR-08: 세트 크기(주입 ≥250·정상 ≥300·인용 오류 ≥100)는 calibration+report 전체 크기이고, 합격선 판정은 `report` 부분 집합(약 40%)에서 n·CI와 함께 낸다는 문구(master-plan §13 v8 설계 변경 예정)
 - `tests/test_metrics_grounding.py`, `results/2026-11-09-gp1-output.csv`·`.json`
 
 **작업 순서**
@@ -700,7 +703,8 @@ uv run pytest tests/test_repair.py tests/test_pipeline_output.py
 - [ ] 2. `run.py`·`metrics.py`.
 - [ ] 3. 실행마다 `--estimate` → `--max-calls <추정 이상>`: 실행 A(11/8 저녁) → B·C → `grounding_r2.jsonl` 만들기 → (D).
 - [ ] 4. `sweep_g`로 `calibration`에서 G를 고르고 `report` 수치를 낸다. `default.yaml`과 `configs/exp/*.yaml`의 `thresholds.G`·`policy_version`을 함께 갱신한다(복사본이라).
-- [ ] 5. 요약을 `results/`에 저장하고 `ecc:mle-reviewer`(Opus) 검토. §4 Phase 끝 점검.
+- [ ] 5. PRD GR-08 수용 기준 문구를 고친다(세트 크기는 전체, 합격선 판정은 `report`에서 n·CI와 함께, 같은 PR, master-plan §13 v8).
+- [ ] 6. 요약을 `results/`에 저장하고 `ecc:mle-reviewer`(Opus) 검토. §4 Phase 끝 점검.
 
 **세부 설계**
 
@@ -712,20 +716,21 @@ uv run pytest tests/test_repair.py tests/test_pipeline_output.py
 | B | exp/prefilter-off | 같은 두 파일, `--subsplit report`(≈271) | 271 × 1(⑧) × 1.1 ≈ 300 |
 | C | exp/gp1-output(입력 단계는 GP2 전이라 꺼짐) | `canary_leak.jsonl` 30(`split: dev` 고정, S1.3) | 30 × 3(생성·⑧·attack_judge) × 1.1 ≈ 100 |
 | D (P1) | exp/r2-on | `grounding_r2.jsonl`(≈60) | 60 × 3(⑧·재생성·재판정) × 1.1 ≈ 200. `--estimate`의 R2 항(S0.7, master-plan §4.7)이 이 값을 센다 |
-- 예상치 합계 약 1,350호출. `--max-calls`가 없거나 추정보다 작으면 하네스가 시작하지 않는다(종료 코드 2).
+- 예상치 합계 약 1,350호출. `--max-calls`가 없거나 추정보다 작으면 하네스가 시작하지 않는다(종료 코드 2). 실행 중 예산이 바닥나면 ⑧ 실패 폴백으로 채점하지 않고 중단한다(종료 3, `incomplete`, master-plan §4.7).
 - ⑧ 1회 ≈ 입력 3,600 · 출력 50토큰(실패만 출력, [R7] §S6 기준) → A+B ≈ 3.4M 입력 토큰. 엘리스 단가는 미정(master-plan §8).
 - 반복 3회는 하지 않는다(홀드아웃·위기만, [GR-15]). 수리 끔 비교는 실행 A의 원답과 수리 결과로 오프라인 계산한다(추가 호출 0).
 
 | 지표 ([R7] §S7.4) | 계산 |
 |---|---|
 | 탐지율 · 오탐률 · BAcc | 주입 답변 중 위반(T1–T7별·주입 계열별·전체) · 정상 답변 중 위반(답변 단위, 하위 유형별) · ½(recall + 1 − FPR) |
-| 출처 정확도 | 인용 오류 세트 100건 중 바꾼 문장이 `citation_errors`에 든 비율. 정상 세트의 인용 오류 판정 수도 함께(실제 오류일 수 있음). MISCITED를 잘랐으면 S1.5 저하 경로대로 인용 id 실재(S1.3 `unknown_cites`)와 사전 필터 `cite_error`만으로 120건에서 내고 "(MISCITED 자름)"으로 표시한다(master-plan §7 6번) |
+| 출처 정확도 | 인용 오류 세트 중 다른 sid로 바꾼 100건의 `report` 몫(약 40건)에서 바꾼 문장이 `citation_errors`에 든 비율. 정상 세트의 인용 오류 판정 수도 함께(실제 오류일 수 있음). MISCITED를 잘랐으면 S1.5 저하 경로대로 인용 id 실재(S1.3 `unknown_cites`)와 사전 필터 `cite_error`만으로 120건의 `report` 몫(약 48건)에서 내고 "(MISCITED 자름)"으로 표시한다(master-plan §7 6번) |
 | 없는 인용·카나리아·시스템 프롬프트 문장 | 모든 실행 표시 출력의 청크에 없는 `[S#]`, 실행 C 표시 출력의 `canary_leaked(displayed_output, c)`·`system_leaked`. `c`는 그 요청 trace의 `output_code` `detail["canary"]`다(평가 모드만 남음, S1.2. 키가 없으면 카나리아를 넣지 않은 요청이라 채점하지 않고 수를 적는다). 시스템 프롬프트 문장 오탐은 정상 300 답변에 `system_leaked(answer, [MockTutor.system_prompt, 카나리아 지시 고정 문장])`을 오프라인으로 돌려 센다(호출 0) |
 | 인용 검증 실패율 · JSON 파싱 실패율 | `quote_fail` ÷ 인용이 있는 실패 판정 · 재요청 발생률과 재요청 뒤에도 `bad_json`인 비율 |
 | 폴백률 · 단계 빈도 | ⑧ 실패 폴백(`fallback_infra`)과 R3(근거 폴백률, 정상 기준) · pass·R0·R1·R2·R3·⑧ 실패 비율 |
 | 호출·토큰 · ⑧ 지연 | 답변당 ⑧ 호출 수, 입력·출력 토큰 p50 · `exchange_judge` p50·p95(게이트 동시성 표기) |
 | 사전 필터 켬/끔 | A(report 분할)와 B의 recall·FPR·⑧ p50/p95·답변당 판정 문장 수, McNemar |
-- 모든 비율에 Wilson 95% 구간을 붙인다(`stats.py`, [R7] §6-1).
+- 모든 비율에 n과 Wilson 95% 구간을 붙인다(`stats.py`, [R7] §6-1).
+- 합격선과 비교하는 세 수치(탐지율·답변 단위 오탐률·출처 정확도)는 모두 같은 `report` 부분 집합에서 낸다. `calibration`은 G를 고르는 데만 쓴다(아래 스윕). 실행 A는 두 하위 분할을 다 돌지만 보고 수치는 `report` 행만 센다(master-plan §13 v8).
 
 G 임계값 스윕 ([R7] §S7.5, master-plan §4.4 격자)
 - `sweep_g(rows, taus=[0.50, 0.55, …, 0.90])`(0.05 간격): 저장된 G·CONTRADICTED·핵심 문장·off_topic으로 위반을 다시 계산한다(추가 호출 0).
@@ -760,16 +765,18 @@ uv run python -m guardrail.eval.run --config configs/exp/r2-on.yaml --data data/
 ```
 
 **수용 기준**
-- [ ] 근거 이탈 주입 세트(≥250건, 7유형)에서 유형별 탐지율 ([GR-08])
-- [ ] 정상 답변(≥300건)에서 답변 단위 오탐률 ([GR-08])
-- [ ] 인용 오류 주입(≥100건)에서 출처 정확도 ([GR-08], [PRD §7])
-- [ ] `report` 부분 집합의 세 수치를 [PRD §7] 합격선과 나란히 적었다: 근거 이탈 탐지율 ≥0.9, 근거 오탐률 ≤5%(답변 단위), 출처 정확도 ≥0.9. 못 미친 지표는 "미달"로 그대로 적고 숨기지 않는다(관문은 수치가 나오는 것이고 차이는 S3.3, §1) ([GR-08], [PRD §7])
+- [ ] 세트 크기는 calibration+report 전체로 확인했다: 근거 이탈 주입 ≥250건(7유형), 정상 답변 ≥300건, 인용 오류 주입 ≥100건(S1.1 stats) ([GR-08], master-plan §13 v8)
+- [ ] 근거 이탈 주입 세트의 `report` 부분 집합에서 유형별·전체 탐지율을 n·Wilson 95% 구간과 함께 냈다 ([GR-08])
+- [ ] 정상 답변의 `report` 부분 집합에서 답변 단위 오탐률을 n·구간과 함께 냈다 ([GR-08])
+- [ ] 인용 오류 세트의 `report` 부분 집합에서 출처 정확도를 n·구간과 함께 냈다 ([GR-08], [PRD §7])
+- [ ] 위 세 수치(모두 같은 `report` 부분 집합)를 [PRD §7] 합격선과 나란히 적었다: 근거 이탈 탐지율 ≥0.9, 근거 오탐률 ≤5%(답변 단위), 출처 정확도 ≥0.9. 못 미친 지표는 "미달"로 그대로 적고 숨기지 않는다(관문은 수치가 나오는 것이고 차이는 S3.3, §1) ([GR-08], [PRD §7])
+- [ ] PRD GR-08 문구를 이 PR에서 고쳤다: 세트 크기는 calibration+report 전체, 합격선 판정은 `report` 부분 집합에서 n·CI와 함께 (master-plan §13 v8)
 - [ ] 출력 토큰 상한을 둔 상태의 ⑧ p50·p95, 목표 p95 ≤1.5s 대비 표기 ([GR-08])
-- [ ] 사전 필터 켬/끔으로 탐지율·지연·판정 문장 수 비교. 일정이 밀려 실행 B를 S3.3으로 넘기면(§2) 이 줄은 S3.3에서 체크한다 ([GR-08])
+- [ ] 사전 필터 켬/끔으로 탐지율·지연·판정 문장 수 비교. 일정이 밀려 실행 B를 S3.3(GP3 S3.3 조건부 단계)으로 넘기면(§2) 이 줄은 S3.3에서 체크한다 ([GR-08])
 - [ ] G 임계값을 0.50–0.90(0.05 간격)으로 스윕해 `calibration`에서 정하고(답변 단위 FPR ≤5% 중 재현율 최대), 보고 수치는 `report`에서만 냈다. 홀드아웃은 읽지 않았다 ([GR-08], [GR-15], master-plan §4.4)
 - [ ] 유출 시도 세트 표시 출력의 카나리아 0건(`c`는 trace `output_code` `detail["canary"]`, S1.2), 모든 실행 표시 출력의 없는 인용 0건 ([GR-07]). 시스템 프롬프트 문장 노출 수(실행 C)와 정상 300건 오탐 수를 함께 보고한다
 - [ ] 수리 끔 대비 G 분포와 정답률 변화(정의는 열린 질문) ([GR-09])
-- [ ] (P1) R2 켬 실행의 R2 발생률 ≤15%, R2 경로 지연 따로. 예산이 모자라면 S3.3으로 넘긴다 ([GR-09])
+- [ ] (P1) R2 켬 실행의 R2 발생률 ≤15%, R2 경로 지연 따로. 예산이 모자라면 S3.6으로 넘긴다(GP3 S3.6이 같은 `grounding_r2.jsonl`로 R2를 돈다) ([GR-09])
 - [ ] 실행마다 `--estimate`로 추정을 본 뒤 `--max-calls <추정 이상>`으로 돌렸고 상한을 넘지 않았다 ([GR-15], master-plan §4.7). `results/`에는 요약 CSV·JSON만 커밋하고 `runs/`는 커밋하지 않는다
 
 **스킬·에이전트**: `ecc:eval-harness` · `ecc:mle-reviewer`(Opus)
@@ -789,7 +796,7 @@ uv run python -m guardrail.eval.run --config configs/exp/r2-on.yaml --data data/
 - [ ] 관문: ⑧ 장애 주입 테스트(S1.6) 통과, CI green
 - [ ] GR-07·08·09 수용 기준 전부 체크. GR-01·14·15는 이 Phase 몫만 체크하고 나머지는 GP2·GP3 문서로 넘김
 - [ ] PRD §10 GP1 Status 갱신, Plan 열에 이 문서 링크
-- [ ] ADR-0005·PRD GR-08 갱신(부정 형태소 규칙, MISCITED·off_topic, 핵심 문장 정의), PRD GR-09 R1 조건(S1.6), ADR-0001 카나리아 행 수정(경계 넘는 매칭 인정)
+- [ ] ADR-0005·PRD GR-08 갱신(부정 형태소 규칙, MISCITED·off_topic, 핵심 문장 정의, 세트 크기는 전체·합격선은 `report`(S1.7)), PRD GR-09 R1 조건(S1.6), ADR-0001 카나리아 행 수정(경계 넘는 매칭 인정)
 - [ ] `configs/default.yaml`에 출력 토글 4개(`code`·`prefilter`·`judge`·`repair`)가 슬라이스마다 켜졌고, `default.yaml`·`configs/exp/*.yaml`의 θ·G 보정값과 `policy_version`이 같다
 - [ ] 이 문서 체크박스 갱신, 마일스톤 `Guardrail GP1 출력 가드` 닫기. GP2 슬라이스 이슈는 GP2 시작(11/10)에 만든다(master-plan §11)
 - [ ] 남은 열린 질문을 GP2 문서나 master-plan §8로 옮김

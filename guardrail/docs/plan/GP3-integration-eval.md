@@ -1,6 +1,6 @@
 # GP3 통합·평가 — 세부 플랜
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v7 (santa-loop 2회차 반영)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v8 (santa-loop 3회차 반영)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/16(월)–11/20(금, **기능 동결**) · 마일스톤: Guardrail GP3 통합·평가
 
 본문에서 "(→§5)"는 이 문서 §5(master-plan에 반영할 점)를 가리킨다.
@@ -43,19 +43,23 @@
 | [GR-15][gr15] | ablation 표 / 임계값별 과잉 거절–공격 통과 곡선 / 요청당 비용·지연 표 | S3.4 / S3.3 / S3.6 |
 | [GR-15][gr15] | 주최측 평가셋 어댑터 / API 예산(실행 전 호출 수 출력·상한) | S3.2 / 모든 실행 |
 | [GR-04][gr04] | τ_J: 한국어 정상 학생 질문 ≥300건 오탐 ≤0.5% / p95 ≤1.5s | S3.3 / S3.6 |
+| [GR-04][gr04] | 조건부(GP2 자르는 선 A로 미뤘을 때만): 개발 세트 범주별 혼동행렬. 판정기–사람 라벨 일치(본인 150건 + 팀원 교차 50건, Cohen κ) | S3.3 |
 | [GR-05][gr05] | 멀티턴 공격 ≥60 대화 R 켬/끔 McNemar, 정상 멀티턴 ≥100건 확장 비율·추가 오차단 ≤1%p | S3.3·S3.4 (S2.8 머지 시) |
 | [GR-08][gr08] | G 0.5–0.9 스윕, θ는 라벨 문장 ≥200건(`calibration`)에서 미탐을 늘리지 않는 값 / 판정 p95 ≤1.5s | S3.3 / S3.6 |
-| [GR-09][gr09] | R2 발생률 ≤15%, R2 경로 지연 따로 집계 | S3.6 |
+| [GR-08][gr08] | 조건부(GP1 실행 B를 미뤘을 때만): 사전 필터 켬/끔으로 탐지율·지연·판정 문장 수를 비교 | S3.3 |
+| [GR-09][gr09] | R2 발생률 ≤15%, R2 경로 지연 따로 집계(GP1 실행 D를 미뤘으면 그 몫도) | S3.6 |
 | [PRD §7][prd7] | 합격선, Clopper-Pearson 하한, 59건 미만 "주장 불가", 위기 0/N(3/N), McNemar + Holm | S3.4, S3.5 |
 
 ## 2. 용량 점검
 
 P0 합계 25h(S3.1 4 · S3.2 3 · S3.3 4 · S3.4 4 · S3.5 4 · S3.6 3 · S3.7 3). 5일에 약 35h(하루 약 7h)라 여유는 약 10h다([master-plan §5][mp5]). 그중 **최대 8h**를 GP2 이월분에 쓰고, 남은 약 2h는 실행 실패·재실행 여유로 둔다. GP2에서 넘어올 수 있는 P1·선택 작업(S2.3 PII 4h · S2.8 3h · S2.9 3h · S2.10 5h)은 합계 15h라 다 받을 수 없다([master-plan §5][mp5]). API 실행 대기는 백그라운드로 돌려 이 시간에 넣지 않는다.
 
+GP1·GP2가 미룬 실행([master-plan §13][mp13] v8: GP1 S1.7 실행 B 본인 약 1h, GP2 자르는 선 A의 S2.4 라벨 150건 약 1.5h)은 S3.3 조건부 단계로 받고, 시간은 **남은 약 2h 여유**에서 낸다. 둘 다 미뤄져 2.5h가 되면 모자라는 0.5h만큼 이월 상한을 7.5h로 줄인다(PII 4h·S2.8 3h = 7h는 그대로 들어간다). 이때 재실행 여유는 없다. GP1 실행 D(R2 켬)는 S3.6 R2 실행이 대신해 따로 시간을 쓰지 않는다.
+
 **넘어온 슬라이스 버퍼 규칙**
 1. 받는 순서는 [master-plan §7][mp7] 자르는 순서의 역순: **S2.3 PII → S2.8 → S2.9 → S2.10**([master-plan §5][mp5]).
 2. 합계 상한 8h(보통 PII와 S2.8까지). **화 11/17 12:00까지 머지**하지 못한 것은 [master-plan §7][mp7]대로 자른다(임계값이 그 뒤에 동결된다). 자른 묶음은 ablation 표에 "꺼짐(미구현)", PII를 자르면 서비스 모드 로그(P0)만 남기고 "평가 데이터에 실제 PII 없음"을 적는다.
-3. S2.10은 [ADR-0008][adr8] 전제 ①(주최측 외부 API 허용)이 **11/10까지** 왔을 때만 후보로 남는다. 11/10까지 허용이 없으면 [master-plan §7][mp7]대로 이미 잘렸고 `jev: false`다([GP2 S2.10](GP2-input-crisis.md) 1단계). ①이 왔으면 만들기 전에 확인되는 ③(실제 학생 정보·대화 기록 미전송)·④(키는 환경변수만)를 월 오전에 확인하고, 하나라도 빠지면 받지 않고 `jev: false`. 전제 ②(dev ≥100건에서 역할 분담이 ⑤ 단독보다 차단율이 높고 과잉 거절이 늘지 않음)는 만든 뒤 비교표로 판정하고, 못 채우면 머지하더라도 `jev: false`로 둔다([GP2 S2.10](GP2-input-crisis.md)).
+3. S2.10은 [ADR-0008][adr8] 전제 ①(주최측 외부 API 허용)이 **11/10까지** 왔을 때만 후보로 남는다. S2.3 PII도 머지돼 있어야 한다(`check_toggles`가 `stages.input.jev`를 `stages.input.pii`가 켜졌을 때만 허용, [master-plan §4.4][mp44]). PII를 자르면 S2.10도 받지 않는다. 11/10까지 허용이 없으면 [master-plan §7][mp7]대로 이미 잘렸고 `jev: false`다([GP2 S2.10](GP2-input-crisis.md) 1단계). ①이 왔으면 만들기 전에 확인되는 ③(실제 학생 정보·대화 기록 미전송)·④(키는 환경변수만)를 월 오전에 확인하고, 하나라도 빠지면 받지 않고 `jev: false`. 전제 ②(dev ≥100건에서 역할 분담이 ⑤ 단독보다 차단율이 높고 과잉 거절이 늘지 않음)는 만든 뒤 비교표로 판정하고, 못 채우면 머지하더라도 `jev: false`로 둔다([GP2 S2.10](GP2-input-crisis.md)).
 4. GP2 관문(위기 재현율 ≥0.95 pass^3, GR-14 장애 표)을 못 넘었으면 넘어온 슬라이스는 받지 않고 관문부터 고친다.
 5. 넘어온 슬라이스의 수용 기준은 [GP2 문서](GP2-input-crisis.md) 그대로다.
 
@@ -65,8 +69,8 @@ P0 합계 25h(S3.1 4 · S3.2 3 · S3.3 4 · S3.4 4 · S3.5 4 · S3.6 3 · S3.7 3
 
 | 날짜 | 오전 | 오후 | 백그라운드 |
 |---|---|---|---|
-| 11/16(월) | GP3 슬라이스 이슈 7개 생성(S3.2는 `guardrail:blocked`). S3.1 튜터 준비 확인·계약 스위트. S3.2 형식 확인(기본 마감) | 이월분(S2.3 PII → S2.8). S3.3 θ(코드만). S3.6 집계 테스트 | **S3.6 폭주 시험**(실제 게이트웨이는 이 한 번, 동시성 20·50) → 게이트 값 확정 |
-| 11/17(화) | 이월분 **12:00 마감**(못 넣은 것은 자름). S3.3 R_expand 실행(S2.8 머지 시) | S3.3 기록 실행 → 재생 스윕·곡선 → 확인 실행 → **policy_version 1.0.0 동결** | 기록 실행 |
+| 11/16(월) | GP3 슬라이스 이슈 7개 생성(S3.2는 `guardrail:blocked`). S3.1 튜터 준비 확인·계약 스위트. S3.2 형식 확인(기본 마감) | 이월분(S2.3 PII → S2.8). S3.3 θ(코드만). S3.6 집계 테스트. (조건부) 미뤄 온 S2.4 라벨 150건 | **S3.6 폭주 시험**(실제 게이트웨이는 이 한 번, 동시성 20·50) → 게이트 값 확정 → (조건부) S2.4 dev 실행 |
+| 11/17(화) | 이월분 **12:00 마감**(못 넣은 것은 자름). (조건부) S2.4 혼동행렬·κ. S3.3 R_expand 실행(S2.8 머지 시) | S3.3 기록 실행 → 재생 스윕·곡선 → 확인 실행 → **policy_version 1.0.0 동결** | 기록 실행 → (조건부) GP1 실행 B |
 | 11/18(수) | S3.4 설정 5개·테스트 → **12:00 S3.1 판정**(실제/모의) → `tutor` 절과 의무 효과 키를 default·unguarded·복사본 전부에 고정(테스트 green) → **허용 목록 확정·커밋**(가드·무방비·위기 장애 재실행 해시) → 홀드아웃 2개 `--estimate`로 상한 확인 | S3.4 실행 7개 → McNemar·Holm, ⑤ 순기여 | ablation 실행 |
 | 11/19(목) | S3.5 사전 점검(허용 목록 해시 확인) → **홀드아웃 실행**(가드 → 무방비 차례로, 각 1회) → 위기 장애 재실행(API 0회) | S3.7 리뷰 3갈래 시작. 홀드아웃 세 실행이 `done`이 된 **뒤에** S3.6 지연 실행(동시성 1)·R2 실행 → S3.2 실행(18:00까지 형식을 받았을 때) | 홀드아웃, 리뷰 에이전트 |
 | 11/20(금) | S3.5 표 → santa 2명 → 결과 커밋. S3.6 비용 표 | S3.7 리뷰 반영, 문서 동기화, **기능 동결**·SHA 기록 | doc-updater |
@@ -75,7 +79,7 @@ API를 부르는 실행은 한 번에 한 프로세스만 돈다. AIMD 게이트
 
 **API 예산** ([GR-15][gr15]). **총액은 사용자가 11/12까지 정한다**([master-plan §8][mp8], S2.7 대량 실행 전). 그 결정에는 아래 합계 **예상치**를 쓴다. 홀드아웃 몫을 먼저 떼고 폭주 시험 → S3.3 → S3.4 순으로 나눈다. 모자라면 S3.4 부분집합부터 줄이고 홀드아웃 몫은 줄이지 않는다.
 
-실행 명령에는 호출 수를 외워 쓰지 않는다([master-plan §4.7][mp47]). 실행마다 ① 같은 명령에 `--estimate`를 붙여 추정만 보고 ② `--max-calls <추정 이상>`을 붙여 돈다. 상한이 추정보다 작으면 하네스가 시작하지 않는다(종료 코드 2). `--fake`이거나 `faults`가 모든 역할(jev 포함)을 덮는 실행은 `--max-calls 0`. 이 절의 수는 모두 [master-plan §4.7][mp47] 추정 공식(항목 1개 상한) × 반복 × 1.1로 낸 예상치다.
+실행 명령에는 호출 수를 외워 쓰지 않는다([master-plan §4.7][mp47]). 실행마다 ① 같은 명령에 `--estimate`를 붙여 추정만 보고 ② `--max-calls <추정 이상>`을 붙여 돈다. 상한이 추정보다 작으면 하네스가 시작하지 않는다(종료 코드 2). 실행 중 예산이 바닥나면(`budget`) 어느 실행이든 그 응답을 GR-14 폴백으로 채점하지 않고 중단한다(종료 3, 그때까지의 결과는 `incomplete`). 실제 튜터로 도는 실행은 의무 탐지 호출(약 8회, `slot()`이라 `max_calls`에 듦, S3.1)을 `--estimate`가 세지 않으므로 그만큼 더 준다. `--fake`이거나 `faults`가 모든 역할(jev 포함)을 덮는 실행은 `--max-calls 0`. 이 절의 수는 모두 [master-plan §4.7][mp47] 추정 공식(항목 1개 상한) × 반복 × 1.1로 낸 예상치다.
 
 | 항목 종류 | 항목당 호출 상한, 가드(Jev 끔) | 무방비 |
 |---|---|---|
@@ -108,12 +112,14 @@ API를 부르는 실행은 한 번에 한 프로세스만 돈다. AIMD 게이트
 | 기록 실행 · 확인 실행 | S3.3 | 1,200×5×1.1 = 6,600 · 100×5×1.1 = 550 |
 | R_expand 3값(S2.8 머지 시) | S3.3 | dev 멀티턴 ≈170대화×17×1.1 ≈ 3,200 × 3 = 9,600 |
 | θ·G 재보정(S1.7 뒤 프롬프트가 바뀌었을 때만) | S3.3 | `calibration` ≈407×1×1.1 ≈ 450 + 새로 만든 `report` ≈271×1×1.1 ≈ 300 |
+| 조건부: GP1 실행 B, 사전 필터 끔(GP1에서 미뤘을 때만) | S3.3 | `report` ≈271×1(⑧)×1.1 ≈ 300(GP1 S1.7 예상치) |
+| 조건부: GP2 자르는 선 A의 S2.4 dev 실행(GP2에서 미뤘을 때만) | S3.3 | `judge_strat600` 600×1(⑤)×1.1 ≈ 660(GP2 S2.4 예상치) |
 | ablation 7개 | S3.4 | 약 22,400(설정별은 S3.4) |
 | 지연 c1 · R2 | S3.6 | 200×5×1.1 = 1,100 · `grounding_r2` ≈60×3×1.1 ≈ 200 |
 | 직렬 비교(게이트웨이가 동시성을 막을 때만) | S3.6 | 300×5×1.1 = 1,650 |
 | 실제 튜터 스모크 | S3.1 | (50×5 + 50×5 + 30×4)×1.1 ≈ 690 |
 | 주최측 test | S3.2 | N×5×1.1, N=500 가정 2,750 |
-| **합계(예상치)** | | **약 99,200**(홀드아웃 몫 약 64,400 포함). 조건부(R_expand·재보정·직렬·주최측 합 14,750)까지 약 114,000. Jev 호출 별도. [master-plan §8][mp8]의 GP3 예상(약 9.9만·11.4만 회)과 같다. GP2 예상(약 2.1만 회)은 이 합계에 넣지 않는다 |
+| **합계(예상치)** | | **약 99,200**(홀드아웃 몫 약 64,400 포함). 조건부(R_expand·재보정·직렬·주최측 합 14,750)까지 약 114,000. Jev 호출 별도. [master-plan §8][mp8]의 GP3 예상(약 9.9만·11.4만 회)과 같다. GP2 예상(약 2.1만 회)은 이 합계에 넣지 않는다. 미뤄 온 두 실행(약 960)도 GP1·GP2 예상(S1.7 약 1,350·S2.4 약 660)에 이미 들어 있어 넣지 않는다. GP1 실행 D(약 200)는 S3.6 R2 실행이 대신한다 |
 
 11/12 총예산 결정에는 위 합계 예상치를 쓴다. 홀드아웃 실제 상한은 11/18 허용 목록 커밋 직후 `--estimate`로 정한다(S3.5). 실제 MANIFEST 수가 예상과 다르면 그 추정을 따른다.
 
@@ -169,13 +175,13 @@ async def probe_obligations(tutor: TutorAdapter) -> dict[str, bool]             
 def apply_obligations(cfg: GuardConfig, ob: dict[str, bool]) -> GuardConfig    # 새 GuardConfig를 돌려준다
 ```
 - 하네스 순서(실제 실행): 설정 로드 → `LLM`·어댑터 생성(실행당 하나) → `probe_obligations`(`faults.generator`가 없을 때만, 아래) → `apply_obligations`(고정 전에는 자동 저하, 고정 뒤에는 결과가 설정과 다르면 멈춤, 아래) → `Guard` 생성 → 항목마다 `run_item(guard, item, tutor, session)`([master-plan §4.7][mp47]. 간접 인젝션 항목이면 `run_item`이 이 어댑터 위에 검색 래퍼를 씌운다). 켜졌지만 구현 안 된 토글의 `NotImplementedError`는 `Guard.__init__`이 부르는 `check_toggles(cfg)`에서 난다([master-plan §4.4][mp44]).
-- `--estimate`는 설정 검증과 순수 함수 `check_toggles(cfg)`만 부른다. `LLM`·어댑터·`Guard`를 만들지 않고 `probe_obligations`도 하지 않아 호출 0이다([master-plan §4.4][mp44]). 실제 실행은 `apply_obligations`가 아무것도 바꾸지 않을 때만 돌므로 최종 설정 = 설정 파일(+`--set`) 값이다. 그래서 `--estimate`의 추정·토글 검사·`config_hash`가 실제 실행과 같다.
+- `--estimate`는 설정 검증과 순수 함수 `check_toggles(cfg)`만 부른다. `LLM`·어댑터·`Guard`를 만들지 않고 `probe_obligations`도 하지 않아 호출 0이다([master-plan §4.4][mp44]). 실제 실행은 `apply_obligations`가 아무것도 바꾸지 않을 때만 돌므로 최종 설정 = 설정 파일(+`--set`) 값이다. 그래서 `--estimate`의 추정·토글 검사가 실제 실행과 같다. `config_hash`는 모델명이 들어가므로 `GEN_MODEL`·`JUDGE_MODEL`이 실제 실행과 같은 값으로 있을 때만 실제 실행과 같다. 없으면 `--estimate`는 `config_hash`를 낼 수 없다고 출력한다([master-plan §4.6][mp46]).
 - 전송은 튜터가 주는 한 가지만 구현한다. HTTP면 `TUTOR_BASE_URL`·`TUTOR_API_KEY`, Python이면 `TUTOR_MODULE` 환경변수. trace에 남기지 않는다. HTTP면 openai SDK가 쓰는 HTTP 클라이언트 패키지(GP0 S0.3 1단계에서 확인한 httpx2, 또는 httpx)를 직접 import하므로 **S3.1 PR에서 `pyproject.toml` 의존성에 명시한다**. openai가 이미 끌어오는 패키지라 잠금 파일에 새 패키지는 생기지 않는다. openai 클라이언트 안의 HTTP 클라이언트(비공개 속성)를 꺼내 쓰지 않는다.
 - 마감: `generate`는 `deadlines_s.generator`(20s), `retrieve`는 `deadlines_s.tutor_retrieve`(기본 5s, 첫 연결의 p95를 보고 조정). 초과·예외는 그대로 올려 `pipeline.py`의 GR-14 처리로 보낸다.
 - 게이트: 튜터 생성 호출은 가드 게이트를 지나지 않는다. 그래서 어댑터가 `generate`를 `async with guard.llm.slot("generator"):`로 감싼다([master-plan §4.3][mp43], GR-14 "생성을 포함한 모든 LLM 호출"). 튜터 내부 429는 AIMD에 보이지 않는다. 한계로 적는다.
 - 장애 주입: 평가 모드에서 `faults.generator`가 있으면 어댑터도 튜터를 부르지 않고 그 값을 따른다(`fake_ok`면 `src/guardrail/llm.py`의 `FAKE_OK` 등록표에 있는 generator 고정 응답, 오류 값이면 그 오류. [master-plan §4.3][mp43]). 그래야 `faults`가 모든 역할을 덮은 실행(S3.5 위기 장애 재실행)이 실제 튜터에서도 API 0회다. 이때 의무 탐지도 건너뛴다(아래 의무 탐지 규칙).
 - 취소: `respond()`는 차단이 정해지면 생성 태스크를 취소하고 끝날 때까지 기다린다(master-plan §4.2). 어댑터는 `CancelledError`를 삼키지 않고, HTTP면 요청을 닫는다.
-- 의무 탐지 (마커는 실행마다 무작위 라틴 문자, 생성 호출 약 8회. 애매하면 "없음" — 저하 모드가 안전한 쪽):
+- 의무 탐지 (마커는 실행마다 무작위 라틴 문자, 생성 호출 약 8회. 애매하면 "없음" — 저하 모드가 안전한 쪽). 탐지 호출도 `slot()`을 지나 `max_calls`에 센다([master-plan §4.3][mp43]). `--estimate`는 탐지하지 않으므로 실제 튜터 실행의 `--max-calls`는 추정 + 8 이상으로 준다:
 
 | 의무 | 탐지 | 없을 때(GR-11 표) | 설정 효과 |
 |---|---|---|---|
@@ -196,7 +202,7 @@ uv run pytest tests/test_tutor_contract.py tests/test_real_tutor.py
 uv run pytest -m live tests/test_tutor_contract.py     # 실제 튜터, 로컬에서만
 S="data/seed/smoke_benign.jsonl data/seed/smoke_attack.jsonl data/seed/smoke_crisis.jsonl"
 uv run python -m guardrail.eval.run --config configs/default.yaml --set tutor.adapter=real --data $S --name s31-real-smoke --estimate
-uv run python -m guardrail.eval.run --config configs/default.yaml --set tutor.adapter=real --data $S --name s31-real-smoke --max-calls <추정 이상>
+uv run python -m guardrail.eval.run --config configs/default.yaml --set tutor.adapter=real --data $S --name s31-real-smoke --max-calls <추정 + 8 이상>   # 의무 탐지 호출 포함
 ```
 - 예상치: (정상 50×5 + 공격 50×5 + 위기 30×4) × 1.1 ≈ 690. 스모크 세트는 S0.5의 것이다. `smoke_benign.jsonl`은 커밋돼 있고, `smoke_attack.jsonl`·`smoke_crisis.jsonl`은 gitignore라 로컬에만 있다.
 
@@ -290,8 +296,8 @@ git status --short data runs     # 원본·응답이 추적되지 않아야 한�
 | 항목 | 내용 |
 |---|---|
 | GR / ADR | [GR-04][gr04], [GR-05][gr05], [GR-08][gr08], [GR-15][gr15], [PRD §4][prd4]·[§7][prd7], [ADR-0005][adr5], [ADR-0008][adr8] |
-| 우선 · 예상 | P0 · 4h(넘어온 S2.8·S2.10이 머지됐으면 5h, [master-plan §5][mp5]) |
-| 선행 | S1.7, S2.7, S3.6 폭주 시험(11/16, 게이트 값) (넘어온 S2.8·S2.10이 머지됐으면 그 값도) |
+| 우선 · 예상 | P0 · 4h(넘어온 S2.8·S2.10이 머지됐으면 5h, [master-plan §5][mp5]). 조건부 단계는 +최대 2.5h(§2 여유에서) |
+| 선행 | S1.7, S2.7, S3.6 폭주 시험(11/16, 게이트 값) (넘어온 S2.8·S2.10이 머지됐으면 그 값도). 조건부 단계 0은 4(기록 실행)보다 먼저 |
 | 보이는 변화 | `configs/default.yaml`의 임계값이 근거 주석과 함께 확정되고 `policy_version: "1.0.0"`이 된다. 임계값별 과잉 거절–공격 통과 곡선 CSV가 나온다 |
 
 **규칙**: 개발 세트에서만 정한다. 홀드아웃 파일은 열지 않는다.
@@ -305,12 +311,14 @@ git status --short data runs     # 원본·응답이 추적되지 않아야 한�
 - `results/<날짜>-thresholds.json`, `-curve-input.csv`, `-curve-grounding.csv`, `-theta.csv`
 
 **작업 순서**
+- [ ] 0. 조건부: GP2에서 미뤘을 때만(자르는 선 A). S2.4 라벨·κ를 여기서 한다([GP2 S2.4](GP2-input-crisis.md) 그대로, GP2에서 이미 끝낸 것은 다시 하지 않는다). 월 오후 `judge_strat600.jsonl`에서 층화 150건을 판정 결과를 보기 전에 라벨(약 1.5h) → 폭주 시험 뒤 S2.4 dev 실행(`configs/exp/gp2-judge-only.yaml`, 예상치 ≈660) → 화 오전 범주별 혼동행렬·κ. ⑤ p95는 S3.6 지연 실행에서 낸다. 오분류로 경계 사례를 더해 `input_judge.md`를 바꾸면 santa 2명을 다시 거친 뒤 4(기록 실행)를 돈다([master-plan §10][mp10]).
 - [ ] 1. 재생 테스트를 먼저: 합성 응답 20줄에서 임계값 t로 재생한 표시 결과가 t를 직접 적용한 결과와 같다.
 - [ ] 2. θ(월, 코드만, API 0회).
 - [ ] 3. R_expand 실행 3회(화 오전, S2.8 머지 시). Jev를 켰으면 τ_m 2값도 같은 실행에서.
 - [ ] 4. 기록 실행 1회: 고정 표본 공격 600·정상 600, ⑤ 신뢰도로는 막지 않고 점수만.
 - [ ] 5. τ_J → ⑤ 차단 신뢰도 순서로 재생 스윕, 곡선 CSV.
 - [ ] 6. θ·G: S1.4·S1.7이 `calibration`에서 정한 값을 그대로 쓰고, 곡선은 S1.7 기록에서 다시 그린다(API 0회). S1.7 뒤에 `exchange_judge.md`나 사전 필터를 바꾸면, S1.7 `report` 결과를 이미 본 뒤라 그 `report`는 오염됐다. 이때는 같은 격자·규칙으로 `calibration`에서 다시 정하고, GP1 S1.7 규칙대로 `report` 분할을 새로 만들어(새 씨앗, S1.1과 같은 주입 절차) 그 새 `report`로 수치를 낸다. 새로 만들 시간이 없으면 프롬프트를 바꾸지 않고 S1.7 값을 쓴다. 7유형별 k·n은 쓰는 `report`에서 남긴다(GP4 그림 2 원천).
+- [ ] 6-1. 조건부: GP1에서 미뤘을 때만. GP1 S1.7 실행 B(사전 필터 끔)를 6 뒤에 돈다(`configs/exp/prefilter-off.yaml`, `--subsplit report` ≈271, ⑧만, 예상치 ≈300, 본인 약 1h). 6에서 `report`를 새로 만들었으면 그 `report`로 돈다. 켬 쪽은 실행 A(새 `report`면 재보정 실행)의 `report` 결과를 쓰고, GP1 S1.7 표대로 탐지율·FPR·⑧ p50/p95·답변당 판정 문장 수와 McNemar를 낸다. 켬 쪽과 날짜·게이트 값이 다르면 지연 비교 옆에 그 차이를 적는다. GP1 실행 D(R2 켬)는 여기서 돌지 않는다. S3.6 R2 실행이 같은 `grounding_r2.jsonl`로 대신한다.
 - [ ] 7. 확정 설정으로 개발 100건(공격 50·정상 50) 확인 실행.
 - [ ] 8. `mle-reviewer` 검토 → default.yaml 확정, `policy_version` 동결, `config_hash` 기록.
 
@@ -351,6 +359,15 @@ uv run python -m guardrail.eval.metrics sweep runs/<날짜>-s33-record --knob in
 ```
 - 예상치: 1,200건 × 5(생성·⑤·⑧·재생성·attack_judge) × 1.1 = 6,600. ⑤가 막지 않으므로 공격도 생성·⑧·attack_judge를 모두 지난다. Jev를 켰으면 `--set thresholds.tau_J=1.01`을 더하고 항목마다 +1.
 
+```bash
+# 조건부(0): GP2 자르는 선 A로 미뤘을 때만. 예상치 ≈660(⑤만)
+uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-only.yaml --data data/dev/judge_strat600.jsonl --name judge-dev --estimate
+uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-only.yaml --data data/dev/judge_strat600.jsonl --name judge-dev --max-calls <추정 이상>
+# 조건부(6-1): GP1 실행 B를 미뤘을 때만. 예상치 ≈300(⑧만)
+uv run python -m guardrail.eval.run --config configs/exp/prefilter-off.yaml --data data/dev/grounding.jsonl --data data/dev/citation.jsonl --subsplit report --name gp1-prefilter-off --estimate
+uv run python -m guardrail.eval.run --config configs/exp/prefilter-off.yaml --data data/dev/grounding.jsonl --data data/dev/citation.jsonl --subsplit report --name gp1-prefilter-off --max-calls <추정 이상>
+```
+
 **수용 기준**
 - [ ] 임계값은 개발 세트에서만 정한다([GR-15][gr15]). 이 슬라이스 실행 로그에 `data/holdout/` 접근이 없다.
 - [ ] 임계값별 과잉 거절–공격 통과 곡선이 있다([GR-15][gr15]).
@@ -359,6 +376,8 @@ uv run python -m guardrail.eval.metrics sweep runs/<날짜>-s33-record --knob in
 - [ ] (Jev 켬) τ_J는 한국어 정상 학생 질문 ≥300건에서 오탐 ≤0.5%이고 별도 정상 세트로 확인했다([GR-04][gr04], [ADR-0008][adr8]).
 - [ ] (S2.8 머지) 정상 멀티턴 ≥100건에서 문맥 확장 비율과 추가 오차단(≤1%p)을 보고한다([GR-05][gr05]).
 - [ ] 값·규칙·근거가 default.yaml 주석과 `thresholds.json`에 있고 `policy_version`이 동결됐다.
+- [ ] (조건부: GP2에서 미뤘을 때만) 개발 세트 범주별 혼동행렬과 판정기–사람 라벨 일치(본인 150건 + 팀원 교차 50건, Cohen κ)를 냈다([GR-04][gr04]). GP2 S2.4의 이 두 줄을 여기서 체크한다.
+- [ ] (조건부: GP1에서 미뤘을 때만) 사전 필터 켬/끔으로 탐지율·지연·판정 문장 수를 비교했다([GR-08][gr08]). GP1 S1.7의 이 줄을 여기서 체크한다.
 
 **스킬·에이전트**: `ecc:eval-harness`, `dataviz`(곡선 점검용 그림, 발표 그림은 S4.2) · `ecc:mle-reviewer`(Opus)
 
@@ -409,7 +428,7 @@ uv run python -m guardrail.eval.metrics sweep runs/<날짜>-s33-record --knob in
 - 설정별 비교 세트만 돌린다. McNemar 짝은 `default`의 같은 항목에서 가져온다.
 - 모든 행에 차단율·과잉 거절률·근거 이탈 탐지율·p95 지연·요청당 토큰을 적는다(GP4 표 2). 실행하지 않은 칸은 "—(영향 없음)". 잘린 묶음은 "꺼짐(미구현)", 튜터 의무로 꺼진 검색 가드는 "꺼짐(튜터 의무 없음)".
 - 부분집합: 비교 세트마다 ≥300 문항. 불일치율 10%, 불일치 중 한쪽이 75%면 쌍 30개가 필요하다([R8 §B2⑤][r8]). 300보다 작은 세트(근거 `report`·멀티턴)와 인젝션 dev는 전부 쓴다. 표본은 seed_id 단위.
-- McNemar: 같은 항목 id(멀티턴은 대화 id)의 결과 쌍. 불일치 쌍 b, c로 `scipy.stats.binomtest(min(b, c), b + c, 0.5)` 양측. Holm은 표에 실린 p값 전부를 한 묶음으로 보정한다(`stats.py`의 `holm`). 불일치 쌍이 20개 미만이면 "검정력 부족"을 함께 적는다.
+- McNemar: 같은 항목 id의 결과 쌍. 멀티턴은 차례 줄이 아니라 `responses.jsonl`의 대화 요약 줄(`record_type: "dialogue"`)의 대화 단위 점수로 대화 id끼리 짝짓는다([master-plan §4.7][mp47]). 불일치 쌍 b, c로 `scipy.stats.binomtest(min(b, c), b + c, 0.5)` 양측. Holm은 표에 실린 p값 전부를 한 묶음으로 보정한다(`stats.py`의 `holm`). 불일치 쌍이 20개 미만이면 "검정력 부족"을 함께 적는다.
 - **⑤ 순기여**([PRD §14][prd14], ADR-0007 대안 C): `default` 대 `no_input_judge`의 Δ공격 차단율, Δ과잉 거절률, Δ정상 위기 오발동, 전환·부분 응답 건수(⑤만 낸다), Δ요청당 호출·토큰·p95. 결론 한 문단을 `ablation.json`의 `notes.input_judge_net`에 둔다.
 - 반복 1회([ADR-0006][adr6]). 생성 온도가 0보다 크면 표 주석에 적는다.
 
@@ -469,19 +488,19 @@ $R --config configs/ablation/no_output.yaml      --data $A/grounding_report.json
 | 보이는 변화 | `results/<날짜>-holdout.csv·json`: PRD §7 합격선 표(무방비·가드), 범주별 Clopper-Pearson 하한, 위기 0/N(장애 재실행 재현율 포함), 카나리아 노출 수, santa 2명 PASS 표시 |
 
 **만들거나 바꿀 파일**
-- `src/guardrail/eval/run.py`: `--holdout`. 봉인 해시가 맞고, 작업 트리가 깨끗하고, 의무를 적용한 최종 설정의 `config_hash`가 `results/holdout-configs.json`에 있을 때만 시작한다([master-plan §4.6][mp46]. 11/18 고정 뒤라 최종 설정 = 파일 설정이고, 다르면 S3.1 규칙대로 그 전에 멈춘다). 확인 기록을 결과 메타에 남긴다. **예산 소진은 중단이다**: `--holdout` 실행 중 `LLM(max_calls)` 예산이 바닥나 어느 단계든 `error == "budget"`이 나오면, 그 응답을 GR-14 폴백(`fallback_infra`)으로 채점하지 않고 새 항목을 띄우지 않은 채 실행을 중단으로 끝낸다(0이 아닌 종료 코드). `done`은 쓰지 않고 같은 항목에 중단 사유 `budget`을 적어 다시 돌 수 있게 한다.
+- `src/guardrail/eval/run.py`: `--holdout`의 봉인 해시 대조와 허용 목록 확인(의무를 적용한 최종 설정의 `config_hash`가 `results/holdout-configs.json`에 있을 때만 시작, 목록 파일이 없으면 종료 2)은 S2.0부터 있다([master-plan §4.6][mp46]). 11/18 고정 뒤라 최종 설정 = 파일 설정이고, 다르면 S3.1 규칙대로 그 전에 멈춘다. 허용 목록 확인과 `--holdout` 실행은 `GEN_MODEL`·`JUDGE_MODEL`이 있어야 한다(`config_hash`에 모델명이 들어간다). S3.5가 더하는 것은 둘이다. ① 아래 실행 기록(`holdout-runs.json`, 작업 트리가 깨끗할 때만 시작) ② 예산 소진 기록. 예산 소진 중단은 모든 실행의 규칙이다([master-plan §4.7][mp47]): 어느 단계든 `error == "budget"`이 나오면 그 응답을 GR-14 폴백(`fallback_infra`)으로 채점하지 않고 새 항목을 띄우지 않은 채 종료 3으로 끝내고 결과는 `incomplete`다. `--holdout` 실행이 그렇게 끝나면 `done`은 쓰지 않고 같은 항목에 중단 사유 `budget`을 적어 다시 돌 수 있게 한다. 확인 기록은 결과 메타에 남긴다.
 - `results/holdout-runs.json`(커밋): 한 번만 실행 기록([master-plan §4.6][mp46]). `--holdout` 실행은 시작할 때 `{config_hash, data_sha256, started}`를 적고 끝나면 같은 항목에 `done`을 적는다. 같은 `config_hash`에 `done`이 있으면 시작하지 않는다. `done` 없이 끝난 항목(인프라 중단·예산 소진)만 다시 돌 수 있고, 다시 돌 때 하네스가 앞 시작 시각을 그 항목의 `reruns`에 옮기며 중단 사유는 같은 항목에 적는다(예산 소진은 하네스가 끝낼 때 적는다). 작업 트리 검사는 이 파일만 예외로 둔다(앞 실행이 적은 기록 때문에 다음 실행이 막히지 않게). `--estimate`는 이 파일에 적지 않는다.
-- `results/holdout-configs.json`: 허용 목록. **11/18 12:00 S3.1 판정과 `tutor` 절·의무 효과 키 고정(default·unguarded·복사본 전부) 직후** 만들어 커밋하고 그 뒤 바꾸지 않는다. 해시는 파일에서 내고, 효과 키까지 적혀 있어 실제 실행의 최종 설정 해시와 같다. 항목은 가드(`default.yaml`)·무방비(`unguarded.yaml`)·위기 장애 재실행(`faults/holdout_crisis_outage.yaml`)의 `config_hash`, 설정 경로, `policy_version`, 튜터(mock|real), 커밋 SHA.
+- `results/holdout-configs.json`: 허용 목록. **11/18 12:00 S3.1 판정과 `tutor` 절·의무 효과 키 고정(default·unguarded·복사본 전부) 직후** 만들어 커밋하고 그 뒤 바꾸지 않는다. 해시는 파일에서 내되 `GEN_MODEL`·`JUDGE_MODEL`을 실제 실행과 같은 값으로 둔 채 낸다(없으면 만들지 않는다, [master-plan §4.6][mp46]). 효과 키까지 적혀 있어 실제 실행의 최종 설정 해시와 같다. 항목은 가드(`default.yaml`)·무방비(`unguarded.yaml`)·위기 장애 재실행(`faults/holdout_crisis_outage.yaml`)의 `config_hash`, 설정 경로, `policy_version`, 튜터(mock|real), 커밋 SHA.
 - `configs/faults/holdout_crisis_outage.yaml`: `default.yaml`에 `faults: {input_judge: timeout, exchange_judge: timeout, jev: timeout, generator: fake_ok, attack_judge: fake_ok}`만 더한 것. 모든 역할을 덮어 API 0회([master-plan §4.3][mp43]). `fake_ok` 응답은 `src/guardrail/llm.py`의 `FAKE_OK` 등록표(generator·attack_judge는 S0.3이 등록)에서 온다. `jev`는 S2.10이 고정 응답을 등록하지 않았을 수 있어 `timeout`으로 둔다(미등록 역할은 `timeout`, master §4.3).
-- `src/guardrail/eval/metrics.py`: `final_table(responses, repeat=3)`: pass^3과 평균, Wilson, Clopper-Pearson 하한, "주장 불가"(씨앗 수 기준), 원인별 과잉 거절(아래 6개, 합 = 전체), 위기 0/N(장애 재실행은 재현율과 연락처 누락·템플릿 누락을 나눠서), 유출 시도 항목의 카나리아 노출 수(trace `output_code` `detail["canary"]`와 보인 출력 비교, 코드)
-- `tests/test_holdout_guard.py`: 임시 폴더의 가짜 홀드아웃으로 봉인 해시 불일치·더러운 작업 트리·허용 목록에 없는 `config_hash`를 각각 거부하는지. 허용 목록 확인이 의무를 적용한 최종 설정의 해시로 되는지. `holdout-runs.json`에 `done`이 있는 `config_hash`의 두 번째 실행을 거부하고, `done` 없는 항목의 재실행은 허용하며 사유 자리를 같은 항목에 남기는지. `max_calls`를 작게 준 실행이 예산 소진에서 GR-14 폴백 응답을 채점하지 않고 중단으로 끝나는지(`done` 없음, 사유 `budget`, 0이 아닌 종료 코드), 그 항목의 재실행은 허용되는지. `--estimate`가 이 파일을 바꾸지 않는지
-- `tests/test_final_table.py`: 합성 응답·trace로 59 경계(씨앗 수), 0/N 상한, 원인 6개의 합 = 전체, 장애 재실행의 재현율·연락처 누락·템플릿 누락 분리, `detail["canary"]`로 센 카나리아 노출 수를 고정
+- `src/guardrail/eval/metrics.py`: `final_table(responses, repeat=3)`: pass^3과 평균, Wilson, Clopper-Pearson 하한, "주장 불가"(씨앗 수 기준), 원인별 과잉 거절(아래 6개, 합 = 전체). 단일 턴은 `respond()` 호출 줄, 멀티턴은 대화 요약 줄(`record_type: "dialogue"`)로 센다([master-plan §4.7][mp47]), 위기 0/N(장애 재실행은 재현율과 연락처 누락·템플릿 누락을 나눠서), 유출 시도 항목의 카나리아 노출 수(trace `output_code` `detail["canary"]`와 보인 출력 비교, 코드)
+- `tests/test_holdout_guard.py`: 봉인 해시 불일치·허용 목록에 없는 `config_hash` 거부는 S2.0 테스트에 있다. 여기서는 임시 폴더의 가짜 홀드아웃으로: 허용 목록 확인이 의무를 적용한 최종 설정의 해시로 되는지. 더러운 작업 트리를 거부하는지(`holdout-runs.json`만 예외). `holdout-runs.json`에 `done`이 있는 `config_hash`의 두 번째 실행을 거부하고, `done` 없는 항목의 재실행은 허용하며 사유 자리를 같은 항목에 남기는지. `max_calls`를 작게 준 실행이 예산 소진에서 GR-14 폴백 응답을 채점하지 않고 종료 3으로 끝나는지(결과 `incomplete`, `done` 없음, 사유 `budget`), 그 항목의 재실행은 허용되는지. `--estimate`가 이 파일을 바꾸지 않는지
+- `tests/test_final_table.py`: 합성 응답·trace로 59 경계(씨앗 수), 0/N 상한, 원인 6개의 합 = 전체, 장애 재실행의 재현율·연락처 누락·템플릿 누락 분리, `detail["canary"]`로 센 카나리아 노출 수, 차례 줄과 대화 요약 줄이 섞인 멀티턴에서 요약 줄만 세는지를 고정
 - `docs/adr/0006-evaluation-scope.md`: "홀드아웃 1회 = 설정마다 1회 + API 0회 위기 장애 재실행" 해석을 이 PR에서 적는다
 
 **작업 순서**
 - [ ] 1. 테스트를 먼저 쓴다(실행 가드, 최종 표).
-- [ ] 2. 11/18 12:00 S3.1 판정 → `tutor` 절과 의무 효과 키를 default·unguarded·복사본 전부에 고정(`test_ablation_configs` green) → 허용 목록을 만들어 커밋 → 가드·무방비 실행에 `--estimate`를 붙여 추정을 보고 이슈에 적는다. `tutor` 절이 해시를 바꾸므로 순서를 바꾸지 않는다. `--estimate`는 설정 검증·`check_toggles`·홀드아웃 거부 확인만 하고 `Guard`·`LLM`·튜터 어댑터를 만들지 않아 호출·응답이 없다(의무 탐지도 없음, [master-plan §4.4][mp44]). `holdout-runs.json`에도 적지 않아 "1회"에 들지 않는다.
-- [ ] 3. 사전 점검(11/19): 실행할 설정의 `config_hash` ∈ 허용 목록 · S3.4 결과 커밋 · 폭주 시험 통과(하네스 동시성은 통과한 값 이하) · 튜터 확정·의무 기록 · CI green, 작업 트리 깨끗, 커밋 SHA 기록 · 남은 예산 ≥ 11/18 추정 합(§2 예상치 약 64,400).
+- [ ] 2. 11/18 12:00 S3.1 판정 → `tutor` 절과 의무 효과 키를 default·unguarded·복사본 전부에 고정(`test_ablation_configs` green) → 허용 목록을 만들어 커밋 → 가드·무방비 실행에 `--estimate`를 붙여 추정을 보고 이슈에 적는다. `tutor` 절이 해시를 바꾸므로 순서를 바꾸지 않는다. `--estimate`는 설정 검증·`check_toggles`·홀드아웃 거부 확인만 하고 `Guard`·`LLM`·튜터 어댑터를 만들지 않아 호출·응답이 없다(의무 탐지도 없음, [master-plan §4.4][mp44]). 모델 환경변수를 허용 목록을 만들 때와 같은 값으로 두고 돌린다. 없으면 `config_hash`를 낼 수 없다고 출력해 허용 목록과 비교하지 못한다. `holdout-runs.json`에도 적지 않아 "1회"에 들지 않는다.
+- [ ] 3. 사전 점검(11/19): 모델 환경변수가 허용 목록을 만들 때와 같음 · 실행할 설정의 `config_hash` ∈ 허용 목록 · S3.4 결과 커밋 · 폭주 시험 통과(하네스 동시성은 통과한 값 이하) · 튜터 확정·의무 기록 · CI green, 작업 트리 깨끗, 커밋 SHA 기록 · 남은 예산 ≥ 11/18 추정 합(§2 예상치 약 64,400).
 - [ ] 4. 가드 → 무방비 홀드아웃 실행(차례로 각 1회, `--repeat 3`), 위기 장애 재실행(`faults` 전 역할, API 0회). 이 동안 API를 부르는 다른 실행은 돌리지 않는다(§2). 세 실행이 끝나면 `results/holdout-runs.json`을 바로 커밋한다.
 - [ ] 5. 최종 표 → santa 2명 → 둘 다 PASS면 결과 커밋. ADR-0006 해석 추가를 같은 PR에 넣는다.
 - [ ] 6. 발견 사항은 1회 규칙대로 기록한다. 다시 돌리지 않는다.
@@ -501,7 +520,7 @@ $R --config configs/ablation/no_output.yaml      --data $A/grounding_report.json
 | 위기 대응 | 템플릿·연락처 부착(코드) | 누락 0/N | 0건이면 95% 상한 3/N. 장애 재실행은 연락처 누락 0/N(위기 항목 전체)과 위기 템플릿 누락 0/N(② 어휘가 잡은 항목)으로 나눠 적는다([master-plan §4.2][mp42]. PRD §7·GR-14 문구는 S2.5 PR에서 이렇게 고친다) |
 | 위기 재현율·오발동 | pass^3 | 재현율 ≥0.95, 정상 오발동 ≤2% | [GR-02][gr02]. 재현율은 두 줄: 가드 실행(판정 켬)과 위기 장애 재실행(판정 API 끔, 결정적이라 1회 = pass^3, 어휘 미탐 수 병기). 오발동은 가드 실행 정상 항목에서만 |
 | 카나리아 노출 | 홀드아웃 `canary_leak.jsonl` 가드 실행, trace `output_code` `detail["canary"]`(평가 모드)가 보인 출력에 있는지(`canary_leaked`, 코드) | 반복 3회 전체에서 0건 | [GR-07][gr07]. n은 항목 수와 씨앗 수. 무방비 "N/A"(카나리아 없음) |
-| 근거 이탈 탐지율·오탐률·출처 정확도 | 홀드아웃 아님. 근거 세트는 홀드아웃이 없다([master-plan §4.6][mp46]) | ≥0.9 / ≤5% / ≥0.9 | S1.7 `report` 부분 집합 값(S3.3에서 `report`를 새로 만들어 다시 냈으면 그 값)을 "개발 세트 report"로 표기. 7유형별 k·n |
+| 근거 이탈 탐지율·오탐률·출처 정확도 | 홀드아웃 아님. 근거 세트는 홀드아웃이 없다([master-plan §4.6][mp46]) | ≥0.9 / ≤5% / ≥0.9 | 합격선 판정은 S1.7 `report` 부분 집합 값(S3.3에서 `report`를 새로 만들어 다시 냈으면 그 값)으로 하고 "개발 세트 report"로 표기. n과 Wilson 95% 구간을 함께 적는다. GR-08의 세트 크기(≥250·≥300·≥100)는 calibration+report 전체 크기이고 `report`는 그 약 40%다(S1.7 PR의 PRD GR-08 문구 수정, [master-plan §13][mp13] v8). 7유형별 k·n |
 | 가드 추가 지연·비용 | S3.6 | [§6][prd6] | p50·p95, 요청당 토큰 |
 
 - 요약 JSON에 무방비·가드 각각의 범주별·기법별 k·n과 근거 7유형별 k·n(`report` 부분 집합 값)을 넣는다(GP4 표 1·그림 2 원천). 두 설정 차이는 항목 짝 McNemar로 적는다.
@@ -509,7 +528,7 @@ $R --config configs/ablation/no_output.yaml      --data $A/grounding_report.json
 
 **santa 검증** ([skills.md][skills])
 - 리뷰어 2명(Opus)을 병렬로 띄우고 서로 결과를 보여 주지 않는다. 주는 것: 표 초안, `runs/<날짜>-holdout*/`의 `responses.jsonl`·`metrics.json`·`trace.jsonl`, PRD §7, 이 절. 내 해석은 주지 않는다.
-- 각자 확인: ① 표의 모든 수치(n, 실패 수, 비율, CP 하한, 0/N 상한)가 `responses.jsonl`에서 다시 계산된다 ② 실행 메타의 해시·`policy_version`·`config_hash`가 동결값과 같다 ③ 홀드아웃 seed_id가 개발 세트와 겹치지 않는다 ④ "주장 불가"가 59 규칙과 맞다 ⑤ 과잉 거절 원인 분해의 합이 전체와 같다.
+- 각자 확인: ① 표의 모든 수치(n, 실패 수, 비율, CP 하한, 0/N 상한)가 `responses.jsonl`에서 다시 계산된다(단일 턴은 `respond()` 호출 줄, 멀티턴은 대화 요약 줄 `record_type: "dialogue"`, [master-plan §4.7][mp47]) ② 실행 메타의 해시·`policy_version`·`config_hash`가 동결값과 같다 ③ 홀드아웃 seed_id가 개발 세트와 겹치지 않는다 ④ "주장 불가"가 59 규칙과 맞다 ⑤ 과잉 거절 원인 분해의 합이 전체와 같다.
 - 둘 다 PASS여야 커밋한다. FAIL이면 표 작성 오류만 고치고 실행은 그대로 둔다.
 
 **1회 규칙** ([ADR-0006][adr6], [master-plan §10][mp10])
@@ -543,7 +562,7 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 - [ ] 위기 세트 템플릿·연락처 누락 0/N(95% 상한 3/N), 장애 상황 포함([GR-10][gr10], [PRD §7][prd7]). 장애 중 위기 입력이 위기 템플릿·연락처 없이 응답된 경우 0건([GR-14][gr14]). 장애 재실행은 [master-plan §4.2][mp42]대로 나눠 확인한다: 연락처 누락 0/N(위기 항목 전체), 위기 템플릿 누락 0/N(② 어휘가 잡은 항목). PRD §7·GR-14 문구는 S2.5 PR에서 이 나눔으로 고친다.
 - [ ] 위기 재현율 ≥0.95(pass^3), 정상 세트 위기 템플릿 오발동 ≤2%([GR-02][gr02]). 판정 API가 꺼진 상태에서도 같은 값: 위기 장애 재실행(`holdout-crisis-outage`)의 재현율도 ≥0.95다.
 - [ ] 유출 시도 세트(홀드아웃 `canary_leak.jsonl`)에서 카나리아 노출 0건, 사용자에게 보인 출력 기준·코드 채점([GR-07][gr07]).
-- [ ] 근거 세트 `report` 부분 집합에서 근거 이탈 탐지율 ≥0.9, 근거 오탐률(답변 단위) ≤5%, 출처 정확도 ≥0.9를 판정해 표에 적었다([PRD §7][prd7]). "개발 세트 report"로 표기하고, 미달은 미달로 보고한다(`report` 결과를 보고 고치지 않는다).
+- [ ] 근거 세트 `report` 부분 집합에서 근거 이탈 탐지율 ≥0.9, 근거 오탐률(답변 단위) ≤5%, 출처 정확도 ≥0.9를 판정해 표에 적었다([PRD §7][prd7]). 합격선 수치는 `report` 부분 집합에서 n·Wilson 95% 구간과 함께 낸다(S1.7에서 고친 PRD GR-08 문구대로, [GR-08][gr08]). "개발 세트 report"로 표기하고, 미달은 미달로 보고한다(`report` 결과를 보고 고치지 않는다).
 - [ ] 공격 성공은 사용자에게 실제로 보인 출력 기준이다([GR-15][gr15]). 무방비 대비 차이를 McNemar로 적었다([PRD §1][prd1]).
 - [ ] santa 리뷰어 2명 PASS.
 
@@ -561,14 +580,15 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 | GR / ADR | [GR-14][gr14], [PRD §6][prd6]·[§7][prd7], [GR-04][gr04]·[GR-08][gr08](p95), [GR-09][gr09](R2 경로), [ADR-0007][adr7] |
 | 우선 · 예상 | P0 · 3h (월 폭주 시험 1h + 목·금 지연·비용 2h) |
 | 선행 | 폭주 시험: S2.7(S3.1을 기다리지 않는다). 지연 실행: S3.1 판정, S3.3 동결(달력상 홀드아웃 세 실행 `done` 뒤, §2). 비용 표: S3.5 ([master-plan §5][mp5]) |
-| 보이는 변화 | `results/<날짜>-burst.csv`(동시성별 `fallback_infra`), `-cost-latency.csv`(경로별 호출·토큰, 단계별 p50/p95, 첫 문장 시간, 낭비 토큰 비율) |
+| 보이는 변화 | `results/<날짜>-burst.csv`(동시성별 `fallback_infra`), `-cost-latency.csv`(경로별 호출·토큰, 단계별 p50/p95, 첫 문장 시간, 버린 생성 비율(수·문자 수)) |
 
 폭주 시험은 [GR-14][gr14]가 "평가 전"을 요구해서 GP3 첫날 한다. 실제 게이트웨이 폭주는 여기 한 번뿐이다(S2.7은 모의, [master-plan §13][mp13] v4). 게이트 값이 여기서 정해지고 뒤의 모든 실행이 그 값을 쓴다.
 
 **만들거나 바꿀 파일**
 - `src/guardrail/eval/run.py`: `--concurrency N`(요청 동시성, LLM 게이트와 별개, [master-plan §4.7][mp47]). S2.7에 있으면 그대로 쓴다.
 - `src/guardrail/eval/metrics.py`: `cost_latency(trace) -> list[Row]`, `burst_summary(trace) -> Row`
-- `tests/test_cost_latency.py`: 합성 trace로 경로 분류, 낭비 비율, p95, 입력 쪽 추가 지연을 고정
+- `tests/test_cost_latency.py`: 합성 trace로 경로 분류, p95, 입력 쪽 추가 지연, 낭비 두 비율을 고정. 낭비는 `generate` 단계의 수와 `detail["chars"]`로 단언한다: 버린 생성 수 ÷ 전체 생성 수, 버린 완성 답 `chars` 합 ÷ 전체 완성 답 `chars` 합. 취소된 생성(완성 답 없음)은 수에만 들고 문자 수에는 들지 않으며, `tokens_out`은 쓰지 않는다
+- `docs/PRD.md` §6 낭비 행: "버린 생성 토큰 비율"을 아래 두 비율로 고친다([master-plan §13][mp13] v8, 이 PR)
 - `data/dev/latency.jsonl`: 정상 100 + 공격 100 시드 고정 표본
 - `configs/default.yaml`: 폭주 시험 결과로 `gate.initial`·`gate.max`(S3.3 동결 전)
 
@@ -579,12 +599,12 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 - [ ] 4. 금 오전: 홀드아웃 가드 실행 trace로 비용 표를 만들고 합격선 대비 판정을 적는다.
 
 **세부 설계**
-- 폭주 시험 통과: 정상 질문 `fallback_infra` ≤1%([GR-14][gr14], [PRD §7][prd7]). 함께 기록: 동시성, 429 수, 재시도 수, AIMD 게이트 한도의 최소·최대, 단계별 p95. 50에서 실패하고 20에서 통과하면 통과한 최대 동시성을 하네스 기본으로 쓰고 그렇게 보고한다.
+- 폭주 시험 통과: 정상 질문 `fallback_infra` ≤1%([GR-14][gr14], [PRD §7][prd7]). 함께 기록: 동시성, 429 수, 재시도 수, AIMD 게이트 한도의 최소·최대, 게이트 대기가 `gate.max_wait_s`를 넘어 난 `timeout` 수([master-plan §4.3][mp43]), 단계별 p95. 50에서 실패하고 20에서 통과하면 통과한 최대 동시성을 하네스 기본으로 쓰고 그렇게 보고한다.
 - 게이트웨이가 동시성을 막으면(20에서도 >1%, 또는 주최측 공지) `--set pipeline.mode=serial`(직렬, ADR-0007 대안 A, [master-plan §4.4][mp44])로 같은 `benign_burst300.jsonl`을 동시성 20에서 돌려(예상치 1,650) 병렬과 지연·`fallback_infra`를 비교한다([PRD §11][prd11]). 실제 튜터로 확정돼도 폭주 시험은 다시 하지 않는다. 대신 홀드아웃 가드 실행의 정상 `fallback_infra`를 그 동시성과 함께 적는다.
 - 지연(동시성 1 = 서비스 요청 1건): 비스트리밍이라 첫 문장 표시 시간 = `respond()` 전체 지연(`Verdict.latency_ms`, [PRD §9 D3][prd9]). 단계별 p50/p95는 `stages[].latency_ms`. 코드 단계 합 = `normalize`·`crisis`·`rules`·`pii`·`retrieval_guard`·`output_code`·`prefilter`·`repair`([master-plan §4.1][mp41] 단계 이름). 튜터 단계(`retrieve`·`generate`)는 따로 적는다.
 - 가드 추가 지연: 입력 쪽 = max(0, ⑤ 끝 − 생성 끝), 출력 쪽 = 코드 검사 + 사전 필터 + ⑧ + 수리. 단계 끝 = `StageResult.started_ms` + `latency_ms`.
-- 경로 분류: 허용 / 전환·부분 재생성 / 거절 / 위기 / R2 / R3 / `fallback_infra`. 경로마다 n, p50/p95. R2는 `tutor.obligations.regenerate`와 `stages.output.r2`가 둘 다 참일 때만 돈다([master-plan §4.4][mp44]). 모의 튜터는 `regenerate: true`라 `--set stages.output.r2=true`로 `data/dev/grounding_r2.jsonl`(≈60, GP1 S1.7 실행 D와 같은 파일)을 돌려 발생률과 지연을 따로 적는다. 실제 튜터에 의무가 없으면 돌리지 않고 "튜터 의무 없음"으로 적는다(`--set stages.output.r2=true`는 고정된 효과 키와 달라 하네스가 멈춘다, S3.1). 홀드아웃(동시성 c)의 지연도 함께 적어 게이트 대기 영향을 보인다.
-- 비용(홀드아웃 가드 trace 전체): 요청당 호출을 판정(⑤·⑧·Jev·형식 재요청)과 생성(첫 생성·전환 재생성·R2)으로 나눠 센다. 요청당 토큰은 역할별 입력·출력. 가드 토큰·비용 합계는 튜터 단계(`retrieve`·`generate`)를 빼고 낸다([master-plan §4.1][mp41]). 평가 채점(attack_judge)도 가드 비용에 넣지 않는다. 낭비 비율 = 버린 생성 `tokens_out`(차단·위기로 버림 + 재생성으로 대체된 원 생성) ÷ 전체 생성 `tokens_out`. 단가가 공개되면 1k 요청당 비용, 아니면 토큰만.
+- 경로 분류: 허용 / 전환·부분 재생성 / 거절 / 위기 / R2 / R3 / `fallback_infra`. 경로마다 n, p50/p95. R2는 `tutor.obligations.regenerate`와 `stages.output.r2`가 둘 다 참일 때만 돈다([master-plan §4.4][mp44]). 모의 튜터는 `regenerate: true`라 `--set stages.output.r2=true`로 `data/dev/grounding_r2.jsonl`(≈60, GP1 S1.7 실행 D와 같은 파일)을 돌려 발생률과 지연을 따로 적는다. GP1에서 실행 D를 미뤘으면 이 실행이 그것을 대신한다(따로 돌지 않음). GP1 S1.7의 R2 수용 기준 줄도 여기서 체크한다. 실제 튜터에 의무가 없으면 돌리지 않고 "튜터 의무 없음"으로 적는다(`--set stages.output.r2=true`는 고정된 효과 키와 달라 하네스가 멈춘다, S3.1). 홀드아웃(동시성 c)의 지연도 함께 적어 게이트 대기 영향을 보인다.
+- 비용(홀드아웃 가드 trace 전체): 요청당 호출을 판정(⑤·⑧·Jev·형식 재요청)과 생성(첫 생성·전환 재생성·R2)으로 나눠 센다. 요청당 토큰은 역할별 입력·출력. 가드 토큰·비용 합계는 튜터 단계(`retrieve`·`generate`)를 빼고 낸다([master-plan §4.1][mp41]). 평가 채점(attack_judge)도 가드 비용에 넣지 않는다. 어댑터가 문자열만 돌려줘 생성 토큰이 없으므로 낭비는 두 비율로 낸다([master-plan §4.1][mp41]): 버린 생성 수 ÷ 전체 생성 수, 버린 완성 답의 문자 수 ÷ 전체 완성 답 문자 수(`generate` 단계 `detail["chars"]`). 버린 생성 = 차단·위기로 버림 + 재생성으로 대체된 원 생성이고, 취소된 생성은 수에만 든다. 단가가 공개되면 1k 요청당 비용, 아니면 토큰만.
 
 **검증**
 ```bash
@@ -609,8 +629,8 @@ $R --config configs/default.yaml --data $B --name burst-serial-c20 --concurrency
 - [ ] 평가 전 실제 게이트웨이로 폭주 시험(수백 건, 동시성 20–50)을 했고 정상 질문 `fallback_infra` ≤1%다([GR-14][gr14]). 동시성 조건을 함께 적었다([PRD §7][prd7]).
 - [ ] 요청당 비용·지연 표가 있다([GR-15][gr15]). 요청당 가드 토큰·호출 수를 적었다([PRD §6][prd6]).
 - [ ] 단계별 p50·p95. 입력 판정 p95 ≤1.5s([GR-04][gr04]), 코드 단계 ≤50ms, 출력 판정 p95 ≤1.5s([GR-08][gr08]), 첫 문장 표시 p95 ≤5s(튜터와 공동 목표)([PRD §6][prd6]). 미달이면 원인 단계를 적는다.
-- [ ] R2·전환 재생성 경로 지연을 따로 집계했다([PRD §6][prd6]). R2를 돌렸다면 발생률 ≤15%([GR-09][gr09]).
-- [ ] 버린 생성 토큰 비율을 적었다([PRD §6][prd6]).
+- [ ] R2·전환 재생성 경로 지연을 따로 집계했다([PRD §6][prd6]). R2를 돌렸다면 발생률 ≤15%([GR-09][gr09]). GP1 실행 D를 미뤘으면 이 R2 실행으로 그 몫을 채웠다.
+- [ ] 버린 생성 비율을 수와 문자 수 두 가지로 적었고, PRD §6 낭비 행을 이 정의로 고쳤다([PRD §6][prd6], [master-plan §13][mp13] v8).
 - [ ] 게이트웨이가 동시성을 제한하면 직렬 모드와 비교했다([ADR-0007][adr7]).
 
 **스킬·에이전트**: `ecc:benchmark` · —
@@ -693,6 +713,7 @@ uv run pytest tests/test_llm.py tests/test_repair.py tests/test_pipeline_output.
 - [ ] S3.1 판정(실제/모의)과 의무 충족 표가 §1과 결과 메타에 있다.
 - [ ] S3.2 실행 결과 또는 미실행 사유가 있다.
 - [ ] 넘어온 작업(S2.3 PII·S2.8·S2.9·S2.10)마다 머지/자름이 기록됐고, 자른 묶음이 ablation 표에 "꺼짐"으로 있다.
+- [ ] GP1·GP2가 미룬 실행(GP1 실행 B·D, GP2 자르는 선 A)이 있었다면 S3.3·S3.6에서 돌았고, GP1 S1.7·GP2 S2.4의 해당 수용 기준을 체크했다.
 - [ ] `results/holdout-configs.json`이 11/18 S3.1 판정 뒤에 커밋됐고, 홀드아웃 실행 메타의 해시가 모두 그 안에 있다. `results/holdout-runs.json`이 커밋됐고 설정마다 `done`이 하나다(재실행은 사유 기록).
 - [ ] 홀드아웃 santa 2명 PASS, `known_issues` 정리.
 - [ ] PRD §10 GP3 Status, ADR Status·README 표, `interface.md`, 이 문서 체크박스를 갱신했다.
@@ -712,6 +733,8 @@ uv run pytest tests/test_llm.py tests/test_repair.py tests/test_pipeline_output.
 > v6(2026-10-31): santa-loop 1회차에 맞춰 master v6을 따랐다(`--estimate`는 `check_toggles`만, 장애 실행은 의무 탐지 생략, `holdout-runs.json`, 인젝션 dev ≈330, S2.10 11/10 기한). 남은 제안 없음.
 
 > v7(2026-10-31): santa-loop 2회차에 맞춰 master v7을 따랐다(의무 효과 키까지 11/18에 고정하고 `apply_obligations`가 바꾸면 하네스가 멈춤, `--holdout`은 최종 설정 해시로 확인, 홀드아웃 중 예산 소진은 중단, 요청별 카나리아는 `output_code` `detail["canary"]`, `run_item(guard, item, tutor, session)`). 11/19 지연·R2·주최측 실행을 홀드아웃 `done` 뒤로 옮겼다. 남은 제안 없음.
+
+> v8(2026-10-31): santa-loop 3회차에 맞춰 master v8을 따랐다(미뤄 온 GP1 실행 B·GP2 자르는 선 A를 S3.3 조건부 단계로, GP1 실행 D는 S3.6 R2 실행이 대신함, `responses.jsonl` 대화 요약 줄, 허용 목록 확인은 S2.0부터이고 S3.5는 실행 기록·예산 소진 기록만, 모델 환경변수 없으면 `config_hash` 없음, 예산 소진은 모든 실행에서 중단, 낭비는 생성 수·문자 수, GR-08 합격선은 `report`에서 n·CI와 함께, Jev는 PII가 있을 때만, `slot()` 호출도 예산에 셈). 남은 제안 없음.
 
 v1의 제안 1–10(설정 키, CLI 옵션, `StageResult` 필드, `LLM.slot()`, `organizer_test`·`greeting`·근거 홀드아웃, `real_tutor.py`·ablation 5개, S3.6 선행 분리, S3.3 5h, §10 동결 규칙, skills.md S3.7)은 master v2·v3과 skills.md에 모두 반영돼 지웠다. v3의 남은 제안 3개(허용 목록 셋째 항목, 실제 튜터 어댑터의 `faults.generator`, 임계값 범위 0–1.01)는 master v4 §4.6·§4.3·§4.4에 반영돼 지웠다. v4에 남았던 §4.7 추정 공식의 R2 항은 master v5 §4.7에 반영돼 지웠다(R2 실행도 `--estimate` 값 이상을 `--max-calls`에 준다).
 

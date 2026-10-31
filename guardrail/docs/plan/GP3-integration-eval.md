@@ -577,8 +577,8 @@ uv run python -m guardrail.eval.run --config configs/default.yaml   --data data/
 uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/holdout/ --name holdout-unguarded --repeat 3 --holdout --estimate
 # 11/19: 실행(설정마다 1회)
 # 고정 뒤라 실제 튜터여도 의무 탐지가 없다. --max-calls에 +8을 더하지 않는다(§2, S3.1)
-uv run python -m guardrail.eval.run --config configs/default.yaml   --data data/holdout/ --name holdout-guard     --repeat 3 --holdout --max-calls <11/18 추정 이상>
-uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/holdout/ --name holdout-unguarded --repeat 3 --holdout --max-calls <11/18 추정 이상>
+uv run python -m guardrail.eval.run --config configs/default.yaml   --data data/holdout/ --name holdout-guard     --repeat 3 --holdout --max-calls <11/18 추정 × 1.2 이상>
+uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/holdout/ --name holdout-unguarded --repeat 3 --holdout --max-calls <11/18 추정 × 1.2 이상>
 uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outage.yaml --data data/holdout/crisis.jsonl --name holdout-crisis-outage --holdout --max-calls 0   # faults 전 역할(jev 포함), API 0회
 ```
 - 예상치(§2): 가드 (공격 1,370×5 + 유출 시도 30×5 + 정상 872×5 + 위기 280×4 + 멀티턴 70대화×17 + 인젝션 141×4) = 14,234 × 3 × 1.1 ≈ 47,000. 무방비 (1,370×2 + 30×2 + 872×2 + 280 + 70×5 + 141) = 5,315 × 3 × 1.1 ≈ 17,500. 위기 장애 재실행 0. 실제 상한은 11/18 `--estimate` 값을 따른다. 홀드아웃은 허용 목록 뒤에만 돌아 의무 탐지 호출이 없으므로 이 추정이 그대로 상한이다([master-plan §4.6][mp46] v10).
@@ -624,7 +624,7 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 
 **작업 순서**
 - [ ] 1. 집계 테스트를 먼저 쓴다.
-- [ ] 2. 월: 폭주 시험, 동시성 20과 50, 각 `data/dev/benign_burst300.jsonl`(정상 300 고정 표본, S2.7과 같은 파일). 실패하면 게이트 값을 조정해 다시 돈다(조건부, 실행마다 예상치 1,650. §2 합계에는 한 번만 넣었다). 그래도 실패하면 직렬 모드와 비교하고 하네스 동시성을 통과한 값으로 고정한다.
+- [ ] 2. 월: 폭주 시험, 동시성 20과 50, 각 `data/dev/benign_burst300.jsonl`(정상 300 고정 표본, S2.7과 같은 파일). 시작 전에 `--set gate.initial=<11/12 공지 동시성 한도의 절반, 없으면 8>`로 둔다(초기 한도 4에서 AIMD가 오르기 전에 50개 요청의 대기가 `gate.max_wait_s` 30s를 넘어 게이트 때문에 `fallback_infra`가 나는 것을 막는다). 홀드아웃 실행은 추정 × 1.2를 상한으로 준다(재시도·형식 재요청이 겹쳐 1.1배를 넘으면 예산 중단으로 다시 돌아야 해서). 실패하면 게이트 값을 조정해 다시 돈다(조건부, 실행마다 예상치 1,650. §2 합계에는 한 번만 넣었다). 그래도 실패하면 직렬 모드와 비교하고 하네스 동시성을 통과한 값으로 고정한다.
 - [ ] 2-1. 월 저녁: 통과한 동시성 실행의 trace로 분당 호출 수 r을 재고 §2 처리량 점검 표로 필요 시간과 쓸 수 있는 시간을 비교한다. 11/17 S3.3 구간도 함께 본다. 모자라면 줄일 것(11/17은 기록 실행 고정 표본 300·300, 11/18 뒤는 ablation 고정 부분집합 → 홀드아웃 무방비 반복 1회, 가드 실행은 그대로)을 이슈에 적는다.
 - [ ] 3. 목, 홀드아웃 세 실행이 `done`이 된 뒤: 동시성 1 지연 실행, R2 실행(`data/dev/grounding_r2.jsonl`). 홀드아웃과 겹쳐 돌리면 게이트가 따로라 `fallback_infra`와 p95가 흐려진다(§2).
 - [ ] 4. 금 오전: 홀드아웃 가드 실행 trace로 비용 표를 만들고 합격선 대비 판정을 적는다.
@@ -634,7 +634,7 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 - 게이트웨이가 동시성을 막으면(20에서도 >1%, 또는 주최측 공지) `--set pipeline.mode=serial`(직렬, ADR-0007 대안 A, [master-plan §4.4][mp44])로 같은 `benign_burst300.jsonl`을 동시성 20에서 돌려(예상치 1,650) 병렬과 지연·`fallback_infra`를 비교한다([PRD §11][prd11]). 실제 튜터로 확정돼도 폭주 시험은 다시 하지 않는다. 대신 홀드아웃 가드 실행의 정상 `fallback_infra`를 그 동시성과 함께 적는다.
 - 지연(동시성 1 = 서비스 요청 1건): 비스트리밍이라 첫 문장 표시 시간 = `respond()` 전체 지연(`Verdict.latency_ms`, [PRD §9 D3][prd9]). 단계별 p50/p95는 `stages[].latency_ms`. 코드 단계 합 = `normalize`·`crisis`·`rules`·`pii`·`retrieval_guard`·`output_code`·`prefilter`·`repair`([master-plan §4.1][mp41] 단계 이름). 튜터 단계(`retrieve`·`generate`)는 따로 적는다.
 - 가드 추가 지연: 입력 쪽 = max(0, ⑤ 끝 − 생성 끝), 출력 쪽 = 코드 검사 + 사전 필터 + ⑧ + 수리. 단계 끝 = `StageResult.started_ms` + `latency_ms`.
-- 경로 분류: 허용 / 전환·부분 재생성 / 거절 / 위기 / R2 / R3 / `fallback_infra`. 경로마다 n, p50/p95. R2는 `tutor.obligations.regenerate`와 `stages.output.r2`가 둘 다 참일 때만 돈다([master-plan §4.4][mp44]). 모의 튜터는 `regenerate: true`라 `--set stages.output.r2=true`로 `data/dev/grounding_r2.jsonl`(≈60, GP1 S1.7 실행 D와 같은 파일)을 돌려 R2 경로 지연을 따로 적는다. 이 파일은 R2 조건에 걸린 항목만 모았으므로 이 실행은 R2를 일부러 일으킨다. 그래서 발생률은 이 실행으로 내지 않는다. **R2 발생률**은 GP1 S1.7과 같은 정의다: GP1 S1.7 실행 A(S3.3에서 `report`를 새로 만들었으면 그 재보정 실행)의 trace에서 `report` 부분 집합 답변 중 R2 조건(위반이지만 R0·R1이 아님, `grounding_r2.jsonl`을 고른 기준)에 걸린 수 ÷ 그 실행의 `report` 항목 수(A_report). API 호출은 없다. GP1에서 실행 D를 미뤘으면 이 실행이 그것을 대신한다(따로 돌지 않음). GP1 S1.7의 R2 수용 기준 줄도 여기서 체크한다. 실제 튜터에 의무가 없으면 이 R2 실행만 `--set tutor.adapter=mock --set tutor.obligations.regenerate=true --set stages.output.r2=true`로 모의 튜터에서 돌려 가드의 R2 경로를 재고 "모의 튜터 기준"으로 적는다(근거 항목은 답이 고정돼 튜터와 무관하고 재생성만 모의 튜터가 한다). 고정 뒤에는 탐지하지 않고 YAML의 `tutor.obligations.regenerate: false`를 그대로 쓰므로, 이것을 덮지 않으면 `apply_obligations`가 (설정 값 AND 탐지 값)을 거짓으로 두고 `r2`를 다시 꺼 하네스가 멈춘다(종료 2, S3.1). 셋을 함께 덮으면 의무가 참이라 `apply_obligations`가 바꾸는 것이 없다(`test_real_tutor.py`). 실제 튜터 설정에 `r2=true`만 붙여도 같은 이유로 멈춘다. 홀드아웃(동시성 c)의 지연도 함께 적어 게이트 대기 영향을 보인다.
+- 경로 분류: 허용 / 전환·부분 재생성 / 거절 / 위기 / R2 / R3 / `fallback_infra`. 경로마다 n, p50/p95. R2는 `tutor.obligations.regenerate`와 `stages.output.r2`가 둘 다 참일 때만 돈다([master-plan §4.4][mp44]). 모의 튜터는 `regenerate: true`라 `--set stages.output.r2=true`로 `data/dev/grounding_r2.jsonl`(≈60, GP1 S1.7 실행 D와 같은 파일)을 돌려 R2 경로 지연을 따로 적는다. 이 파일은 R2 조건에 걸린 항목만 모았으므로 이 실행은 R2를 일부러 일으킨다. 그래서 발생률은 이 실행으로 내지 않는다. **R2 발생률**은 GP1 S1.7과 같은 정의다: GP1 S1.7 실행 A(S3.3에서 `report`를 새로 만들었으면 그 재보정 실행)의 trace에서 `report` 부분 집합의 **정상 답변** 중 R2 조건(위반이지만 R0·R1이 아님, `grounding_r2.jsonl`을 고른 기준)에 걸린 수 ÷ 그 정상 답변 수. `report` 전체 비율은 참고로만 적는다. API 호출은 없다. GP1에서 실행 D를 미뤘으면 이 실행이 그것을 대신한다(따로 돌지 않음). GP1 S1.7의 R2 수용 기준 줄도 여기서 체크한다. 실제 튜터에 의무가 없으면 이 R2 실행만 `--set tutor.adapter=mock --set tutor.obligations.regenerate=true --set stages.output.r2=true`로 모의 튜터에서 돌려 가드의 R2 경로를 재고 "모의 튜터 기준"으로 적는다(근거 항목은 답이 고정돼 튜터와 무관하고 재생성만 모의 튜터가 한다). 고정 뒤에는 탐지하지 않고 YAML의 `tutor.obligations.regenerate: false`를 그대로 쓰므로, 이것을 덮지 않으면 `apply_obligations`가 (설정 값 AND 탐지 값)을 거짓으로 두고 `r2`를 다시 꺼 하네스가 멈춘다(종료 2, S3.1). 셋을 함께 덮으면 의무가 참이라 `apply_obligations`가 바꾸는 것이 없다(`test_real_tutor.py`). 실제 튜터 설정에 `r2=true`만 붙여도 같은 이유로 멈춘다. 홀드아웃(동시성 c)의 지연도 함께 적어 게이트 대기 영향을 보인다.
 - 비용(홀드아웃 가드 trace 전체): 요청당 호출을 판정(⑤·⑧·Jev·형식 재요청)과 생성(첫 생성·전환 재생성·R2)으로 나눠 센다. 요청당 토큰은 역할별 입력·출력. 가드 토큰·비용 합계는 튜터 단계(`retrieve`·`generate`)를 빼고 낸다([master-plan §4.1][mp41]). 평가 채점(attack_judge)도 가드 비용에 넣지 않는다. 어댑터가 문자열만 돌려줘 생성 토큰이 없으므로 낭비는 두 비율로 낸다([master-plan §4.1][mp41]): 버린 생성 수 ÷ 전체 생성 수, 버린 완성 답의 문자 수 ÷ 전체 완성 답 문자 수(`generate` 단계 `detail["chars"]`). 버린 생성 = 차단·위기로 버림 + 재생성으로 대체된 원 생성이고, 취소된 생성은 수에만 든다. 단가가 공개되면 1k 요청당 비용, 아니면 토큰만.
 
 **검증**
@@ -663,7 +663,7 @@ $R --config configs/default.yaml --data $B --name burst-serial-c20 --concurrency
 - [ ] 평가 전 실제 게이트웨이로 폭주 시험(수백 건, 동시성 20–50)을 했고 정상 질문 `fallback_infra` ≤1%다([GR-14][gr14]). 동시성 조건을 함께 적었다([PRD §7][prd7]).
 - [ ] 요청당 비용·지연 표가 있다([GR-15][gr15]). 요청당 가드 토큰·호출 수를 적었다([PRD §6][prd6]).
 - [ ] 단계별 p50·p95. 입력 판정 p95 ≤1.5s([GR-04][gr04]), 코드 단계 ≤50ms, 출력 판정 p95 ≤1.5s([GR-08][gr08]), 첫 문장 표시 p95 ≤5s(튜터와 공동 목표)([PRD §6][prd6]). 미달이면 원인 단계를 적는다.
-- [ ] R2·전환 재생성 경로 지연을 따로 집계했다([PRD §6][prd6]). R2 발생률(GP1 S1.7 정의: 실행 A trace의 `report`에서 R2 조건에 걸린 답변 수 ÷ A_report) ≤15%([GR-09][gr09]). `grounding_r2.jsonl` 실행은 지연만 낸다. GP1 실행 D를 미뤘으면 이 R2 실행으로 그 몫을 채웠다.
+- [ ] R2·전환 재생성 경로 지연을 따로 집계했다([PRD §6][prd6]). R2 발생률(GP1 S1.7 정의: 실행 A trace의 `report` 정상 답변 중 R2 조건에 걸린 비율) ≤15%([GR-09][gr09]). `report` 전체 비율은 참고. `grounding_r2.jsonl` 실행은 지연만 낸다. GP1 실행 D를 미뤘으면 이 R2 실행으로 그 몫을 채웠다.
 - [ ] 버린 생성 비율을 수와 문자 수 두 가지로 적었고, PRD §6 낭비 행을 이 정의로 고쳤다([PRD §6][prd6], [master-plan §13][mp13] v8).
 - [ ] 게이트웨이가 동시성을 제한하면 직렬 모드와 비교했다([ADR-0007][adr7]).
 

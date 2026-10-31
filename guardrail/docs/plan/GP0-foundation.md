@@ -119,7 +119,7 @@ gh issue list --label guardrail --state all --limit 50
 - 설정 모델(pydantic v2): `GuardConfig{policy_version, mode, pipeline, stages, policy, models, thresholds, context_turns, deadlines_s, gate, tutor, service_log, faults, paths}`. 키는 [§4.4](../master-plan.md#44-설정-configsyaml)의 것을 **모두** 그대로 모델로 둔다. 모든 모델이 `extra="forbid"`라 오타를 로드에서 잡는다.
   - `stages`: `crisis`, `input{rules, pii, judge, jev}`, `session{enabled}`, `retrieval{enabled}`, `output{code, prefilter, judge, repair, r2}`.
   - 값이 정해진 키는 `Literal`: `mode`(eval·service), `pipeline.mode`(parallel·serial), `policy.d1`(s2·s1_s2), `gate.structured_output`(json_schema·json_object·prompt), `tutor.adapter`(mock·real), `service_log.keep_raw_for`(block·escalation·appeal·sample의 목록).
-  - `tutor.obligations{cites, canary, wraps_chunks, non_streaming, regenerate}`(기본 모두 `true`. 모의 튜터는 다 지원하고, R2는 `obligations.regenerate`와 `stages.output.r2`가 둘 다 참일 때만 돈다, §4.4), `service_log{retention_days, keep_raw_for, sample_rate}`(`0 ≤ sample_rate ≤ 1`), `faults: dict[Role, Literal["timeout", "rate_limit", "server", "bad_json", "fake_ok"]]`(기본 `{}`).
+  - `tutor.obligations{cites, canary, wraps_chunks, non_streaming, regenerate}`(기본 모두 `true`. 모의 튜터는 다 지원하고, R2는 `obligations.regenerate`와 `stages.output.r2`가 둘 다 참일 때만 돈다, §4.4), `service_log{retention_days, keep_raw_for, sample_rate, path}`(`0 ≤ sample_rate ≤ 1`, `path`는 서비스 모드 trace 위치, S2.3이 쓴다), `faults: dict[Role, Literal["timeout", "rate_limit", "server", "bad_json", "fake_ok"]]`(기본 `{}`).
   - `deadlines_s{input_judge, exchange_judge, generator, jev, attack_judge, tutor_retrieve}`. `attack_judge`는 10.0이다.
   - `thresholds.lambda`는 예약어라 `lambda_: float = Field(0.9, alias="lambda")`.
   - GP0에서는 `pipeline`·`policy`·`tutor`·`service_log`·`thresholds`·`context_turns`를 검증만 하고 쓰지 않는다. 동작은 그 키를 쓰는 슬라이스가 붙인다.
@@ -218,7 +218,7 @@ class LLM:
     def __init__(self, cfg, *, send=None, fake_responders: Mapping[Role, Fake] = FAKE_OK, max_calls=None, clock=time.monotonic, sleep=asyncio.sleep, rand=random.random)
     async def complete(self, role, messages, *, schema=None, deadline_s, max_tokens=None) -> LLMResult
     def slot(self, role) -> AsyncContextManager[None]
-    usage: dict[Role, Usage]   # calls, retries, reasks, faults, errors{code: n}, tokens_in, tokens_out, latencies_ms
+    usage: dict[Role, Usage]   # calls, retries, reasks, faults, errors{code: n}, gate_timeouts, tokens_in, tokens_out, latencies_ms
 ```
 
 - `send=None`이면 첫 실제 호출 때 `openai_send(AsyncOpenAI(base_url=os.environ["GUARD_LLM_BASE_URL"], api_key=os.environ["GUARD_LLM_API_KEY"], max_retries=0))`을 만든다. 그래서 `--fake`처럼 부르는 역할이 모두 `faults`로 덮인 실행은 환경변수 없이 돈다. 환경변수가 없으면 변수 이름만 담은 오류를 낸다. 값은 어떤 메시지에도 넣지 않는다.
@@ -394,7 +394,7 @@ uv run pytest tests/test_trace.py
 - `load(path, mapping=None) -> list[Item]`: 확장자로 JSONL·CSV를 고른다. 매핑이 없으면 §4.6 원형. 오류는 줄 번호와 함께 모아 `DatasetError` 하나로 낸다(앞 10개).
 - 매핑 YAML: `format: csv` / `columns: {id: idx, text: prompt, category: cat}`(`text` → `turns=[{role: student, content}]`) / `defaults: {kind, split, technique, expected, source, license}`. `id`가 없으면 `f"{source}-{행번호:05d}"`, `seed_id`가 없으면 `id`.
 - `assign_split(seed_id) -> Literal["dev", "holdout"]`([§4.6](../master-plan.md#46-데이터-evaldatasetspy) "분할", 자체 제작 세트 전용. 이 함수 하나만 쓴다): `int(sha256(("cheshire-split:" + seed_id).encode()).hexdigest()[:8], 16) % 100 < 30`이면 holdout, 아니면 dev. salt와 비율은 고정이다. 순서와 무관하고, 항목을 더해도 기존 씨앗이 옮겨 가지 않는다. PRD §8이 세트 단위로 분할을 정한 공개 세트는 이 함수를 쓰지 않는다. 해시 계산은 `_bucket(salt, seed_id) -> 0..99` 하나로 두고, 근거 세트 `subsplit`(salt `cheshire-subsplit:`, 60 미만이면 calibration, §4.6 "같은 함수로")은 S1.1이 이것으로 정한다.
-- `dedupe(items, fixed_dev=frozenset()) -> (남긴 것, [(지운 id, 남긴 id)])`([§4.6](../master-plan.md#46-데이터-evaldatasetspy) "중복 제거"·"이미 본 항목은 dev 고정" 그대로. 이 함수 하나만 쓴다). `text(item)` = 학생 턴마다 `normalize(content)`(preprocess.py)를 `"\n"`으로 이은 것. `fixed_dev`는 dev 고정 항목(봉인 전에 이미 실행·분석한 항목, 예: S1.7 `canary_leak.jsonl`, 이 슬라이스의 스모크 `data/seed/smoke_*`)의 id 집합이고 S2.0이 넘긴다. `Item`에 필드를 더하지 않는다.
+- `dedupe(items, fixed_dev=frozenset()) -> (남긴 것, [(지운 id, 남긴 id)])`([§4.6](../master-plan.md#46-데이터-evaldatasetspy) "중복 제거"·"이미 본 항목은 dev 고정" 그대로. 이 함수 하나만 쓴다. `grounding`·`citation` 항목은 같은 학생 질문에 답이 여럿이라 키에 `answer` 정규화본을 더한다). `text(item)` = 학생 턴마다 `normalize(content)`(preprocess.py)를 `"\n"`으로 이은 것. `fixed_dev`는 dev 고정 항목(봉인 전에 이미 실행·분석한 항목, 예: S1.7 `canary_leak.jsonl`, 이 슬라이스의 스모크 `data/seed/smoke_*`)의 id 집합이고 S2.0이 넘긴다. `Item`에 필드를 더하지 않는다.
   - **같은 분할 안**: 키 `(seed_id, technique, text(item))`가 같으면 먼저 나온 하나만 남긴다. 같은 씨앗의 우회 표기 변형은 technique가 달라 남는다.
   - **분할 사이**: `seed_id`가 같거나 `text(item)`이 같은 항목이 dev와 holdout에 함께 있으면 **dev 쪽을 지운다**. 둘 중 하나만 맞아도 지운다. 번역본이 달라도 영어 원문이 같으면 씨앗이 같아 여기서 걸린다. 지운 쌍의 남긴 id는 맞은 홀드아웃 항목의 id다.
   - **예외(dev 고정)**: 겹친 dev 항목이 `fixed_dev`에 있으면 **홀드아웃 쪽을 지운다**(이미 본 글이 홀드아웃에 남지 않게). 쌍은 (홀드아웃 id, dev 고정 id)다. 순서: 먼저 dev 고정과 겹친 홀드아웃 항목을 지우고, 남은 홀드아웃으로 위 규칙을 적용한다. 두 방향 모두 지운 개수는 S2.0이 MANIFEST에 따로 적는다.
@@ -660,7 +660,7 @@ uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/
 5. 켜기·끄기: `configs/unguarded.yaml`(무방비), 묶음 4개 토글, `policy_version`(`Verdict`)·`config_hash`(trace)로 버전 확인.
 6. 비용·지연 기대치(PRD §6): 요청당 판정 2회, 동시 호출 2개, 입력 쪽 지연은 생성 뒤에 숨는다, 첫 문장 p95 ≤5s는 공동 목표. 튜터가 자기 클라이언트로 생성하면 `async with guard.llm.slot("generator"):`로 감싸 가드와 동시성 한도·호출 예산을 함께 쓴다([master-plan §4.3](../master-plan.md#43-llm-호출-llmpy), 연결은 S3.1).
 7. 오류: 가드는 단계 오류로 멈추지 않는다(GR-14 등급). 방식 (A)에서 튜터 검색·생성 예외는 S2.5부터 생성 실패 행으로 안전 응답이 된다(§4.2 "결정적 단계 오류"). 방식 (B)에서는 튜터가 직접 부르므로 튜터 쪽에서 처리한다.
-7-1. 이의 제기(서비스 모드): 학생이 "잘못 막혔어요"를 누르면 튜터가 그 응답 Verdict의 `request_id`로 `trace.record_appeal(request_id, message)`를 부른다. 그 요청은 30일 보관 대상(`appeal`)이 된다([master-plan §4.5](../master-plan.md#45-trace-tracepy), GR-13).
+7-1. 이의 제기(서비스 모드): 학생이 "잘못 막혔어요"를 누르면 튜터가 그 응답 Verdict의 `request_id`로 `guard.record_appeal(request_id, message)`를 부른다. 그 요청은 30일 보관 대상(`appeal`)이 된다([master-plan §4.5](../master-plan.md#45-trace-tracepy), GR-13).
 8. 요청(리더 결정): D3 비스트리밍, D4 의무 5개. 결정 전 기본값: 없는 의무는 저하 모드로 돌고, 모든 수치는 모의 튜터로 먼저 낸다.
 
 **검증**

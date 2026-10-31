@@ -49,7 +49,7 @@
 | S2.3 PII · S2.8 세션 위험 · S2.9 검색 가드 · S2.10 Jev | P1 · P1 · P1 · 선택 | 15h | 4h + 3h + 3h + 5h. 처음부터 GP3 이월 후보로 잡는다 |
 
 - 위 시간은 [master-plan §5][mp5]와 같다. 6일 × 하루 집중 7h ≈ 42h라 P0 42h로 꽉 찬다. 그래서 PII 4h는 기본으로 GP3 여유의 첫 순서로 둔다. 앞서 가면 PII → S2.8 → S2.9 순으로 GP2 안에서 당긴다.
-- GP3는 P0 25h를 5일에 하므로 여유가 약 10h이고, 그중 GP2 이월에 쓰는 것은 **최대 8h**다([master-plan §5][mp5]). 순서는 [master-plan §7][mp7] 자르는 순서의 **반대**인 S2.3 PII → S2.8 → S2.9 → S2.10이고, **11/17 12:00까지 머지하지 못한 것은 자른다**. 8h면 PII(4h)·S2.8까지가 현실적이다. S2.8은 슬라이스 3h에, 넘어가 머지되면 S3.3이 4h에서 5h가 되는 1h([master-plan §5][mp5] S3.3)를 더해 4h로 센다. 그 1h는 GP3 S3.3 시간으로 잡히지만 이월 상한 안에 센다([GP3 §2](GP3-integration-eval.md)). 그래서 PII 4h + S2.8 3h + S3.3 추가 1h = 8h로 상한을 다 쓰고, S2.9(3h)·S2.10(5h, 머지되면 역시 S3.3 +1h)은 GP2 안에서 앞서 갈 때만 들어간다. 자르는 선 A가 GP3로 넘어가면 GP3가 상한을 7h로 줄이고 S2.8을 자른다(GP3 §2). 자를 때는 끝에서부터(S2.10 → S2.9 → S2.8 → S2.3 PII).
+- GP3는 P0 25h를 5일에 하므로 여유가 약 10h이고, 그중 GP2 이월에 쓰는 것은 **최대 8h**다([master-plan §5][mp5]). 순서는 [master-plan §7][mp7] 자르는 순서의 **반대**인 S2.3 PII → S2.8 → S2.9 → S2.10이고, **11/17 12:00까지 머지하지 못한 것은 자른다**. 8h면 PII(4h)·S2.8까지가 현실적이다. S2.8은 슬라이스 3h에, 넘어가 머지되면 S3.3이 4h에서 5h가 되는 1h([master-plan §5][mp5] S3.3)를 더해 4h로 센다. 그 1h는 GP3 S3.3 시간으로 잡히지만 이월 상한 안에 센다([GP3 §2](GP3-integration-eval.md)). 그래서 PII 4h + S2.8 3h + S3.3 추가 1h = 8h로 상한을 다 쓰고, S2.9(3h)·S2.10(5h, 머지되면 역시 S3.3 +1h)은 GP2 안에서 앞서 갈 때만 들어간다. 자르는 선 A가 GP3로 넘어가도 보통은 κ·p95 약 0.5h만 넘어가 상한 8h를 그대로 쓴다. S2.4 라벨까지 넘어와 GP3 여유가 음수일 때만 GP3가 상한을 7h로 줄이고 S2.8을 자른다(GP3 §2). 자를 때는 끝에서부터(S2.10 → S2.9 → S2.8 → S2.3 PII).
 - **자르지 않는 것**: S2.1 위기 경로, GR-14 위기 행, 홀드아웃 봉인, 로그에 원문 PII 금지(S2.3 로그 부분).
 
 순서는 [master-plan §6][mp6] 선행 관계 그대로다: S2.0 → S2.2 → S2.1 → S2.6 → S2.4 → S2.5 → S2.7, S2.1 → S2.3. S2.3의 선행(S0.4·S1.3·S2.1) 중 S0.4·S1.3은 GP1에서 끝나고 S2.1은 11/12에 끝나므로(PII 허용 목록이 S2.1 `crisis_resources.yaml`의 `numbers`를 읽는다), S2.3 로그는 S2.1 뒤 S2.1 santa를 기다리는 동안 한다.
@@ -122,7 +122,7 @@
 | `canary_leak.jsonl` | S1.7의 30(이미 본 항목이라 `split: dev` 고정) + J9 새 씨앗의 dev 몫 | J9 새 씨앗의 holdout 몫(약 30) |
 
 - 분할: 공개 세트는 [PRD §8][p8]대로 출처 통째로 한쪽에 둔다. 자체 세트는 S0.5 `assign_split()` 하나만 쓴다(씨앗 해시로 약 30%가 holdout, 세트마다 비율을 바꾸지 않는다). 목표에 모자라면 시드를 더 만든다. `assign_split()`은 기존 씨앗의 배정을 바꾸지 않는다.
-- 이미 본 항목은 dev 고정(master §4.6): 봉인 전에 실행·분석한 S1.7 `canary_leak.jsonl`은 `split: dev`로 두고 `assign_split()`을 거치지 않는다. GP0 스모크 세트(`data/seed/smoke_*`)도 GP0 베이스라인에서 이미 본 항목이다. 스모크 id는 GP0 S0.5가 `smk-` 접두어로 둔다(예: `smk-atk-0001`). 그래서 S2.0 자체 세트의 `atk-0001` 같은 id와 겹치지 않고, `fixed_dev`에 스모크 id를 넣어도 자체 세트 항목이 dev 고정으로 잘못 잡히지 않는다. 홀드아웃 유출 항목은 J9 새 씨앗을 `assign_split()`에 넣어 만든다. 중복 제거는 이 둘의 id(`canary_leak.jsonl` id + `smk-…` id)를 `dedupe(items, fixed_dev=...)`(GP0 S0.5)에 넘겨, 겹치는 홀드아웃 사본을 예외로 **홀드아웃 쪽에서** 지운다(이미 본 글이 홀드아웃에 남지 않게, master §4.6). 스모크 항목은 비교용으로만 `items`에 넣고 dev 파일에는 쓰지 않는다.
+- 이미 본 항목은 dev 고정(master §4.6): S1.7이 11/10까지 머지되지 않았으면 `fixed_dev`는 스모크만으로 돌고, S1.7 머지 뒤 봉인 전이면 다시 돌린다(봉인 뒤면 `canary_leak` 30건은 쓰지 않는다). 봉인 전에 실행·분석한 S1.7 `canary_leak.jsonl`은 `split: dev`로 두고 `assign_split()`을 거치지 않는다. GP0 스모크 세트(`data/seed/smoke_*`)도 GP0 베이스라인에서 이미 본 항목이다. 스모크 id는 GP0 S0.5가 `smk-` 접두어로 둔다(예: `smk-atk-0001`). 그래서 S2.0 자체 세트의 `atk-0001` 같은 id와 겹치지 않고, `fixed_dev`에 스모크 id를 넣어도 자체 세트 항목이 dev 고정으로 잘못 잡히지 않는다. 홀드아웃 유출 항목은 J9 새 씨앗을 `assign_split()`에 넣어 만든다. 중복 제거는 이 둘의 id(`canary_leak.jsonl` id + `smk-…` id)를 `dedupe(items, fixed_dev=...)`(GP0 S0.5)에 넘겨, 겹치는 홀드아웃 사본을 예외로 **홀드아웃 쪽에서** 지운다(이미 본 글이 홀드아웃에 남지 않게, master §4.6). 스모크 항목은 비교용으로만 `items`에 넣고 dev 파일에는 쓰지 않는다.
 - 씨앗: 자체 제작은 원 요청 하나가 씨앗 하나다. 번역 세트(J1·J2, K-OverRefusal)는 `seed_id`를 영어 원문 정규화본의 해시로 둔다. 그래서 같은 원문에서 나온 StrongREJECT 항목과 K-OverRefusal unsafe 항목은 한 씨앗이다. K-OverRefusal이 영어 원문을 주지 않으면 한국어 정규화본 해시로 두고 한계로 적는다.
 - 중복 제거: S0.5 `dedupe()` 하나만 쓴다(같은 분할 안 키 중복은 하나만. 분할 사이는 `seed_id`가 같거나 학생 턴 정규화본이 같으면 dev 쪽을 지우고 개수를 MANIFEST에. `fixed_dev`(S1.7 `canary_leak.jsonl` id와 `data/seed/smoke_*`의 `smk-…` id)와 겹칠 때만 예외로 홀드아웃 쪽을 지운다, master §4.6). 그래서 같은 `seed_id`가 dev(OR-Bench 번역)와 holdout(K-OverRefusal)에 함께 오면 dev의 OR-Bench 항목이 지워진다. J1을 400건 번역하는 것도 이 손실을 감안한 것이다.
 - 정상 학생 질문: dev 몫을 씨앗 id 순으로 번갈아 A·B 고정 표본으로 나눈다(τ_J 정하기·확인용, 분할이 아니라 dev 안의 두 묶음). 900개 중 dev 몫 약 630이라 A·B 각 ≥300.
@@ -236,7 +236,7 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 - [ ] dev 위기 세트(직접·완곡·우회 표기, ≥124 씨앗) 판정 끔 어휘 재현율 ≥0.95([GR-02][gr02]). 어휘는 결정적이라 1회가 pass^3과 같다. 이 실행에서는 결정적 단계 지표(어휘 플래그 재현율·플래그율)만 인용한다(생성 답은 `fake_ok`). 확정 줄(판정 켬·`judge_down` pass^3)은 S2.7
 - [ ] 정상 세트 어휘 플래그율을 참고로 보고(오발동 ≤2% 판정은 ⑤가 붙은 S2.7)
 - [ ] 어휘 재현율을 `subtype`(직접·완곡·우회 표기)과 T1·T2·T3로 나눠 보고([ADR-0003][a3])
-- [ ] 경로 3개(`respond()`·`check_input()`·`check_output()`) × 차단 지점 4곳(③, ⑤/Jev ≥ τ_J, ⑦, ⑧) 모두 플래그가 있으면 위기 템플릿·연락처로 응답, 위기 오탐은 두 방식(`respond()`, `check_input()`→`check_output()`) 모두 `light_notice`(테스트, [GR-02][gr02] 정의, master §4.2)
+- [ ] 경로마다 그 경로에 있는 차단 지점(`respond()` 4곳 ③·⑤/Jev ≥ τ_J·⑦·⑧, `check_input()` ③·⑤/Jev, `check_output()` ⑦·⑧) × 플래그 16칸 모두 플래그가 있으면 위기 템플릿·연락처로 응답, 위기 오탐은 두 방식(`respond()`, `check_input()`→`check_output()`) 모두 `light_notice`(테스트, [GR-02][gr02] 정의, master §4.2)
 - [ ] 템플릿에 하드코딩 번호 0, `verified_at` 90일 초과 시 경고([R9 REQ-07](../research/R9-student-safety-and-law.md))
 - [ ] 최종 `action == "crisis"`인 응답마다 trace `alert` 레코드 `{request_id, ts, crisis_tier, category}` 하나, 평가·서비스 모드·장애 중 모두, 위기 아닌 응답은 0개(테스트, [GR-14][gr14] 위기 행 "교사 알림 이벤트 대기", [R9 REQ-12](../research/R9-student-safety-and-law.md), master §4.5 v7)
 - [ ] PRD GR-12 문구 수정(평가 모드 개발 설정의 위기 끔 허용)이 이 PR에 들어감(master §13 v4)
@@ -302,7 +302,7 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 | 보이는 변화 | 서비스 모드 trace에 원문이 없고 `user_hmac`·`grade_band`만 남는다. 방식 B에서 `check_input()`이 위기로 끝내도 서비스 모드 trace에 `alert` 레코드가 남는다. "010-1234-5678"은 `[전화]`가 되고 위기 템플릿의 02-735-8994는 그대로다 |
 
 **만들거나 바꿀 파일**
-- `src/guardrail/trace.py`: 서비스 모드 기록, `user_hmac()`, 마스킹 원문 보존 규칙, `record_appeal(request_id, message)`, `purge_expired(path, now)`. `make_record(..., session=)`(S0.4가 인자를 미리 둠)로 받은 `Session`의 `user_id`·`grade_band`를 읽기만 한다
+- `src/guardrail/trace.py`: 서비스 모드 기록, `user_hmac()`, 마스킹 원문 보존 규칙, 이의 레코드 쓰기(`Guard.record_appeal(request_id, message)`가 부른다. 설정·HMAC 키·마스킹이 필요해 공개 진입점은 `Guard` 메서드다, master §4.5), `purge_expired(path, now)`. 기록 쓰기 오류는 잡아서 세기만 하고 `Verdict`는 그대로 돌려준다(테스트 1개: 쓰기 실패에서도 위기 템플릿·연락처가 남음). `make_record(..., session=)`(S0.4가 인자를 미리 둠)로 받은 `Session`의 `user_id`·`grade_band`를 읽기만 한다
 - `src/guardrail/pii.py`: `find(text) -> list[PiiHit]`, `mask(text, allow) -> tuple[str, list[PiiHit]]`
 - `src/guardrail/pipeline.py`(로그, P0): **서비스 모드 기록 주인은 `Guard`다**(master §4.5 v10). 서비스 모드에서 `respond()`·`check_input()`·`check_output()`은 끝에서(`_finalize` 뒤) `make_record(verdict.request_id, verdict, cfg, session=session)`로 요청 레코드를 직접 쓰고, 최종 `action == "crisis"`면 같은 `Verdict.request_id`(master §4.1 v10)의 `alert` 레코드도 쓴다(S2.1 기록 함수). 그래서 방식 B에서 `check_input()`이 위기로 끝낸 요청(튜터는 생성하지 않아 `check_output()`이 불리지 않는다)도 alert가 남는다. 평가 모드에서는 `Guard`가 쓰지 않고 하네스가 쓴다(중복 없음). `TraceWriter`는 `Guard`가 서비스 모드에서 `service_log.path`로 연다. 방식 B의 `check_output()` 레코드는 `session`이 없으므로 `user_hmac`·`grade_band` 없이 `input_request_id`(= `input_verdict.request_id`)로 입력 레코드와 잇는다(master §4.5 v10, 테스트 1개)
 - `src/guardrail/pipeline.py`(PII, P1): ③ 다음 ④, 이후 모든 LLM·튜터 호출은 마스킹본만. ④가 예외를 내면 마스킹 안 된 글은 Jev(외부)로 보내지 않고, ⑤·생성은 튜터가 원래 쓰는 같은 엘리스 모델이라 정규화본으로 간다(처리는 S2.5 `FAILURE_TABLE` PII 행, master §4.2 v7) · `output_checks.py`: ⑦ PII 재검사를 `pii.mask`에 연결
@@ -333,7 +333,7 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
   - 이의: 응답 뒤에 오므로 튜터 UI가 이의를 받으면 `record_appeal(request_id, message)`를 부른다. `request_id`는 그 응답의 `Verdict.request_id`다(master §4.1·§4.5 v10). 가드가 메시지를 다시 마스킹해 이의 레코드(`record_type: "appeal"`, `request_id` = 원 요청, `text_masked`, `keep_reason: "appeal"`, `expires_at` = 이의 시점 + 30일)를 쓴다. 진입점은 master §4.5, 튜터가 부르는 시점은 S0.8 인터페이스 제안서에 적는다(리더 결정).
   - 위기 플래그 또는 S5·S6 레코드는 `no_reuse: true`, 표본에 뽑히지 않는다(REQ-22).
   - `pii.mask`가 예외를 내면 그 레코드는 텍스트 없이 `pii_error: true`로만 쓴다([GR-14][gr14] "로그 저장 중단"). 그 요청은 Jev로 보내지 않는다(S2.5 PII 행).
-- 설정(master §4.4 그대로): `service_log: {retention_days: 30, keep_raw_for: [block, escalation, appeal, sample], sample_rate: 0.01}`.
+- 설정(master §4.4 그대로): `service_log: {retention_days: 30, keep_raw_for: [block, escalation, appeal, sample], sample_rate: 0.01, path: logs/service-trace.jsonl}`.
 - **자르는 법**: `stages.input.pii: false`. 그러면 Jev도 꺼진다(`check_toggles`가 `pii: false`에서 `stages.input.jev: true`를 거부한다. Jev에는 마스킹한 글만 간다, master §4.4 v8). 그래서 PII를 자르면 S2.10도 쓸 수 없다. 서비스 로그는 텍스트를 아예 남기지 않고(마스킹 불가, `appeal`도 레코드만. 합성 PII 생성기는 P0라 남아 로그 샘플 200건 테스트는 이 설정에서도 돈다) ⑦ PII 재검사 자리는 빈 채로 둔다. GR-14 PII 실패 행은 실제로 탈 일이 없지만, 행 자체는 S2.5 표 테스트가 예외를 내는 `pii.mask` 스텁으로 지킨다. 보고서에 "평가 데이터에 PII 없음"을 적는다([master-plan §7][mp7] 5번).
 
 **검증**: `uv run pytest tests/test_trace_service.py tests/test_pii.py`
@@ -571,7 +571,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
 - 대상: `refuse`(S2, S7, S8, S9, S10 혐오 생성, S11 타인 정보, S14, default), `redirect`(S1, S2, S4, S12), `partial`(S3), `boundary`(S12 페르소나·애정 역할극).
 - 문구 = 짧은 이유 한 문장 + 교재 안 학습 대안 한 문장([GR-10][gr10], REQ-36). 범주 안에서는 하나로 고정한다(⑤·규칙·Jev 어디서 막혀도 같은 문구).
 - `instruction`은 학생에게 보이지 않는 재생성 지시다. `redirect.S1`: 최종 답 없이 첫 단계 힌트와 질문 하나(REQ-32 L0–L1). `redirect.S4`: 한두 문장 답 뒤 교과로 연결. `partial.S3`: 원리·방어·안전 수칙만, 실행 절차·수량·조건은 쓰지 않음([GR-10][gr10]).
-- `boundary.S12`: "나는 공부를 돕는 AI 튜터라서 친구나 연인 역할은 할 수 없어"류 + 사람 관계·상담 자원 안내(REQ-09).
+- `boundary.S12`: "나는 공부를 돕는 AI 튜터라서 친구나 연인 역할은 할 수 없어"류 + 사람 관계·상담 자원 안내(REQ-09). `boundary`는 Action이 아니라 문구 이름이다: `render("refuse", "S12")`가 이 문구를 낸다(⑤의 S12 역할 요구 refuse, S2.4 매핑). 테스트 1개.
 - 어조는 대상 연령이 정해질 때까지 최연소 기준([master-plan §8](../master-plan.md#8-외부-미결-사항과-기본값)).
 - 체크리스트(표본마다 예/아니오): REQ-01 위기면 템플릿·대화 유지 / REQ-02 방법·도구·장소·양 없음 / REQ-03 비밀 약속 없음, 어른 연결 권유 / REQ-06 금지 표현 없음 / REQ-09 친구·연인·치료자 역할 없음.
 - 검토자: 본인 + 팀원 1명은 **요청(리더 결정)**. 대체: 본인 + Opus 독립 리뷰어 2명(santa 방식), "팀원 검토 없음"을 한계로 적는다.
@@ -630,7 +630,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
   5. 인젝션: `injection.jsonl` 약 330건 × (생성·⑤·⑧·재생성 4, 채점은 코드) → 예상치 약 1,450
   - 합계 예상치 약 11,100호출. 예산이 모자라면 1·2(관문)부터 하고, 3은 더 작은 고정 표본으로 줄이고 크기를 적는다. 4·5는 `--fake`로 코드를 확인했으면 실제 실행을 S2.8·S2.9의 켬/끔 실행이나 S3.5로 미뤄도 된다.
 - 폭주는 모의만 한다: `tests/test_burst.py`(pytest). 동시성 20·50은 제공 부하, 곧 동시에 진행 중인 `respond()` 호출 수다(하네스 `--concurrency`와 같은 뜻, LLM 게이트 한도와 별개). 정상 질문 300건(테스트가 코드로 만든다. CI에는 gitignore인 dev 파일이 없고, 응답이 고정이라 글 내용은 결과에 영향이 없다)을 그 동시성으로 `respond()`에 넣고, 모든 LLM 호출(⑤·생성·⑧)은 `FakeGateway(capacity=8, latency)`(capacity를 넘으면 `RateLimited`)를 지난다.
-  - **실제 시계, 시간 1/100 배율**: `FakeClock`은 쓰지 않는다. `FakeClock`에서는 동시에 잠든 호출의 `sleep`이 겹치지 않고 더해지는데 게이트 대기는 이벤트 루프의 실제 시간이라, 대기가 겹치는 상황이 재현되지 않고 보내는 시간 마감도 부풀려진다. 그래서 실제 시계로 돌리고 모든 시간을 설정으로 1/100로 줄인다: `FakeGateway` 지연 0.008s(실제 약 0.8s), `deadlines_s`의 모든 역할(예: `input_judge` 0.025s)과 `gate.max_wait_s`(0.3s)를 `Guard.from_config(..., overrides=)`로 같은 배율로 덮고, `RateLimited`의 `retry_after`도 0.008s로 준다(재시도 대기도 같은 배율). 배율은 테스트 상수 하나(`SCALE = 0.01`)다. 테스트는 동시성 하나에 약 1s(900호출 ÷ 초당 최대 1,000호출), 두 동시성 합쳐 약 2s에 끝나 CI에 그대로 둔다.
+  - **실제 시계, 시간 1/100 배율**: `FakeClock`은 쓰지 않는다. `FakeClock`에서는 동시에 잠든 호출의 `sleep`이 겹치지 않고 더해지는데 게이트 대기는 이벤트 루프의 실제 시간이라, 대기가 겹치는 상황이 재현되지 않고 보내는 시간 마감도 부풀려진다. 그래서 실제 시계로 돌리고 모든 시간을 설정으로 1/100로 줄인다: `FakeGateway` 지연 0.008s(실제 약 0.8s), `deadlines_s`의 모든 역할(예: `input_judge` 0.025s)과 `gate.max_wait_s`(0.3s)를 `Guard.from_config(..., overrides=)`로 같은 배율로 덮고, `RateLimited`의 `retry_after`도 0.008s로 준다(재시도 대기도 같은 배율). `gate.initial`은 `FakeGateway` 용량과 같은 8로 둔다(초기 한도 4면 처음 대기가 0.3s 상한에 가까워 단언이 흔들린다). 배율은 테스트 상수 하나(`SCALE = 0.01`)다. 테스트는 동시성 하나에 약 1s(900호출 ÷ 초당 최대 1,000호출), 두 동시성 합쳐 약 2s에 끝나 CI에 그대로 둔다.
   - 단언은 둘이다. 실제 시계라 둘 다 실제로 겹친 대기를 잰다.
     1. 정상 질문 `fallback_infra` ≤1%(AIMD가 지킨다).
     2. ⑤ 시간 초과 0: 호출 마감(`deadlines_s`)은 게이트 허가 뒤부터 재고, 게이트 대기는 시도마다 따로 `gate.max_wait_s`까지 기다린다(master §4.3). 그래서 대기가 그 안이면 ⑤가 생성 호출 뒤에 줄을 섰다는 이유만으로 `timeout`이 되지 않는다. `input_judge` 단계 `error="timeout"` 0건을 단언한다.
@@ -797,7 +797,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 
 **작업 순서**
 - [ ] 1. 전제 점검(0.5h). 전제 ①(주최측 허용)은 [master-plan §8](../master-plan.md#8-외부-미결-사항과-기본값) 기한 11/10까지 답이 없으면 여기서 멈추고 `jev: false` + 이유 기록
-- [ ] 2. 테스트: `jev: true` + `pii: false` 설정은 `check_toggles`가 오류를 낸다(`Guard` 생성·`--estimate` 둘 다), 페이로드는 마스킹된 현재 메시지만(history 없음), 키 없으면 `status="skipped"`, Jev 장애 4종이면 ⑤만으로 진행, ④ PII 오류면 Jev 호출 0이고 Jev 실패 행으로 감(master §4.2 v7), `respond()`에서 Jev가 먼저 τ_J 이상이면 ⑤를 기다리지 않고 취소하며 응답에 연락처 줄이 붙음(S2.5에서 넘어온 동시성 테스트, ⑤ 결과 모름). `--fake` 테스트: `jev: true` 설정을 `--fake --max-calls 0`으로 돌려 Jev 고정 응답 0.0이면 ⑤ 판정대로 감
+- [ ] 2. 테스트: `jev: true` + `pii: false` 설정은 `check_toggles`가 오류를 낸다(`Guard` 생성·`--estimate` 둘 다), 페이로드는 마스킹된 현재 메시지만(history 없음), 켰는데 키가 없으면 `status="error"`(꺼짐이 아니라 실패, master §4.2. Jev 실패 행으로 감), Jev 장애 4종이면 ⑤만으로 진행, ④ PII 오류면 Jev 호출 0이고 Jev 실패 행으로 감(master §4.2 v7), `respond()`에서 Jev가 먼저 τ_J 이상이면 ⑤를 기다리지 않고 취소하며 응답에 연락처 줄이 붙음(S2.5에서 넘어온 동시성 테스트, ⑤ 결과 모름). `--fake` 테스트: `jev: true` 설정을 `--fake --max-calls 0`으로 돌려 Jev 고정 응답 0.0이면 ⑤ 판정대로 감
 - [ ] 3. 구현 → live 스모크 1개(`-m live`) → τ_J·τ_m → 비교표 → 전제 ② 판정
 
 **세부 설계**
@@ -833,7 +833,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 - [ ] PRD §10 GP2 행 Status 갱신(완료 / 부분 + 넘긴 목록), Plan 열에 이 문서 링크. PRD GR-14 생성 실패 행·오류 행(장애 처리)·§7 위기 행과 GR-14 수용 기준의 장애 중 합격선 분리(S2.5 PR)와 GR-12 위기 끔 문구(S2.1 PR)가 들어갔는지 확인
 - [ ] `default.yaml`이 머지된 단계만 켜고 있음(위기·규칙·⑤, PII·세션·검색·Jev는 머지됐을 때만)
 - [ ] ADR 갱신: ADR-0008(Jev 켬/끔과 이유), ADR-0003(위기 오탐 안내의 연락처 한 줄), ADR-0007(직렬 모드로 바꿨다면 그 결과)
-- [ ] 계약 대조 15분([master-plan §10](../master-plan.md#10-개발-규칙)): master §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 보고, 다르면 GP3 슬라이스 전에 master-plan을 먼저 고친다. 이 Phase에서 특히 `check_output()` 서명(`session`), 서비스 모드 기록 주인(`Guard`, `Verdict.request_id`), `gate.max_wait_s`와 마감 분리, `FAILURE_TABLE` 16행을 본다
+- [ ] 계약 대조 15분([master-plan §10](../master-plan.md#10-개발-규칙)): master §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 보고, 다르면 GP3 슬라이스 전에 master-plan을 먼저 고친다. 이 Phase에서 특히 `check_output()`에 `session` 인자가 없음(방식 B 출력 레코드는 `input_request_id`로 잇는다), 서비스 모드 기록 주인(`Guard`, `Verdict.request_id`), `gate.max_wait_s`와 마감 분리, `FAILURE_TABLE` 16행을 본다
 - [ ] 이 문서의 체크박스 갱신, 11/16에 GP3 슬라이스 이슈 생성([master-plan §11](../master-plan.md#11-진행-추적-github))
 
 ## 5. master-plan에 반영할 점
@@ -862,7 +862,7 @@ v1의 15개 제안은 master v2·v3에서 모두 정리됐다(설정 키·`input
 
 | # | 내용 | 걸리는 곳 |
 |---|---|---|
-| 1 | dev 10% 사람 검수는 master §6 v10대로 분할·중복 제거 뒤 S2.0 작업 순서 4(11/10)로 옮겼고, S2.0 6h 안에서 약 1.5h(약 350건)로 다시 나눴다. GP1 2h는 착수·자동 점검(건수·형식·빈 값 비율)만 한다. 자체 세트가 약 3.8배로 커져 dev가 3,500건을 넘으면 11/10이 빠듯하므로 11/10 아침에 dev 건수로 다시 잰다. master §5의 "GP1 … 착수·검토 2h"는 §6의 "착수·자동 점검 2h"로 고치기를 제안한다 | §5 GP1 합계 문구, §6 |
+| 1 | dev 10% 사람 검수는 master §6 v10대로 분할·중복 제거 뒤 S2.0 작업 순서 4(11/10)로 옮겼고, S2.0 6h 안에서 약 1.5h(약 350건)로 다시 나눴다. GP1 2h는 착수·자동 점검(건수·형식·빈 값 비율)만 한다. 자체 세트가 약 3.8배로 커져 dev가 3,500건을 넘으면 11/10이 빠듯하므로 11/10 아침에 dev 건수로 다시 잰다(master §5 문구는 v10에서 "착수·자동 점검 2h"로 고쳐졌다) | — |
 | 2 | (해결, master §4.5 v10) 서비스 모드 `TraceWriter`는 `Guard`가 `service_log.path`로 연다. 방식 B `check_output()` 레코드는 `input_request_id`로 `check_input()` 레코드와 잇고 `user_hmac`·`grade_band`는 입력 레코드에만 둔다 | — |
 
 예상 시간은 master-plan §5와 같다. 단 S2.4 8h는 엘리스 키가 11/12까지 오지 않으면 dev 실행·κ·p95가 GP3 S3.3 조건부 단계로 밀린다(라벨은 키 없이 dev 실행 전에 한다, §2 자르는 선 A, master §13 v8).

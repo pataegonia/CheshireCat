@@ -56,8 +56,8 @@
 | 11/5(목) | S1.3 출력 코드 검사 / S1.1 사람 확인(주입 전수, 정상 표본), `cite` | 3h / 4h | API: 다른 계열 주입. Sonnet: `canary_leak.jsonl` |
 | 11/6(금) | S1.1 `containment()` → θ 후보 추출·라벨 340·`assemble` / S1.4 `split` → `run`·θ 보정 | 2.5h / 4.5h | Sonnet: θ 전용 변형(후보 추출 뒤) |
 | 11/7(토) | S1.5 스키마·후처리·FakeLLM 테스트·프롬프트 초안 / GP2 J1·J2·J7 착수 | 6h / 0.5h | santa 리뷰어 2명(Opus). Sonnet: GP2 J1·J2·J7 |
-| 11/8(일) | S1.5 santa 반영·live 스모크 / S1.6 수리·연결·장애 주입 / GP2 J3 위기 시드 설계 행렬(본인)·J5 착수 | 2h / 4h / 1h | Opus: GP2 J3 시드. Sonnet: GP2 J5 |
-| 11/9(월) | S1.7 `run_item` 근거·인용 분기·근거 지표 → 실행 A(오전) → B·C(·D), 스윕, 리포트, Phase 끝 점검 / GP2 J6 착수·J1·J2·J3·J5·J7 자동 점검(개수·형식·빈 값 비율·중복 수, 본문 안 읽음) | 5h / 0.5h | API: 실행 A(오전, 예상치 약 750, `--estimate` 확인 후) → B·C(·D). `ecc:mle-reviewer`(Opus). Sonnet: GP2 J6 |
+| 11/8(일) | S1.5 santa 반영·live 스모크 / S1.6 수리·연결·장애 주입 / GP2 J3 위기 시드 설계 행렬(본인)·J4·J5 착수 | 2h / 4h / 1h | Opus: GP2 J3 시드. Sonnet: GP2 J4·J5 |
+| 11/9(월) | S1.7 `run_item` 근거·인용 분기·근거 지표 → 실행 A(오전) → B·C(·D), 스윕, 리포트, Phase 끝 점검 / GP2 J6·J8 착수·J1·J2·J3·J4·J5(J9 포함)·J7 자동 점검(개수·형식·빈 값 비율·중복 수, 본문 안 읽음) | 5h / 0.5h | API: 실행 A(오전, 예상치 약 750, `--estimate` 확인 후) → B·C(·D). `ecc:mle-reviewer`(Opus). Sonnet: GP2 J6·J8 |
 | **GP1 합계** | S1.1 8.5 + S1.2–S1.7 29.5 + GP2 데이터 2 | **40h** | 날짜별 7 · 7 · 7 · 6.5 · 7 · 5.5 |
 
 밀릴 때 자르는 것. 위 표의 여유는 11/7 0.5h와 11/9 1.5h뿐이다. 관문은 실행 A 수치만으로 넘는다.
@@ -80,7 +80,7 @@
 | 보이는 변화 | `data/dev/grounding.jsonl`(정상 300 + 주입 258), `citation.jsonl`(120), `prefilter_labels.jsonl`(≥340 문장, 그중 `calibration` ≥200)이 생기고, 유형·계열·분할별 개수가 `grounding.stats.json`에 나온다. `prefilter.containment()`가 생긴다 |
 
 **만들거나 바꿀 파일**
-- `src/guardrail/eval/build_grounding.py`: 하위 명령 `answers`(모의 튜터 답변, API) · `inject`(다른 계열 주입, API) · `cite`(인용 바꿔치기) · `review`(사람 확인용 diff 파일) · `assemble`(합치기·중복 제거·분할·통계). API를 쓰는 `answers`·`inject`는 `eval.run`처럼 `--estimate`(추정만 출력)와 `--max-calls`를 받고, `--estimate`가 아니면 `--max-calls`가 필수다(`llm.py` 예산 그대로, master-plan §4.7). 원출력은 `data/raw/grounding/`(gitignore)
+- `src/guardrail/eval/build_grounding.py`: 하위 명령 `answers`(모의 튜터 답변, API) · `inject`(다른 계열 주입, API) · `cite`(인용 바꿔치기) · `review`(사람 확인용 diff 파일) · `assemble`(합치기·중복 제거(S0.5 `dedupe()`, 근거 항목은 키에 `answer` 포함)·분할·통계). API를 쓰는 `answers`·`inject`는 `eval.run`처럼 `--estimate`(추정만 출력)와 `--max-calls`를 받고, `--estimate`가 아니면 `--max-calls`가 필수다(`llm.py` 예산 그대로, master-plan §4.7). 원출력은 `data/raw/grounding/`(gitignore)
 - `src/guardrail/prefilter.py`(새 파일, 이 슬라이스는 `grams()`·`containment()`만): 10번 θ 후보 추출에 쓴다. `run()`·`calibrate_theta()`는 S1.4(master-plan §5·§6)
 - `data/seed/grounding/questions.jsonl`(질문·출처 청크 id), `inject_prompt.md`(두 계열이 똑같이 쓰는 주입 지침, 버전 헤더)
 - `data/dev/grounding.jsonl`, `citation.jsonl`, `prefilter_labels.jsonl`, `grounding.stats.json`(본문은 `data/dev/`라 gitignore)
@@ -117,7 +117,7 @@
 - `split`: 근거 세트는 홀드아웃을 두지 않아 모두 `dev`다(master-plan §4.6. `report`를 보고용으로 쓴다).
 - `subsplit`: S0.5의 분할 함수로 정한다(master-plan §4.6: `sha256("cheshire-subsplit:" + seed_id)` 값이 60 미만이면 `calibration`, 아니면 `report`, [R7] §S7.7 보정 60 / 보고 40).
 - 주입 위치는 문장 번호 대신 `inj_text`로 남긴다. 평가 때 S1.4 분리기로 번호를 찾는다.
-- `chunks`는 모의 튜터 `retrieve()` 상위 3개다(`bm25_top_k`, k=3, GP0 S0.6). 출처 청크가 빠졌으면 3번째와 바꾼다. 답변 중복은 정규화본으로 지운다.
+- `chunks`는 모의 튜터 `retrieve()` 상위 3개다(`bm25_top_k`, k=3, GP0 S0.6). 출처 청크가 빠졌으면 3번째와 바꾼다. 답변 중복은 S0.5 `dedupe()`로 지운다(근거 항목 키 = `seed_id`, technique, 질문·`answer` 정규화본, master §4.6).
 
 정상 세트 300 ([R7] §S7.3). 30% 이상(≥90건)에 격려·되묻기·안내 문장이 1개 이상 있게 하고, 모자라면 Sonnet이 끼운다.
 
@@ -742,8 +742,8 @@ G 임계값 스윕 ([R7] §S7.5, master-plan §4.4 격자)
 - `sweep_g(rows, taus=[0.50, 0.55, …, 0.90])`(0.05 간격): 저장된 G·CONTRADICTED·핵심 문장·off_topic으로 위반을 다시 계산한다(추가 호출 0).
 - `calibration`에서 답변 단위 FPR ≤5%인 τ 중 recall이 가장 큰 것을 고른다(같으면 작은 τ). 그런 τ가 없으면 FPR이 가장 낮은 τ를 고르고 "합격선 미달"로 적는다.
 - 보고 수치는 그 τ로 낸 `report` 수치뿐이다. `calibration`이나 전체 수치는 보고 수치로 쓰지 않는다. τ별 곡선(`calibration`·`report` 따로)은 JSON에 넣고 그림은 S3.3·S4.2에서 그린다.
-- R2 발생률 = 실행 A `report` 답변 중 S1.6 8번 행의 답변 조건(위반이고 1–7번에 걸리지 않음, 청크 0개 제외)에 걸린 수 ÷ 실행 A `report` 답변 수(≈271). 실행 A trace에서 센다. A는 `r2: false`라 이 답들은 9번에서 끝나므로 `repair.reason_code == "r3_fallback"`이고 `exchange_judge.status == "ok"`인 답이다(`grounding_r2.jsonl`과 같은 조건). D는 R2가 나게 고른 집합이라 분모로 쓰지 않고, R2 경로 지연만 D(≈60)에서 따로 잰다.
-- 보고 세트는 주입 답이 많아(주입 ≈103·인용 오류 ≈48·정상 ≈120) 기댓값이 GR-09의 15% 선을 넘을 수 있다(D가 예상대로 ≈60이면 약 22%). 이 섞임에서 잰 값이라고 섞임과 함께 그대로 적는다. 서비스 발생률은 추정하지 않는다.
+- R2 발생률 = 실행 A `report`의 **정상 답변**(≈120) 중 S1.6 8번 행의 답변 조건(위반이고 1–7번에 걸리지 않음, 청크 0개 제외)에 걸린 수 ÷ 그 정상 답변 수. 서비스에서 대부분의 답은 정상 답이므로 GR-09 ≤15%는 이 값으로 판정한다. 주입·인용 오류 답을 섞은 `report` 전체(≈271)의 비율은 참고로 따로 적는다. 실행 A trace에서 센다. A는 `r2: false`라 이 답들은 9번에서 끝나므로 `repair.reason_code == "r3_fallback"`이고 `exchange_judge.status == "ok"`인 답이다(`grounding_r2.jsonl`과 같은 조건). D는 R2가 나게 고른 집합이라 분모로 쓰지 않고, R2 경로 지연만 D(≈60)에서 따로 잰다.
+- 보고 세트 전체는 주입 답이 많아(주입 ≈103·인용 오류 ≈48·정상 ≈120) 참고 비율이 15%를 넘을 수 있다(D가 예상대로 ≈60이면 약 22%). 이 값은 판정에 쓰지 않는다.
 
 | 유형별 현실 목표 ([README] §8, [R7] §S8) | 기대 범위 |
 |---|---|
@@ -783,7 +783,7 @@ uv run python -m guardrail.eval.run --config configs/exp/r2-on.yaml --data data/
 - [ ] G 임계값을 0.50–0.90(0.05 간격)으로 스윕해 `calibration`에서 정하고(답변 단위 FPR ≤5% 중 재현율 최대), 보고 수치는 `report`에서만 냈다. 홀드아웃은 읽지 않았다 ([GR-08], [GR-15], master-plan §4.4)
 - [ ] 유출 시도 세트 표시 출력의 카나리아 0건(`c`는 trace `output_code` `detail["canary"]`, S1.2), 모든 실행 표시 출력의 없는 인용 0건 ([GR-07]). 시스템 프롬프트 문장 노출 수(실행 C)와 정상 300건 오탐 수를 함께 보고한다
 - [ ] 수리 끔 대비 G 분포와 정답률 변화(정의는 열린 질문) ([GR-09])
-- [ ] (P1) R2 발생률(실행 A `report` trace에서 센 위 정의)을 GR-09 ≤15%와 나란히 적었다. 주입이 많은 보고 세트에서 잰 값이라 넘을 수 있고, 넘어도 섞임과 함께 그대로 적는다(서비스 발생률로 옮겨 말하지 않는다). R2 경로 지연은 실행 D에서 따로 잰다. 예산이 모자라면 D를 S3.6으로 넘긴다(GP3 S3.6이 같은 `grounding_r2.jsonl`로 R2를 돈다) ([GR-09])
+- [ ] (P1) R2 발생률(실행 A `report` 정상 답변에서 센 위 정의) ≤15%([GR-09]). `report` 전체 비율은 참고로 따로 적는다. R2 경로 지연은 실행 D에서 따로 잰다. 예산이 모자라면 D를 S3.6으로 넘긴다(GP3 S3.6이 같은 `grounding_r2.jsonl`로 R2를 돈다) ([GR-09])
 - [ ] 실행마다 `--estimate`로 추정을 본 뒤 `--max-calls <추정 이상>`으로 돌렸고 상한을 넘지 않았다 ([GR-15], master-plan §4.7). `results/`에는 요약 CSV·JSON만 커밋하고 `runs/`는 커밋하지 않는다
 
 **스킬·에이전트**: `ecc:eval-harness` · `ecc:mle-reviewer`(Opus)

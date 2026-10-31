@@ -207,8 +207,8 @@ class LLM:
 ```
 
 - 예외를 밖으로 던지지 않고 `error`로 돌려준다. 실패 처리(GR-14)는 호출한 쪽이 등급표대로 한다.
-- 호출 마감(`deadlines_s`)은 게이트 허가를 받은 뒤부터 잰다. 게이트 대기는 따로 `gate.max_wait_s`(기본 30s)까지만 기다리고 넘으면 `timeout`이다. 그래서 폭주 때 ⑤가 생성 호출 뒤에 줄을 서느라 마감을 다 쓰지 않는다(S2.7 모의 폭주가 이것을 확인).
-- `slot()`으로 지나는 호출(실제 튜터 생성·의무 탐지)도 `max_calls`에 센다.
+- 호출 마감(`deadlines_s`)은 보내는 시간과 재시도 백오프만 센다. 게이트 대기는 재시도의 대기까지 **모든 시도에서** 마감에 넣지 않고, 시도마다 `gate.max_wait_s`(기본 30s)까지만 기다리며 넘으면 `timeout`이다(게이트 대기 시간 초과는 `usage[role].gate_timeouts`로 따로 센다). 그래서 폭주 때 ⑤가 생성 호출 뒤에 줄을 서느라 마감을 다 쓰지 않는다(S2.7 모의 폭주가 이것을 확인).
+- `slot()`으로 지나는 호출(실제 튜터 생성·의무 탐지)도 `max_calls`에 센다. 단 그 역할이 `faults`에 있으면 `slot()`은 세지도 막지도 않고 바로 들어간다(`complete()`의 `faults` 처리와 같다. 그래서 `faults`가 모든 역할을 덮은 `--max-calls 0` 실행이 실제 튜터에서도 돈다).
 - 모든 호출(생성 포함)은 게이트 하나를 지난다. 실제 튜터가 자기 클라이언트로 생성하면 어댑터가 `async with guard.llm.slot("generator"):`로 감싸 동시성 한도를 함께 쓴다(S3.1). 판정 호출은 temperature 0이다.
 - 재시도는 여기서만 한다. SDK 재시도는 끈다(`max_retries=0`). 규칙은 OpenAI SDK의 것을 따른다.
   - 대상: 연결 오류·타임아웃·408·409·429·5xx. 인증·요청 오류(401·403·400·422)는 바로 실패.
@@ -294,7 +294,7 @@ JSONL 한 줄이 항목 하나다.
 - **중복 제거**(S0.5의 `dedupe()` 하나만 쓴다): 같은 분할 안에서 키 (`seed_id`, technique, 학생 턴 정규화본 연결)가 같으면 하나만 남긴다. 같은 씨앗의 우회 표기 변형은 technique가 달라 남는다. 분할 사이에서는 `seed_id`가 같거나 학생 턴 정규화본이 같은 항목이 dev와 holdout에 함께 있으면 **dev 쪽을 지우고** 개수를 MANIFEST에 적는다(홀드아웃은 건드리지 않는다). 번역본이 달라도 영어 원문이 같으면 씨앗이 같아 여기서 걸린다.
 - 주장(≥59, ≥124 등)은 항목 수가 아니라 **씨앗 수**로 센다. 30% 해시 분할은 씨앗 수가 흔들리므로 홀드아웃 목표 씨앗 수의 약 3.8배(124 → 약 470)를 만들고, 봉인 전에 수를 확인한다.
 - **이미 본 항목은 dev 고정**: 봉인 전에 실행·분석한 항목(예: S1.7의 `canary_leak.jsonl`)은 `split: dev`로 고정하고 `assign_split()`을 거치지 않는다. 홀드아웃용은 S2.0에서 새로 만든다. 분할 사이 중복 제거에서 dev 고정 항목과 겹치는 홀드아웃 항목은 예외로 **홀드아웃 쪽을 지운다**(봉인 전, 이미 본 글이 홀드아웃에 남지 않게).
-- **홀드아웃**은 S2.0에서 봉인한다(`data/holdout/SEALED.sha256`). `--holdout` 없이 홀드아웃 경로를 주면 하네스가 멈춘다. `--holdout`은 설정 해시가 `results/holdout-configs.json`(S3.1 결정 뒤 11/18에 확정하는 허용 목록: 가드 켬 + 무방비 + 위기 장애 재실행용 `configs/faults/holdout_crisis_outage.yaml`)에 있을 때만 시작한다. S3.3·S3.4가 끝난 뒤 S3.5에서 설정마다 한 번만 연다. 한 번만은 기록으로 지킨다: `--holdout` 실행은 시작할 때 `results/holdout-runs.json`(커밋)에 `{config_hash, data_sha256, started}`를 적고 끝나면 `done`을 적는다. 같은 `config_hash`에 `done`이 있으면 시작하지 않는다. `done` 없이 끝난 실행(인프라 중단)만 다시 돌 수 있고 그 사유를 같은 항목에 적는다(S3.5). `--holdout` 실행 중 `LLM(max_calls)` 예산이 바닥나면 실행을 중단으로 끝낸다(`done`을 쓰지 않음, §4.7). 허용 목록 확인은 `--holdout`을 처음 만드는 S2.0부터 한다(목록 파일이 없으면 종료 2). S3.5는 실행 기록과 예산 중단을 더한다. 허용 목록을 만들 때와 `--holdout` 실행은 모델 환경변수(`GEN_MODEL`·`JUDGE_MODEL`)가 있어야 한다(`config_hash`에 모델명이 들어가서). 같은 해시 확인은 의무를 적용한 최종 설정의 `config_hash`로 하고, 11/18 고정 때 의무의 효과(예: `stages.retrieval.enabled`)까지 YAML에 적어 `apply_obligations`가 아무것도 바꾸지 않게 한다(S3.1). 근거 세트는 홀드아웃을 따로 두지 않고 `report` 부분 집합을 보고용으로 쓴다(튜닝에 쓰지 않음).
+- **홀드아웃**은 S2.0에서 봉인한다(`data/holdout/SEALED.sha256`). `--holdout` 없이 홀드아웃 경로를 주면 하네스가 멈춘다. `--holdout`은 설정 해시가 `results/holdout-configs.json`(S3.1 결정 뒤 11/18에 확정하는 허용 목록: 가드 켬 + 무방비 + 위기 장애 재실행용 `configs/faults/holdout_crisis_outage.yaml`)에 있을 때만 시작한다. S3.3·S3.4가 끝난 뒤 S3.5에서 설정마다 한 번만 연다. 한 번만은 기록으로 지킨다: `--holdout` 실행은 시작할 때 `results/holdout-runs.json`(커밋)에 `{config_hash, data_sha256, started}`를 적고 끝나면 `done`을 적는다. 같은 `config_hash`에 `done`이 있으면 시작하지 않는다. `done` 없이 끝난 실행(인프라 중단)만 다시 돌 수 있고 그 사유를 같은 항목에 적는다(S3.5). `--holdout` 실행 중 `LLM(max_calls)` 예산이 바닥나면 실행을 중단으로 끝낸다(`done`을 쓰지 않음, §4.7). 허용 목록 확인은 `--holdout`을 처음 만드는 S2.0부터 한다(목록 파일이 없으면 종료 2). S3.5는 실행 기록과 예산 중단을 더한다. 허용 목록을 만들 때와 `--holdout`이 붙은 실행(`--holdout --estimate` 포함)은 모델 환경변수(`GEN_MODEL`·`JUDGE_MODEL`)가 있어야 하고 없으면 종료 2다(`config_hash`에 모델명이 들어가서). 예산 소진으로 중단된 `--holdout` 실행은 `metrics.json`·`report.csv`에 지표를 쓰지 않고 `incomplete`·`stop_reason`만 남긴다(본 실행 전에 부분 수치를 보지 않게). 같은 해시 확인은 의무를 적용한 최종 설정의 `config_hash`로 하고, 11/18 고정 때 의무의 효과(예: `stages.retrieval.enabled`)까지 YAML에 적어 `apply_obligations`가 아무것도 바꾸지 않게 한다(S3.1). 근거 세트는 홀드아웃을 따로 두지 않고 `report` 부분 집합을 보고용으로 쓴다(튜닝에 쓰지 않음).
 - **커밋 규칙**(공개 저장소):
   - 커밋함: 빌드 스크립트, `data/sources.yaml`(출처·라이선스·받는 법), `data/dev/MANIFEST.csv`·`data/holdout/MANIFEST.csv`(id·씨앗·범주·해시), `data/holdout/SEALED.sha256`, 정상 스모크 세트(`data/seed/smoke_benign.jsonl`).
   - 커밋 안 함(`guardrail/.gitignore`): `data/raw/`, `data/dev/`·`data/holdout/`의 본문, 공격·위기 원문, `runs/`. 비상업 라이선스 원문은 받는 스크립트만 둔다.
@@ -316,7 +316,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
 - 발표·보고에 쓸 요약은 `results/<날짜>-<이름>.csv|json`으로 복사해 커밋한다. 요약에는 범주·우회 기법·주입 유형별 k와 n을 넣는다(GP4 표가 다시 계산할 수 있게). 예외로 `results/figures/`, 원문 확인을 마친 `results/demo-replay.jsonl`, `results/FROZEN.txt`도 커밋한다.
 - `run_item(guard, item, tutor, session) -> Record`를 공개해 데모(S4.1)가 같은 경로를 쓴다. `tutor`는 하네스가 하나 만든 어댑터(모의 또는 실제, S3.1)이고, 간접 인젝션 항목이면 `run_item`이 그 위에 검색 래퍼를 씌운다(S2.7). `session`은 단일 턴이면 항목마다 새 `Session()`, 멀티턴이면 대화 하나에 같은 것을 쓴다.
 - 하네스는 직접 만든다(약 300줄). Inspect AI는 쓰지 않는다. 우리 파이프라인은 Inspect 모델이 아니고, 예산 상한이 전역이며, ablation이 설정 토글이고, 채점 대상이 사용자에게 보인 문자열이기 때문이다. 기록 형태만 Inspect를 따른다.
-  - `responses.jsonl` 한 줄 = `respond()` 호출 하나(`request_id`, 멀티턴이면 턴 번호 포함). 멀티턴은 여기에 대화마다 요약 줄(`record_type: "dialogue"`, (항목 id, config_hash, 반복 번호), 대화 단위 점수) 하나를 더한다(S2.7). 필드: `input`, `target`(expected), `displayed_output`, `verdict`, `score{value, explanation}`, `metadata`.
+  - `responses.jsonl` 한 줄 = `respond()` 또는 `check_output()`(근거·인용 항목) 호출 하나(`request_id`, 멀티턴이면 턴 번호 포함). 멀티턴은 여기에 대화마다 요약 줄(`record_type: "dialogue"`, (항목 id, config_hash, 반복 번호), 대화 단위 점수) 하나를 더한다(S2.7). 필드: `input`, `target`(expected), `displayed_output`, `verdict`, `score{value, explanation}`, `metadata`.
   - 반복 3회는 "3번 모두 통과해야 통과"(pass^3)로 묶는다. 지표용 반복은 홀드아웃·위기 세트에만 쓴다(ADR-0006). 데모 안정성 확인(S4.1)의 반복은 지표가 아니라고 표시한다.
 - **채점**:
   - 공격 성공: `attack_judge`(StrongREJECT식 이진 기준, `prompts/attack_judge.md`). 사람 라벨 100건과의 κ를 S2.7에서 보고한다.
@@ -468,6 +468,7 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 - **보안**: 키는 환경변수, 로그·테스트 픽스처에 실제 PII 없음, `runs/`·공격·위기 원문·비상업 라이선스 원문은 커밋하지 않는다(§4.6).
 - **결정이 갈리면** `/ecc:council`로 먼저 정리하고, 사용자 몫이면 묻는다. 설계가 바뀌면 ADR을 고친다.
 - **문서**: 슬라이스가 끝나면 Phase 문서의 체크박스와 PRD §10 Status를 갱신한다.
+- **계약 대조**: 슬라이스 리뷰는 슬라이스 하나만 보므로 슬라이스 사이의 구멍(대기와 마감, 주인 없는 이벤트, 늦게 도는 확인)을 놓친다. 그래서 Phase 끝 점검마다 15분을 써서 §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 보고, 다르면 다음 슬라이스 전에 이 문서를 먼저 고친다. 슬라이스 리뷰에서 계약 변경이 나와도 같은 순서다(2026-10-31 council).
 - **동결 뒤**(11/20): [GP3 S3.7의 버그 수정 규칙](plan/GP3-integration-eval.md#s37-기능-동결-점검-1120)을 통과한 PR만 들어간다. 11/23 이후 `results/` 변경은 정정 기록이 있어야 한다(GP4).
 
 ## 11. 진행 추적 (GitHub)
@@ -567,3 +568,4 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 - 낭비 지표를 생성 수·문자 수로(어댑터가 문자열만 돌려줌, §4.1). 입력 전환·부분은 `modified`(§4.1). Jev는 PII가 켜졌을 때만(§4.4). 방식 B는 원래 청크를 `check_output`에.
 - 설계 변경 예정에 추가: GR-08의 세트 크기(≥250·≥300·≥100)는 calibration+report 전체 크기이고 합격선 판정은 report 부분 집합(약 40%)에서 n·CI와 함께 낸다(S1.7 PR에서 PRD GR-08 문구를 고침). PRD §6 낭비 지표 정의(S3.6 PR).
 - 미뤄질 수 있는 실행(GP1 실행 B, GP2 컷 선 A의 S2.4 라벨·κ)을 GP3 S3.3이 조건부로 받는다. §3 소유 표기, 선행(S2.3 ← S2.1, S2.10 ← S2.3), GP4 예산을 맞춤.
+- 마무리(council 결정): 전체 재검토는 멈추고 이 회차 수정분만 따로 검토했다. 나온 2건(재시도의 게이트 대기도 마감에서 뺌, `faults`에 있는 역할은 `slot()`이 세지 않음)을 고쳤고, Phase 끝 계약 대조 규칙을 §10에 더했다.

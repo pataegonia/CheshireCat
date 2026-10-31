@@ -1,6 +1,7 @@
 .coverage
 htmlcov/
 runs/
+logs/
 data/raw/
 # 공격·위기 스모크 원문도 올리지 않는다. 정상 스모크만 커밋한다
 data/seed/smoke_attack*

@@ -27,7 +27,7 @@
 
 - 슬라이스 합계 38h + S1.1 준비 2h = **40h**([master-plan §5](../master-plan.md#5-슬라이스-목록), 모두 P0). 슬라이스별 시간은 §5 그대로다.
 - **10/31 재기준**: 10/30에는 문서만 커밋했다. 10/30 행(S0.1 남은 일, S0.2 착수)과 서브에이전트 ①·②는 시작하지 못했다. 남은 일은 39h(S0.1 1 + S0.2–S0.8 36 + S1.1 준비 2)이고, 10/31–11/3 용량은 36h(8·9·9·10)라 3h가 넘친다.
-- 10/31이 계획 검토로 끝나 구현이 0h면 11/1 아침에 다시 재기준한다. 관문 사슬(S0.2 → S0.3·S0.4·S0.5·S0.6 → S0.7)과 S1.1 준비 2h(11/4의 S1.1 답변 확인이 그 산출물을 쓴다)는 GP0 안에 두고, S0.8만 11/4로 넘긴다(아래, GP1 컷 표가 받는 3h). 그래도 모자라는 시간(11/1–11/3 용량 28h에 일 36h, 약 8h)은 사용자에게 묻는다: 관문을 하루 미루고 [GP1 §2](GP1-output-guard.md#2-용량-점검) 컷 표를 더 쓸지, 작업 시간을 늘릴지(컷 표의 "둘 다 약 9h → 사용자에게 묻는다"와 같은 규칙).
+- 10/31이 계획 검토로 끝나 구현이 0h면 11/1 아침에 다시 재기준한다. 관문 사슬(S0.2 → S0.3·S0.4·S0.5·S0.6 → S0.7)과 S1.1 준비 2h(11/4의 S1.1 답변 확인이 그 산출물을 쓴다)는 GP0 안에 두고, S0.8만 11/4로 넘긴다(아래, GP1 컷 표가 받는 3h). 그래도 모자라는 시간(11/1–11/3 용량 28h에 일 36h, 약 8h)은 사용자에게 묻는다: 관문을 하루 미루고 [GP1 §2](GP1-output-guard.md#2-용량-점검) 컷 표를 더 쓸지(그러면 GP1이 약 11h(8h + S0.8 3h)를 떠안는데 컷 표는 겹치지 않게 약 6h만 돌려준다), 작업 시간을 늘릴지(컷 표의 "둘 다 약 9h → 사용자에게 묻는다"와 같은 규칙).
 - 그래서 **S0.8(3h)을 11/4(수) 오전으로 넘긴다**(master-plan §5의 여유 밸브, 관문 밖). 이것으로 [GP1 §2](GP1-output-guard.md#2-용량-점검) 컷 표의 "S0.8이 11/4로 밀림" 행(3h)이 발동한다. 그 행의 ①–③을 위에서부터 적용한다. 남은 36h는 용량과 같아 GP0 안에 여유가 없다.
 - S1.1 준비 2h(본인): 청크 고르기, 주입 지침 초안, `build_grounding.py` 골격·테스트. 범위와 산출물은 [GP1 문서](GP1-output-guard.md)가 정한다. S0.5(스키마)와 대체 교재 검토(11/1) 뒤에만 할 수 있다.
 - 임계 경로 S0.2 → S0.3 → S0.6 → S0.7은 미루지 않는다.
@@ -336,7 +336,7 @@ uv run pytest -m live tests/test_llm.py   # 키가 있을 때 로컬에서만
   2. 쓸 때: 직렬화한 줄에서 [§4.4](../master-plan.md#44-설정-configsyaml)의 비밀 환경변수 **전체**의 값(8자 이상)과 `(?i)bearer\s+\S+`, `sk-[A-Za-z0-9_-]{16,}`를 `[REDACTED]`로 바꾼다. 대상은 이름이 `GUARD_LLM_`·`JEV_`·`TUTOR_`로 시작하거나 `GUARD_LOG_HMAC_KEY`인 변수다(`GUARD_LLM_BASE_URL`·`GUARD_LLM_API_KEY`·`JEV_BASE_URL`·`JEV_API_KEY`·`GUARD_LOG_HMAC_KEY`·`TUTOR_*`). 값 목록은 `TraceWriter` 생성 때 한 번 모은다. 모델명(`GEN_MODEL`·`JUDGE_MODEL`)은 비밀이 아니고 `StageResult.model`에 남아야 하므로 뺀다.
 - `_run_stage(stage, fn) -> StageResult`: `perf_counter`로 지연을 잰다. 예외면 `status="error"`, `error=type(e).__name__`, `reason_code="stage_exception"`. 실패 처리는 하지 않는다(§4.2: GR-14 등급표 한 곳). `CancelledError`는 잡지 않는다. 튜터 단계 `retrieve`·`generate`는 시간만 재고 예외는 올린다(S0.2, 생성 실패 처리는 S2.5).
 - 테스트:
-  - 테스트 안에서 만든 가짜 값을 위 변수 모두(`TUTOR_API_TOKEN` 같은 임의 `TUTOR_*` 하나 포함)에 넣고, reason·stage error·input_raw에 값과 `Authorization: Bearer <키>`를 심어 기록 → 파일에 그 값 0건, 모델명은 그대로. 가짜 키 문자열은 테스트 안에서 런타임에 조립한다(`"sk-" + "x" * 20`처럼. 소스에 비밀 모양 문자열이 그대로 있으면 CI gitleaks가 잡는다).
+  - 테스트 안에서 만든 가짜 값을 위 변수 모두(`TUTOR_API_TOKEN` 같은 임의 `TUTOR_*` 하나 포함)에 넣고, reason·stage error·input_raw에 값과 `Authorization: Bearer <키>`를 심어 기록 → 파일에 그 값 0건, 모델명은 그대로. 가짜 값은 테스트 안에서 런타임에 만든다(소스에 비밀 모양 문자열이 그대로 있으면 CI gitleaks가 잡는다). 환경변수 값은 정규식에 걸리지 않는 모양(`secrets.token_hex(12)`)으로 만들어 환경변수 수집이 깨지면 테스트가 실패하게 하고, 정규식 경로는 따로 만든 `"sk-" + "x" * 20` 값 하나로 본다.
   - FakeLLM `ServerError`를 거친 Verdict, S0.3 MockTransport 요청의 Authorization 값 → `LLMResult`·trace 어디에도 없음.
   - 평가 모드는 원문 필드가 있고 서비스 모드는 없다. `output_code` 단계 `detail={"canary": …}`인 Verdict → 평가 모드 레코드에는 그대로 있고, 서비스 모드 레코드에는 키가 없다. `_run_stage`에 10ms 대기 함수 → `latency_ms ≥ 10`, 예외 함수 → `status="error"`, 메시지 없음.
   - `generate` 단계에 토큰을 넣은 Verdict → 레코드 `tokens_*`에 들어가지 않는다.

@@ -1,6 +1,6 @@
 # GP3 통합·평가 — 세부 플랜
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v10 (적대 검토 5회차 반영)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v13 (적대 검토 8회차까지 반영, master v13 기준)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/16(월)–11/20(금, **기능 동결**) · 마일스톤: Guardrail GP3 통합·평가
 
 본문에서 "(→§5)"는 이 문서 §5(master-plan에 반영할 점)를 가리킨다.
@@ -85,7 +85,7 @@ API를 부르는 실행은 한 번에 한 프로세스만 돈다. AIMD 게이트
 
 | 구간 | 쓸 수 있는 시간 | 호출 예상치 | 필요한 r |
 |---|---|---|---|
-| ⓪ 11/17 S3.3 | 11/17 08:00 → 20:00(동결 전), 12h | R_expand 약 9,600 + 기록 실행 약 6,600 + 확인 실행 약 550 ≈ 16,750(S2.8이 없으면 R_expand를 빼 약 7,150) | 약 23회/분 |
+| ⓪ 11/17 S3.3 | 11/17 08:00 → 20:00(동결 전), 12h. S2.8이 넘어오면 R_expand(약 9,600)는 머지(늦으면 12:00) 뒤 8h 안에 돈다 | R_expand 약 9,600 + 기록 실행 약 6,600 + 확인 실행 약 550 ≈ 16,750(S2.8이 없으면 R_expand를 빼 약 7,150) | 약 23회/분(S2.8이 12:00에 머지되면 오후 몫 기준 약 35회/분) |
 | ① ablation 7개 | 11/18 13:00 → 11/19 09:00(밤새 백그라운드), 20h | 약 22,400 | 약 19회/분 |
 | ② 홀드아웃 가드 → 무방비 | 11/19 09:00 → 11/20 09:00, 24h | 약 64,500 | 약 45회/분 |
 | ③ R2·주최측, 지연 c1 | 홀드아웃 `done` 뒤 → 11/20 12:00(비용 표 앞) | 약 2,950 + 지연 200건 | r로 나눈 시간 + 200 × 폭주 시험 요청 p50(지연 실행은 동시성 1) |
@@ -528,7 +528,7 @@ $R --config configs/ablation/no_output.yaml      --data $A/grounding_report.json
 **작업 순서**
 - [ ] 1. 테스트를 먼저 쓴다(실행 가드, 최종 표).
 - [ ] 2. 11/18 12:00 S3.1 판정 → `tutor` 절과 의무 효과 키를 default·unguarded·복사본 전부에 고정(`test_ablation_configs` green) → 허용 목록을 만들어 커밋 → 가드·무방비 실행에 `--estimate`를 붙여 추정을 보고 이슈에 적는다. `tutor` 절이 해시를 바꾸므로 순서를 바꾸지 않는다. `--estimate`는 설정 검증·`check_toggles`·홀드아웃 거부 확인만 하고 `Guard`·`LLM`·튜터 어댑터를 만들지 않아 호출·응답이 없다(의무 탐지도 없음, [master-plan §4.4][mp44]). 모델 환경변수를 허용 목록을 만들 때와 같은 값으로 두고 돌린다(없으면 종료 2, master §4.6). `holdout-runs.json`에도 적지 않아 "1회"에 들지 않는다.
-- [ ] 3. 사전 점검(11/19): 모델 환경변수가 허용 목록을 만들 때와 같음 · 실행할 설정의 `config_hash` ∈ 허용 목록 · S3.4 결과 커밋 · 폭주 시험 통과(하네스 동시성은 통과한 값 이하) · 튜터 확정·의무 기록 · CI green, 작업 트리 깨끗, 커밋 SHA 기록 · 남은 예산 ≥ 11/18 추정 합(§2 예상치 약 64,500. 11/16 처리량 점검에서 무방비를 줄였으면 약 52,800).
+- [ ] 3. 사전 점검(11/19): 모델 환경변수가 허용 목록을 만들 때와 같음 · 실행할 설정의 `config_hash` ∈ 허용 목록 · S3.4 결과 커밋 · 폭주 시험 통과(하네스 동시성은 통과한 값 이하) · 튜터 확정·의무 기록 · CI green, 작업 트리 깨끗, 커밋 SHA 기록 · 남은 예산 ≥ 11/18 추정 합 × 1.2(`--max-calls` 상한과 같게. §2 예상치 약 64,500 → 약 77,400. 11/16 처리량 점검에서 무방비를 줄였으면 약 52,800 → 약 63,400).
 - [ ] 4. 가드 → 무방비 홀드아웃 실행(차례로 각 1회, `--repeat 3`), 위기 장애 재실행(`faults` 전 역할, API 0회). 이 동안 API를 부르는 다른 실행은 돌리지 않는다(§2). 세 실행이 끝나면 `results/holdout-runs.json`을 바로 커밋한다.
 - [ ] 5. 최종 표 → santa 2명 → 둘 다 PASS면 결과 커밋. ADR-0006 해석 추가를 같은 PR에 넣는다.
 - [ ] 6. 발견 사항은 1회 규칙대로 기록한다. 다시 돌리지 않는다.
@@ -624,7 +624,7 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 
 **작업 순서**
 - [ ] 1. 집계 테스트를 먼저 쓴다.
-- [ ] 2. 월: 폭주 시험, 동시성 20과 50, 각 `data/dev/benign_burst300.jsonl`(정상 300 고정 표본, S2.7과 같은 파일). 시작 전에 `--set gate.initial=<11/12 공지 동시성 한도의 절반, 없으면 8>`로 둔다(초기 한도 4에서 AIMD가 오르기 전에 50개 요청의 대기가 `gate.max_wait_s` 30s를 넘어 게이트 때문에 `fallback_infra`가 나는 것을 막는다). 홀드아웃 실행은 추정 × 1.2를 상한으로 준다(재시도·형식 재요청이 겹쳐 1.1배를 넘으면 예산 중단으로 다시 돌아야 해서). 실패하면 게이트 값을 조정해 다시 돈다(조건부, 실행마다 예상치 1,650. §2 합계에는 한 번만 넣었다). 그래도 실패하면 직렬 모드와 비교하고 하네스 동시성을 통과한 값으로 고정한다.
+- [ ] 2. 월: 폭주 시험, 동시성 20과 50, 각 `data/dev/benign_burst300.jsonl`(정상 300 고정 표본, S2.7과 같은 파일). 시작 전에 `--set gate.initial=<11/12 공지 동시성 한도의 절반, 없으면 8>`로 둔다(초기 한도 4에서 AIMD가 오르기 전에 50개 요청의 대기가 `gate.max_wait_s` 30s를 넘어 게이트 때문에 `fallback_infra`가 나는 것을 막는다). 실패하면 게이트 값을 조정해 다시 돈다(조건부, 실행마다 예상치 1,650. §2 합계에는 한 번만 넣었다). 그래도 실패하면 직렬 모드와 비교하고 하네스 동시성을 통과한 값으로 고정한다.
 - [ ] 2-1. 월 저녁: 통과한 동시성 실행의 trace로 분당 호출 수 r을 재고 §2 처리량 점검 표로 필요 시간과 쓸 수 있는 시간을 비교한다. 11/17 S3.3 구간도 함께 본다. 모자라면 줄일 것(11/17은 기록 실행 고정 표본 300·300, 11/18 뒤는 ablation 고정 부분집합 → 홀드아웃 무방비 반복 1회, 가드 실행은 그대로)을 이슈에 적는다.
 - [ ] 3. 목, 홀드아웃 세 실행이 `done`이 된 뒤: 동시성 1 지연 실행, R2 실행(`data/dev/grounding_r2.jsonl`). 홀드아웃과 겹쳐 돌리면 게이트가 따로라 `fallback_infra`와 p95가 흐려진다(§2).
 - [ ] 4. 금 오전: 홀드아웃 가드 실행 trace로 비용 표를 만들고 합격선 대비 판정을 적는다.
@@ -642,10 +642,11 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 uv run pytest tests/test_cost_latency.py
 R="uv run python -m guardrail.eval.run"; B=data/dev/benign_burst300.jsonl
 # 줄마다 두 번: 먼저 --estimate, 그다음 --max-calls <추정 이상>
-$R --config configs/default.yaml --data $B --name burst-c20 --concurrency 20 --estimate
-$R --config configs/default.yaml --data $B --name burst-c20 --concurrency 20 --max-calls <추정 이상>
-$R --config configs/default.yaml --data $B --name burst-c50 --concurrency 50 --estimate
-$R --config configs/default.yaml --data $B --name burst-c50 --concurrency 50 --max-calls <추정 이상>
+G="--set gate.initial=<11/12 동시성 한도의 절반, 없으면 8>"
+$R --config configs/default.yaml --data $B --name burst-c20 --concurrency 20 $G --estimate
+$R --config configs/default.yaml --data $B --name burst-c20 --concurrency 20 $G --max-calls <추정 이상>
+$R --config configs/default.yaml --data $B --name burst-c50 --concurrency 50 $G --estimate
+$R --config configs/default.yaml --data $B --name burst-c50 --concurrency 50 $G --max-calls <추정 이상>
 $R --config configs/default.yaml --data data/dev/latency.jsonl --name latency-c1 --concurrency 1 --estimate
 $R --config configs/default.yaml --data data/dev/latency.jsonl --name latency-c1 --concurrency 1 --max-calls <추정 이상>
 $R --config configs/default.yaml --data data/dev/grounding_r2.jsonl --name r2-on --set stages.output.r2=true --estimate
@@ -663,7 +664,7 @@ $R --config configs/default.yaml --data $B --name burst-serial-c20 --concurrency
 - [ ] 평가 전 실제 게이트웨이로 폭주 시험(수백 건, 동시성 20–50)을 했고 정상 질문 `fallback_infra` ≤1%다([GR-14][gr14]). 동시성 조건을 함께 적었다([PRD §7][prd7]).
 - [ ] 요청당 비용·지연 표가 있다([GR-15][gr15]). 요청당 가드 토큰·호출 수를 적었다([PRD §6][prd6]).
 - [ ] 단계별 p50·p95. 입력 판정 p95 ≤1.5s([GR-04][gr04]), 코드 단계 ≤50ms, 출력 판정 p95 ≤1.5s([GR-08][gr08]), 첫 문장 표시 p95 ≤5s(튜터와 공동 목표)([PRD §6][prd6]). 미달이면 원인 단계를 적는다.
-- [ ] R2·전환 재생성 경로 지연을 따로 집계했다([PRD §6][prd6]). R2 발생률(GP1 S1.7 정의: 실행 A trace의 `report` 정상 답변 중 R2 조건에 걸린 비율) ≤15%([GR-09][gr09]). `report` 전체 비율은 참고. `grounding_r2.jsonl` 실행은 지연만 낸다. GP1 실행 D를 미뤘으면 이 R2 실행으로 그 몫을 채웠다.
+- [ ] R2·전환 재생성 경로 지연을 따로 집계했다([PRD §6][prd6]). R2 발생률(GP1 S1.7 정의: 실행 A trace의 `report` 정상 답변 중 R2 조건에 걸린 비율) ≤15%([GR-09][gr09]). `report` 전체 비율은 참고. 실생성 trace(S2.7 `eval_strat1000`, 홀드아웃 가드 실행)의 정상 답변 중 R2 조건 비율도 참고로 여기서 적는다(GP1 S1.7이 넘긴 몫). `grounding_r2.jsonl` 실행은 지연만 낸다. GP1 실행 D를 미뤘으면 이 R2 실행으로 그 몫을 채웠다.
 - [ ] 버린 생성 비율을 수와 문자 수 두 가지로 적었고, PRD §6 낭비 행을 이 정의로 고쳤다([PRD §6][prd6], [master-plan §13][mp13] v8).
 - [ ] 게이트웨이가 동시성을 제한하면 직렬 모드와 비교했다([ADR-0007][adr7]).
 

@@ -40,7 +40,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       # 실제 LLM API는 부르지 않는다(키 없음). live 표시 테스트는 로컬에서만 돈다.
-      - run: uv run pytest --cov=guardrail --cov-report=term-missing
+      - run: uv run pytest --cov=guardrail --cov-report=term-missing --cov-fail-under=80
 
   secrets:
     name: guardrail / secret scan

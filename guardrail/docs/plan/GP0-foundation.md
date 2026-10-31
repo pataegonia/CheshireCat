@@ -328,7 +328,7 @@ uv run pytest -m live tests/test_llm.py   # 키가 있을 때 로컬에서만
   - 조인은 요청 레코드끼리 한다. S2.1의 위기 알림(`record_type: "alert"`)과 S2.3의 이의(`record_type: "appeal"`) 레코드는 같은 `request_id`를 가리키지만 `record_type`으로 빼고 센다(§4.5).
 - 서비스 모드는 원문 필드를 넣지 않는다. `user_hmac`·`grade_band`는 S2.3이 `make_record`의 `session`(user_id·grade_band)으로 채운다. 서비스 모드에서는 `Guard`가 호출 끝(`_finalize` 뒤)에서 `Verdict.request_id`로 레코드와 alert 레코드를 직접 쓴다(§4.5 v10 "서비스 모드 기록 주인", S2.3). 평가 모드는 하네스가 평가 id로 쓴다.
 - `StageResult.detail`에는 원문을 넣지 않는다(문장 번호·라벨·점수만, §4.5). 예외는 하나다: 평가 모드에서 `output_code` 단계 `detail["canary"]`에 그 요청의 카나리아를 남긴다(S1.2가 채우고, 하네스가 `canary_leaked` 채점에 읽는다). 서비스 모드에서는 남기지 않는다. `make_record`가 서비스 모드면 이 키를 지운다.
-- `make_record(request_id, verdict, cfg, *, session=None, input_raw=None, displayed_output=None) -> dict`, `TraceWriter(path).write(record)`: JSON 한 줄(`ensure_ascii=False`)을 덧붙이고 flush.
+- `make_record(request_id, verdict, cfg, *, session=None, input_request_id=None, input_raw=None, displayed_output=None) -> dict`(`input_request_id`는 방식 B `check_output()` 서비스 레코드가 입력 레코드와 잇는 데 쓴다, S2.3. 그 레코드의 토큰 합계는 복사해 온 입력 단계를 빼고 센다), `TraceWriter(path).write(record)`: JSON 한 줄(`ensure_ascii=False`)을 덧붙이고 flush.
   - `session: Session | None`은 S2.3이 `user_hmac`·`grade_band`에 쓸 인자를 지금 둔 것이다(§4.5 v10, 서명을 뒤에 바꾸지 않게). 평가 모드는 무시한다.
 - 키 차단 두 겹:
   1. 만들 때: `StageResult.error`에는 `LLMResult.error` 코드나 예외 클래스 이름만 넣는다. `str(e)`는 어디에도 넣지 않는다.
@@ -398,6 +398,7 @@ uv run pytest tests/test_trace.py
   - **같은 분할 안**: 키 `(seed_id, technique, text(item))`가 같으면 먼저 나온 하나만 남긴다. 같은 씨앗의 우회 표기 변형은 technique가 달라 남는다.
   - **분할 사이**: `seed_id`가 같거나 `text(item)`이 같은 항목이 dev와 holdout에 함께 있으면 **dev 쪽을 지운다**. 둘 중 하나만 맞아도 지운다. 번역본이 달라도 영어 원문이 같으면 씨앗이 같아 여기서 걸린다. 지운 쌍의 남긴 id는 맞은 홀드아웃 항목의 id다.
   - **예외(dev 고정)**: 겹친 dev 항목이 `fixed_dev`에 있으면 **홀드아웃 쪽을 지운다**(이미 본 글이 홀드아웃에 남지 않게). 쌍은 (홀드아웃 id, dev 고정 id)다. 순서: 먼저 dev 고정과 겹친 홀드아웃 항목을 지우고, 남은 홀드아웃으로 위 규칙을 적용한다. 두 방향 모두 지운 개수는 S2.0이 MANIFEST에 따로 적는다.
+  - 테스트: 같은 씨앗·같은 질문에 답만 다른 `grounding` 두 항목은 둘 다 남는다(키에 `answer`, master §4.6).
 
 스모크 구성(서브에이전트 ① 지시서. 대체 교재 단원(S0.6)에 맞추고, 범주는 [R3](../research/R3-student-specific-guardrails.md)의 S0–S14):
 

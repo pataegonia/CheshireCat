@@ -41,7 +41,7 @@
 
 | 날짜 | 할 일 | 슬라이스 | 시간 |
 |---|---|---|---|
-| 11/21(토) | `figures.py`·테스트, 표·차트 생성. 데모 후보 스캔(서브에이전트), `demo.py`·테스트 | S4.2 4h, S4.1 2h | 6h |
+| 11/21(토) | GP4 슬라이스 이슈 생성(master §11 "Phase 시작 때"). `figures.py`·테스트, 표·차트 생성. 데모 후보 스캔(서브에이전트), `demo.py`·테스트 | S4.2 4h, S4.1 2h | 6h |
 | 11/22(일) | 후보 안정성 확인(3회 반복, 지표 아님), 녹화본 기록·커밋 전 원문 확인, **리허설 1**. 자체 세트 공개 여부 결정(S4.4 1단계). 운영 사양 1쪽. S4.5를 돌리고 있으면 24:00에 멈춤 | S4.1 2h, S4.3 3h | 5h |
 | 11/23(월) | **18:00 수치 동결**(`figures --check` → PR 머지 → 머지 커밋 SHA를 `results/FROZEN.txt`에 기록(태그는 팀 공용 이름공간이라 만들지 않는다)). 보고서 초안, santa 리뷰어 2명 병렬 시작 | S4.4 3h | 3h |
 | 11/24(화) | santa 지적 수정, humanize-korean, 숫자 대조. **리허설 2**(발표 장비·네트워크 조건). 넘길 자료 경로를 리더에게 공유 | S4.4 1h, S4.1 1h | 2h |
@@ -331,7 +331,7 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 | P3 집계 | 힌트 남용 비율, 사용 시간 | 주간 요약 | 없음 |
 
 - 공통: 교사에게는 플래그 단위로만 보이고 전체 대화 열람은 기본으로 끈다. 경찰 연계는 자동화하지 않는다(REQ-28). 학대 신호는 보호자에게 자동으로 알리지 않는다(REQ-29).
-- 가드가 내는 것은 위기 응답(최종 `action == "crisis"`)마다 trace에 쓰는 알림 레코드(`record_type: "alert"`, `{request_id, ts, crisis_tier, category}`, S2.1)까지다. 평가·서비스 모드 모두, 장애 중에도 쓴다. 서비스 모드에서는 `Guard`가 직접 쓰고 `request_id`는 `Verdict.request_id`다. 이의 제기도 같은 id로 `trace.record_appeal`이 표시한다(S2.3, [master-plan §4.5](../master-plan.md#45-trace-tracepy)). 위기가 아닌 행(S2·S7·S10·S14 반복, 힌트 남용 등)에는 가드가 알림 레코드를 쓰지 않는다. P0–P3로 나누는 일, 전달, 교사 대시보드는 서비스 몫이다(PRD §2 비목표).
+- 가드가 내는 것은 위기 응답(최종 `action == "crisis"`)마다 trace에 쓰는 알림 레코드(`record_type: "alert"`, `{request_id, ts, crisis_tier, category}`, S2.1)까지다. 평가·서비스 모드 모두, 장애 중에도 쓴다. 서비스 모드에서는 `Guard`가 직접 쓰고 `request_id`는 `Verdict.request_id`다. 이의 제기도 같은 `Verdict.request_id`로 `Guard.record_appeal(request_id, message)`가 표시한다(S2.3, [master-plan §4.5](../master-plan.md#45-trace-tracepy)). 위기가 아닌 행(S2·S7·S10·S14 반복, 힌트 남용 등)에는 가드가 알림 레코드를 쓰지 않는다. P0–P3로 나누는 일, 전달, 교사 대시보드는 서비스 몫이다(PRD §2 비목표).
 
 **검증**
 ```bash

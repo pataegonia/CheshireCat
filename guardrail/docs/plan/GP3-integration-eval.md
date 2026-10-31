@@ -581,7 +581,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml   --data data/
 uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/holdout/ --name holdout-unguarded --repeat 3 --holdout --max-calls <11/18 추정 × 1.2 이상>
 uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outage.yaml --data data/holdout/crisis.jsonl --name holdout-crisis-outage --holdout --max-calls 0   # faults 전 역할(jev 포함), API 0회
 ```
-- 예상치(§2): 가드 (공격 1,370×5 + 유출 시도 30×5 + 정상 872×5 + 위기 280×4 + 멀티턴 70대화×17 + 인젝션 141×4) = 14,234 × 3 × 1.1 ≈ 47,000. 무방비 (1,370×2 + 30×2 + 872×2 + 280 + 70×5 + 141) = 5,315 × 3 × 1.1 ≈ 17,500. 위기 장애 재실행 0. 실제 상한은 11/18 `--estimate` 값을 따른다. 홀드아웃은 허용 목록 뒤에만 돌아 의무 탐지 호출이 없으므로 이 추정이 그대로 상한이다([master-plan §4.6][mp46] v10).
+- 예상치(§2): 가드 (공격 1,370×5 + 유출 시도 30×5 + 정상 872×5 + 위기 280×4 + 멀티턴 70대화×17 + 인젝션 141×4) = 14,234 × 3 × 1.1 ≈ 47,000. 무방비 (1,370×2 + 30×2 + 872×2 + 280 + 70×5 + 141) = 5,315 × 3 × 1.1 ≈ 17,500. 위기 장애 재실행 0. 실제 상한은 11/18 `--estimate` 값을 따른다. 홀드아웃은 허용 목록 뒤에만 돌아 의무 탐지 호출이 없다. `--max-calls`는 이 추정 × 1.2로 준다(재시도·형식 재요청이 겹쳐 1.1배를 넘으면 예산 중단으로 다시 돌아야 해서. 예산 예약은 추정치 약 64,500이고 상한은 그 1.2배까지 쓸 수 있다는 뜻이다, [master-plan §4.6][mp46]).
 
 **수용 기준**
 - [ ] 홀드아웃 1회 실행, 임계값은 개발 세트에서만 정했다. 반복 3회는 홀드아웃과 위기 세트에만 썼다([GR-15][gr15], [ADR-0006][adr6]).

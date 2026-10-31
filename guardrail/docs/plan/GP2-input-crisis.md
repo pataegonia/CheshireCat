@@ -122,7 +122,7 @@
 | `canary_leak.jsonl` | S1.7의 30(이미 본 항목이라 `split: dev` 고정) + J9 새 씨앗의 dev 몫 | J9 새 씨앗의 holdout 몫(약 30) |
 
 - 분할: 공개 세트는 [PRD §8][p8]대로 출처 통째로 한쪽에 둔다. 자체 세트는 S0.5 `assign_split()` 하나만 쓴다(씨앗 해시로 약 30%가 holdout, 세트마다 비율을 바꾸지 않는다). 목표에 모자라면 시드를 더 만든다. `assign_split()`은 기존 씨앗의 배정을 바꾸지 않는다.
-- 이미 본 항목은 dev 고정(master §4.6): S1.7이 11/10까지 머지되지 않았으면 `fixed_dev`는 스모크만으로 돌고, S1.7 머지 뒤 봉인 전이면 다시 돌린다(봉인 뒤면 `canary_leak` 30건은 쓰지 않는다). 봉인 전에 실행·분석한 S1.7 `canary_leak.jsonl`은 `split: dev`로 두고 `assign_split()`을 거치지 않는다. GP0 스모크 세트(`data/seed/smoke_*`)도 GP0 베이스라인에서 이미 본 항목이다. 스모크 id는 GP0 S0.5가 `smk-` 접두어로 둔다(예: `smk-atk-0001`). 그래서 S2.0 자체 세트의 `atk-0001` 같은 id와 겹치지 않고, `fixed_dev`에 스모크 id를 넣어도 자체 세트 항목이 dev 고정으로 잘못 잡히지 않는다. 홀드아웃 유출 항목은 J9 새 씨앗을 `assign_split()`에 넣어 만든다. 중복 제거는 이 둘의 id(`canary_leak.jsonl` id + `smk-…` id)를 `dedupe(items, fixed_dev=...)`(GP0 S0.5)에 넘겨, 겹치는 홀드아웃 사본을 예외로 **홀드아웃 쪽에서** 지운다(이미 본 글이 홀드아웃에 남지 않게, master §4.6). 스모크 항목은 비교용으로만 `items`에 넣고 dev 파일에는 쓰지 않는다.
+- 이미 본 항목은 dev 고정(master §4.6): `canary_leak.jsonl`은 S1.3(11/5)이 만들므로 S1.7 머지와 무관하게 늘 `fixed_dev`에 넣는다. S1.1 근거·인용 세트의 학생 질문도 S1.7에서 이미 실행·분석했으므로 비교용으로 `items`에 넣고 그 id를 `fixed_dev`에 넣는다(dev 파일에는 쓰지 않음, J7 정상 질문과 같은 교재라 겹칠 수 있다). 봉인 전에 실행·분석한 S1.7 `canary_leak.jsonl`은 `split: dev`로 두고 `assign_split()`을 거치지 않는다. GP0 스모크 세트(`data/seed/smoke_*`)도 GP0 베이스라인에서 이미 본 항목이다. 스모크 id는 GP0 S0.5가 `smk-` 접두어로 둔다(예: `smk-atk-0001`). 그래서 S2.0 자체 세트의 `atk-0001` 같은 id와 겹치지 않고, `fixed_dev`에 스모크 id를 넣어도 자체 세트 항목이 dev 고정으로 잘못 잡히지 않는다. 홀드아웃 유출 항목은 J9 새 씨앗을 `assign_split()`에 넣어 만든다. 중복 제거는 이 둘의 id(`canary_leak.jsonl` id + `smk-…` id)를 `dedupe(items, fixed_dev=...)`(GP0 S0.5)에 넘겨, 겹치는 홀드아웃 사본을 예외로 **홀드아웃 쪽에서** 지운다(이미 본 글이 홀드아웃에 남지 않게, master §4.6). 스모크 항목은 비교용으로만 `items`에 넣고 dev 파일에는 쓰지 않는다.
 - 씨앗: 자체 제작은 원 요청 하나가 씨앗 하나다. 번역 세트(J1·J2, K-OverRefusal)는 `seed_id`를 영어 원문 정규화본의 해시로 둔다. 그래서 같은 원문에서 나온 StrongREJECT 항목과 K-OverRefusal unsafe 항목은 한 씨앗이다. K-OverRefusal이 영어 원문을 주지 않으면 한국어 정규화본 해시로 두고 한계로 적는다.
 - 중복 제거: S0.5 `dedupe()` 하나만 쓴다(같은 분할 안 키 중복은 하나만. 분할 사이는 `seed_id`가 같거나 학생 턴 정규화본이 같으면 dev 쪽을 지우고 개수를 MANIFEST에. `fixed_dev`(S1.7 `canary_leak.jsonl` id와 `data/seed/smoke_*`의 `smk-…` id)와 겹칠 때만 예외로 홀드아웃 쪽을 지운다, master §4.6). 그래서 같은 `seed_id`가 dev(OR-Bench 번역)와 holdout(K-OverRefusal)에 함께 오면 dev의 OR-Bench 항목이 지워진다. J1을 400건 번역하는 것도 이 손실을 감안한 것이다.
 - 정상 학생 질문: dev 몫을 씨앗 id 순으로 번갈아 A·B 고정 표본으로 나눈다(τ_J 정하기·확인용, 분할이 아니라 dev 안의 두 묶음). 900개 중 dev 몫 약 630이라 A·B 각 ≥300.
@@ -266,7 +266,7 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 
 **작업 순서**
 - [ ] 1. S2.0 우회 회귀 세트에 규칙 어휘 대상이 종마다 들었는지 확인(모자라면 S2.0 변형기로 보충, 코드 역변환)
-- [ ] 2. `test_gr01_acceptance.py`(회귀 100%, hypothesis, 수학·코드 200건, p95), `test_rules.py`(차단 → `refuse`와 어휘 파일의 범주, 플래그는 절대 `refuse` 아님, ADR-0001 경계 회귀)
+- [ ] 2. `test_gr01_acceptance.py`(회귀 100%, hypothesis, 수학·코드 200건, p95), `test_rules.py`(차단 → `refuse`와 어휘 파일의 범주, 플래그는 절대 `refuse` 아님, ADR-0001 경계 회귀, `rules_block.txt`의 S8 패턴은 모두 ② 위기 어휘에도 걸린다 — ③ S8 차단은 늘 위기 플래그와 함께 와서 `_finalize`가 위기 템플릿으로 바꾼다, ③은 ⑤ 전에 끝나므로 이것이 그루밍 신호의 유일한 안전판이다)
 - [ ] 3. `rules.py`·어휘 구현, ③ 연결: 차단이면 생성 없이 block Verdict(`action="refuse"`, `response`는 `resources/templates.yaml`의 `output.safe`. 이 파일은 S1.3이 `output.safe`만 담아 처음 만들고 S1.6이 늘린다. 범주별 거절 문구는 S2.6이 `render()`로 바꾼다)를 돌려준다. `_finalize`는 부르지 않는다(위기 덮어쓰기는 S2.1이 `respond()`·`check_input()`·`check_output()` 세 경로 끝에 건다. 방식 B에서 ③ 차단은 `check_input()` 응답이 최종이다)
 
 **세부 설계**
@@ -565,7 +565,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
 **작업 순서**
 - [ ] 1. 테스트: 모든 (action, category)에 문구 있음, 점수·규칙·범주 코드(`S\d`, `C\d`, 소수) 노출 0, 금지 표현(S1.3 목록) 0, 번호 하드코딩 0, 두 문장 이내
 - [ ] 2. 문구 작성(최연소 기준 어조, 훈계 없음) → `humanize-korean`
-- [ ] 3. 범주별 표본 각 ≥10건 생성 → 체크리스트 검토. ⑤가 아직 없으므로 거절·경계는 `render()` 결과를, 전환·부분은 dev 항목(범주 라벨 기준)에 `instruction()`을 붙여 모의 튜터 `generate(instruction=)`로 만든 답을 표본으로 쓴다
+- [ ] 3. 범주별 표본 각 ≥10건 생성 → 체크리스트 검토. ⑤가 아직 없으므로 거절·경계는 `render()` 결과를, 전환·부분은 dev 항목(범주 라벨 기준)에 `instruction()`을 붙여 모의 튜터 `generate(instruction=)`로 만든 답을 표본으로 쓴다(모듈 전용 CLI `python -m guardrail.templates sample --max-calls 60`, 생성 약 5범주 × 10건 × 1.1. 하네스와 같이 `LLM(max_calls=)`가 막고 호출 수를 예산표의 GP2 몫에 더한다)
 
 **세부 설계**
 - 대상: `refuse`(S2, S7, S8, S9, S10 혐오 생성, S11 타인 정보, S14, default), `redirect`(S1, S2, S4, S12), `partial`(S3), `boundary`(S12 페르소나·애정 역할극).
@@ -630,7 +630,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
   5. 인젝션: `injection.jsonl` 약 330건 × (생성·⑤·⑧·재생성 4, 채점은 코드) → 예상치 약 1,450
   - 합계 예상치 약 11,100호출. 예산이 모자라면 1·2(관문)부터 하고, 3은 더 작은 고정 표본으로 줄이고 크기를 적는다. 4·5는 `--fake`로 코드를 확인했으면 실제 실행을 S2.8·S2.9의 켬/끔 실행이나 S3.5로 미뤄도 된다.
 - 폭주는 모의만 한다: `tests/test_burst.py`(pytest). 동시성 20·50은 제공 부하, 곧 동시에 진행 중인 `respond()` 호출 수다(하네스 `--concurrency`와 같은 뜻, LLM 게이트 한도와 별개). 정상 질문 300건(테스트가 코드로 만든다. CI에는 gitignore인 dev 파일이 없고, 응답이 고정이라 글 내용은 결과에 영향이 없다)을 그 동시성으로 `respond()`에 넣고, 모든 LLM 호출(⑤·생성·⑧)은 `FakeGateway(capacity=8, latency)`(capacity를 넘으면 `RateLimited`)를 지난다.
-  - **실제 시계, 시간 1/100 배율**: `FakeClock`은 쓰지 않는다. `FakeClock`에서는 동시에 잠든 호출의 `sleep`이 겹치지 않고 더해지는데 게이트 대기는 이벤트 루프의 실제 시간이라, 대기가 겹치는 상황이 재현되지 않고 보내는 시간 마감도 부풀려진다. 그래서 실제 시계로 돌리고 모든 시간을 설정으로 1/100로 줄인다: `FakeGateway` 지연 0.008s(실제 약 0.8s), `deadlines_s`의 모든 역할(예: `input_judge` 0.025s)과 `gate.max_wait_s`(0.3s)를 `Guard.from_config(..., overrides=)`로 같은 배율로 덮고, `RateLimited`의 `retry_after`도 0.008s로 준다(재시도 대기도 같은 배율). `gate.initial`은 `FakeGateway` 용량과 같은 8로 둔다(초기 한도 4면 처음 대기가 0.3s 상한에 가까워 단언이 흔들린다). 배율은 테스트 상수 하나(`SCALE = 0.01`)다. 테스트는 동시성 하나에 약 1s(900호출 ÷ 초당 최대 1,000호출), 두 동시성 합쳐 약 2s에 끝나 CI에 그대로 둔다.
+  - **실제 시계, 시간 1/100 배율**: `FakeClock`은 쓰지 않는다. `FakeClock`에서는 동시에 잠든 호출의 `sleep`이 겹치지 않고 더해지는데 게이트 대기는 이벤트 루프의 실제 시간이라, 대기가 겹치는 상황이 재현되지 않고 보내는 시간 마감도 부풀려진다. 그래서 실제 시계로 돌리고 모든 시간을 설정으로 1/100로 줄인다: `FakeGateway` 지연 0.008s(실제 약 0.8s), `deadlines_s`의 모든 역할(예: `input_judge` 0.025s)과 `gate.max_wait_s`(0.3s)를 `Guard.from_config(..., overrides=)`로 같은 배율로 덮고, `RateLimited`의 `retry_after`도 0.008s로 준다(재시도 대기도 같은 배율). `gate.initial`과 `gate.max`는 둘 다 `FakeGateway` 용량과 같은 8로 둔다(초기 한도 4면 처음 대기가 0.3s 상한에 가깝고, max가 16이면 AIMD가 9로 올라 429 뒤 4로 반감돼 단언이 흔들린다). 배율은 테스트 상수 하나(`SCALE = 0.01`)다. 테스트는 동시성 하나에 약 1s(900호출 ÷ 초당 최대 1,000호출), 두 동시성 합쳐 약 2s에 끝나 CI에 그대로 둔다.
   - 단언은 둘이다. 실제 시계라 둘 다 실제로 겹친 대기를 잰다.
     1. 정상 질문 `fallback_infra` ≤1%(AIMD가 지킨다).
     2. ⑤ 시간 초과 0: 호출 마감(`deadlines_s`)은 게이트 허가 뒤부터 재고, 게이트 대기는 시도마다 따로 `gate.max_wait_s`까지 기다린다(master §4.3). 그래서 대기가 그 안이면 ⑤가 생성 호출 뒤에 줄을 섰다는 이유만으로 `timeout`이 되지 않는다. `input_judge` 단계 `error="timeout"` 0건을 단언한다.
@@ -743,7 +743,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_session.yaml --
 이 슬라이스는 datamarking, 링크·이미지 허용 목록, 색인 스캔만 가진다. 인젝션 성공 채점은 P0 S2.7이다(master §4.7 v4).
 
 **만들거나 바꿀 파일**
-- `src/guardrail/retrieval_guard.py`: `guard_retrieval(chunks, nonce) -> list[Chunk]`, `SYSTEM_NOTE`, `filter_links(answer, allow) -> tuple[str, int]`, `scan(chunks)` + CLI `python -m guardrail.retrieval_guard scan <chunks.jsonl>`
+- `src/guardrail/retrieval_guard.py`: `guard_retrieval(chunks, nonce) -> list[Chunk]`(모듈 함수. 공개 `Guard.guard_retrieval(chunks)`가 호출마다 nonce를 만들어 넘기므로 방식 B 튜터는 nonce를 다루지 않는다), `SYSTEM_NOTE`, `filter_links(answer, allow) -> tuple[str, int]`, `scan(chunks)` + CLI `python -m guardrail.retrieval_guard scan <chunks.jsonl>`
 - `resources/link_allowlist.txt`(기본: 1388.go.kr, d4u.stop.or.kr + 교재 도메인), `resources/lexicons/injection.txt`
 - `src/guardrail/pipeline.py`: 표시한 청크는 생성에만, 원본 청크는 ⑦·사전 필터·⑧에 · `tests/test_retrieval_guard.py`
 - `configs/default.yaml`: `stages.retrieval.enabled: true`(이 PR에서 켬) · `configs/ablation/no_retrieval.yaml`(S3.4와 같은 이름, default 복사 + `stages.retrieval.enabled: false`)
@@ -807,7 +807,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 - τ_m: dev 멀티턴에서 공격 차단율이 가장 높으면서 정상 추가 오차단 ≤1%p인 값([GR-05][gr05] 한도). S2.8이 잘렸으면 τ_m = τ_J(중간 구간 없음).
 - 비교표(dev 공격 ≥100 + dev 정상): 행 ⑤ 단독(`jev: false`) / Jev 단독(`judge: false, jev: true`) / 역할 분담. 열 차단율(CP 하한), 과잉 거절, p50·p95 지연, 토큰·비용, 호출 수. 돌려 말한·인코딩 공격 열을 따로 둔다. 홀드아웃에서는 τ_J·τ_m을 바꾸지 않는다.
 
-**검증**: `uv run pytest tests/test_jev.py`, 로컬에서 `JEV_API_KEY`가 있을 때만 `uv run pytest -m live tests/test_jev.py`
+**검증**: `uv run pytest tests/test_jev.py`, 로컬에서 `JEV_API_KEY`가 있을 때만 `uv run pytest -m live tests/test_jev.py`. τ_J·비교표 실행은 하네스 두 단계(master §4.7)로 돈다: `--config configs/exp/jev-only.yaml`(`stages.input.judge: false, jev: true`, `thresholds.tau_J: 1.01`로 점수만 기록) `--data data/dev/benign_student_a.jsonl --data data/dev/benign_student_b.jsonl --estimate` → `--max-calls <추정 이상>`. 그 trace의 Jev 점수로 τ_J를 고르고, 비교표의 세 행(⑤ 단독 = `default.yaml` + `--set stages.input.jev=false`, Jev 단독 = `jev-only.yaml`에 τ_J 적용, 역할 분담 = `default.yaml`)을 dev 공격 ≥100 + dev 정상으로 같은 방식으로 돈다
 
 **수용 기준**
 - [ ] 사용 전제 4개를 점검해 기록, 하나라도 빠지면 `jev: false`와 이유를 PRD §10·ADR-0008에 적음([ADR-0008][a8])

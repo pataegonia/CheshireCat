@@ -1,6 +1,6 @@
 # GP1 출력 가드 — 세부 플랜
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v15 (적대 검토 10회차까지 반영, master v15 기준)
+작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
 상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/4(수)–11/9(월) · 마일스톤: Guardrail GP1 출력 가드
 
 [GR-01]: ../PRD.md#gr-01-전처리-p0
@@ -262,7 +262,7 @@ uv run pytest tests/test_preprocess.py tests/test_match.py tests/test_output_che
 - 띄어쓰기 없는 "17시발표"는 조각 하나라 엄격 규칙도 인정한다(ADR 규칙의 한계) → S2.2에서 2음절 어휘를 넣을 때 수식·코드 정상 200건 회귀로 막는다.
 - `hypothesis`가 dev 의존성에 없다(master-plan §4.8에는 있음) → GP0에서 안 넣었으면 여기서 넣는다.
 
-**결정(2026-10-31, master-plan §13)**: 카나리아와 ⑦ 시스템 프롬프트 문장(10자 이상, S1.3)만 경계를 넘는 매칭을 인정한다(`cross_ok=True`). 엄격 규칙은 `abcdefgh ijklmnopx`처럼 마지막 조각에 글자를 붙여 쪼갠 유출을 놓치고, 무작위 라틴 16자가 정상 문장에 우연히 걸릴 확률은 사실상 0이라 엄격 규칙의 이득이 없다. 이 사례를 회귀 테스트로 고정하고, S1.2 PR에서 [ADR-0001](../adr/0001-korean-normalization-skeleton-view.md) 매칭 규칙 표의 카나리아 행을 고친다.
+**결정(2026-10-31, master-plan §13)**: ③·⑦의 결정적 차단 매칭 가운데서는 카나리아와 ⑦ 시스템 프롬프트 문장(10자 이상, S1.3)만 경계를 넘는 매칭을 인정한다(`cross_ok=True`. ② 위기는 원래 경계를 넘는다, ADR-0001 위기 행). 엄격 규칙은 `abcdefgh ijklmnopx`처럼 마지막 조각에 글자를 붙여 쪼갠 유출을 놓치고, 무작위 라틴 16자가 정상 문장에 우연히 걸릴 확률은 사실상 0이라 엄격 규칙의 이득이 없다. 이 사례를 회귀 테스트로 고정하고, S1.2 PR에서 [ADR-0001](../adr/0001-korean-normalization-skeleton-view.md) 매칭 규칙 표의 카나리아 행을 고친다.
 
 ### S1.3 출력 코드 검사 ⑦
 
@@ -629,21 +629,21 @@ uv run python -m guardrail.eval.run --config configs/unguarded.yaml --set stages
 |---|---|---|---|---|---|
 | 1 | 카나리아·시스템 프롬프트 문장 유출(⑦) | 차단 | block / refuse | `canary_leak`·`system_prompt_leak` | `output.safe` |
 | 2 | harm 또는 prompt_leak | R0 | block / refuse | `r0_harm`·`r0_prompt_leak` | `output.safe` |
-| 3 | answer_leak | R0 | block / redirect | `r0_answer_leak` | `output.safe`(S2.6에서 전환 문구로) |
+| 3 | answer_leak | R0 | block / redirect | `r0_answer_leak` | `output.safe`(S2.6이 `render("redirect", "S2")`로 바꾼다) |
 | 4 | ⑧ 실패 + 자동 통과 문장 있음 | ⑧ 실패 | modified / allow | `judge_fail_partial` | `output.judge_fail` + 자동 통과 문장 + 연락처 줄, `fallback_infra=True` |
 | 5 | ⑧ 실패 + 자동 통과 문장 없음 | ⑧ 실패 | block / refuse | `judge_fail_guidance` | `output.guidance` + 연락처 줄, `fallback_infra=True` |
 | 6 | 위반 아님 | 통과 | pass / allow | `pass` | 원답(없는 인용을 지운 것) |
 | 7 | 위반, 실패 문장 ≤ 전체 문장의 1/3, 핵심 문장 통과, on-topic | R1 | modified / allow | `r1_delete` | 실패 문장 삭제 |
 | 8 | 그 외 + `stages.output.r2` + `regenerate` 있음 + 첫 시도 | R2 | 재판정 결과대로 | `r2_regen` | 재생성 답 |
 | 9 | 그 외 | R3 | modified / allow | `r3_fallback` | `output.r3` + 지지된 claim 문장(원래 순서). off_topic이면 문장 없이 |
-- 금지 표현이 든 문장은 어느 경로에서든 표시 전에 지운다. 지우고 남는 문장이 없으면 9번(R3, `output.r3`, 문장 없이)으로 낸다(테스트 1개).
+- 금지 표현이 든 문장은 어느 경로에서든 표시 전에 지운다. 지우고 남는 문장이 없으면 원래 행이 ⑧ 실패(4번)나 `r2_fail`이었으면 5번(학습 안내 + 연락처, block/refuse, `fallback_infra=True`)으로, 그 밖이면 9번(R3, `output.r3`, 문장 없이)으로 낸다(테스트 2개).
 - 3번 R0 `answer_leak`의 `block`/`redirect`는 master-plan §4.2 v7 "답변 대신 내는 응답은 block"의 명시적 예외다(학습 전환). 그 밖에 가드가 답변 대신 내는 안전 응답(1·2·5번)은 모두 `block`/`refuse`다.
 - 4번과 5번이 갈리는 이유(master-plan §4.2 "답변 대신 내는 응답은 block"): 4번은 답변 문장이 남는 부분 응답이라 `modified`다. 5번은 답변 문장이 하나도 없이 가드가 학습 안내를 대신 내므로 `block`/`refuse`다. 그래서 위기 플래그가 있으면 `_finalize`가 5번도 위기 템플릿으로 바꾼다.
 - 6번은 실패 문장이 있어도 지우지 않는다. 위반 여부는 G 임계값이 정한다([R7] §S4 → §S5). 그 수를 `failing_shown`으로 남겨 S1.7 스윕에 쓴다.
 - R1(7번): 분모는 PRD GR-09대로 `split()` 문장 전체("위반 문장 ≤ 전체의 1/3"), 분자는 실패 문장(MISCITED는 지지로 세므로 뺀다)이다. "핵심 문장 통과·on-topic"은 GR-09에 없는 조건이다. 핵심 문장이 빠진 답이나 질문에 답하지 않는 답을 지워서 내보내지 않으려고 더했고, master-plan §13 v3에서 선언한 GR-09 개정이다. 이 PR에서 PRD GR-09 R1 행을 고친다.
 - R2 피드백에는 실패 문장 번호·라벨·인용을 넣는다. 근거 없는 "다시 생각해 봐"는 금지다([GR-09]). 재판정도 위반이면 7번 조건을 보고 아니면 R3. 재생성이나 재판정이 실패하면 첫 판정에서 지지된 문장으로 R3 표시를 내되 `modified`/`allow`, `reason_code="r2_fail"`, `fallback_infra=True`로 두고 연락처 줄을 붙인다(답변 문장이 남으므로 `modified`. 인프라 폴백이므로 `r3_fallback`과 섞지 않는다). 생성 실패 안전 응답과는 다른 경우다(아래 연락처 줄).
 - ⑧ 실패 처리는 [R11] §5 등급이다. 확인 안 된 내용은 닫고 사전 필터가 확인한 문장만 보여 준다.
-- **연락처 줄**(master-plan §4.2 v7, [ADR-0003](../adr/0003-deterministic-crisis-first.md) "판정이 실패해 범주를 모를 때의 기본 응답"): `crisis_resources.yaml`의 짧은 연락처 줄을 붙이는 경우 중 출력 쪽에 걸리는 것은 아래 넷이다. 나머지(⑤ 결과 없이 끝나는 응답인 ①·③ 오류와 ⑤보다 먼저 Jev가 막은 응답, ⑧ 실패와 같은 길로 가는 ⑨ 수리 오류)는 S2.5가 GR-14 표로 단다(master-plan §4.2 "결정적 단계 오류"·"⑤ 결과 없이 끝나는 응답").
+- **연락처 줄**(master-plan §4.2 v7, [ADR-0003](../adr/0003-deterministic-crisis-first.md) "판정이 실패해 범주를 모를 때의 기본 응답"): `crisis_resources.yaml`의 짧은 연락처 줄을 붙이는 경우 중 출력 쪽에 걸리는 것은 아래 넷이다. 나머지(⑤ 결과 없이 끝나는 응답인 ①·③ 오류와 ⑤보다 먼저 Jev가 막은 응답, ⑧ 실패와 같은 길로 가는 ⑨ 수리 오류. ⑧ 결과에 R0 플래그가 있으면 ⑨ 오류여도 R0 차단이고 연락처 줄은 없다)는 S2.5가 GR-14 표로 단다(master-plan §4.2 "결정적 단계 오류"·"⑤ 결과 없이 끝나는 응답").
   - ⑤가 실패했거나 ② 위기 탐지가 오류를 낸 요청의 모든 응답. GP1 설정(`gp1-output.yaml`)에서는 ②·⑤가 꺼져 `skipped`이고, 꺼짐은 실패가 아니므로(master-plan §4.2) 붙지 않는다. 이 규칙은 S2.5의 `_finalize()`가 단다.
   - ⑧ 실패 안내(4·5번).
   - R2 재생성·재판정 실패(`r2_fail`). R3 표시라 `modified`다(위).

@@ -1,0 +1,64 @@
+# 가드레일 전용 CI. guardrail/ 변경에만 돈다.
+# 경로 필터가 있으므로 저장소 전체의 필수 검사(required check)로 지정하면 안 된다.
+# guardrail/을 건드리지 않는 PR에서는 이 검사가 돌지 않아 머지가 영영 대기 상태가 된다.
+name: guardrail-ci
+
+on:
+  pull_request:
+    paths: ["guardrail/**", ".github/workflows/guardrail-ci.yml"]
+  push:
+    branches: [main]
+    paths: ["guardrail/**", ".github/workflows/guardrail-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guardrail-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: guardrail / lint·test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: guardrail
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.17"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: guardrail/uv.lock
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # 실제 LLM API는 부르지 않는다(키 없음). live 표시 테스트는 로컬에서만 돈다.
+      - run: uv run pytest --cov=guardrail --cov-report=term-missing --cov-fail-under=80
+
+  secrets:
+    name: guardrail / secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: gitleaks 설치 (해시 고정)
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "${tarball}" gitleaks
+      # 커밋 이력이 아니라 guardrail/ 현재 파일만 본다. 팀원 영역은 검사하지 않고, 찾은 값은 가린다.
+      - name: guardrail/ 비밀 키 검사
+        run: ./gitleaks dir guardrail --no-banner --redact

@@ -452,10 +452,10 @@ git check-ignore runs/x data/raw/x .coverage data/seed/smoke_attack.jsonl data/s
 **만들거나 바꿀 파일**: `src/guardrail/eval/mock_tutor.py`(`MockTutor`, `load_textbook`, `bm25_top_k`, 생성 지시 상수, `NOT_FOUND`, 약 120줄), `data/seed/textbook_placeholder.jsonl`(서브에이전트 ②), `data/README.md`(교재 행), `tests/test_mock_tutor.py`
 
 **작업 순서**
-- [ ] 1. (10/31) 서브에이전트 ②에 대체 교재를 맡긴다. (11/1) 본인이 사실 오류를 훑는다
-- [ ] 2. 테스트 먼저: BM25 순위, 검색 적중 10문항, 생성 메시지 구성, FakeLLM으로 끝까지
-- [ ] 3. `mock_tutor.py`
-- [ ] 4. `ecc:rag-pipeline-reviewer` 리뷰 → PR
+- [x] 1. (10/31) 서브에이전트 ②에 대체 교재를 맡긴다. (11/1) 본인이 사실 오류를 훑는다
+- [x] 2. 테스트 먼저: BM25 순위, 검색 적중 10문항, 생성 메시지 구성, FakeLLM으로 끝까지
+- [x] 3. `mock_tutor.py`
+- [x] 4. `ecc:rag-pipeline-reviewer` 리뷰 → PR
 
 **세부 설계**
 - 대체 교재: **자체 집필 "중학교 과학 1(대체본)"**, 라이선스 CC-BY-4.0(작성 danielcho02, Claude Code Sonnet 초안). 기존 교과서·위키 문장을 옮기지 않는다.
@@ -482,11 +482,11 @@ uv run pytest tests/test_mock_tutor.py
 ```
 
 **수용 기준**
-- [ ] 같은 LLM + 교재 1권 최소 RAG로 `TutorAdapter`를 구현한다([GR-15](../PRD.md#gr-15-평가-하네스-p0) "모의 튜터").
-- [ ] `system_extra`(가드가 켠 단계의 문구: `output.code`면 카나리아 지시, `retrieval.enabled`면 datamarking, 무방비면 `""`)와 `instruction`(전환·부분·R2 지시)을 받고, `system_prompt`(기본 지시)를 내놓는다([§4.1](../master-plan.md#41-타입-typespy)·[§4.2](../master-plan.md#42-공개-api-pipelinepy)). GR-11 튜터 의무 중 인용과 카나리아 삽입을 모의 튜터가 지킨다.
-- [ ] 손으로 쓴 10문항에서 top-3 적중 ≥8/10(이 슬라이스 자체 기준).
-- [ ] FakeLLM만으로 파이프라인 테스트가 돈다(네트워크 없음). 새 의존성이 없다.
-- [ ] 키가 있으면 S0.7 베이스라인에서 정상 50건 중 유효한 `[S#]`가 붙은 답의 비율을 기록한다(목표 없음, S1.3 참고값).
+- [x] 같은 LLM + 교재 1권 최소 RAG로 `TutorAdapter`를 구현한다([GR-15](../PRD.md#gr-15-평가-하네스-p0) "모의 튜터").
+- [x] `system_extra`(가드가 켠 단계의 문구: `output.code`면 카나리아 지시, `retrieval.enabled`면 datamarking, 무방비면 `""`)와 `instruction`(전환·부분·R2 지시)을 받고, `system_prompt`(기본 지시)를 내놓는다([§4.1](../master-plan.md#41-타입-typespy)·[§4.2](../master-plan.md#42-공개-api-pipelinepy)). GR-11 튜터 의무 중 인용과 카나리아 삽입을 모의 튜터가 지킨다.
+- [x] 손으로 쓴 10문항에서 top-3 적중 ≥8/10(이 슬라이스 자체 기준).
+- [x] FakeLLM만으로 파이프라인 테스트가 돈다(네트워크 없음). 새 의존성이 없다.
+- [ ] 키가 있으면 S0.7 베이스라인에서 정상 50건 중 유효한 `[S#]`가 붙은 답의 비율을 기록한다(목표 없음, S1.3 참고값). 11/3 키 없음: 베이스라인과 함께 막힘
 
 **스킬·에이전트**: `ecc:python-patterns`, 에이전트 `ecc:rag-pipeline-reviewer`(Sonnet)
 

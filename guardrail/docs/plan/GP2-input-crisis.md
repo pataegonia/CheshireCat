@@ -1,7 +1,7 @@
 # GP2 입력·위기·멀티턴 — 세부 플랜
 
 작성 2026-10-30 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/10(화)–11/15(일) · 마일스톤: Guardrail GP2 입력·위기
+상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/10(화)–11/15(일)
 
 ## 1. 목표와 관문
 

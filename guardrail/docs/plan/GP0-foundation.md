@@ -1,7 +1,7 @@
 # GP0 기반 — 세부 플랜
 
 작성 2026-10-30 · 갱신 2026-11-03 · 담당 danielcho02 · 상태: v17 (11/3 재기준, master v17 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 10/30(금)–11/4(수)(11/3 재기준) · 마일스톤: Guardrail GP0 기반
+상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 10/30(금)–11/4(수)(11/3 재기준)
 
 ## 1. 목표와 관문
 
@@ -84,7 +84,7 @@ gh issue list --label guardrail --state all --limit 50
 
 **수용 기준**
 - [ ] 이 PR에서 두 CI 검사가 green이다.
-- [ ] 에픽 5개와 슬라이스 이슈 15개가 모두 라벨·마일스톤을 갖고, 슬라이스 이슈는 에픽의 하위 이슈다([master-plan §11](../master-plan.md#11-진행-추적-github)).
+- [ ] 에픽 5개와 슬라이스 이슈 15개가 모두 라벨을 갖고, 슬라이스 이슈는 에픽의 하위 이슈다([master-plan §11](../master-plan.md#11-진행-추적-github)).
 - [ ] `git status`에 `.coverage`가 보이지 않고, `git check-ignore data/seed/smoke_attack.jsonl data/dev/x`가 둘 다 무시로 나온다.
 
 **스킬·에이전트**: `ecc:github-ops`, `ecc:git-workflow`. 이슈·라벨 일괄 작업은 Sonnet.

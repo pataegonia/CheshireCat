@@ -33,7 +33,7 @@
 
 | 슬라이스 | 스킬 | 에이전트(모델) | 쓰는 이유 |
 |---|---|---|---|
-| S0.1 CI·추적 | `ecc:github-ops`, `ecc:git-workflow` | — | 워크플로·라벨·마일스톤·이슈 |
+| S0.1 CI·추적 | `ecc:github-ops`, `ecc:git-workflow` | — | 워크플로·라벨·이슈 |
 | S0.2 계약·설정 | `ecc:api-design`, `ecc:python-patterns` | `ecc:type-design-analyzer`(Sonnet) | 판정 타입이 잘못된 상태를 못 만들게 |
 | S0.3 LLM 게이트웨이 | `ecc:cost-aware-llm-pipeline`, `ecc:error-handling`, `ecc:documentation-lookup` | `ecc:silent-failure-hunter`(Opus), `ecc:docs-lookup`(Sonnet) | 재시도·예산·토큰 기록, 삼킨 예외 찾기, SDK 문서 확인 |
 | S0.4 trace | `ecc:security-review` | `ecc:security-reviewer`(Opus) | 로그에 키·원문 PII가 남지 않게 |

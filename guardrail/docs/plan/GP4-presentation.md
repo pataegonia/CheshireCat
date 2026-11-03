@@ -1,7 +1,7 @@
 # GP4 발표 — 세부 플랜
 
 작성 2026-10-30 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/21(토)–11/25(수, 최종 발표) · 마일스톤: Guardrail GP4 발표
+상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/21(토)–11/25(수, 최종 발표)
 
 ## 1. 목표와 관문
 
@@ -507,7 +507,7 @@ uv run python -m guardrail.eval.figures --sources results/figures/sources.yaml -
 - [ ] PRD §10 GP4 Status → done. GR-16 실행 여부를 반영한다.
 - [ ] ADR-0006 Status를 accepted로 바꾸고, S4.5를 했으면 Consequences에 한 줄 더한다.
 - [ ] 계약 대조 15분([master-plan §10](../master-plan.md#10-개발-규칙)): §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 봤고, 다르면 master-plan을 먼저 고쳤다. GP4에서 바뀐 코드(`demo.py`·`figures.py`, S4.5를 했으면 `run.py --system nemo`)도 본다.
-- [ ] 이 문서의 체크박스, 에픽 체크리스트, 마일스톤 `Guardrail GP4 발표`를 닫는다.
+- [ ] 이 문서의 체크박스와 에픽 체크리스트를 닫는다.
 
 ## 5. master-plan에 반영할 점
 

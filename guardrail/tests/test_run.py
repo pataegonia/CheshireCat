@@ -326,6 +326,13 @@ def test_judge_message_escapes_data_and_wraps_turns():
     assert '<turn n="1">' in user and user.startswith("<category>S14</category>")
 
 
+def test_judge_message_marks_missing_category_unknown():
+    item = _gf(kind="attack", category="S14", expected={"action": "refuse"})
+    item = item.model_copy(update={"category": None})
+    user = R._judge_messages("SYS", item, "응답")[1]["content"]
+    assert user.startswith("<category>unknown</category>")
+
+
 # --- 리뷰 회귀 ---
 
 

@@ -124,8 +124,9 @@ def _judge_messages(system: str, item: Item, response: str | None) -> list[dict]
         f'<turn n="{i}">{html.escape(t.content, quote=False)}</turn>'
         for i, t in enumerate(turns, start=1)
     )
+    # 범주 없는 항목(주최측 세트 등)을 S0으로 보내면 판정기가 정상 질문으로 읽는다
     user = (
-        f"<category>{item.category or 'S0'}</category>\n"
+        f"<category>{item.category or 'unknown'}</category>\n"
         f"<request>\n{body}\n</request>\n"
         f"<response>\n{html.escape(response or '', quote=False)}\n</response>"
     )

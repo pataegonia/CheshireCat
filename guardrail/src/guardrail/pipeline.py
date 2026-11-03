@@ -4,6 +4,7 @@
 지금은 가드 단계가 모두 꺼져 있어 튜터 답을 그대로 돌려주고, 단계 13개를 기록만 한다.
 """
 
+import inspect
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,33 @@ def _skipped(stage: Stage) -> StageResult:
 
 def _ms(since: float) -> float:
     return (time.perf_counter() - since) * 1000.0
+
+
+async def _run_stage(
+    stage: Stage,
+    fn: Callable[[], StageResult | Awaitable[StageResult]],
+    *,
+    t0: float,
+    clock: Callable[[], float] = time.perf_counter,
+) -> StageResult:
+    """가드 단계 하나를 돌리고 시간을 잰다(S0.4). 실패 처리는 여기서 하지 않는다(GR-14 표 한 곳).
+
+    예외면 status="error"이고 error에는 클래스 이름만 넣는다(메시지에 키가 섞여 trace로 새지 않게).
+    CancelledError는 잡지 않는다(Exception이 아니다). 튜터 단계 retrieve·generate는 이 함수를 쓰지
+    않고 예외를 올린다(생성 실패 처리는 S2.5).
+    """
+    started = clock()
+    try:
+        out = fn()
+        result = await out if inspect.isawaitable(out) else out
+    except Exception as e:  # noqa: BLE001 — 단계 하나의 예외로 파이프라인을 멈추지 않는다
+        result = StageResult(
+            stage, None, None, None, None, "stage_exception", 0.0,
+            status="error", error=type(e).__name__,
+        )  # fmt: skip
+    result.started_ms = (started - t0) * 1000.0
+    result.latency_ms = (clock() - started) * 1000.0
+    return result
 
 
 class Guard:

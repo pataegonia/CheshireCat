@@ -324,9 +324,9 @@ uv run pytest -m live tests/test_llm.py   # 키가 있을 때 로컬에서만
 **만들거나 바꿀 파일**: `src/guardrail/trace.py`(`make_record`, `TraceWriter`, `_scrub`, 약 60줄), `src/guardrail/pipeline.py`(`_run_stage()`), `tests/test_trace.py`
 
 **작업 순서**
-- [ ] 1. 테스트 먼저: 키 누출 0, 평가 모드 원문 필드, 서비스 모드 원문 없음(`detail["canary"]` 포함), 평가 모드 `session` 무시, 단계 지연, 예외 단계
-- [ ] 2. `trace.py` → `_run_stage`
-- [ ] 3. `ecc:security-reviewer` 리뷰 → PR
+- [x] 1. 테스트 먼저: 키 누출 0, 평가 모드 원문 필드, 서비스 모드 원문 없음(`detail["canary"]` 포함), 평가 모드 `session` 무시, 단계 지연, 예외 단계
+- [x] 2. `trace.py` → `_run_stage`
+- [x] 3. `ecc:security-reviewer` 리뷰 → PR
 
 **세부 설계**
 - 레코드([§4.5](../master-plan.md#45-trace-tracepy) 그대로): `request_id, ts, policy_version, config_hash, mode, final_action, verdict, crisis_tier, fallback_infra, latency_ms, tokens_in, tokens_out, stages[]`. 평가 모드에서만 `input_raw`, `displayed_output`.
@@ -354,10 +354,10 @@ uv run pytest tests/test_trace.py
 ```
 
 **수용 기준**
-- [ ] 어떤 모드에서도 trace에 API 키·Authorization 값과 §4.4 비밀 환경변수 값이 남지 않는다. 테스트로 고정한다(§4.5, [GR-13](../PRD.md#gr-13-로깅추적-p0) "API 키는 환경변수로만, 로그에 남기지 않는다").
-- [ ] 요청마다 정책 버전, 단계별 판정·점수·조치·사유 코드·지연·토큰이 남는다(GR-13).
-- [ ] 평가 모드에서 `responses.jsonl`의 모든 요청 행(대화 요약 줄 `record_type: "dialogue"` 제외)이 같은 `request_id`의 trace 요청 레코드 1개와 이어진다(멀티턴은 턴 번호까지 키에 든다). GR-13 수용 기준 "평가 모드에서 미탐·오탐 전수 역추적"을 이것으로 잰다(S0.7 fake 실행 테스트, `request_id` 테스트).
-- [ ] GR-13 "서비스 모드 로그 샘플에서 원문 PII 0건"은 S2.3 몫이다. 여기서는 서비스 모드에 원문 필드와 `detail["canary"]`가 없음을 테스트한다(평가 모드의 `detail["canary"]`가 `detail` 원문 금지의 유일한 예외, §4.5).
+- [x] 어떤 모드에서도 trace에 API 키·Authorization 값과 §4.4 비밀 환경변수 값이 남지 않는다. 테스트로 고정한다(§4.5, [GR-13](../PRD.md#gr-13-로깅추적-p0) "API 키는 환경변수로만, 로그에 남기지 않는다").
+- [x] 요청마다 정책 버전, 단계별 판정·점수·조치·사유 코드·지연·토큰이 남는다(GR-13).
+- [x] 평가 모드에서 `responses.jsonl`의 모든 요청 행(대화 요약 줄 `record_type: "dialogue"` 제외)이 같은 `request_id`의 trace 요청 레코드 1개와 이어진다(멀티턴은 턴 번호까지 키에 든다). GR-13 수용 기준 "평가 모드에서 미탐·오탐 전수 역추적"을 이것으로 잰다(S0.7 fake 실행 테스트, `request_id` 테스트).
+- [x] GR-13 "서비스 모드 로그 샘플에서 원문 PII 0건"은 S2.3 몫이다. 여기서는 서비스 모드에 원문 필드와 `detail["canary"]`가 없음을 테스트한다(평가 모드의 `detail["canary"]`가 `detail` 원문 금지의 유일한 예외, §4.5).
 
 **스킬·에이전트**: `ecc:security-review`, 에이전트 `ecc:security-reviewer`(Opus)
 

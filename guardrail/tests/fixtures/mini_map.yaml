@@ -1,0 +1,10 @@
+# 테스트용 CSV 매핑: 열 이름 → Item 필드
+format: csv
+columns: {text: prompt, category: cat}
+defaults:
+  kind: benign
+  split: dev
+  technique: none
+  expected: {action: allow}
+  source: mini
+  license: CC-BY-4.0

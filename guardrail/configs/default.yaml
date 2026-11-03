@@ -1,0 +1,31 @@
+# 가드 기본 설정 (master-plan §4.4). 평가 모드 개발 설정이다.
+# 단계 토글은 머지된 단계만 켠다. 단계를 붙이는 슬라이스가 같은 PR에서 자기 토글을 켠다(GP0 S0.2 표).
+# GP0에는 가드 단계가 없으므로 모두 false다(위기도 S2.1 전까지 꺼짐, mode: eval이라 검증 통과).
+# 키·base URL은 여기에 쓰지 않는다. 환경변수 GUARD_LLM_BASE_URL·GUARD_LLM_API_KEY로만 받는다.
+policy_version: "0.1.0"          # 정책 프롬프트·템플릿·임계값이 바뀌면 올린다
+mode: eval                       # eval | service (GR-13)
+pipeline: {mode: parallel}       # parallel | serial (ADR-0007 대안 A)
+stages:                          # GR-12 단계 묶음 4개 + 위기
+  crisis: false                  # S2.1
+  input:   {rules: false, pii: false, judge: false, jev: false}   # S2.2 · S2.3 · S2.4 · S2.10
+  session: {enabled: false}      # S2.8
+  retrieval: {enabled: false}    # S2.9
+  output:  {code: false, prefilter: false, judge: false, repair: false, r2: false}   # S1.3 · S1.4 · S1.5 · S1.6 · (실험만)
+policy:
+  d1: s2                         # PRD §9 D1. s2 | s1_s2
+models:                          # 역할별 모델. 이름은 게이트웨이 목록이 나오면 채운다(판정은 생성과 다른 계열, ADR-0004)
+  generator: ${GEN_MODEL}
+  input_judge: ${JUDGE_MODEL}
+  exchange_judge: ${JUDGE_MODEL}
+  attack_judge: ${JUDGE_MODEL}   # 생성·판정과 다른 셋째 계열이 있으면 그 모델 이름을 여기에 바로 적는다
+  jev: typesafe-ai/jev-1.14.0
+thresholds: {input_block: 0.0, tau_J: null, tau_m: null, theta: 0.9, G: 0.7, R_expand: 0.5, lambda: 0.9}
+context_turns: {base: 4, expanded: 8}
+deadlines_s: {input_judge: 2.5, exchange_judge: 3.0, generator: 20.0, jev: 1.5, attack_judge: 10.0, tutor_retrieve: 5.0}
+gate: {initial: 4, min: 1, max: 16, increase_after: 10, max_wait_s: 30, structured_output: json_schema}
+tutor:                           # GR-11 튜터 쪽 의무. 모의 튜터는 다 지원한다
+  adapter: mock                  # mock | real
+  obligations: {cites: true, canary: true, wraps_chunks: true, non_streaming: true, regenerate: true}
+service_log: {retention_days: 30, keep_raw_for: [block, escalation, appeal, sample], sample_rate: 0.01, path: logs/service-trace.jsonl}
+faults: {}                       # 평가 전용 장애 주입. 예: {input_judge: timeout}
+paths: {prompts: prompts, resources: resources}

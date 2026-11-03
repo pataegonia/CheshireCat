@@ -109,10 +109,10 @@ gh issue list --label guardrail --state all --limit 50
 - `tests/test_config.py`, `tests/test_pipeline.py`, `tests/fakes.py`(이 슬라이스는 최소 `FakeTutor`(정해진 청크·답을 돌려주는 `TutorAdapter`)만 만든다. S0.3이 같은 파일에 `FakeLLM`·`FakeClock`을 더하고, S2.5가 `FakeTutor`에 완료 시점 조절을 더한다)
 
 **작업 순서**
-- [ ] 1. 테스트 먼저: 설정 검증 실패 사례(서비스 모드 위기 끔·PII 끔·`faults`·`GUARD_LOG_HMAC_KEY` 없음, 모르는 키), `overrides`, `${ENV}` 치환, `config_hash` 안정성, 켰지만 구현 안 된 토글(`check_toggles`와 `Guard` 생성 둘 다), `input.pii` 없이 켠 `input.jev`, Verdict 불변식(`modified` 전환·부분 `check_input` 합법 포함), `Verdict.request_id`가 호출마다 다름(`respond()` 두 번 → 서로 다른 uuid4), 무방비 `respond`·`check_*`(`check_output` stages = `input_verdict.stages` + 출력 쪽 4개, `generate`의 `detail["chars"]`), 무방비 `system_extra == ""`
-- [ ] 2. 의존성 추가, `uv.lock` 커밋
-- [ ] 3. `types.py` → `config.py`와 YAML 2개 → `pipeline.py`
-- [ ] 4. `ecc:type-design-analyzer` 검토, ruff·pytest green → PR
+- [x] 1. 테스트 먼저: 설정 검증 실패 사례(서비스 모드 위기 끔·PII 끔·`faults`·`GUARD_LOG_HMAC_KEY` 없음, 모르는 키), `overrides`, `${ENV}` 치환, `config_hash` 안정성, 켰지만 구현 안 된 토글(`check_toggles`와 `Guard` 생성 둘 다), `input.pii` 없이 켠 `input.jev`, Verdict 불변식(`modified` 전환·부분 `check_input` 합법 포함), `Verdict.request_id`가 호출마다 다름(`respond()` 두 번 → 서로 다른 uuid4), 무방비 `respond`·`check_*`(`check_output` stages = `input_verdict.stages` + 출력 쪽 4개, `generate`의 `detail["chars"]`), 무방비 `system_extra == ""`
+- [x] 2. 의존성 추가, `uv.lock` 커밋
+- [x] 3. `types.py` → `config.py`와 YAML 2개 → `pipeline.py`
+- [x] 4. `ecc:type-design-analyzer` 검토, ruff·pytest green → PR
 
 **세부 설계**
 - 타입은 §4.1 그대로 쓰고(`Session`은 `user_id, grade_band, risk, last_block_norm` 4개 필드 모두, `Verdict`는 `request_id: str`·`crisis_flag`·`instruction: str | None` 포함, `TutorAdapter`는 선택 속성 `system_prompt: str | None` 포함) 셋만 더한다. `system_prompt`는 가드가 `getattr(tutor, "system_prompt", None)`으로 읽어 이 속성이 없는 어댑터도 받는다. 쓰는 곳은 ⑦의 시스템 프롬프트 문장 유출 검사(S1.3, GR-07)이고, 모의 튜터는 기본 지시를 내놓는다(S0.6).
@@ -174,14 +174,14 @@ uv run ruff check . && uv run ruff format --check .
 ```
 
 **수용 기준**
-- [ ] `default.yaml`과 `unguarded.yaml`을 같은 코드로 로드하고, 단계 상태는 YAML에서만 정해진다. [GR-12](../PRD.md#gr-12-설정토글무방비-모드-p0) 수용 기준 "코드 수정 없이 설정만 바꿔 ablation과 전후 비교가 돌아간다"의 GP0 몫이다. ablation 실행은 S3.4.
-- [ ] 무방비 `respond()`가 튜터 답을 바꾸지 않고, 가드 단계 11개가 모두 `status="skipped"`, `retrieve`·`generate`가 `status="ok"`다(GR-12 "전체를 끈 무방비 모드").
-- [ ] 서비스 모드에서 위기나 PII를 끈 설정·`faults`가 있는 설정·`GUARD_LOG_HMAC_KEY`가 없는 환경, §4.4에 없는 키, 잘못된 `mode`는 로드에서 실패한다. 켰지만 구현 안 된 토글은 `check_toggles(cfg)`에서 `NotImplementedError`이고, `input.pii` 없이 켠 `input.jev`도 같은 함수에서 실패한다. `Guard` 생성도 같은 함수로 실패한다(§4.4 "단계 켜기 규칙").
-- [ ] 무방비 설정에서 튜터가 받는 `system_extra`가 `""`다(§4.2 "가드 문구는 그 단계가 켜졌을 때만").
-- [ ] `overrides`로 바꾼 값이 검증을 거치고 `config_hash`를 바꾼다.
-- [ ] `policy_version`은 `Verdict`에서 읽고, `config_hash`는 설정(`config_hash(cfg)`)에서 읽어 `make_record`(S0.4)가 trace에 쓴다(GR-12 "설정에 버전"). `Verdict`에는 `config_hash` 필드가 없다(§4.1).
-- [ ] `Verdict`에 공통 필드 10개(`verdict, action, category, confidence, rule_id, reason_code, reason, latency_ms, policy_version, response`)가 있다([GR-11](../PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0)). 여기에 `request_id`(호출마다 uuid4, §4.1 v10)가 있고 테스트에서 호출마다 다르다. 불변식 테스트에서 `verdict="modified"`, `response=None`, `instruction` 있는 전환·부분 `check_input` Verdict는 통과하고, 둘 다 없는 차단·`instruction` 있는 `refuse`·`instruction` 있는 `block`·등급 없는 `crisis`는 `ValueError`다.
-- [ ] 새 모듈 줄 커버리지 ≥80%([master-plan §10](../master-plan.md#10-개발-규칙)).
+- [x] `default.yaml`과 `unguarded.yaml`을 같은 코드로 로드하고, 단계 상태는 YAML에서만 정해진다. [GR-12](../PRD.md#gr-12-설정토글무방비-모드-p0) 수용 기준 "코드 수정 없이 설정만 바꿔 ablation과 전후 비교가 돌아간다"의 GP0 몫이다. ablation 실행은 S3.4.
+- [x] 무방비 `respond()`가 튜터 답을 바꾸지 않고, 가드 단계 11개가 모두 `status="skipped"`, `retrieve`·`generate`가 `status="ok"`다(GR-12 "전체를 끈 무방비 모드").
+- [x] 서비스 모드에서 위기나 PII를 끈 설정·`faults`가 있는 설정·`GUARD_LOG_HMAC_KEY`가 없는 환경, §4.4에 없는 키, 잘못된 `mode`는 로드에서 실패한다. 켰지만 구현 안 된 토글은 `check_toggles(cfg)`에서 `NotImplementedError`이고, `input.pii` 없이 켠 `input.jev`도 같은 함수에서 실패한다. `Guard` 생성도 같은 함수로 실패한다(§4.4 "단계 켜기 규칙").
+- [x] 무방비 설정에서 튜터가 받는 `system_extra`가 `""`다(§4.2 "가드 문구는 그 단계가 켜졌을 때만").
+- [x] `overrides`로 바꾼 값이 검증을 거치고 `config_hash`를 바꾼다.
+- [x] `policy_version`은 `Verdict`에서 읽고, `config_hash`는 설정(`config_hash(cfg)`)에서 읽어 `make_record`(S0.4)가 trace에 쓴다(GR-12 "설정에 버전"). `Verdict`에는 `config_hash` 필드가 없다(§4.1).
+- [x] `Verdict`에 공통 필드 10개(`verdict, action, category, confidence, rule_id, reason_code, reason, latency_ms, policy_version, response`)가 있다([GR-11](../PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0)). 여기에 `request_id`(호출마다 uuid4, §4.1 v10)가 있고 테스트에서 호출마다 다르다. 불변식 테스트에서 `verdict="modified"`, `response=None`, `instruction` 있는 전환·부분 `check_input` Verdict는 통과하고, 둘 다 없는 차단·`instruction` 있는 `refuse`·`instruction` 있는 `block`·등급 없는 `crisis`는 `ValueError`다.
+- [x] 새 모듈 줄 커버리지 ≥80%([master-plan §10](../master-plan.md#10-개발-규칙)).
 
 **스킬·에이전트**: `ecc:api-design`, `ecc:python-patterns`, 에이전트 `ecc:type-design-analyzer`(Sonnet)
 

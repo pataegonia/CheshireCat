@@ -6,6 +6,7 @@
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +122,7 @@ class Guard:
         chunks: list[Chunk],
         answer: str,
         input_verdict: Verdict,
-        regenerate: Any = None,
+        regenerate: Callable[[str], Awaitable[str]] | None = None,
         canary: str | None = None,
         system_prompt: str | None = None,
     ) -> Verdict:
@@ -129,16 +130,24 @@ class Guard:
         t0 = time.perf_counter()
         # 입력 단계 기록을 앞에 복사한다. S2.5의 _finalize가 그 안의 ②·⑤ 오류를 읽어 연락처를 붙인다
         stages = list(input_verdict.stages) + [_skipped(s) for s in OUTPUT_STAGES]
-        verdict = self._pass(request_id, answer, _ms(t0), stages)
-        verdict.crisis_flag = input_verdict.crisis_flag
-        verdict.crisis_tier = input_verdict.crisis_tier
-        return self._finalize(verdict, verdict.crisis_flag, verdict.crisis_tier)
+        verdict = self._pass(
+            request_id, answer, _ms(t0), stages, crisis_flag=input_verdict.crisis_flag
+        )
+        # 위기 플래그·등급은 input_verdict에서 받는다(§4.2)
+        return self._finalize(verdict, input_verdict.crisis_flag, input_verdict.crisis_tier)
 
     # --- 내부 ---
 
     def _pass(
-        self, request_id: str, response: str | None, latency_ms: float, stages: list[StageResult]
+        self,
+        request_id: str,
+        response: str | None,
+        latency_ms: float,
+        stages: list[StageResult],
+        *,
+        crisis_flag: bool = False,
     ) -> Verdict:
+        # 필드는 생성자로만 채운다(사후 대입은 Verdict 불변식 검사를 건너뛴다)
         return Verdict(
             verdict="pass",
             action="allow",
@@ -151,6 +160,7 @@ class Guard:
             policy_version=self.cfg.policy_version,
             request_id=request_id,
             response=response,
+            crisis_flag=crisis_flag,
             stages=stages,
         )
 

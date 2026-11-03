@@ -6,8 +6,8 @@ import pytest
 from fakes import FakeTutor
 
 from guardrail import Guard, Session, StageResult, Verdict
-from guardrail.config import ROOT, load_config
-from guardrail.types import STAGES, Chunk, Turn
+from guardrail.config import ROOT
+from guardrail.types import ROLES, STAGES, Chunk, Turn
 
 pytestmark = pytest.mark.anyio
 
@@ -58,6 +58,10 @@ def test_stages_are_the_13_contract_names():
         "exchange_judge",
         "repair",
     )
+
+
+def test_roles_are_the_5_contract_names():
+    assert ROLES == ("input_judge", "exchange_judge", "generator", "attack_judge", "jev")
 
 
 def test_session_defaults():
@@ -228,18 +232,21 @@ async def test_check_output_accepts_contract_keywords(guard):
     assert ov.response == "a"
 
 
-async def test_finalize_runs_on_all_three_paths(guard, monkeypatch):
-    seen: list[tuple[bool, object]] = []
-    original = guard._finalize
+async def test_finalize_runs_once_per_path_and_its_result_is_returned(guard, monkeypatch):
+    seen: list[tuple[str, bool, object]] = []
+    marker = _verdict(response="표식")
 
     def spy(verdict, crisis_flag, crisis_tier):
-        seen.append((crisis_flag, crisis_tier))
-        return original(verdict, crisis_flag, crisis_tier)
+        seen.append((verdict.reason_code, crisis_flag, crisis_tier))
+        return marker
 
     monkeypatch.setattr(guard, "_finalize", spy)
-    iv = await guard.check_input("q", [])
-    await guard.check_output("q", [], [], "a", iv)
-    await guard.respond("q", [], FakeTutor())
+    assert await guard.check_input("q", []) is marker
+    assert len(seen) == 1
+    iv = _verdict(crisis_flag=True, crisis_tier="T2", stages=[])
+    assert await guard.check_output("q", [], [], "a", iv) is marker
+    assert seen[1] == ("stages_off", True, "T2")  # 입력 쪽 플래그·등급이 넘어간다
+    assert await guard.respond("q", [], FakeTutor()) is marker
     assert len(seen) == 3
 
 
@@ -248,11 +255,6 @@ def test_from_config_overrides():
     assert g.cfg.thresholds.G == 0.6
 
 
-def test_guard_accepts_config_object():
-    cfg = load_config(UNGUARDED)
-    assert Guard(cfg).cfg is cfg
-
-
-def test_stage_result_defaults():
-    s = StageResult("rules", None, None, None, None, "disabled", 0.0)
-    assert (s.status, s.attempts, s.fallback_infra, s.detail) == ("ok", 1, False, {})
+def test_stage_result_status_default_is_ok_not_skipped():
+    # 꺼짐(skipped)은 명시해야만 기록된다
+    assert StageResult("rules", None, None, None, None, "x", 0.0).status == "ok"

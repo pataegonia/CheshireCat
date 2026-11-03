@@ -2,7 +2,7 @@
 
 import pytest
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from guardrail import config as config_mod
 from guardrail.config import (
@@ -14,6 +14,7 @@ from guardrail.config import (
     load_prompt,
 )
 from guardrail.pipeline import Guard
+from guardrail.types import ROLES
 
 DEFAULT = ROOT / "configs" / "default.yaml"
 UNGUARDED = ROOT / "configs" / "unguarded.yaml"
@@ -246,6 +247,39 @@ def test_config_hash_stable_and_short(monkeypatch):
     assert len(config_hash(a)) == 12
 
 
+def test_config_hash_ignores_yaml_key_order(tmp_path):
+    raw = _raw()
+    shuffled = dict(reversed(list(raw.items())))
+    shuffled["gate"] = dict(reversed(list(raw["gate"].items())))
+    assert config_hash(load_config(_write(tmp_path, shuffled))) == config_hash(load_config(DEFAULT))
+
+
+def test_every_config_model_forbids_extra():
+    models = [GuardConfig]
+    seen = set()
+    while models:
+        m = models.pop()
+        if m in seen:
+            continue
+        seen.add(m)
+        assert m.model_config.get("extra") == "forbid", m.__name__
+        for f in m.model_fields.values():
+            for t in (f.annotation, *getattr(f.annotation, "__args__", ())):
+                if isinstance(t, type) and issubclass(t, BaseModel):
+                    models.append(t)
+    assert len(seen) >= 15
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_faults_accept_every_role(role):
+    assert load_config(DEFAULT, overrides={f"faults.{role}": "timeout"}).faults == {role: "timeout"}
+
+
+def test_lambda_python_name_is_not_a_yaml_key():
+    with pytest.raises(ValidationError):
+        load_config(DEFAULT, overrides={"thresholds.lambda_": 0.5})
+
+
 def test_config_hash_includes_substituted_model(monkeypatch):
     monkeypatch.setenv("GEN_MODEL", "gen-a")
     h1 = config_hash(load_config(DEFAULT))
@@ -330,6 +364,7 @@ def test_load_prompt_reads_front_matter(tmp_path):
         "---\nid: demo\n---\n본문\n",
         "---\nid: other\nversion: 1.0.0\n---\n본문\n",
         "---\nid: demo\nversion: 1.0.0\n본문(닫는 줄 없음)\n",
+        "---\n- id\n- version\n---\n본문\n",
     ],
 )
 def test_load_prompt_rejects_bad_header(tmp_path, text):

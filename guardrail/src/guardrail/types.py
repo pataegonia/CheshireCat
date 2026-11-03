@@ -5,7 +5,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Literal, Protocol, get_args
+from typing import Any, Literal, Protocol, get_args
 
 Action = Literal["allow", "redirect", "partial", "refuse", "crisis"]
 Category = Literal[
@@ -66,7 +66,7 @@ class StageResult:
     status: StageStatus = "ok"  # skipped = 설정으로 꺼짐(실패가 아님)
     error: str | None = None  # LLMResult.error 코드나 예외 클래스 이름만. 메시지는 넣지 않는다
     fallback_infra: bool = False
-    detail: dict = field(default_factory=dict)  # 문장 번호·라벨·점수만. 원문 금지
+    detail: dict[str, Any] = field(default_factory=dict)  # 문장 번호·라벨·점수만. 원문 금지
 
 
 @dataclass

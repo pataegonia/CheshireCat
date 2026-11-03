@@ -83,8 +83,6 @@ class Models(_Strict):
 
 
 class Thresholds(_Strict):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
     input_block: Threshold = 0.0
     tau_J: Threshold | None = None
     tau_m: Threshold | None = None
@@ -295,7 +293,7 @@ def load_prompt(cfg: GuardConfig, name: str) -> tuple[str, str]:
     m = _FRONT.match(text)
     if not m:
         raise ValueError(f"프롬프트 {name}: 버전 앞머리(---/id/version/---)가 없다")
-    head = yaml.safe_load(m.group("head")) or {}
-    if head.get("id") != name or not head.get("version"):
+    head = yaml.safe_load(m.group("head"))
+    if not isinstance(head, dict) or head.get("id") != name or not head.get("version"):
         raise ValueError(f"프롬프트 {name}: 앞머리 id·version이 맞지 않다({head})")
     return str(head["version"]), text[m.end() :]

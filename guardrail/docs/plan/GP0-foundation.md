@@ -688,18 +688,20 @@ uv run pytest tests/test_pipeline.py -k adapter
 
 ## 4. Phase 끝 점검 (11/4, 11/3 재기준)
 
-- [ ] 관문: 무방비 설정으로 스모크 3종이 끝까지 돌고 `report.csv`가 나왔다(실제 키 또는 `--fake`). `main`에서 CI green
-- [ ] 실제 베이스라인 요약이 `results/`에 있다. 없으면 S0.7 `guardrail:blocked`와 사용자 답이 기록돼 있다
-- [ ] GP0 이슈 7개(S0.1–S0.7)가 닫혔다. S0.8은 11/4 오전 초안 머지로 닫고(공유는 따로), 밀린 사실과 GP1 §2 컷 행 발동을 에픽에 적는다
-- [ ] 새 모듈 줄 커버리지 ≥80%(`pytest --cov`)
-- [ ] `git ls-files runs data/raw data/seed/smoke_attack.jsonl data/seed/smoke_crisis.jsonl`이 비어 있다. gitleaks green
-- [ ] `configs/default.yaml`의 `stages` 토글이 모두 `false`이고(GP0에 머지된 가드 단계 없음), `deadlines_s.attack_judge`가 10.0이다
-- [ ] [PRD §10](../PRD.md#10-마일스톤) GP0 행: Status → done(키가 없으면 "done, 베이스라인 blocked"), Plan 열에 이 문서 링크
-- [ ] 이 문서 체크박스를 갱신했고, §5 남은 항목이 master-plan에 반영됐는지 확인했다
-- [ ] [master-plan §10](../master-plan.md#10-개발-규칙) 계약 대조: §4 계약과 코드 대조 15분(서명·설정 키·종료 코드·trace 필드), 다르면 다음 슬라이스 전에 master를 먼저 고친다
-- [ ] ADR: ADR-0006 수정(과잉 거절 채점 범위)이 S0.7 PR에 들어갔다. 구조화 출력 하강(S0.3)이 ADR-0004와 어긋나면 고친다
-- [ ] `interface.md` 공유 여부를 사용자에게 물었다
-- [ ] GP1 준비: GP1 이슈 7개가 열려 있고, S1.1 준비 2h(청크 선택·주입 지침·`build_grounding.py` 골격)가 끝났고, S1.1 질문 생성 서브에이전트 착수 여부를 정했다
+> 11/3 점검(세션 결과). `[x]`는 확인한 것, `[ ]`는 남은 것과 이유다. GitHub 쓰기 권한이 없어(403) 브랜치·PR·라벨·이슈 작업은 로컬 커밋까지만 했다.
+
+- [ ] 관문: 무방비 설정으로 스모크 3종이 끝까지 돌고 `report.csv`가 나왔다(실제 키 또는 `--fake`). `main`에서 CI green — **`--fake`로 끝까지 돌았다**(종료 0, `results/*-fake.csv`). 로컬 ruff·pytest(455개)·gitleaks green. CI는 PR을 열지 못해 미확인
+- [ ] 실제 베이스라인 요약이 `results/`에 있다. 없으면 S0.7 `guardrail:blocked`와 사용자 답이 기록돼 있다 — 키 없음, `results/BASELINE_BLOCKED.md`. 라벨은 403으로 못 닮, 사용자 답 대기
+- [ ] GP0 이슈 7개(S0.1–S0.7)가 닫혔다 — PR 머지 대기(머지는 사용자)
+- [x] 새 모듈 줄 커버리지 ≥80%(`pytest --cov`) — 모듈마다 95–100%, 전체 98%
+- [x] `git ls-files runs data/raw data/seed/smoke_attack.jsonl data/seed/smoke_crisis.jsonl`이 비어 있다. gitleaks green(8.30.1, 해시 고정본)
+- [x] `configs/default.yaml`의 `stages` 토글이 모두 `false`이고(GP0에 머지된 가드 단계 없음), `deadlines_s.attack_judge`가 10.0이다
+- [ ] [PRD §10](../PRD.md#10-마일스톤) GP0 행: Status → done(키가 없으면 "done, 베이스라인 blocked"), Plan 열에 이 문서 링크 — 머지 전이라 "in-progress (S0.2–S0.7 구현, 베이스라인 blocked)"로 둠. `attack_judge.md` 적대 검증 미통과도 남음
+- [x] 이 문서 체크박스를 갱신했고, §5 남은 항목이 master-plan에 반영됐는지 확인했다(§5의 두 건은 S0.7 연락처 첫 판·S0.3 역할 상수로 이 문서 안에서 처리)
+- [x] [master-plan §10](../master-plan.md#10-개발-규칙) 계약 대조: §4 계약과 코드 대조(서명·설정 키·종료 코드·trace 필드). 다른 곳은 슬라이스 PR에서 master를 먼저 고쳤다(v18 §4.3 retry-after, v19 §4.5 오류 레코드·§4.7 판정기 입력). 남은 차이는 하위 호환 확장뿐이다: `Guard(cfg, *, llm=None)`·`Guard.from_config(..., *, llm=None)`(S0.3 문서대로), `run_item(..., *, rep, judge_prompt, contact_numbers)`, `LLM(..., wall=)`(retry-after 날짜용 벽시계)
+- [x] ADR: ADR-0006 수정(과잉 거절 채점 범위)이 S0.7 PR에 들어갔다. 구조화 출력 하강(S0.3)은 ADR-0004(판정 모델 계열)와 어긋나지 않는다
+- [ ] `interface.md` 공유 여부를 사용자에게 물었다 — S0.8 초안 PR과 함께 마지막 보고에서 묻는다
+- [ ] GP1 준비: GP1 이슈 7개가 열려 있고, S1.1 준비 2h(청크 선택·주입 지침·`build_grounding.py` 골격)가 끝났고, S1.1 질문 생성 서브에이전트 착수 여부를 정했다 — 이슈는 열려 있고 준비 2h는 끝남(`gr/s1.1-prep`). 코드·민감 교과 청크 부족(aux 청크) 결정과 질문 생성 착수는 사용자 결정 대기
 
 ## 5. master-plan에 반영할 점
 

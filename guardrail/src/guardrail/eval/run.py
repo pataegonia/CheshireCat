@@ -19,7 +19,7 @@ import json
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,11 +74,10 @@ def estimate(items: list[Item], cfg: GuardConfig, repeat: int) -> tuple[int, dic
 
     for item in items:
         if item.kind in _GROUNDED:
-            if st.output.judge:
+            counts["exchange_judge"] += int(st.output.judge)
+            if r2:  # 상한이라 ⑧ 토글과 따로 센다
+                counts["generator"] += 1
                 counts["exchange_judge"] += 1
-                if r2:
-                    counts["generator"] += 1
-                    counts["exchange_judge"] += 1
         elif item.kind == "multiturn":
             for t in item.turns:
                 if t.role == "student":
@@ -151,8 +150,10 @@ async def run_item(
     except (TutorError, BudgetExceeded) as e:
         budget = isinstance(e, BudgetExceeded) or getattr(e, "code", None) == "budget"
         code = getattr(e, "code", type(e).__name__)
+        print(f"항목 {rid} 튜터 오류: {code}", file=sys.stderr)
         return Record(rid, item, rep, None, "error", error=f"tutor:{code}", budget=budget)
     except Exception as e:  # noqa: BLE001 — 항목 하나의 예외로 실행을 멈추지 않는다
+        print(f"항목 {rid} 오류: {type(e).__name__}", file=sys.stderr)
         return Record(rid, item, rep, None, "error", error=type(e).__name__)
 
     if item.kind == "crisis":
@@ -259,7 +260,9 @@ async def execute(
     runs_dir: Path | None = None,
 ) -> RunResult:
     """CLI 사전 확인을 통과한 뒤의 실행 본체. 예산이 바닥나면 남은 항목을 채점하지 않고 멈춘다."""
-    run_dir = (runs_dir or RUNS_DIR) / f"{date.today().isoformat()}-{name}"
+    run_dir = run_dir_for(name, runs_dir)
+    if run_dir.exists() and any(run_dir.iterdir()):
+        raise Refused(f"{run_dir}에 이미 결과가 있다(이름을 바꾸거나 지운다)")
     run_dir.mkdir(parents=True, exist_ok=True)
     cfg_hash = config_hash(cfg)
     guard = Guard(cfg, llm=llm)
@@ -311,6 +314,9 @@ async def execute(
                             displayed_output=rec.verdict.response,
                         )
                     )  # fmt: skip
+                else:
+                    # respond()가 예외를 낸 항목도 같은 request_id로 잇는다(§4.5)
+                    trace.write(error_record(rec.request_id, rec.error or "error", cfg))
 
         tasks = [asyncio.create_task(worker()) for _ in range(max(1, concurrency))]
         waiter = asyncio.create_task(stop.wait())
@@ -319,10 +325,21 @@ async def execute(
         if stop.is_set():
             for t in tasks:
                 t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         waiter.cancel()
+    failures = [
+        r
+        for r in results
+        if isinstance(r, BaseException) and not isinstance(r, asyncio.CancelledError)
+    ]
+    if failures:
+        raise failures[0]  # 평가 기록 쓰기 실패 등 하네스 오류는 그대로 실패한다(§4.5)
 
     incomplete = stop.is_set()
+    if incomplete and repeat > 1:
+        # 중단되면 회차 수가 다른 항목이 섞인다. 반복을 다 마친 항목만 pass^k로 묶는다
+        reps_done = Counter(r.item.id for r in records)
+        records = [r for r in records if reps_done[r.item.id] == repeat]
     scored = [
         M.Scored(
             r.item.id, r.item.seed_id, r.item.kind, r.item.category, r.item.technique or "none",
@@ -343,7 +360,7 @@ async def execute(
         w = csv.DictWriter(f, fieldnames=M.CSV_COLUMNS)
         w.writeheader()
         for row in rows:
-            w.writerow(row)
+            w.writerow(row | {"claimable": "true" if row["claimable"] else "false"})
     return RunResult(EXIT_BUDGET if incomplete else EXIT_OK, run_dir, records)
 
 
@@ -431,7 +448,10 @@ def _metrics_json(
         "claimable_groups": sum(bool(r["claimable"]) for r in rows),
         "requests": n_requests,
         "per_request": {
-            "guard_calls": (llm.total_calls() - llm.usage["generator"].calls) / n_requests
+            "guard_calls": (
+                llm.total_calls() - llm.usage["generator"].calls - llm.usage["attack_judge"].calls
+            )
+            / n_requests
             if n_requests
             else None,
             "guard_tokens_mean": sum(guard_tokens) / len(guard_tokens) if guard_tokens else None,
@@ -453,7 +473,28 @@ def _display_path(p: Path) -> str:
 
 
 def _count_items(files: list[Path]) -> list[tuple[Path, int]]:
-    return [(p, sum(1 for line in p.open(encoding="utf-8") if line.strip())) for p in files]
+    out = []
+    for p in files:
+        with p.open(encoding="utf-8") as f:
+            out.append((p, sum(1 for line in f if line.strip())))
+    return out
+
+
+def run_dir_for(name: str, runs_dir: Path | None = None) -> Path:
+    return (runs_dir or RUNS_DIR) / f"{date.today().isoformat()}-{name}"
+
+
+def error_record(request_id: str, error: str, cfg: GuardConfig) -> dict[str, Any]:
+    """respond()가 예외를 낸 요청의 trace 레코드(record_type: "error"). 원문·메시지 없이 코드만."""
+    return {
+        "record_type": "error",
+        "request_id": request_id,
+        "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
+        "policy_version": cfg.policy_version,
+        "config_hash": config_hash(cfg),
+        "mode": cfg.mode,
+        "error": error,
+    }
 
 
 # --- CLI ---
@@ -479,7 +520,10 @@ def _overrides(pairs: list[str]) -> dict[str, Any]:
         key, sep, value = pair.partition("=")
         if not sep or not key:
             raise Refused(f"--set은 key=value 형식이다: {pair!r}")
-        out[key] = yaml.safe_load(value)
+        try:
+            out[key] = yaml.safe_load(value)
+        except yaml.YAMLError:
+            raise Refused(f"--set 값을 읽지 못했다: {pair!r}") from None
     return out
 
 
@@ -518,6 +562,8 @@ def prepare(
             items.extend(load(f))
     except DatasetError as e:
         raise Refused(f"데이터 오류:\n{e}") from None
+    if not items:
+        raise Refused(f"항목이 0건이다: {args.data}")
     held_items = [i.id for i in items if i.split == "holdout"]
     if held_items:
         raise Refused(f"홀드아웃 항목은 S3.5 전에 읽지 않는다: {held_items[:5]}")
@@ -529,7 +575,10 @@ def prepare(
     if args.fake:
         # 이번 실행이 부르는 역할(덮기 전 추정에서 0보다 큰 역할) 전부를 fake_ok로
         faults = dict(cfg.faults) | dict.fromkeys(by_role, "fake_ok")
-        cfg = load_config(args.config, overrides=overrides | {"faults": faults})
+        try:
+            cfg = load_config(args.config, overrides=overrides | {"faults": faults})
+        except (ValidationError, ValueError) as e:
+            raise Refused(f"설정 오류: {e}") from None
         total, by_role = estimate(items, cfg, args.repeat)
     missing = [r for r, v in cfg.faults.items() if v == "fake_ok" and r not in FAKE_OK]
     if missing:
@@ -568,6 +617,9 @@ def main(argv: list[str] | None = None, *, llm: LLM | None = None) -> int:
         except ValueError as e:  # fake_ok 고정 응답 미등록 등 설정 오류
             return _refuse(e)
     name = f"{args.name}-fake" if args.fake else args.name
+    run_dir = run_dir_for(name)
+    if run_dir.exists() and any(run_dir.iterdir()):
+        return _refuse(Refused(f"{run_dir}에 이미 결과가 있다(이름을 바꾸거나 지운다)"))
     result = asyncio.run(
         execute(
             items, cfg, name=name, repeat=args.repeat,

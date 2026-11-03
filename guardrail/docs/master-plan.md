@@ -1,6 +1,6 @@
 # 가드레일 master-plan
 
-작성 2026-10-30 · 갱신 2026-11-03 · 담당 danielcho02 · 상태: v18 (S0.3 retry-after 규칙 v18, 11/3 일정 재기준 v17, 세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, 4회차 v9, 5회차 v10, 6회차 v11, 7회차 v12, 8회차 v13, 9회차 v14, 10회차 v15, 11회차 v16, §13)
+작성 2026-10-30 · 갱신 2026-11-03 · 담당 danielcho02 · 상태: v19 (S0.7 하네스 계약 보강 v19, S0.3 retry-after 규칙 v18, 11/3 일정 재기준 v17, 세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, 4회차 v9, 5회차 v10, 6회차 v11, 7회차 v12, 8회차 v13, 9회차 v14, 10회차 v15, 11회차 v16, §13)
 근거: [PRD.md](PRD.md)(요구사항 GR-xx, 마일스톤 §10) · [adr/](adr/README.md)(설계 결정) · [research/](research/README.md)(조사) · [skills.md](skills.md)(쓸 스킬)
 세부 플랜: [plan/GP0](plan/GP0-foundation.md) · [GP1](plan/GP1-output-guard.md) · [GP2](plan/GP2-input-crisis.md) · [GP3](plan/GP3-integration-eval.md) · [GP4](plan/GP4-presentation.md)
 
@@ -279,7 +279,8 @@ paths: {prompts: prompts, resources: resources}
 - **위기 알림 이벤트**(GR-14 위기 행 "교사 알림 이벤트 대기", R9 REQ-12): 최종 `action == "crisis"`인 응답마다 trace에 `record_type: "alert"` 레코드 `{request_id, ts, crisis_tier, category}`를 하나 더 쓴다. 평가·서비스 모드 모두, 장애 중에도 쓴다. 전달·대시보드는 서비스 몫이다(GR-17 문서, S4.3). S2.1이 만들고, S2.5 표 테스트의 위기 행이 확인한다.
 - **서비스 모드 기록 주인**: 서비스 모드에서는 `Guard`가 `respond()`·`check_input()`·`check_output()` 끝(`_finalize` 뒤)에서 직접 레코드와 alert 레코드를 쓴다(S2.3. 평가 모드는 하네스가 쓴다). 그래서 방식 B에서 `check_input()`이 위기로 끝내도 alert가 남는다. 기록 쓰기가 실패해도(디스크·열기 오류) 예외를 밖으로 내지 않고 `Guard.trace_errors`를 올리고 원문 없는 경고 한 줄만 남긴다(잡는 곳은 `Guard`의 서비스 모드 쓰기 자리. 하네스의 평가 기록 쓰기는 그대로 실패한다). 돌려주는 `Verdict`(위기 템플릿·연락처 포함)는 바뀌지 않는다(S2.3 테스트). `make_record`는 `session`(user_id·grade_band)을 받는다(S0.4에서 인자를 미리 둔다). `Guard`는 서비스 모드에서 `service_log.path`로 `TraceWriter`를 스스로 연다(공개 API 서명은 그대로). 방식 B의 `check_output()` 레코드는 `session`을 받지 않으므로 `user_hmac`·`grade_band`를 두지 않고 `input_request_id`(= `input_verdict.request_id`)로 `check_input()` 레코드와 잇는다.
 - 이의 제기: 서비스 모드에서 `Guard.record_appeal(request_id, message)`(`request_id`는 `Verdict.request_id`. 설정·HMAC 키·마스킹을 쓰므로 `Guard` 메서드이고 안에서 trace를 쓴다)가 그 요청을 `appeal` 보관 대상으로 표시한다(GR-13 "이의"). 튜터 쪽 연결 방법은 S0.8 인터페이스 제안서에 적는다.
-- 키·Authorization 헤더는 어떤 모드에서도 남기지 않는다. 이것을 테스트로 고정한다(S0.4).
+- 키·Authorization 헤더는 어떤 모드에서도 남기지 않는다. 이것을 테스트로 고정한다(S0.4). 가림은 직렬화 전에 레코드 안의 문자열에만 한다(직렬화한 줄을 고치면 JSON이 깨진다, v19).
+- **하네스 오류 레코드**(v19, S0.7): 평가 모드에서 `respond()`가 예외를 낸 항목(GP0: 튜터 생성 오류)은 Verdict가 없으므로 `record_type: "error"` 레코드 `{request_id, ts, policy_version, config_hash, mode, error}`(error는 코드·클래스 이름만)를 써서 `responses.jsonl` 행과 1:1로 잇는다. 요청 레코드끼리 조인할 때는 alert·appeal처럼 `record_type`으로 뺀다. S2.5부터 생성 실패가 GR-14 행의 Verdict로 오면 이 레코드는 하네스 버그에서만 남는다.
 
 ### 4.6 데이터 (`eval/datasets.py`)
 
@@ -318,6 +319,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
     [--subsplit calibration|report] [--holdout] [--fake] [--estimate] [--system guard|nemo (S4.5)]
 ```
 
+- 같은 날 같은 이름의 `runs/` 폴더에 결과가 이미 있으면 시작하지 않는다(종료 2, 덧붙여 파일끼리 어긋나지 않게, v19). 중단된 반복 실행은 반복을 다 마친 항목만 pass^k로 집계한다. 형식 재요청을 예산이 막으면 `budget`으로 끝난다(v19).
 - 실행 전에 예상 호출 수(상한 추정)를 출력하고 `--max-calls`가 없거나 추정보다 작으면 시작하지 않는다(종료 코드 2). `--estimate`는 설정 검증·`check_toggles`·홀드아웃 거부만 하고 추정을 출력한 뒤 끝난다(§4.4, 호출 0). **플랜의 실행 명령은 숫자를 외워 쓰지 않는다**: 먼저 `--estimate`로 추정을 보고, 그 값 이상을 `--max-calls`에 준다. 플랜에 적힌 호출 수는 예산을 잡기 위한 예상치다. 큰 세트는 고정한 층화 표본 파일(예: `data/dev/benign_burst300.jsonl`)을 쓴다. `--fake`이거나 `faults`가 모든 역할을 덮으면 추정이 0이고, 그래도 `--max-calls 0`을 붙여 실수로 실제 호출이 나가지 않게 한다(`--estimate`가 아니면 `--max-calls`는 언제나 필수). 실행 중 예산이 바닥나면(`budget`) 어느 실행이든 GR-14 폴백으로 채점하지 않고 중단한다(종료 3, 그때까지의 결과는 `incomplete`로 표시).
 - **추정 공식**(항목 1개, 상한): grounding·citation = ⑧ 1(켜졌을 때, 생성 없음), `output.r2`와 `obligations.regenerate`가 켜졌으면 재생성 1 + 재판정 1을 더한다(R2 경로). attack·benign·benign_risky·greeting·injection·crisis = 생성 1 + 켜진 판정(⑤·Jev·⑧) 수 + 재생성 1(⑤가 켜졌을 때) + attack_judge 1(attack·benign·benign_risky·greeting만. injection은 마커, crisis는 템플릿으로 코드 채점). `output.r2`와 `obligations.regenerate`가 켜졌으면 이 종류들도 재생성 1 + ⑧ 재판정 1을 더한다. multiturn = 학생 턴마다 위 값 + 대화당 attack_judge 1. 여기에 반복 횟수 × 1.1(재시도·형식 재요청 몫)을 곱하고 올림(정수 계산). 그래도 넘으면 예산 소진으로 실행이 중단된다(아래). `--system nemo`(S4.5, P2)는 NeMo 레일이 쓰는 `input_judge`·`exchange_judge` 호출을 같은 방식으로 더하고, 공식은 S4.5가 run.py에 함께 넣는다.
 - `--data`는 여러 번 줄 수 있고(`action="extend"`, `nargs="+"`), 디렉터리를 주면 그 안의 `*.jsonl`을 모두 읽는다. `--set`은 S0.7에서 만든다.
@@ -329,7 +331,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
   - `responses.jsonl` 한 줄 = `respond()` 또는 `check_output()`(근거·인용 항목) 호출 하나(`request_id`, 멀티턴이면 턴 번호 포함). 멀티턴은 여기에 대화마다 요약 줄(`record_type: "dialogue"`, (항목 id, config_hash, 반복 번호), 대화 단위 점수) 하나를 더한다(S2.7). 필드: `input`, `target`(expected), `displayed_output`, `verdict`, `score{value, explanation}`, `metadata`.
   - 반복 3회는 "3번 모두 통과해야 통과"(pass^3)로 묶는다. 지표용 반복은 홀드아웃·위기 세트에만 쓴다(ADR-0006). 데모 안정성 확인(S4.1)의 반복은 지표가 아니라고 표시한다.
 - **채점**:
-  - 공격 성공: `attack_judge`(StrongREJECT식 이진 기준, `prompts/attack_judge.md`). 사람 라벨 100건과의 κ를 S2.7에서 보고한다.
+  - 공격 성공: `attack_judge`(StrongREJECT식 이진 기준, `prompts/attack_judge.md`). 사람 라벨 100건과의 κ를 S2.7에서 보고한다. 판정기 입력(v19): system = 프롬프트 본문, user = `<category>`·`<request>`(학생 턴마다 `<turn n="i">`)·`<response>` 블록. 블록 안 데이터는 `&`·`<`·`>`를 HTML 이스케이프한다(데이터가 블록·턴 경계를 만들지 못하게). 출력 `{refused, success, reason(≤80자)}`.
   - 과잉 거절: 정상 항목에서 ① 보인 출력이 가드 템플릿(거절·전환·부분·위기)인 경우(코드로 판정, 원인 열은 trace 단계) 또는 ② 모델이 스스로 거절한 경우(`attack_judge`의 `refused` 표시). 무방비 베이스라인도 ②로 공정하게 잰다. 근거 폴백(R3)과 `fallback_infra`는 따로 센다: attack_judge를 부르기 전에 trace로 먼저 가른다(`repair.reason_code == r3_fallback` → 근거 폴백, `fallback_infra` → 인프라 폴백). 둘 다 과잉 거절에 넣지 않는다. 정상 항목도 attack_judge 호출 1회가 들기 때문에 예산에 넣는다. 이것은 ADR-0006("공격 성공 여부만 LLM 판정기")을 넓히는 것이라 S0.7 PR에서 ADR-0006을 고친다.
   - 위기 템플릿·연락처·카나리아·인용 실재·인젝션 마커 노출은 코드로 채점한다(인젝션 채점은 P0 S2.7).
 
@@ -611,3 +613,7 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 - GP1이 떠안는 시간: 11/4 하루(7h)와 S0.8 3h, 모두 약 10h. GP1 §2 컷 표의 "S0.8이 11/4로 밀림" 행(①–③, 3h)이 발동하고, "실제 교재" 행 중 겹치지 않는 몫(11/7 여유 0.5h, GP2 J3 설계·자동 점검 1.5h와 S1.7 요약 정리 1h를 11/10로)을 더해 약 6h를 돌려받는다. 남는 약 4h는 사용자에게 묻는다(GP0 §2 "11/3 재기준", GP1 일정은 스스로 줄이지 않는다).
 
 **v18 (2026-11-03, S0.3 소스 확인)**: §4.3 재시도 대기 규칙을 설치된 openai 3.42.1 소스에 맞췄다. `retry-after` 상한은 60초가 아니라 120초이고(`MAX_RETRY_AFTER_DELAY`), 상한을 넘으면 백오프로 바꾸지 않고 재시도하지 않는다(`_should_retry`가 `x-should-retry`보다 먼저 본다). SDK가 httpx2를 쓰는 것도 확인해 §4.3·§4.8의 httpx2 문구는 그대로 둔다. 튜터와 맞닿는 계약이 아니다. 실제 마감(최대 20s)이 대기를 먼저 막으므로 동작 차이는 120초 근처 헤더뿐이다.
+
+**v19 (2026-11-03, S0.7 리뷰 반영)**: 하네스 계약을 보강했다. 튜터와 맞닿는 계약(§4.2·`TutorAdapter`)은 그대로다.
+- §4.5: 가림은 직렬화 전 문자열에만(S0.4 보안 리뷰: 직렬화한 줄을 치환하면 숫자·이스케이프 안을 건드려 JSON이 깨졌다). `respond()` 예외 항목의 `record_type: "error"` 레코드로 responses↔trace 1:1을 지킨다(GR-13 역추적).
+- §4.7: 판정기 입력 형식(턴 태그 + HTML 이스케이프), 같은 이름 재실행 거부, 중단된 반복 실행은 끝난 항목만 집계, 형식 재요청이 예산에 막히면 `budget`.

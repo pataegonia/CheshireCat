@@ -528,7 +528,18 @@ class LLM:
                         t0, role, reply.text, parsed, tokens_in, tokens_out, attempts,
                         reply.finish_reason, None,
                     )  # fmt: skip
-                if reasked or attempts >= MAX_ATTEMPTS or remaining <= 0 or self._over_budget():
+                if (
+                    not reasked
+                    and attempts < MAX_ATTEMPTS
+                    and remaining > 0
+                    and self._over_budget()
+                ):
+                    # 형식 재요청을 예산이 막았다. 하네스가 중단할 수 있게 budget으로 알린다
+                    return self._result(
+                        t0, role, reply.text, None, tokens_in, tokens_out, attempts,
+                        reply.finish_reason, "budget",
+                    )  # fmt: skip
+                if reasked or attempts >= MAX_ATTEMPTS or remaining <= 0:
                     # finish_reason은 text로 돌려주는 원문을 낸 시도의 값이다
                     return self._result(
                         t0, role, reply.text, None, tokens_in, tokens_out, attempts,

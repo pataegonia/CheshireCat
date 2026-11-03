@@ -1,13 +1,14 @@
 """S0.7 하네스: 종류별 추정, --estimate, 사전 거부(종료 2), --fake 끝까지, 예산 소진(종료 3)."""
 
+import asyncio
 import csv
 import json
 
 import pytest
-from fakes import FakeLLM, Ok, fake_config
+from fakes import FakeLLM, Malformed, Ok, fake_config
 
 from guardrail import pipeline
-from guardrail.config import ROOT, load_config
+from guardrail.config import ROOT, config_hash, load_config
 from guardrail.eval import run as R
 from guardrail.eval.datasets import Item, load
 from guardrail.eval.metrics import CSV_COLUMNS, METRICS
@@ -212,8 +213,6 @@ def test_data_repeat_and_directory(tmp_path, capsys):
 def test_set_changes_config_hash():
     args_a = R.prepare(_cli("--estimate"))
     args_b = R.prepare(_cli("--estimate", "--set", "thresholds.G=0.6"))
-    from guardrail.config import config_hash
-
     assert config_hash(args_a[1]) != config_hash(args_b[1])
     assert args_b[1].thresholds.G == 0.6
 
@@ -237,7 +236,7 @@ def test_fake_run_end_to_end(tmp_path):
         assert tuple(reader.fieldnames) == CSV_COLUMNS
         rows = list(reader)
     assert {r["metric"] for r in rows} == set(METRICS)
-    assert all(r["claimable"] == "False" for r in rows)  # 씨앗 59개 미만은 주장 불가
+    assert all(r["claimable"] == "false" for r in rows)  # 씨앗 59개 미만은 주장 불가
     responses = [
         json.loads(x) for x in (run_dir / "responses.jsonl").read_text("utf-8").splitlines()
     ]
@@ -272,8 +271,6 @@ def test_budget_exhaustion_stops_with_exit_3(tmp_path):
     llm = FakeLLM(cfg, responder=responder, max_calls=3)
     items = load(MINI)
     total, by_role = R.estimate(items, cfg, 1)
-    import asyncio
-
     result = asyncio.run(
         R.execute(
             items, cfg, name="b", repeat=1, concurrency=1, llm=llm, estimate_total=total,
@@ -309,6 +306,10 @@ def test_item_exception_is_error_and_run_continues(tmp_path, monkeypatch):
     rows = [json.loads(x) for x in (run_dir / "responses.jsonl").read_text("utf-8").splitlines()]
     assert len(rows) == 8 and sum(r["metadata"]["outcome"] == "error" for r in rows) == 1
     assert json.loads((run_dir / "metrics.json").read_text("utf-8"))["errors"] == 1
+    traces = [json.loads(x) for x in (run_dir / "trace.jsonl").read_text("utf-8").splitlines()]
+    assert {t["request_id"] for t in traces} == {r["request_id"] for r in rows}  # error 행도 잇는다
+    (err,) = [t for t in traces if t.get("record_type") == "error"]
+    assert err["error"] == "RuntimeError" and "boom" not in json.dumps(err)
 
 
 # --- 판정기 메시지 ---
@@ -323,3 +324,84 @@ def test_judge_message_escapes_data_and_wraps_turns():
     assert user.count("</request>") == 1 and user.count("</response>") == 1
     assert "&lt;/request&gt;" in user and "&amp; 끝" in user
     assert '<turn n="1">' in user and user.startswith("<category>S14</category>")
+
+
+# --- 리뷰 회귀 ---
+
+
+def test_rerun_same_name_is_refused(capsys):
+    assert R.main(_cli("--fake", "--max-calls", "0")) == 0
+    assert R.main(_cli("--fake", "--max-calls", "0")) == 2
+    assert "이미 결과" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("extra", [("--set", "a=["), ("--set", "a=[", "--estimate")])
+def test_bad_set_yaml_exit_2(extra):
+    assert R.main(_cli(*extra)) == 2
+
+
+def test_empty_data_dir_refused(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    argv = ["--config", str(UNGUARDED), "--data", str(empty), "--name", "e", "--estimate"]
+    assert R.main(argv) == 2
+
+
+def _execute(items, cfg, llm, *, name, repeat=1, concurrency=1, max_calls=0, fake=False):
+    return asyncio.run(
+        R.execute(
+            items, cfg, name=name, repeat=repeat, concurrency=concurrency, llm=llm,
+            estimate_total=0, estimate_by_role={}, max_calls=max_calls, fake=fake,
+            data_files=[MINI],
+        )
+    )  # fmt: skip
+
+
+def test_worker_exception_propagates(monkeypatch):
+    def broken_write(self, record):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(R.TraceWriter, "write", broken_write)
+    cfg = fake_config(faults={"generator": "fake_ok", "attack_judge": "fake_ok"})
+    with pytest.raises(OSError):
+        _execute(load(MINI), cfg, FakeLLM(cfg), name="w", concurrency=2, fake=True)
+
+
+def _judge_responder(judge):
+    def responder(req):
+        return judge if req["role"] == "attack_judge" else Ok("답 [S1]")
+
+    return responder
+
+
+def test_budget_stopped_repeat_run_counts_only_finished_items():
+    cfg = fake_config()
+    judge = Ok('{"refused": false, "success": false, "reason": "x"}')
+    items = [i for i in load(MINI) if i.kind in ("attack", "benign")]
+    llm = FakeLLM(cfg, responder=_judge_responder(judge), max_calls=9)
+    result = _execute(items, cfg, llm, name="r", repeat=3, max_calls=9)
+    assert result.exit_code == 3
+    m = json.loads((result.run_dir / "metrics.json").read_text("utf-8"))
+    # 회차 순서 큐: 4항목 × 2호출 = 8호출로 1회차를 마치고 2회차에서 소진. 3회를 다 마친 항목 없음
+    assert m["metrics"] == {}
+
+
+def test_reask_blocked_by_budget_stops_run():
+    cfg = fake_config()
+    items = [i for i in load(MINI) if i.kind == "attack"][:1]
+    llm = FakeLLM(cfg, responder=_judge_responder(Malformed()), max_calls=2)
+    result = _execute(items, cfg, llm, name="q", max_calls=2)
+    assert result.exit_code == 3 and llm.usage["attack_judge"].errors["budget"] == 1
+
+
+def test_guard_calls_exclude_tutor_and_judge(tmp_path):
+    assert R.main(_cli("--fake", "--max-calls", "0")) == 0
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    m = json.loads((run_dir / "metrics.json").read_text("utf-8"))
+    assert m["per_request"]["guard_calls"] == 0
+
+
+def test_estimate_r2_without_judge_still_counts_grounding():
+    cfg = load_config(UNGUARDED, overrides={"stages.output.r2": True})
+    grounding = _gf(kind="grounding", expected={"violation": False})
+    assert sum(R.estimate([grounding], cfg, 1)[1].values()) == 2

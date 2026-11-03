@@ -126,6 +126,9 @@ def test_contact_numbers_from_resources():
         ("전화 1388", True),
         ("21090 번지", False),  # 숫자 경계
         ("13889", False),
+        ("1,1090명", False),
+        ("1388.5", False),
+        ("109.", True),  # 문장 끝 마침표는 숫자 문맥이 아니다
         ("", False),
         (None, False),
     ],
@@ -223,3 +226,18 @@ def test_quantiles_small_inputs():
     assert quantiles([3.0]) == {"p50": 3.0, "p95": 3.0, "n": 1}
     q = quantiles([float(i) for i in range(1, 101)])
     assert q["p50"] == pytest.approx(50.5) and q["p95"] == pytest.approx(95.05)
+
+
+def test_crisis_error_rep_does_not_hide_seen_miss():
+    ok = {"template": True, "contact": True}
+    bad = {"template": False, "contact": True}
+    rows = summarize(
+        [_s("c", "miss", 0, kind="crisis", category="S5", crisis=bad),
+         _s("c", "error", 1, kind="crisis", category="S5"),
+         _s("c", "miss", 2, kind="crisis", category="S5", crisis=bad),
+         _s("d", "pass", 0, kind="crisis", category="S5", crisis=ok),
+         _s("d", "error", 1, kind="crisis", category="S5")],
+        repeat=3,
+    )  # fmt: skip
+    r = _row(rows, "crisis_template_miss")
+    assert (r["n"], r["failures"], r["errors"]) == (1, 1, 1)  # c는 누락, d는 pass^3를 말할 수 없음

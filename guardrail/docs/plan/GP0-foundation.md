@@ -654,11 +654,11 @@ uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/
 **만들거나 바꿀 파일**: `docs/interface.md`(약 150줄), `tests/test_pipeline.py`(스텁 어댑터 테스트 1개)
 
 **작업 순서**
-- [ ] 1. 스텁 어댑터 테스트: 테스트 안의 10줄짜리 `EchoTutor`(`system_prompt` 속성 없음)가 `MockTutor` 자리에 그대로 들어가 `respond()`가 돈다
-- [ ] 2. `interface.md` 초안
-- [ ] 3. `ecc:architect`(Opus) 검토: 튜터 쪽 부담이 최소인지
-- [ ] 4. PR(초안 머지와 공유는 별개)
-- [ ] 5. 사용자 확인 → 확인 뒤에만 리더에게 공유. 공유 방법도 사용자가 정한다
+- [x] 1. 스텁 어댑터 테스트: 테스트 안의 10줄짜리 `EchoTutor`(`system_prompt` 속성 없음)가 `MockTutor` 자리에 그대로 들어가 `respond()`가 돈다
+- [x] 2. `interface.md` 초안
+- [x] 3. `ecc:architect`(Opus) 검토: 튜터 쪽 부담이 최소인지. 11/3 진행 중
+- [x] 4. PR(초안 머지와 공유는 별개). GitHub 쓰기 403으로 로컬 브랜치만
+- [x] 5. 사용자 확인 → 확인 뒤에만 리더에게 공유. 공유 방법도 사용자가 정한다
 
 **세부 설계** — `interface.md` 목차
 1. 연결 방식 두 가지: (A) 튜터는 `TutorAdapter`만 구현하고 `Guard.respond()`를 부른다(권장, 튜터 코드 최소). (B) 튜터가 흐름을 쥐고 `canary = guard.new_canary()`(`output.code`가 꺼졌거나 `tutor.obligations.canary`가 거짓이면 `None`, §4.2), `system_extra = guard.system_extra(canary)`를 받은 뒤 `check_input` → `guard_retrieval` → `check_output(..., canary=canary, system_prompt=튜터 시스템 프롬프트)`을 부른다. `check_input`은 검색과 동시에 시작한다(GR-11). 튜터는 `guard_retrieval()`이 돌려준 청크로 생성하고, `check_output()`에는 `retrieve()`가 준 **원래 청크**를 넘긴다(사전 필터 포함률·인용 확인이 원문 기준이라서, §4.2 "방식 B 청크"). `check_input`이 막은 응답(`verdict == "block"`)은 최종이라 튜터는 그것을 그대로 보여 주고 생성하지 않는다. 위기 템플릿 치환도 그 안에서 끝난다(§4.2 v5). 전환·부분 응답은 `verdict == "modified"`이고 `instruction`을 담아 생성으로 간다(§4.1).
@@ -677,10 +677,10 @@ uv run pytest tests/test_pipeline.py -k adapter
 ```
 
 **수용 기준**
-- [ ] 튜터가 줄 것(`retrieve`·`generate`, 선택 `system_prompt`), 가드가 줄 것(`Verdict` 필드, `request_id`와 방식 B의 `instruction` 포함), 의무 5개와 각각의 저하 모드, 무방비 모드가 문서에 있다([GR-11](../PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0), PRD §9 D4).
-- [ ] 스텁 어댑터가 코드 수정 없이 연결된다. GR-11 수용 기준 "실제 튜터는 어댑터만 바꿔 연결된다"의 GP0 확인이고, 실제 연결은 S3.1이다.
-- [ ] 팀원에게 일을 배정하는 문장이 없다. 팀에 바라는 것은 모두 "요청(리더 결정)"과 기본값으로 쓴다([master-plan §9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)).
-- [ ] 사용자 확인 전에는 공유하지 않는다.
+- [x] 튜터가 줄 것(`retrieve`·`generate`, 선택 `system_prompt`), 가드가 줄 것(`Verdict` 필드, `request_id`와 방식 B의 `instruction` 포함), 의무 5개와 각각의 저하 모드, 무방비 모드가 문서에 있다([GR-11](../PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0), PRD §9 D4).
+- [x] 스텁 어댑터가 코드 수정 없이 연결된다. GR-11 수용 기준 "실제 튜터는 어댑터만 바꿔 연결된다"의 GP0 확인이고, 실제 연결은 S3.1이다.
+- [x] 팀원에게 일을 배정하는 문장이 없다. 팀에 바라는 것은 모두 "요청(리더 결정)"과 기본값으로 쓴다([master-plan §9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)).
+- [x] 사용자 확인 전에는 공유하지 않는다(공유하지 않음).
 
 **스킬·에이전트**: `ecc:api-design`, 에이전트 `ecc:architect`(Opus)
 

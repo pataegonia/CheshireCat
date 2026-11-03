@@ -258,3 +258,28 @@ def test_from_config_overrides():
 def test_stage_result_status_default_is_ok_not_skipped():
     # 꺼짐(skipped)은 명시해야만 기록된다
     assert StageResult("rules", None, None, None, None, "x", 0.0).status == "ok"
+
+
+# --- S0.8: 스텁 어댑터가 코드 수정 없이 연결된다 (GR-11 "어댑터만 바꿔 연결") ---
+
+
+class EchoTutor:
+    """system_prompt 속성이 없는 10줄짜리 어댑터. 튜터 팀이 쓸 최소 모양."""
+
+    async def retrieve(self, question, history):
+        return [Chunk("S1", "echo", question)]
+
+    async def generate(self, question, history, chunks, *, system_extra="", instruction=None):
+        return f"{chunks[0].text} [S1]"
+
+
+async def test_adapter_echo_tutor_plugs_in_without_changes(guard):
+    tutor = EchoTutor()
+    assert not hasattr(tutor, "system_prompt")
+    v = await guard.respond(
+        "물은 몇 도에서 끓어?", [Turn("student", "안녕")], tutor, session=Session()
+    )
+    assert v.response == "물은 몇 도에서 끓어? [S1]" and v.verdict == "pass"
+    iv = await guard.check_input("q", [])
+    ov = await guard.check_output("q", [], await tutor.retrieve("q", []), "q [S1]", iv)
+    assert ov.response == "q [S1]"

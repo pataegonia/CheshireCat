@@ -379,12 +379,12 @@ uv run pytest tests/test_trace.py
 - `tests/test_datasets.py`, `tests/fixtures/mini.csv`, `tests/fixtures/mini_map.yaml`
 
 **작업 순서**
-- [ ] 1. (10/31) 서브에이전트 ①에 스모크 3종을 맡긴다(아래 구성표)
-- [ ] 2. 테스트 먼저: 스키마 오류 보고, CSV 매핑, 분할 불변식, 중복 제거 규칙, 스모크 파일 검증
-- [ ] 3. `datasets.py`
-- [ ] 4. 스모크 파일을 로더로 검증한다. 걸린 항목은 서브에이전트 ③이 고친다
-- [ ] 5. `data/README.md`. `git status`에 `smoke_attack`·`smoke_crisis`가 안 보이는지 확인
-- [ ] 6. `ecc:pr-test-analyzer` 리뷰 → PR
+- [x] 1. (10/31) 서브에이전트 ①에 스모크 3종을 맡긴다(아래 구성표)
+- [x] 2. 테스트 먼저: 스키마 오류 보고, CSV 매핑, 분할 불변식, 중복 제거 규칙, 스모크 파일 검증
+- [x] 3. `datasets.py`
+- [x] 4. 스모크 파일을 로더로 검증한다. 걸린 항목은 서브에이전트 ③이 고친다
+- [x] 5. `data/README.md`. `git status`에 `smoke_attack`·`smoke_crisis`가 안 보이는지 확인
+- [x] 6. `ecc:pr-test-analyzer` 리뷰 → PR
 
 **세부 설계**
 - `Item`(pydantic, `extra="forbid"`, [§4.6](../master-plan.md#46-데이터-evaldatasetspy) v9 그대로):
@@ -430,11 +430,11 @@ git check-ignore runs/x data/raw/x .coverage data/seed/smoke_attack.jsonl data/s
 ```
 
 **수용 기준**
-- [ ] JSONL·CSV를 형식과 무관하게 같은 `Item`으로 읽는다. 주최측 원본은 S3.2가 이 형식의 JSONL로 한 번 변환하고 하네스는 그 파일을 읽는다(§4.6 v9)([GR-15](../PRD.md#gr-15-평가-하네스-p0) "형식이 나오기 전엔 형식 무관 로더", PRD §9 D6).
-- [ ] 분할은 `seed_id` 단위(`assign_split()` 하나), 중복 제거는 정규화본 기준이고 분할 사이에서는 씨앗이나 정규화본 중 하나만 같아도 dev 쪽을 지우고, 겹친 dev 항목이 dev 고정이면 예외로 홀드아웃 쪽을 지운다(`dedupe()` 하나)(GR-15 "원 요청 단위로 개발/홀드아웃 분리, 정규화 후 중복 제거", [PRD §8](../PRD.md#8-데이터)). 두 함수는 §4.6 규칙과 글자 그대로 같다.
-- [ ] 항목마다 범주와 기법이 있어 리포트를 범주 × 기법으로 나눌 수 있다(GR-15 "한국어 테스트 매트릭스"). 범주 null은 `organizer_test`의 대응 없는 라벨만이다(§4.6).
-- [ ] 스모크 130건이 검증을 통과하고 실제 PII는 0건이다([master-plan §10](../master-plan.md#10-개발-규칙) 보안).
-- [ ] `runs/`, `data/raw/`, `.coverage`, 공격·위기 스모크가 git에서 무시되고, 커밋된 스모크는 `smoke_benign.jsonl` 하나다.
+- [x] JSONL·CSV를 형식과 무관하게 같은 `Item`으로 읽는다. 주최측 원본은 S3.2가 이 형식의 JSONL로 한 번 변환하고 하네스는 그 파일을 읽는다(§4.6 v9)([GR-15](../PRD.md#gr-15-평가-하네스-p0) "형식이 나오기 전엔 형식 무관 로더", PRD §9 D6).
+- [x] 분할은 `seed_id` 단위(`assign_split()` 하나), 중복 제거는 정규화본 기준이고 분할 사이에서는 씨앗이나 정규화본 중 하나만 같아도 dev 쪽을 지우고, 겹친 dev 항목이 dev 고정이면 예외로 홀드아웃 쪽을 지운다(`dedupe()` 하나)(GR-15 "원 요청 단위로 개발/홀드아웃 분리, 정규화 후 중복 제거", [PRD §8](../PRD.md#8-데이터)). 두 함수는 §4.6 규칙과 글자 그대로 같다.
+- [x] 항목마다 범주와 기법이 있어 리포트를 범주 × 기법으로 나눌 수 있다(GR-15 "한국어 테스트 매트릭스"). 범주 null은 `organizer_test`의 대응 없는 라벨만이다(§4.6).
+- [x] 스모크 130건이 검증을 통과하고 실제 PII는 0건이다([master-plan §10](../master-plan.md#10-개발-규칙) 보안).
+- [x] `runs/`, `data/raw/`, `.coverage`, 공격·위기 스모크가 git에서 무시되고, 커밋된 스모크는 `smoke_benign.jsonl` 하나다.
 
 **스킬·에이전트**: `ecc:eval-harness`, 에이전트 `ecc:pr-test-analyzer`(Sonnet). 데이터 작성은 general-purpose(Sonnet).
 

@@ -5,6 +5,7 @@
 - 주최측 원본은 S3.2가 이 형식의 JSONL로 한 번 변환하고 하네스는 그 파일을 읽는다.
 """
 
+import copy
 import csv
 import hashlib
 import json
@@ -40,7 +41,7 @@ class _Strict(BaseModel):
 
 class TurnIn(_Strict):
     role: Literal["student", "tutor"]
-    content: str
+    content: str = Field(min_length=1)  # 빈 글은 분할 사이 중복 비교에서 가짜로 겹친다
 
 
 class ChunkIn(_Strict):
@@ -66,7 +67,7 @@ class Item(_Strict):
     technique: Technique | None = None  # 필수. organizer_test에서 없으면 none
     subtype: str | None = None
     turns: list[TurnIn] = Field(min_length=1)
-    expected: Expected = Expected()
+    expected: Expected = Field(default_factory=Expected)  # 검증기가 action을 채운다
     source: str
     license: str
     # 근거 세트 필드. 필수 검사와 labels 형식은 S1.1이 더한다
@@ -126,26 +127,35 @@ def _describe(e: ValidationError) -> str:
     return "; ".join(parts)
 
 
-def _jsonl_rows(path: Path, errors: list[str]) -> list[tuple[int, dict]]:
+Row = tuple[int, dict[str, Any]]
+
+
+def _jsonl_rows(path: Path, errors: list[str]) -> list[Row]:
     rows = []
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            rows.append((lineno, json.loads(line)))
-        except json.JSONDecodeError as e:
-            errors.append(f"{path}:{lineno}: JSON 오류 {e.msg}")
+    # splitlines()는 JSON 문자열 안의 U+2028 등에서도 자르므로 \n에서만 나누는 파일 반복을 쓴다
+    with path.open(encoding="utf-8", newline="\n") as f:
+        for lineno, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                rows.append((lineno, json.loads(line)))
+            except json.JSONDecodeError as e:
+                errors.append(f"{path}:{lineno}: JSON 오류 {e.msg}")
     return rows
 
 
-def _csv_rows(path: Path, mapping: Path) -> list[tuple[int, dict]]:
-    spec = yaml.safe_load(Path(mapping).read_text(encoding="utf-8")) or {}
+def _csv_rows(path: Path, mapping: Path) -> list[Row]:
+    try:
+        spec = yaml.safe_load(mapping.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as e:
+        raise DatasetError([f"{mapping}: 매핑 YAML을 읽지 못했다({type(e).__name__})"]) from None
     columns: dict[str, str] = spec.get("columns", {})
     defaults: dict[str, Any] = spec.get("defaults", {})
     rows = []
     with path.open(encoding="utf-8", newline="") as f:
-        for n, record in enumerate(csv.DictReader(f), start=1):
-            raw = json.loads(json.dumps(defaults))  # 깊은 복사
+        reader = csv.DictReader(f)
+        for n, record in enumerate(reader, start=1):
+            raw = copy.deepcopy(defaults)
             for field, column in columns.items():
                 value = record.get(column)
                 if field == "text":
@@ -154,7 +164,7 @@ def _csv_rows(path: Path, mapping: Path) -> list[tuple[int, dict]]:
                     raw[field] = value
             raw.setdefault("id", f"{raw.get('source', 'csv')}-{n:05d}")
             raw.setdefault("seed_id", raw["id"])
-            rows.append((n + 1, raw))  # 머리줄 다음부터 센 파일 줄 번호
+            rows.append((reader.line_num, raw))  # 셀 안 줄바꿈이 있어도 맞는 파일 줄 번호
     return rows
 
 
@@ -162,14 +172,17 @@ def load(path: str | Path, mapping: str | Path | None = None) -> list[Item]:
     """JSONL 또는 CSV(+매핑 YAML)를 Item 목록으로 읽는다. 오류는 줄 번호와 함께 모아 낸다."""
     path = Path(path)
     errors: list[str] = []
-    if path.suffix == ".jsonl":
-        rows = _jsonl_rows(path, errors)
-    elif path.suffix == ".csv":
-        if mapping is None:
-            raise DatasetError([f"{path}: CSV에는 매핑 YAML이 필요하다"])
-        rows = _csv_rows(path, Path(mapping))
-    else:
-        raise DatasetError([f"{path}: 모르는 형식 {path.suffix!r}(jsonl·csv만)"])
+    try:
+        if path.suffix == ".jsonl":
+            rows = _jsonl_rows(path, errors)
+        elif path.suffix == ".csv":
+            if mapping is None:
+                raise DatasetError([f"{path}: CSV에는 매핑 YAML이 필요하다"])
+            rows = _csv_rows(path, Path(mapping))
+        else:
+            raise DatasetError([f"{path}: 모르는 형식 {path.suffix!r}(jsonl·csv만)"])
+    except (OSError, UnicodeDecodeError, csv.Error) as e:
+        raise DatasetError([f"{path}: 읽지 못했다({type(e).__name__})"]) from None
     items: list[Item] = []
     seen: dict[str, int] = {}
     for lineno, raw in rows:
@@ -227,15 +240,21 @@ def dedupe(
     항목이 dev 고정(fixed_dev, 이미 본 항목)이면 홀드아웃 쪽을 먼저 지운다.
     """
     removed: list[tuple[str, str]] = []
-    first: dict[tuple[str, ...], str] = {}
+    first: dict[tuple[str, ...], int] = {}  # 키 → kept 안 위치
     kept: list[Item] = []
     for it in items:
         k = _key(it)
-        if k in first:
-            removed.append((it.id, first[k]))
+        if k not in first:
+            first[k] = len(kept)
+            kept.append(it)
             continue
-        first[k] = it.id
-        kept.append(it)
+        old = kept[first[k]]
+        if it.id in fixed_dev and old.id not in fixed_dev:
+            # dev 고정 항목을 대표로 남긴다. 아니면 고정 항목이 지워져 홀드아웃 쪽 겹침을 놓친다
+            kept[first[k]] = it
+            removed.append((old.id, it.id))
+        else:
+            removed.append((it.id, old.id))
 
     drop: set[str] = set()
     fixed = [i for i in kept if i.split == "dev" and i.id in fixed_dev]

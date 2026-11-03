@@ -195,6 +195,32 @@ def test_csv_without_mapping_is_error():
         load(FIXTURES / "mini.csv")
 
 
+def test_jsonl_line_separator_inside_string_is_not_a_line_break(tmp_path):
+    row = _item(turns=[{"role": "student", "content": "줄\u2028나눔\x0c문자"}])
+    p = tmp_path / "u.jsonl"
+    p.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert load(p)[0].turns[0].content == "줄\u2028나눔\x0c문자"
+
+
+def test_bad_mapping_yaml_is_dataset_error(tmp_path):
+    bad = tmp_path / "m.yaml"
+    bad.write_text("columns: [unclosed\n", encoding="utf-8")
+    with pytest.raises(DatasetError, match="매핑"):
+        load(FIXTURES / "mini.csv", mapping=bad)
+
+
+def test_undecodable_file_is_dataset_error(tmp_path):
+    p = tmp_path / "x.jsonl"
+    p.write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(DatasetError, match="읽지 못했다"):
+        load(p)
+
+
+def test_empty_student_turn_rejected(tmp_path):
+    with pytest.raises(DatasetError, match="content"):
+        load(_write(tmp_path, [_item(turns=[{"role": "student", "content": ""}])]))
+
+
 def test_unknown_extension(tmp_path):
     p = tmp_path / "x.txt"
     p.write_text("a", encoding="utf-8")
@@ -206,19 +232,28 @@ def test_unknown_extension(tmp_path):
 
 
 def test_assign_split_fixed_values():
-    # 고정 기준값: salt·비율이 바뀌면 이 테스트가 깨진다
-    got = {s: assign_split(s) for s in ("atk-0001", "atk-0002", "atk-0003", "ben-0001", "cri-0001")}
-    assert got == {s: ("holdout" if _bucket("cheshire-split:", s) < 30 else "dev") for s in got}
-    assert (
-        _bucket("cheshire-split:", "atk-0001")
-        == int(__import__("hashlib").sha256(b"cheshire-split:atk-0001").hexdigest()[:8], 16) % 100
+    # 고정 기준값(2026-11-03 계산). salt·비율·해시 자리수가 바뀌면 깨진다
+    assert {s: assign_split(s) for s in ("atk-0001", "atk-0002", "ben-0001", "cri-0001")} == {
+        "atk-0001": "dev",
+        "atk-0002": "dev",
+        "ben-0001": "dev",
+        "cri-0001": "holdout",
+    }
+    assert (_bucket("cheshire-split:", "atk-0001"), _bucket("cheshire-split:", "cri-0001")) == (
+        35,
+        26,
     )
 
 
-@given(st.text(min_size=1, max_size=20))
-def test_assign_split_is_a_function_of_seed(seed):
-    assert assign_split(seed) == assign_split(seed)
-    assert assign_split(seed) in ("dev", "holdout")
+@given(
+    st.lists(st.text(min_size=1, max_size=12), min_size=1, max_size=20, unique=True), st.randoms()
+)
+def test_assign_split_ignores_order_and_other_items(seeds, rnd):
+    before = {s: assign_split(s) for s in seeds}
+    shuffled = list(seeds) + ["새로 더한 씨앗"]
+    rnd.shuffle(shuffled)
+    after = {s: assign_split(s) for s in shuffled}
+    assert all(after[s] == before[s] for s in seeds)
 
 
 def test_assign_split_ratio_about_30_percent():
@@ -294,6 +329,40 @@ def test_dedupe_holdout_overlapping_fixed_and_plain_dev():
     kept, removed = dedupe([fixed, plain, hold], fixed_dev=frozenset({"smk-1"}))
     assert {i.id for i in kept} == {"smk-1", "d2"}
     assert removed == [("h", "smk-1")]
+
+
+def test_dedupe_fixed_dev_after_plain_duplicate_still_protects_holdout():
+    # 같은 키의 일반 dev가 먼저 나와도 dev 고정 항목이 대표로 남아 홀드아웃 쪽이 지워진다
+    plain = _it("d", "s1", "밀도가 뭐야?")
+    fixed = _it("smk-1", "s1", "밀도가 뭐야?")
+    hold = _it("h", "s1", "다른 글", split="holdout")
+    kept, removed = dedupe([plain, fixed, hold], fixed_dev=frozenset({"smk-1"}))
+    assert [i.id for i in kept] == ["smk-1"]
+    assert removed == [("d", "smk-1"), ("h", "smk-1")]
+
+
+def test_dedupe_fixed_dev_by_text_only():
+    fixed = _it("smk-1", "s1", "밀도가 뭐야?")
+    hold = _it("h", "s7", "밀도가 뭐야?", split="holdout")
+    kept, removed = dedupe([hold, fixed], fixed_dev=frozenset({"smk-1"}))
+    assert kept == [fixed] and removed == [("h", "smk-1")]
+
+
+def test_dedupe_two_holdouts_one_fixed_one_plain():
+    fixed = _it("smk-1", "s1", "밀도가 뭐야?")
+    plain = _it("d2", "s2", "질량이 뭐야?")
+    h1 = _it("h1", "s1", "x", split="holdout")
+    h2 = _it("h2", "s2", "y", split="holdout")
+    kept, removed = dedupe([fixed, plain, h1, h2], fixed_dev=frozenset({"smk-1"}))
+    assert {i.id for i in kept} == {"smk-1", "h2"}
+    assert removed == [("h1", "smk-1"), ("d2", "h2")]
+
+
+def test_dedupe_cross_split_ignores_answer_for_grounding():
+    dev = _it("g1", "s1", "승화가 뭐야?", kind="grounding", answer="답 A")
+    hold = _it("g2", "s9", "승화가 뭐야?", split="holdout", kind="grounding", answer="답 B")
+    kept, removed = dedupe([dev, hold])
+    assert kept == [hold] and removed == [("g1", "g2")]
 
 
 def test_dedupe_other_splits_untouched():

@@ -203,12 +203,12 @@ uv run ruff check . && uv run ruff format --check .
 - `pyproject.toml`·`uv.lock`: `uv add "openai>=3,<4"`. `[tool.pytest.ini_options]`에 `markers = ["live: 실제 API 호출. CI에서 돌지 않음"]`, `addopts = "-m 'not live'"`
 
 **작업 순서**
-- [ ] 1. `ecc:docs-lookup`으로 설치된 openai 3.x `_base_client.py`(재시도 대상, `x-should-retry`, retry-after 상한), 예외 클래스, httpx2를 확인한다. 아래 표와 다르면 표를 먼저 고친다. 설치된 SDK가 httpx2가 아니라 httpx를 쓰면: openai를 그 버전으로 고정하고(`uv add "openai==<설치된 버전>"`), 헤더 테스트는 `httpx.AsyncClient(transport=httpx.MockTransport(handler))`로 쓴다(새 의존성 없음). master §4.3·§4.8의 httpx2 문구는 이 PR에서 고친다
-- [ ] 2. 테스트 먼저(아래 표), `tests/fakes.py`
-- [ ] 3. `Gate` → `retry_wait`·오류 분류 → `LLM.complete`(faults·마감·재시도·예산·구조화 출력·집계) → `LLM.slot`
-- [ ] 4. `openai_send` + MockTransport 헤더 테스트
-- [ ] 5. live 스모크(키가 오면 로컬에서)
-- [ ] 6. `ecc:silent-failure-hunter` 리뷰 → PR
+- [x] 1. `ecc:docs-lookup`으로 설치된 openai 3.x `_base_client.py`(재시도 대상, `x-should-retry`, retry-after 상한), 예외 클래스, httpx2를 확인한다. 아래 표와 다르면 표를 먼저 고친다. 설치된 SDK가 httpx2가 아니라 httpx를 쓰면: openai를 그 버전으로 고정하고(`uv add "openai==<설치된 버전>"`), 헤더 테스트는 `httpx.AsyncClient(transport=httpx.MockTransport(handler))`로 쓴다(새 의존성 없음). master §4.3·§4.8의 httpx2 문구는 이 PR에서 고친다
+- [x] 2. 테스트 먼저(아래 표), `tests/fakes.py`
+- [x] 3. `Gate` → `retry_wait`·오류 분류 → `LLM.complete`(faults·마감·재시도·예산·구조화 출력·집계) → `LLM.slot`
+- [x] 4. `openai_send` + MockTransport 헤더 테스트
+- [ ] 5. live 스모크(키가 오면 로컬에서). 11/3 키 없음: `-m live` 테스트만 두고 미실행
+- [x] 6. `ecc:silent-failure-hunter` 리뷰 → PR
 
 **세부 설계** ([§4.3](../master-plan.md#43-llm-호출-llmpy)을 그대로 구현)
 
@@ -256,7 +256,7 @@ class LLM:
 0. `faults`에 역할이 있으면 위 규칙대로 바로 반환한다.
 1. 시도마다 예산 확인(`calls >= max_calls`면 `budget`) → 게이트 허가(대기는 마감에 넣지 않고 시도마다 `gate.max_wait_s`(기본 30s)까지만 기다린다. 넘기면 `timeout`이고 `usage[role].gate_timeouts` +1, §4.3 v8) → 마감은 남은 시간 `remaining`(처음 `deadline_s`)으로 들고 다니며 **보내는 시간과 백오프만** 뺀다. 재시도의 게이트 대기도 빼지 않는다 → `send(..., max_tokens=…, timeout=remaining)` → `finally`에서 허가 반납. 그래서 폭주 때 ⑤가 생성 호출 뒤에 줄을 서거나 429 뒤 다시 줄을 서도 마감을 대기에 쓰지 않는다(테스트: 429 뒤 재시도가 긴 줄을 기다려도 `timeout`이 아님).
 2. 대기 `retry_wait(headers, n, rand, now)`(n = 0부터 센 재시도 번호): `retry-after-ms`(밀리초) → `retry-after`(초 실수 또는 HTTP 날짜) 순서로 읽는다. 값이 **0 초과 120초 이하**면 그만큼 기다린다. **120초를 넘으면 `None`(재시도하지 않음)**. 없거나, 못 읽거나, 0 이하이면 `min(0.5·2ⁿ, 8) × (1 − 0.25·rand())`([§4.3](../master-plan.md#43-llm-호출-llmpy) v18, openai-python 3.42.1 소스로 확인).
-3. 재시도 조건: 재시도 대상이고, 시도 < 3이고, 재시도 예산(`retries < max(5, 0.1 × 첫 시도 수)`, §4.3 "하한 5회")이 남았고, 대기 < 남은 마감. 아니면 기다리지 않고 그 `error`로 반환한다.
+3. 재시도 조건(형식 재요청·구조화 단 하강도 같은 3회 안에 센다. 예산은 게이트 허가를 받은 뒤 한 번 더 확인해 줄 선 호출이 상한을 넘겨 보내지 않게 한다, S0.3 리뷰): 재시도 대상이고, 시도 < 3이고, 재시도 예산(`retries < max(5, 0.1 × 첫 시도 수)`, §4.3 "하한 5회")이 남았고, 대기 < 남은 마감. 아니면 기다리지 않고 그 `error`로 반환한다.
 4. `schema`가 있으면 파싱한다. 실패하면 이전 출력과 "앞 출력이 스키마에 맞지 않습니다. JSON 객체 하나만 다시 출력하세요."를 붙여 1회 재요청. 또 실패하면 `bad_json`, `text`는 원문.
 5. 예외를 밖으로 던지지 않는다. `CancelledError`만 그대로 올린다(허가는 반납).
 6. `attempts` = 실제 보낸 요청 수, 토큰 = 모든 시도의 합, `latency_ms` = 시작부터 반환까지. usage가 없는 게이트웨이면 토큰 0, `usage_missing`을 센다. `finish_reason`([§4.3](../master-plan.md#43-llm-호출-llmpy) v9) = 최종으로 쓴 출력을 낸 시도의 `Reply.finish_reason`이다. 재요청 뒤면 재요청 응답의 값, `bad_json`이면 `text`로 돌려준 원문을 낸 시도의 값이고, 출력 없이 끝난 오류면 `None`이다. `"length"`면 `max_tokens`에서 잘린 것이라 S1.5·S2.4 live 스모크가 이것을 본다.
@@ -298,13 +298,13 @@ uv run pytest -m live tests/test_llm.py   # 키가 있을 때 로컬에서만
 ```
 
 **수용 기준**
-- [ ] FakeLLM으로 타임아웃·5xx·429·잘못된 JSON을 넣으면 예외 없이 `timeout`·`server`·`rate_limit`·`bad_json`이 나온다. [GR-14](../PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2) 수용 기준 "장애 주입 테스트(판정 API 타임아웃·5xx·429·잘못된 JSON)에서 표와 일치"의 호출 계층 몫이다. 등급표 적용은 S1.6·S2.5, 전체 장애 주입은 S2.7.
-- [ ] 재시도는 `llm.py` 한 곳에서만 하고 SDK 재시도는 끈다(`max_retries=0`). `retry-after`를 지키고 지터를 넣으며 호출별 마감을 넘기지 않는다. 마감은 게이트 허가부터 재고, 게이트 대기는 `gate.max_wait_s`까지다(GR-14 동시성 게이트 항목, §4.3).
-- [ ] 생성을 포함한 모든 호출이 게이트 하나를 지난다. 가드 밖 호출은 `slot()`으로 같은 게이트와 같은 예산을 쓴다. 429면 절반(구간당 1회), 성공 10회면 +1(GR-14, ADR-0007).
-- [ ] 평가 모드 `faults`가 역할별로 호출 없이 결과를 정한다(4개 오류 + `fake_ok`). `fake_ok`는 `FAKE_OK`에 고정 응답이 등록된 역할(GP0: generator·attack_judge)만 쓸 수 있고, 등록이 없으면 역할 이름을 담은 설정 오류로 멈춘다(가짜 응답을 지어내지 않는다). `llm.py`는 `guardrail.eval`을 import하지 않는다(S2.7 장애 주입과 S0.7 `--fake`의 바탕).
-- [ ] 호출 상한을 넘으면 `budget`을 돌려주고 호출하지 않는다(`slot()`은 `BudgetExceeded`, 둘 다 같은 상한에 센다)([GR-15](../PRD.md#gr-15-평가-하네스-p0) API 예산). 호출마다 토큰·지연·시도 수·`finish_reason`이 남는다([ADR-0004](../adr/0004-judge-model-family.md)).
-- [ ] `live` 테스트는 기본 실행과 CI에서 빠진다.
-- [ ] GR-14 "장애 중 위기 입력이 위기 템플릿·연락처 없이 응답된 경우 0건"은 S2.5·S2.7, "폭주 시험(수백 건, 동시성 20–50) 정상 질문의 `fallback_infra` ≤1%"는 S3.6 몫이다. 여기서는 게이트 단위 테스트까지 한다.
+- [x] FakeLLM으로 타임아웃·5xx·429·잘못된 JSON을 넣으면 예외 없이 `timeout`·`server`·`rate_limit`·`bad_json`이 나온다. [GR-14](../PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2) 수용 기준 "장애 주입 테스트(판정 API 타임아웃·5xx·429·잘못된 JSON)에서 표와 일치"의 호출 계층 몫이다. 등급표 적용은 S1.6·S2.5, 전체 장애 주입은 S2.7.
+- [x] 재시도는 `llm.py` 한 곳에서만 하고 SDK 재시도는 끈다(`max_retries=0`). `retry-after`를 지키고 지터를 넣으며 호출별 마감을 넘기지 않는다. 마감은 게이트 허가부터 재고, 게이트 대기는 `gate.max_wait_s`까지다(GR-14 동시성 게이트 항목, §4.3).
+- [x] 생성을 포함한 모든 호출이 게이트 하나를 지난다. 가드 밖 호출은 `slot()`으로 같은 게이트와 같은 예산을 쓴다. 429면 절반(구간당 1회), 성공 10회면 +1(GR-14, ADR-0007).
+- [x] 평가 모드 `faults`가 역할별로 호출 없이 결과를 정한다(4개 오류 + `fake_ok`). `fake_ok`는 `FAKE_OK`에 고정 응답이 등록된 역할(GP0: generator·attack_judge)만 쓸 수 있고, 등록이 없으면 역할 이름을 담은 설정 오류로 멈춘다(가짜 응답을 지어내지 않는다). `llm.py`는 `guardrail.eval`을 import하지 않는다(S2.7 장애 주입과 S0.7 `--fake`의 바탕).
+- [x] 호출 상한을 넘으면 `budget`을 돌려주고 호출하지 않는다(`slot()`은 `BudgetExceeded`, 둘 다 같은 상한에 센다)([GR-15](../PRD.md#gr-15-평가-하네스-p0) API 예산). 호출마다 토큰·지연·시도 수·`finish_reason`이 남는다([ADR-0004](../adr/0004-judge-model-family.md)).
+- [x] `live` 테스트는 기본 실행과 CI에서 빠진다.
+- [x] GR-14 "장애 중 위기 입력이 위기 템플릿·연락처 없이 응답된 경우 0건"은 S2.5·S2.7, "폭주 시험(수백 건, 동시성 20–50) 정상 질문의 `fallback_infra` ≤1%"는 S3.6 몫이다. 여기서는 게이트 단위 테스트까지 한다.
 
 **스킬·에이전트**: `ecc:cost-aware-llm-pipeline`, `ecc:error-handling`, `ecc:documentation-lookup`, 에이전트 `ecc:silent-failure-hunter`(Opus), `ecc:docs-lookup`(Sonnet)
 

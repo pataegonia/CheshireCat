@@ -23,13 +23,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from guardrail.config import GuardConfig
 from guardrail.types import ROLES, Role
 
 ErrorCode = Literal["timeout", "rate_limit", "server", "bad_json", "auth", "bad_request", "budget"]
-Outcome = Literal["ok", "rate_limit", "error", "cancel"]
+Outcome = Literal["ok", "rate_limit", "error", "cancel", "unused"]  # unused: 받고 안 씀
 Structured = Literal["json_schema", "json_object", "prompt"]
 
 MAX_ATTEMPTS = 3
@@ -106,7 +106,7 @@ class LLMResult:
 
 @dataclass
 class Usage:
-    calls: int = 0  # 실제로 보낸 요청 수(slot 진입 포함)
+    calls: int = 0  # 보낸 요청 수 + slot()이 허가를 받은 수. max_calls가 이 합을 본다
     retries: int = 0
     reasks: int = 0
     faults: int = 0
@@ -114,7 +114,8 @@ class Usage:
     usage_missing: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
-    errors: Counter[str] = field(default_factory=Counter)
+    errors: Counter[str] = field(default_factory=Counter)  # LLMResult.error 코드별 수
+    unexpected: Counter[str] = field(default_factory=Counter)  # 분류 밖 예외의 클래스 이름별 수
     latencies_ms: list[float] = field(default_factory=list)
 
 
@@ -177,8 +178,11 @@ def _parse_retry_after(headers: Mapping[str, str], now: float) -> float | None:
         if math.isinf(delay) and value.strip().lower() not in _INF_LITERALS:
             return MAX_RETRY_AFTER_S + 1  # 수치 넘침은 과도한 대기로 본다(SDK와 같음)
         return delay / divisor
+    value = headers.get("retry-after")
+    if value is None:
+        return None
     try:
-        parsed = email.utils.parsedate_tz(headers.get("retry-after"))  # type: ignore[arg-type]
+        parsed = email.utils.parsedate_tz(value)
         if parsed is None:
             return None
         return float(email.utils.mktime_tz(parsed) - now)
@@ -245,6 +249,8 @@ class Gate:
             if epoch == self.epoch:
                 self.limit = max(self.min, self.limit // 2)
                 self.epoch += 1
+        elif outcome == "unused":
+            pass  # 허가를 받았지만 보내지 않음(예산 소진). 연속 성공 수를 건드리지 않는다
         elif outcome == "ok":
             self._streak += 1
             if self._streak % self.increase_after == 0:
@@ -295,6 +301,11 @@ def openai_send(client: Any) -> Send:
             raise TransportError("connect") from None
         except openai.APIStatusError as e:
             raise TransportError("status", e.status_code, dict(e.response.headers)) from None
+        except openai.APIError:
+            # 응답 검증 실패 등 나머지 SDK 오류. 서버 쪽 문제로 본다
+            raise TransportError("connect") from None
+        if not resp.choices:
+            raise TransportError("connect")
         choice = resp.choices[0]
         usage = resp.usage
         return Reply(
@@ -390,15 +401,22 @@ class LLM:
         fault = self.cfg.faults.get(role)
         if fault is not None:
             usage.faults += 1
+            # faults는 게이트·예산·재시도·집계(errors·지연)를 지나지 않는다. faults 수로만 센다
             if fault != "fake_ok":
-                return self._result(t0, role, None, None, 0, 0, 0, None, fault)
-            text = self._fakes[role](messages)
+                return LLMResult(None, None, 0, 0, 0.0, 0, None, fault)
+            try:
+                text = self._fakes[role](messages)
+            except Exception as e:  # noqa: BLE001 — 고정 응답 함수의 버그도 error로 돌려준다
+                usage.unexpected[type(e).__name__] += 1
+                return LLMResult(None, None, 0, 0, 0.0, 0, None, "server")
             parsed = _parse(text, schema, "json_schema") if schema else None
             error = "bad_json" if schema and parsed is None else None
-            return self._result(t0, role, text, parsed, 0, 0, 0, None, error)
+            return LLMResult(text, parsed, 0, 0, 0.0, 0, None, error)
         model = getattr(self.cfg.models, role)
         if not model:
-            # 모델명이 없으면 보내지 않는다. 실행 전 확인은 run.py가 한다(S0.7)
+            # 모델명이 없으면 보내지 않는다. 실행 전 확인은 run.py가 한다(S0.7).
+            # 계약상 예외를 내지 않으므로 bad_request로 돌려주고 따로 센다
+            usage.unexpected["no_model"] += 1
             return self._result(t0, role, None, None, 0, 0, 0, None, "bad_request")
         if self._send is None:
             self._send = _default_send()
@@ -420,8 +438,10 @@ class LLM:
         usage.calls += 1
         try:
             epoch = await self.gate.acquire(self.cfg.gate.max_wait_s)
-        except TimeoutError:
-            usage.gate_timeouts += 1
+        except BaseException as e:
+            usage.calls -= 1  # 들어가지 못했으니 예산을 쓰지 않는다
+            if isinstance(e, TimeoutError):
+                usage.gate_timeouts += 1
             raise
         outcome: Outcome = "error"
         try:
@@ -449,7 +469,6 @@ class LLM:
         attempts = tokens_in = tokens_out = n_retry = 0
         reasked = downgraded = False
         convo = list(messages)
-        self._first_attempts += 1
         while True:
             if self._over_budget():
                 return self._result(
@@ -462,8 +481,16 @@ class LLM:
                 return self._result(
                     t0, role, None, None, tokens_in, tokens_out, attempts, None, "timeout"
                 )
+            if self._over_budget():
+                # 줄을 서 있는 동안 다른 호출이 예산을 다 썼다. 허가만 돌려주고 보내지 않는다
+                self.gate.release(epoch, "unused")
+                return self._result(
+                    t0, role, None, None, tokens_in, tokens_out, attempts, None, "budget"
+                )
             level = self.structured_level
             usage.calls += 1
+            if attempts == 0:
+                self._first_attempts += 1  # 재시도 예산의 분모는 실제로 보낸 첫 시도만
             attempts += 1
             sent_at = self._clock()
             outcome: Outcome = "cancel"
@@ -482,6 +509,10 @@ class LLM:
             except TransportError as e:
                 failure = e
                 outcome = "rate_limit" if e.status == 429 else "error"
+            except Exception as e:  # noqa: BLE001 — 계약: CancelledError 말고는 밖으로 내지 않는다
+                usage.unexpected[type(e).__name__] += 1
+                failure = TransportError("connect", headers={"x-should-retry": "false"})
+                outcome = "error"
             finally:
                 self.gate.release(epoch, outcome)
                 remaining -= self._clock() - sent_at
@@ -497,7 +528,7 @@ class LLM:
                         t0, role, reply.text, parsed, tokens_in, tokens_out, attempts,
                         reply.finish_reason, None,
                     )  # fmt: skip
-                if reasked or remaining <= 0 or self._over_budget():
+                if reasked or attempts >= MAX_ATTEMPTS or remaining <= 0 or self._over_budget():
                     # finish_reason은 text로 돌려주는 원문을 낸 시도의 값이다
                     return self._result(
                         t0, role, reply.text, None, tokens_in, tokens_out, attempts,
@@ -514,7 +545,13 @@ class LLM:
 
             assert failure is not None
             code, retryable = classify(failure)
-            if code == "bad_request" and schema is not None and not downgraded:
+            if (
+                failure.status == 400
+                and schema is not None
+                and not downgraded
+                and attempts < MAX_ATTEMPTS
+                and remaining > 0
+            ):
                 lower = _DOWNGRADE[level]
                 if lower is not None:
                     # json_schema 미지원 같은 400: 한 단 내려 1회, 이 인스턴스에서 유지한다
@@ -611,5 +648,5 @@ def _parse(text: str, schema: type[BaseModel] | None, level: Structured) -> Base
         candidate = text[start : end + 1]
     try:
         return schema.model_validate_json(candidate)
-    except (ValidationError, ValueError):
+    except ValueError:  # pydantic ValidationError도 ValueError다
         return None

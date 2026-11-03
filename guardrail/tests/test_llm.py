@@ -609,6 +609,107 @@ async def test_retry_gate_wait_also_not_charged():
     assert res.error is None and res.attempts == 2
 
 
+# --- 리뷰 회귀: 예산 경합·시도 상한·분류 밖 예외 ---
+
+
+async def test_budget_rechecked_after_gate_wait():
+    llm = FakeLLM(fake_config(**{"gate.initial": 1}), responder=lambda r: Ok("x"), max_calls=2)
+    results = await asyncio.gather(
+        *(llm.complete("generator", MSG, deadline_s=5.0) for _ in range(6))
+    )
+    assert len(llm.requests) == 2
+    assert sorted(str(r.error) for r in results) == ["None"] * 2 + ["budget"] * 4
+    assert llm.gate.in_flight == 0 and llm.gate.limit == 1
+
+
+async def test_downgrade_and_reask_count_toward_three_attempts():
+    llm = FakeLLM(
+        script=[ServerError(), ServerError(), BadRequest(), Malformed(), Ok('{"ok": true}')]
+    )
+    res = await llm.complete("attack_judge", MSG, schema=Out, deadline_s=20.0)
+    assert (res.error, res.attempts, len(llm.requests)) == ("bad_request", 3, 3)
+    llm2 = FakeLLM(script=[ServerError(), ServerError(), Malformed(), Ok('{"ok": true}')])
+    res2 = await llm2.complete("attack_judge", MSG, schema=Out, deadline_s=20.0)
+    assert (res2.error, res2.attempts) == ("bad_json", 3)
+
+
+async def test_non_transport_exception_becomes_server_error():
+    async def broken(*a, **kw):
+        raise IndexError("no choices")
+
+    llm = LLM(fake_config(), send=broken)
+    res = await llm.complete("generator", MSG, deadline_s=5.0)
+    assert (res.error, res.attempts) == ("server", 1)
+    assert llm.usage["generator"].unexpected["IndexError"] == 1
+    assert llm.gate.in_flight == 0
+
+
+async def test_fake_responder_exception_becomes_error():
+    def bad(messages):
+        raise TypeError("bug")
+
+    llm = LLM(fake_config(**{"faults.generator": "fake_ok"}), fake_responders={"generator": bad})
+    res = await llm.complete("generator", MSG, deadline_s=5.0)
+    assert res.error == "server" and llm.usage["generator"].unexpected["TypeError"] == 1
+
+
+async def test_downgrade_skipped_when_deadline_spent():
+    clock = FakeClock()
+
+    def responder(req):
+        clock.advance(3.0)
+        return BadRequest()
+
+    llm = FakeLLM(responder=responder, clock=clock)
+    res = await llm.complete("attack_judge", MSG, schema=Out, deadline_s=2.0)
+    assert res.error == "bad_request" and len(llm.requests) == 1
+
+
+async def test_only_400_downgrades_structured_level():
+    llm = FakeLLM(script=[ServerError(404)])
+    res = await llm.complete("attack_judge", MSG, schema=Out, deadline_s=5.0)
+    assert res.error == "bad_request" and llm.structured_level == "json_schema"
+
+
+async def test_unsent_calls_do_not_inflate_retry_budget():
+    llm = FakeLLM(script=[ServerError(), Ok("x")] * 10, max_calls=0)
+    for _ in range(50):
+        await llm.complete("generator", MSG, deadline_s=5.0)  # 모두 budget, 보내지 않음
+    assert llm._first_attempts == 0
+
+
+async def test_slot_gate_timeout_does_not_spend_budget():
+    llm = FakeLLM(fake_config(**{"gate.initial": 1, "gate.max_wait_s": 0.01}))
+    async with llm.slot("generator"):
+        with pytest.raises(TimeoutError):
+            async with llm.slot("generator"):
+                pass
+    assert llm.usage["generator"].calls == 1 and llm.usage["generator"].gate_timeouts == 1
+
+
+async def test_faults_are_not_counted_as_errors_or_latency():
+    llm = FakeLLM(fake_config(**{"faults.exchange_judge": "timeout"}))
+    await llm.complete("exchange_judge", MSG, deadline_s=3.0)
+    u = llm.usage["exchange_judge"]
+    assert u.faults == 1 and not u.errors and not u.latencies_ms
+
+
+async def test_openai_send_empty_choices_and_validation_error():
+    def handler(request):
+        body = {"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": []}
+        return httpx2.Response(200, json=body)
+
+    client = AsyncOpenAI(
+        base_url="http://test",
+        api_key="test-" + "key",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+    )
+    llm = LLM(fake_config(), send=openai_send(client), sleep=FakeClock().sleep)
+    res = await llm.complete("generator", MSG, deadline_s=20.0)
+    assert res.error == "server"
+
+
 # --- 무작위 스크립트: 예외 0 ---
 
 

@@ -1,6 +1,6 @@
 # 가드 ↔ 튜터 인터페이스 제안서 (초안)
 
-작성 2026-11-04 · 담당 danielcho02 · 상태: **초안, 공유 전**(사용자 확인 뒤 리더에게 공유)
+작성 2026-11-03 · 담당 danielcho02 · 상태: **초안, 공유 전**(사용자 확인 뒤 리더에게 공유)
 근거: [PRD GR-11](PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0) · [master-plan §4.1·§4.2](master-plan.md#4-공통-계약) · [PRD §9 D3·D4](PRD.md#9-튜터팀과-맞닿는-결정-제안-결정은-리더)
 
 이 문서는 가드레일 패키지(`guardrail/`)를 튜터에 붙이는 방법을 **제안**한다. 결정은 리더가 한다. 튜터 쪽이 할 일은 모두 "요청(리더 결정)"이고, 결정이 없어도 가드는 모의 튜터로 모든 수치를 먼저 낸다.
@@ -25,20 +25,30 @@ show(verdict.response)                   # 학생 화면에는 이것만 보인�
 ### (B) 튜터가 흐름을 쥐고 가드 함수를 부른다
 
 ```python
+import asyncio
+
 canary = guard.new_canary()              # output.code가 꺼졌거나 obligations.canary가 거짓이면 None
 system_extra = guard.system_extra(canary)  # 시스템 프롬프트 끝에 그대로 붙인다(무방비면 "")
 
-iv = await guard.check_input(message, history)      # 검색과 동시에 시작한다
-chunks = await tutor.retrieve(message, history)
-guarded = guard.guard_retrieval(chunks)             # 생성에는 이 청크를 쓴다
+session = Session()                      # 대화 하나에 하나. 턴마다 같은 객체를 넘긴다
+iv, chunks = await asyncio.gather(       # check_input은 검색과 동시에 시작한다(GR-11)
+    guard.check_input(message, history, session=session),
+    tutor.retrieve(message, history),
+)
+guarded = guard.guard_retrieval(chunks)  # 생성에는 이 청크를 쓴다
 
 if iv.verdict == "block":                # 최종. 생성하지 않고 iv.response를 그대로 보여 준다
     show(iv.response)                    # 위기 템플릿 치환도 이 안에서 끝난다
 else:
     answer = await tutor.generate(message, history, guarded,
                                   system_extra=system_extra, instruction=iv.instruction)
+    async def regenerate(feedback: str) -> str:   # R2 재생성(의무 5번)
+        return await tutor.generate(message, history, guarded,
+                                    system_extra=system_extra, instruction=feedback)
+
     ov = await guard.check_output(message, history, chunks, answer, iv,   # 원래 청크를 넘긴다
-                                  canary=canary, system_prompt=TUTOR_SYSTEM_PROMPT)
+                                  regenerate=regenerate, canary=canary,
+                                  system_prompt=TUTOR_SYSTEM_PROMPT)
     show(ov.response)
 ```
 
@@ -94,7 +104,11 @@ class TutorAdapter(Protocol):
 | 비스트리밍, 검사 후 표시 | 가드는 차단 대신 사후 경고만(데모에 쓰지 않음) |
 | `regenerate` 콜백(= `generate(instruction=)`) | R2 재생성 생략, R1·R3만 |
 
-설정 `tutor.obligations`에 다섯 값을 적으면 가드가 그에 맞는 저하 모드로 돈다. 방식 (A)에서는 어댑터가 이 의무를 대부분 자동으로 지킨다.
+설정 `tutor.obligations`에 다섯 값을 적으면 가드가 그에 맞는 저하 모드로 돈다.
+
+- 방식 (A)에서 가드가 대신 하는 것: 청크 래핑(`guard_retrieval`을 가드가 부름), 비스트리밍(가드가 완성 답을 받아 검사), 재생성(가드가 `generate(instruction=)`을 다시 부름).
+- 방식 (A)에서도 튜터 `generate`가 할 것: 답변에 `[S#]` 인용 붙이기, 받은 `system_extra`를 시스템 프롬프트 끝에 붙이기(카나리아).
+- 방식 (B)에서는 다섯 가지 모두 튜터 코드가 한다(재생성은 `check_output(regenerate=)`로 넘긴다).
 
 ## 5. 켜기·끄기와 버전
 
@@ -114,9 +128,9 @@ class TutorAdapter(Protocol):
 - 방식 (A)에서 튜터 검색·생성 예외는 GP2 S2.5부터 "생성 실패" 안전 응답이 된다(그 전에는 예외가 그대로 올라온다).
 - 방식 (B)에서는 튜터가 `retrieve`·`generate`를 직접 부르므로 그 예외는 튜터 쪽에서 처리한다.
 
-### 7-1. 이의 제기(서비스 모드)
+### 7-1. 이의 제기(서비스 모드, GP2 S2.3부터 제공)
 
-학생이 "잘못 막혔어요"를 누르면 그 응답 Verdict의 `request_id`로 `guard.record_appeal(request_id, message)`를 부른다. 그 요청이 30일 보관 대상(`appeal`)이 된다(GR-13). 서비스 모드 로그는 GP2 S2.3에서 만든다.
+`record_appeal`은 아직 없다(서비스 모드 로그와 함께 S2.3에서 만든다). 학생이 "잘못 막혔어요"를 누르면 그 응답 Verdict의 `request_id`로 `guard.record_appeal(request_id, message)`를 부른다. 그 요청이 30일 보관 대상(`appeal`)이 된다(GR-13). 서비스 모드 로그는 GP2 S2.3에서 만든다.
 
 ## 8. 요청(리더 결정)과 결정 전 기본값
 
@@ -125,6 +139,7 @@ class TutorAdapter(Protocol):
 | D3 비스트리밍(검사 후 표시)으로 답을 보여 줄지 | 가드 수치는 비스트리밍 기준으로 낸다. 스트리밍이면 사후 경고만 가능하다고 보고서에 적는다 |
 | D4 튜터 의무 5개(§4) 중 어디까지 지킬지 | 없는 의무는 저하 모드로 돈다. 모든 수치는 모의 튜터로 먼저 낸다 |
 | 연결 방식 (A)·(B) 중 무엇으로 붙일지 | (A)를 권장한다. 11/18 12:00까지 연결이 안 되면 모의 튜터 기준으로 확정하고 보고서에 적는다(master-plan §9) |
+| 튜터가 자기 클라이언트로 생성할 때 그 호출을 `guard.llm.slot("generator")`로 감쌀지(§6) | 감싸지 않으면 S3.1에서 가드 쪽 동시성 한도를 낮춰 엘리스 RPM을 나눠 쓴다 |
 | D2 생성 모델 계열 | 엘리스 모델 목록을 보고 정한다. 판정 모델은 생성과 다른 계열(ADR-0004) |
 | D5 시험 시간 신호를 줄지 | 신호가 없으면 시험 부정(S2) 탐지는 막지 않고 학습 전환만 한다(REQ-34) |
 

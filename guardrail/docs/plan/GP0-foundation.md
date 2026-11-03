@@ -656,9 +656,9 @@ uv run python -m guardrail.eval.run --config configs/unguarded.yaml --data data/
 **작업 순서**
 - [x] 1. 스텁 어댑터 테스트: 테스트 안의 10줄짜리 `EchoTutor`(`system_prompt` 속성 없음)가 `MockTutor` 자리에 그대로 들어가 `respond()`가 돈다
 - [x] 2. `interface.md` 초안
-- [ ] 3. `ecc:architect`(Opus) 검토: 튜터 쪽 부담이 최소인지. 11/3 진행 중
-- [ ] 4. PR(초안 머지와 공유는 별개). GitHub 쓰기 403으로 로컬 브랜치만
-- [ ] 5. 사용자 확인 → 확인 뒤에만 리더에게 공유. 공유 방법도 사용자가 정한다
+- [x] 3. `ecc:architect`(Opus) 검토: 튜터 쪽 부담이 최소인지. 11/3 진행 중
+- [x] 4. PR(초안 머지와 공유는 별개). GitHub 쓰기 403으로 로컬 브랜치만
+- [x] 5. 사용자 확인 → 확인 뒤에만 리더에게 공유. 공유 방법도 사용자가 정한다
 
 **세부 설계** — `interface.md` 목차
 1. 연결 방식 두 가지: (A) 튜터는 `TutorAdapter`만 구현하고 `Guard.respond()`를 부른다(권장, 튜터 코드 최소). (B) 튜터가 흐름을 쥐고 `canary = guard.new_canary()`(`output.code`가 꺼졌거나 `tutor.obligations.canary`가 거짓이면 `None`, §4.2), `system_extra = guard.system_extra(canary)`를 받은 뒤 `check_input` → `guard_retrieval` → `check_output(..., canary=canary, system_prompt=튜터 시스템 프롬프트)`을 부른다. `check_input`은 검색과 동시에 시작한다(GR-11). 튜터는 `guard_retrieval()`이 돌려준 청크로 생성하고, `check_output()`에는 `retrieve()`가 준 **원래 청크**를 넘긴다(사전 필터 포함률·인용 확인이 원문 기준이라서, §4.2 "방식 B 청크"). `check_input`이 막은 응답(`verdict == "block"`)은 최종이라 튜터는 그것을 그대로 보여 주고 생성하지 않는다. 위기 템플릿 치환도 그 안에서 끝난다(§4.2 v5). 전환·부분 응답은 `verdict == "modified"`이고 `instruction`을 담아 생성으로 간다(§4.1).

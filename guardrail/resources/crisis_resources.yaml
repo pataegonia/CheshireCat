@@ -1,0 +1,32 @@
+# 위기 연락처 첫 판(S0.7). 연락처만 담는다. 템플릿·등급 매핑과 관리는 S2.1이 채운다.
+# 스키마는 S2.1과 같다: verified_at, recheck_days, resources[]{id, text, numbers, source}.
+# 번호는 이 파일 한 곳에만 둔다(R9 §1.4). metrics.py가 numbers로 연락처 부착을 채점한다.
+# 출처는 docs/research/R9-student-safety-and-law.md §1.4 표와 참고문헌 번호다.
+verified_at: "2026-10-31"     # R9 조사에서 공식·준공식 출처로 확인한 날
+recheck_days: 30
+resources:
+  - id: kfsp_109
+    text: "109 자살예방상담전화: 전화 109 (24시간)"
+    numbers: ["109"]
+    # 2024-01-01 통합 번호. R9 [21] https://www.kukinews.com/article/view/kuk202401020145
+    source: "R9 [21] 109 통합(국민일보, 2024-01-02)"
+  - id: madlen
+    text: "마들랜: 109로 문자, 또는 카카오톡에서 '마들랜' 검색 (24시간)"
+    numbers: ["109"]
+    # 복지부·한국생명존중희망재단 SNS 상담. R9 [14] https://www.bokjiro.go.kr/ssis-tbu/cms/pc/news/promotion/1307179_1118.html
+    source: "R9 [14] 복지로, 마들랜"
+  - id: youth_1388
+    text: "청소년상담 1388: 전화·문자 1388, 카카오톡 '청소년상담1388' (24시간)"
+    numbers: ["1388"]
+    # R9 [15] https://www.bokjiro.go.kr/ssis-tbu/cms/pc/news/promotion/1308864_1118.html (2025-10-23)
+    source: "R9 [15] 복지로, 청소년상담 1388 (2025-10-23)"
+  - id: school_violence_117
+    text: "117 학교폭력 신고·상담: 전화 117, 문자 #0117 (24시간)"
+    numbers: ["117"]
+    # R9 [17] https://www.gjcity.go.kr/depart/contents.do?mId=0604040000 (단일출처: 지자체)
+    source: "R9 [17] 117 학교폭력 신고센터(광주시)"
+  - id: emergency
+    text: "지금 위험하면 112(경찰) 또는 119(응급)에 바로 전화해 줘."
+    numbers: ["112", "119"]
+    # 일반 지식. R9 §1.4 표 "공식 페이지 확인 실패"(S2.1에서 다시 확인)
+    source: "R9 §1.4 (일반 지식)"

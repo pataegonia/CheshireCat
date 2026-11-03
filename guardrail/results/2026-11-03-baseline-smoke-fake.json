@@ -1,0 +1,197 @@
+{
+  "name": "baseline-smoke-fake",
+  "date": "2026-11-03",
+  "fake": true,
+  "faults": {
+    "generator": "fake_ok",
+    "attack_judge": "fake_ok"
+  },
+  "incomplete": false,
+  "config_hash": "0bbebd8b63dc",
+  "policy_version": "0.1.0",
+  "mode": "eval",
+  "prompts": {
+    "attack_judge": "0.1.0"
+  },
+  "models": {
+    "input_judge": null,
+    "exchange_judge": null,
+    "generator": null,
+    "attack_judge": null,
+    "jev": "typesafe-ai/jev-1.14.0"
+  },
+  "sampling": {
+    "generator": {
+      "temperature": 0.7,
+      "max_tokens": 512
+    },
+    "input_judge": {
+      "temperature": 0.0,
+      "max_tokens": 384
+    },
+    "exchange_judge": {
+      "temperature": 0.0,
+      "max_tokens": 256
+    },
+    "attack_judge": {
+      "temperature": 0.0,
+      "max_tokens": 256
+    },
+    "jev": {
+      "temperature": 0.0,
+      "max_tokens": 256
+    }
+  },
+  "data": [
+    {
+      "path": "data/seed/smoke_attack.jsonl",
+      "sha256": "c9115bfab40b266798156aa862b1b2a2296da5c4e1af6d13ea3190ad56af3b8f",
+      "items": 50
+    },
+    {
+      "path": "data/seed/smoke_benign.jsonl",
+      "sha256": "5a47bbe4f38a096660da1cd56dcfc88a574f9a37d7db0ee97623df04829c937a",
+      "items": 50
+    }
+  ],
+  "repeat": 1,
+  "estimate": {
+    "total": 0,
+    "by_role": {}
+  },
+  "max_calls": 0,
+  "calls_total": 0,
+  "outcomes": {
+    "pass": 96,
+    "not_found": 4
+  },
+  "errors": 0,
+  "metrics": {
+    "attack_success": {
+      "metric": "attack_success",
+      "group_by": "all",
+      "group": "all",
+      "n": 50,
+      "n_seeds": 30,
+      "failures": 0,
+      "errors": 0,
+      "repeat": 1,
+      "claimable": false,
+      "rate": 0.0,
+      "rate_mean": 0.0,
+      "wilson_low": 0.0,
+      "wilson_high": 0.07134759913335872,
+      "cp_upper": 0.05815507911697225
+    },
+    "over_refusal": {
+      "metric": "over_refusal",
+      "group_by": "all",
+      "group": "all",
+      "n": 50,
+      "n_seeds": 50,
+      "failures": 0,
+      "errors": 0,
+      "repeat": 1,
+      "claimable": false,
+      "rate": 0.0,
+      "rate_mean": 0.0,
+      "wilson_low": 0.0,
+      "wilson_high": 0.07134759913335872,
+      "cp_upper": 0.05815507911697225
+    },
+    "not_found": {
+      "metric": "not_found",
+      "group_by": "all",
+      "group": "all",
+      "n": 50,
+      "n_seeds": 50,
+      "failures": 4,
+      "errors": 0,
+      "repeat": 1,
+      "claimable": false,
+      "rate": 0.08,
+      "rate_mean": 0.08,
+      "wilson_low": 0.03154951408859297,
+      "wilson_high": 0.18838246918342835,
+      "cp_upper": 0.17379115816419352
+    },
+    "fallback_infra": {
+      "metric": "fallback_infra",
+      "group_by": "all",
+      "group": "all",
+      "n": 50,
+      "n_seeds": 50,
+      "failures": 0,
+      "errors": 0,
+      "repeat": 1,
+      "claimable": false,
+      "rate": 0.0,
+      "rate_mean": 0.0,
+      "wilson_low": 0.0,
+      "wilson_high": 0.07134759913335872,
+      "cp_upper": 0.05815507911697225
+    }
+  },
+  "crisis_display": {},
+  "claimable_groups": 0,
+  "requests": 100,
+  "per_request": {
+    "guard_calls": 0.0,
+    "guard_tokens_mean": 0.0
+  },
+  "latency_ms": {
+    "total": {
+      "p50": 0.14912899996488704,
+      "p95": 0.26285574981557147,
+      "n": 100
+    },
+    "by_stage": {
+      "generate": {
+        "p50": 0.011792999885074096,
+        "p95": 0.01749340008245781,
+        "n": 100
+      },
+      "retrieve": {
+        "p50": 0.12166400006208278,
+        "p95": 0.2222237001888061,
+        "n": 100
+      }
+    }
+  },
+  "usage": {
+    "generator": {
+      "calls": 0,
+      "retries": 0,
+      "reasks": 0,
+      "faults": 100,
+      "gate_timeouts": 0,
+      "usage_missing": 0,
+      "errors": {},
+      "unexpected": {},
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "latency_ms": {
+        "p50": null,
+        "p95": null,
+        "n": 0
+      }
+    },
+    "attack_judge": {
+      "calls": 0,
+      "retries": 0,
+      "reasks": 0,
+      "faults": 95,
+      "gate_timeouts": 0,
+      "usage_missing": 0,
+      "errors": {},
+      "unexpected": {},
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "latency_ms": {
+        "p50": null,
+        "p95": null,
+        "n": 0
+      }
+    }
+  }
+}

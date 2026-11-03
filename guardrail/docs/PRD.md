@@ -307,7 +307,7 @@ REQ-xx는 [R9](research/R9-student-safety-and-law.md)의 학생 안전 요구사
 
 | # | 마일스톤 | 기간 | 결과(보이는 변화) | 포함 GR | Status | Plan |
 |---|---|---|---|---|---|---|
-| GP0 | 기반 | 10/30–11/3 | 모의 튜터로 무방비 베이스라인 수치 | GR-11·12·13·15(골격) | in-progress | [plan/GP0](plan/GP0-foundation.md) |
+| GP0 | 기반 | 10/30–11/4 | 모의 튜터로 무방비 베이스라인 수치 | GR-11·12·13·15(골격) | in-progress | [plan/GP0](plan/GP0-foundation.md) |
 | GP1 | 출력 가드 | 11/4–11/9 | 근거 이탈 탐지율·오탐률·출처 정확도 첫 수치 | GR-07·08·09 | pending | [plan/GP1](plan/GP1-output-guard.md) |
 | GP2 | 입력·위기·멀티턴 | 11/10–11/15 | 차단율·과잉 거절·위기 재현율 첫 수치, 장애 주입 통과 | GR-01·02·03·04·05·06·10·14 | pending | [plan/GP2](plan/GP2-input-crisis.md) |
 | GP3 | 통합·평가 | 11/16–11/20 | 실제 튜터 연결, 임계값 확정, ablation, 홀드아웃 1회. **11/20 기능 동결** | GR-15(전체) | pending | [plan/GP3](plan/GP3-integration-eval.md) |

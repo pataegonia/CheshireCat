@@ -51,7 +51,7 @@
 
 | 날짜 | 직접 하는 일 | 시간 | 병렬(서브에이전트·API) |
 |---|---|---|---|
-| 10/31–11/3 (GP0 중) | S1.1 준비: 청크 선택, 주입 지침(Opus 검토), `build_grounding.py` 골격·테스트 | 2h(GP0 몫) | Sonnet: 질문 320개. 키가 오면 API로 기본 답변 |
+| 10/31–11/3 (GP0 중) | S1.1 준비: 청크 선택, 주입 지침(Opus 검토), `build_grounding.py` 골격·테스트. **11/3 완료**(주입 지침은 초안 0.0.1, Opus 검토는 S1.1 3번에서): `data/seed/grounding/README.md`(코드·민감 교과 청크 모자람 → aux 청크 결정 필요) | 2h(GP0 몫) | Sonnet: 질문 320개. 키가 오면 API로 기본 답변 |
 | 11/4(수) | S1.2 골격 매처·카나리아·`Guard.new_canary()` / S1.1 정상 답변 확인 시작 | 5h / 2h | API: 기본 답변(GP0에 못 했으면). Sonnet: 근거 없는 문장 초안 표시, 정상 변형, Claude 계열 주입 |
 | 11/5(목) | S1.3 출력 코드 검사 / S1.1 사람 확인(주입 전수, 정상 표본), `cite` | 3h / 4h | API: 다른 계열 주입. Sonnet: `canary_leak.jsonl`(id·seed_id 접두어 `cl-`, GP2 S2.0 접두어 규칙) |
 | 11/6(금) | S1.1 `containment()` → θ 후보 추출·라벨 340·`assemble` / S1.4 `split` → `run`·θ 보정 | 2.5h / 4.5h | Sonnet: θ 전용 변형(후보 추출 뒤) |

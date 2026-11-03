@@ -4,7 +4,8 @@
 - 서비스 모드는 원문을 두지 않고 output_code 단계 detail["canary"]도 지운다. user_hmac·grade_band와
   보관 사유 필드는 S2.3이 채운다(session 인자는 서명을 뒤에 바꾸지 않으려고 지금 둔다).
 - 키는 두 겹으로 막는다. ① 만들 때: StageResult.error에는 오류 코드·예외 클래스 이름만 넣는다.
-  ② 쓸 때: 비밀 환경변수 값(8자 이상)과 Bearer·sk- 모양을 [REDACTED]로 바꾼다.
+  ② 쓸 때: 직렬화 전에 레코드 안의 문자열(키·값)에서 비밀 환경변수 값(8자 이상)과 Bearer·sk-
+  모양을 [REDACTED]로 바꾼다. 직렬화한 줄을 고치면 숫자·이스케이프 안을 건드려 JSON이 깨진다.
 """
 
 import json
@@ -24,9 +25,8 @@ SECRET_ENV_PREFIXES: tuple[str, ...] = ("GUARD_LLM_", "JEV_", "TUTOR_")
 SECRET_ENV_EXACT: frozenset[str] = frozenset({"GUARD_LOG_HMAC_KEY"})
 _MIN_SECRET_LEN = 8
 _REDACTED = "[REDACTED]"
-# 따옴표·역슬래시에서 멈춰 JSON 줄을 깨지 않는다
 _PATTERNS = (
-    re.compile(r"(?i)bearer\s+[^\s\"\\]+"),
+    re.compile(r"(?i)bearer\s+\S+"),
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
 )
 _TUTOR_STAGES = frozenset({"retrieve", "generate"})
@@ -86,15 +86,23 @@ def _secret_values() -> list[str]:
     return sorted(values, key=len, reverse=True)
 
 
-def _scrub(line: str, secrets: list[str]) -> str:
+def _scrub_text(text: str, secrets: list[str]) -> str:
     for value in secrets:
-        line = line.replace(value, _REDACTED)
-        escaped = json.dumps(value, ensure_ascii=False)[1:-1]  # JSON 안에서 이스케이프된 모양
-        if escaped != value:
-            line = line.replace(escaped, _REDACTED)
+        text = text.replace(value, _REDACTED)
     for pattern in _PATTERNS:
-        line = pattern.sub(_REDACTED, line)
-    return line
+        text = pattern.sub(_REDACTED, text)
+    return text
+
+
+def _scrub(obj: Any, secrets: list[str]) -> Any:
+    """레코드를 재귀로 돌며 문자열(dict 키 포함)만 가린다. 숫자·bool·None은 그대로."""
+    if isinstance(obj, str):
+        return _scrub_text(obj, secrets)
+    if isinstance(obj, dict):
+        return {_scrub(k, secrets): _scrub(v, secrets) for k, v in obj.items()}
+    if isinstance(obj, list | tuple):
+        return [_scrub(v, secrets) for v in obj]
+    return obj
 
 
 class TraceWriter:
@@ -107,8 +115,8 @@ class TraceWriter:
         self._f = self.path.open("a", encoding="utf-8")
 
     def write(self, record: dict[str, Any]) -> None:
-        line = json.dumps(record, ensure_ascii=False)
-        self._f.write(_scrub(line, self._secrets) + "\n")
+        line = json.dumps(_scrub(record, self._secrets), ensure_ascii=False)
+        self._f.write(line + "\n")
         self._f.flush()
 
     def close(self) -> None:

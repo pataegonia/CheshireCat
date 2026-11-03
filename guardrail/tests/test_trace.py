@@ -136,17 +136,24 @@ def test_no_secret_values_in_trace(tmp_path, monkeypatch):
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("GEN_MODEL", "gen-model-visible")
-    regex_only = "sk-" + "x" * 20
+    regex_only = "sk-" + "x" * 20  # 환경변수에 없는 값: 정규식 경로만 가린다
+    bearer = "Bearer " + "q" * 6 + "tok"
     joined = " ".join(values.values())
     stages = [
         _stage(
             "input_judge", error=f"auth {values['GUARD_LLM_API_KEY']}", model="gen-model-visible"
         ),
+        _stage(
+            "exchange_judge", error=f"x {regex_only}", detail={"note": f"Authorization: {bearer}"}
+        ),
         _stage("generate", detail={"chars": 3}),
     ]
-    v = _verdict(stages, reason=f"Authorization: Bearer {values['JEV_API_KEY']} {regex_only}")
     rec = make_record(
-        "r#0", v, fake_config(), input_raw=f'{joined} 큰따옴표" 역슬래시\\', displayed_output="ok"
+        "r#0",
+        _verdict(stages),
+        fake_config(),
+        input_raw=f'{joined} {bearer} {regex_only} 큰따옴표" 역슬래시\\',
+        displayed_output="ok",
     )
     path = tmp_path / "trace.jsonl"
     with TraceWriter(path) as w:
@@ -154,9 +161,36 @@ def test_no_secret_values_in_trace(tmp_path, monkeypatch):
     text = path.read_text(encoding="utf-8")
     for value in values.values():
         assert value not in text
-    assert regex_only not in text and "Bearer" not in text.replace("[REDACTED]", "")
+    assert regex_only not in text and "qqqqqqtok" not in text and "Bearer" not in text
     assert "gen-model-visible" in text
     assert _read(path)[0]["request_id"] == "r#0"  # 가린 뒤에도 JSON으로 읽힌다
+
+
+@pytest.mark.parametrize("value", ["10000000", "abcdefg\\", '"abcdefgh"', "ab\ncdefgh"])
+def test_redaction_never_breaks_json(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("TUTOR_SEED", value)
+    path = tmp_path / "t.jsonl"
+    with TraceWriter(path) as w:
+        w.write({"latency_ms": 3.1000000000000005, "x": f"앞 {value} 뒤", "n": 10000000})
+    (row,) = _read(path)  # 깨지면 여기서 JSONDecodeError
+    assert row["latency_ms"] == 3.1000000000000005 and row["n"] == 10000000
+    assert row["x"] == "앞 [REDACTED] 뒤"
+
+
+def test_bearer_with_tab_or_newline_is_redacted(tmp_path):
+    path = tmp_path / "t.jsonl"
+    with TraceWriter(path) as w:
+        w.write({"a": "Bearer\tabcSECRETxyz", "b": "bearer\nzzzSECRET"})
+    assert "SECRET" not in path.read_text(encoding="utf-8")
+
+
+def test_secret_in_dict_key_and_list_is_redacted(tmp_path, monkeypatch):
+    key = secrets.token_hex(10)
+    monkeypatch.setenv("JEV_API_KEY", key)
+    path = tmp_path / "t.jsonl"
+    with TraceWriter(path) as w:
+        w.write({key: 1, "list": [key, 2]})
+    assert key not in path.read_text(encoding="utf-8")
 
 
 def test_secret_with_json_escapes_is_redacted(tmp_path, monkeypatch):

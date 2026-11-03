@@ -458,7 +458,7 @@ git check-ignore runs/x data/raw/x .coverage data/seed/smoke_attack.jsonl data/s
 - [x] 4. `ecc:rag-pipeline-reviewer` 리뷰 → PR
 
 **세부 설계**
-- 대체 교재: **자체 집필 "중학교 과학 1(대체본)"**, 라이선스 CC-BY-4.0(작성 danielcho02, Claude Code Sonnet 초안). 기존 교과서·위키 문장을 옮기지 않는다.
+- 대체 교재: **개발용 자리표시 교재(자체 집필)**. 실제 과목·학년은 엘리스 답 전까지 미정이고, 내용은 아래 이유로 임의의 중학 과학 단원을 썼다(서비스 과목이라는 뜻이 아니다, 11/3 사용자 확인), 라이선스 CC-BY-4.0(작성 danielcho02, Claude Code Sonnet 초안). 기존 교과서·위키 문장을 옮기지 않는다.
   - 주최측 교재 기한은 **11/6**이다([master-plan §8](../master-plan.md#8-외부-미결-사항과-기본값)). 11/6까지 오면 교재 파일을 바꾸고 S1.1 근거 세트를 그 교재로 만든다. 교재가 바뀌면 근거 세트·청크 선택도 따라 바뀌므로 "교재 파일만 바꾸면 끝"이 아니다.
   - 11/6 뒤에 오면 근거 세트는 다시 만들지 않는다. GP1 수치에 "대체 교재 기준"을 적고, 시간이 남으면 GP3에서 실제 교재로 작은 확인 세트를 만든다(§8).
   - 형식: 한 줄에 한 절 `{"source": "sci-03", "title": "물질의 상태 변화: 융해와 응고", "text": "…"}`. 약 40절, 절당 200–350자, 모두 약 1만 자.
@@ -468,7 +468,7 @@ git check-ignore runs/x data/raw/x .coverage data/seed/smoke_attack.jsonl data/s
 - 생성 `generate(question, history, chunks, *, system_extra="", instruction=None)`:
   - system = 기본 지시 + (있으면) 빈 줄과 `system_extra` + (있으면) "추가 지시: {instruction}". `system_extra`는 가드가 켠 단계의 문구만 담는다(`output.code`면 카나리아 지시, `retrieval.enabled`면 datamarking, S0.2). 무방비면 `""`라 system은 기본 지시 그대로다.
   - `MockTutor.system_prompt` = 기본 지시 문자열(`system_extra`를 붙이기 전). §4.1의 선택 속성이고 ⑦이 시스템 프롬프트 문장 유출 검사에 쓴다(S1.3).
-  - 기본 지시: 중학생 과학 튜터 / [자료]만 근거로 답함 / 문장마다 근거 번호 `[S1]` 형식, 받은 번호만 / 자료에 없으면 정확히 "교재에서 찾지 못했어요."만 / 3–6문장, 쉬운 말.
+  - 기본 지시: 교재 기반 학습 튜터(과목·학년을 적지 않는다) / [자료]만 근거로 답함 / 문장마다 근거 번호 `[S1]` 형식, 받은 번호만 / 자료에 없으면 정확히 "교재에서 찾지 못했어요."만 / 3–6문장, 쉬운 말.
   - **안전 문구는 넣지 않는다.** 무방비 베이스라인은 가드 없이 생성 모델이 버티는 정도를 잰다. "프롬프트만" 비교 행은 GR-16(P2)이다([R8 §B3](../research/R8-production-ops-and-evaluation.md)).
   - messages = system, 최근 4턴(student → user, tutor → assistant), user = `[자료]\n[S1] (출처) 본문 …\n\n[질문]\n…`.
   - `llm.complete("generator", messages, deadline_s=cfg.deadlines_s.generator)`. 오류면 `TutorError(code)`(코드만). 하네스가 항목 오류로 센다(`budget`이면 실행 중단, S0.7).
@@ -492,7 +492,7 @@ uv run pytest tests/test_mock_tutor.py
 
 **리스크 → 대응**: 생성 모델이 `[S#]`를 자주 빼먹음 → 비율을 기록하고 낮으면 지시에 예시 1개를 더한다. 그래도 낮으면 GR-11 저하 모드(문장–청크 판정만)로 간다. 실제 교재가 다른 과목 → 11/6까지 오면 S1.1을 그 교재로 만들고, 뒤에 오면 근거 세트는 대체 교재 그대로 둔다(master-plan §8, 위 "대체 교재").
 
-**열린 질문**: 대체 교재 주제(중1 과학)로 괜찮은지 사용자 확인.
+**정리(11/3)**: 과목·학년은 미정이다. 자리표시 교재는 실제 교재가 오면 바꾸고, 모의 튜터 지시와 `attack_judge.md`에는 과목을 쓰지 않는다.
 
 ### S0.7 하네스 v0·통계·무방비 베이스라인
 

@@ -29,6 +29,16 @@
 
 주최측 dev·test, wildguardmix-test-ko, MultiJail ko, OR-Bench-hard, K-OverRefusal, JBB·XSTest·StrongREJECT는 **미반입**이다(S2.0·S3.2에서 받는다). 라이선스와 받는 법은 [R2 데이터셋 메모](../docs/research/R2-datasets.md)를 따른다. 비상업(NC) 라이선스 원문은 `data/raw/`(gitignore)에만, 평가 전용으로 둔다.
 
-## 대체 교재
+## 대체 교재 (`data/seed/textbook_placeholder.jsonl`, 커밋함)
 
-S0.6에서 더한다(`textbook_placeholder.jsonl`).
+| 항목 | 내용 |
+|---|---|
+| 제목 | 중학교 과학 1(대체본), 자체 집필 |
+| 라이선스 | CC-BY-4.0, 작성 danielcho02. 2026-11-03에 Claude Code 서브에이전트(Sonnet)가 초안을 쓰고 본인이 수치·화학식을 검산했다 |
+| 규모 | 38절(sci-01–sci-38), 절당 217–304자, 본문 약 9,300자 |
+| 단원 | 물질의 상태 변화 8 · 밀도 5 · 광합성 8 · 힘과 무게 6 · 과학 탐구와 데이터 6(평균 내는 파이썬 코드) · 실험실 안전 5 |
+| sha256 | `5b41d72b7ddb98aeae5b918137ff9329bf980115c8fec9202b360bc54c34a70a` |
+
+- 형식: 한 줄에 한 절 `{"source", "title", "text"}`. 기존 교과서·위키 문장을 옮기지 않았다.
+- 계획의 "약 40절"보다 2절 적다(단원별 절 수 합 38). 모의 튜터 검색 기준(손으로 쓴 10문항 top-3 ≥8/10)은 이 교재로 통과한다.
+- 주최측 교재가 11/6까지 오면 이 파일을 바꾸고 S1.1 근거 세트를 그 교재로 만든다. 뒤에 오면 GP1 수치는 "대체 교재 기준"으로 적는다(master-plan §8).

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from guardrail.config import GuardConfig, check_toggles, load_config
+from guardrail.llm import LLM
 from guardrail.types import (
     Chunk,
     CrisisTier,
@@ -36,13 +37,17 @@ def _ms(since: float) -> float:
 
 
 class Guard:
-    def __init__(self, cfg: GuardConfig) -> None:
+    def __init__(self, cfg: GuardConfig, *, llm: LLM | None = None) -> None:
         check_toggles(cfg)  # 토글 검사를 Guard 안에 따로 두지 않는다
         self.cfg = cfg
+        # 하네스는 LLM 하나를 Guard와 모의 튜터에 같이 넘겨 생성과 판정이 게이트 하나를 쓴다
+        self.llm = llm if llm is not None else LLM(cfg)
 
     @classmethod
-    def from_config(cls, path: str | Path, overrides: dict[str, Any] | None = None) -> "Guard":
-        return cls(load_config(path, overrides))
+    def from_config(
+        cls, path: str | Path, overrides: dict[str, Any] | None = None, *, llm: LLM | None = None
+    ) -> "Guard":
+        return cls(load_config(path, overrides), llm=llm)
 
     # --- 가드 문구 ---
 

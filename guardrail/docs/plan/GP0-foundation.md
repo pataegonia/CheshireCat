@@ -255,7 +255,7 @@ class LLM:
 `complete()` 흐름:
 0. `faults`에 역할이 있으면 위 규칙대로 바로 반환한다.
 1. 시도마다 예산 확인(`calls >= max_calls`면 `budget`) → 게이트 허가(대기는 마감에 넣지 않고 시도마다 `gate.max_wait_s`(기본 30s)까지만 기다린다. 넘기면 `timeout`이고 `usage[role].gate_timeouts` +1, §4.3 v8) → 마감은 남은 시간 `remaining`(처음 `deadline_s`)으로 들고 다니며 **보내는 시간과 백오프만** 뺀다. 재시도의 게이트 대기도 빼지 않는다 → `send(..., max_tokens=…, timeout=remaining)` → `finally`에서 허가 반납. 그래서 폭주 때 ⑤가 생성 호출 뒤에 줄을 서거나 429 뒤 다시 줄을 서도 마감을 대기에 쓰지 않는다(테스트: 429 뒤 재시도가 긴 줄을 기다려도 `timeout`이 아님).
-2. 대기 `retry_wait(headers, n, rand, now)`(n = 0부터 센 재시도 번호): `retry-after-ms`(밀리초) → `retry-after`(초 실수 또는 HTTP 날짜, `email.utils.parsedate_to_datetime`) 순서로 읽는다. 값이 **0 초과 60초 이하**면 그만큼 기다린다. 없거나, 못 읽거나, 범위 밖이면 `min(0.5·2ⁿ, 8) × (1 − 0.25·rand())`([§4.3](../master-plan.md#43-llm-호출-llmpy), openai-python 규칙. 1단계 소스 확인에서 다르면 §4.3부터 고친다).
+2. 대기 `retry_wait(headers, n, rand, now)`(n = 0부터 센 재시도 번호): `retry-after-ms`(밀리초) → `retry-after`(초 실수 또는 HTTP 날짜) 순서로 읽는다. 값이 **0 초과 120초 이하**면 그만큼 기다린다. **120초를 넘으면 `None`(재시도하지 않음)**. 없거나, 못 읽거나, 0 이하이면 `min(0.5·2ⁿ, 8) × (1 − 0.25·rand())`([§4.3](../master-plan.md#43-llm-호출-llmpy) v18, openai-python 3.42.1 소스로 확인).
 3. 재시도 조건: 재시도 대상이고, 시도 < 3이고, 재시도 예산(`retries < max(5, 0.1 × 첫 시도 수)`, §4.3 "하한 5회")이 남았고, 대기 < 남은 마감. 아니면 기다리지 않고 그 `error`로 반환한다.
 4. `schema`가 있으면 파싱한다. 실패하면 이전 출력과 "앞 출력이 스키마에 맞지 않습니다. JSON 객체 하나만 다시 출력하세요."를 붙여 1회 재요청. 또 실패하면 `bad_json`, `text`는 원문.
 5. 예외를 밖으로 던지지 않는다. `CancelledError`만 그대로 올린다(허가는 반납).
@@ -276,7 +276,7 @@ class LLM:
 |---|---|
 | `RateLimited(1.5)` → `Ok` / ms·초 헤더 함께 / HTTP 날짜 | 가짜 시계 1.5s, `attempts=2` / ms 쪽 / 날짜 차이 |
 | `RateLimited(30)`, 마감 3s | 대기 없이 `rate_limit`, 시계 그대로 |
-| 헤더 없음 / `retry-after: 90` / `retry-after: 0`, n=0–4 (hypothesis) | 셋 다 백오프: `0.75·b < 대기 ≤ b`, `b = min(0.5·2ⁿ, 8)` |
+| 헤더 없음 / `retry-after: 0` / 못 읽는 값, n=0–4 (hypothesis) / `retry-after: 90` / `retry-after: 130` | 셋 다 백오프: `0.75·b < 대기 ≤ b`, `b = min(0.5·2ⁿ, 8)` / 90 / 재시도 없음(v18, SDK 상한 120초) |
 | `ServerError` ×3 / 401 / `max_calls=2`의 3번째 | `server`·`attempts=3` / `auth`, 재시도 없음 / `budget`, `send` 0회 |
 | `Malformed` → `Ok(…, finish_reason="stop")` / `Malformed` ×2 / json_schema `BadRequest` → `Ok` | `parsed` 채움, `finish_reason == "stop"`(재요청 응답의 값) / `bad_json` + 원문 / 이후 요청이 `json_object` |
 | 100호출이 모두 1회씩 실패 | 재시도 ≤ max(5, 10) |

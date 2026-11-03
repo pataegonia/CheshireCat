@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "CheshireCat AI 튜터용 가드레일 모듈"
 requires-python = ">=3.12"
 dependencies = [
+    "openai>=3,<4",
     "pydantic>=2.14.2",
     "pyyaml>=6.0.3",
 ]
@@ -31,3 +32,5 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["live: 실제 API 호출. CI에서 돌지 않음"]
+addopts = "-m 'not live'"

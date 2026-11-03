@@ -60,8 +60,6 @@ def load_textbook(path: str | Path = DEFAULT_TEXTBOOK) -> list[Section]:
 def _tokens(text: str) -> list[str]:
     """normalize·소문자·공백 제거 뒤 문자 2-gram. skeleton은 숫자를 지우므로 쓰지 않는다."""
     s = re.sub(r"\s+", "", normalize(text).lower())
-    if len(s) < 2:
-        return [s] if s else []
     return [s[i : i + 2] for i in range(len(s) - 1)]
 
 
@@ -73,6 +71,7 @@ class BM25:
 
     def __init__(self, sections: list[Section]) -> None:
         self.sections = sections
+        # 색인은 제목+본문이다(제목이 단원 용어를 담아 검색이 갈린다. 계획 문구는 본문만 말한다)
         self._tf = [Counter(_tokens(f"{s.title} {s.text}")) for s in sections]
         self._len = [sum(tf.values()) for tf in self._tf]
         self._avg = (sum(self._len) / len(self._len)) if self._len else 0.0
@@ -141,6 +140,7 @@ class MockTutor:
         result = await self.llm.complete(
             "generator", messages, deadline_s=self.llm.cfg.deadlines_s.generator
         )
+        # budget이면 TutorError("budget")가 되고 하네스가 실행을 멈춘다(S0.7)
         if result.error is not None or result.text is None:
             raise TutorError(result.error or "empty")
         return result.text

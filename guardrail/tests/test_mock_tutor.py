@@ -47,9 +47,38 @@ def test_bm25_ignores_whitespace_and_case():
     assert index.search("G/CM³", 1)[0].source == "t-2 밀도"
 
 
-def test_bm25_parameters():
-    index = BM25(TOY)
+def test_bm25_score_matches_hand_computation():
+    import math
+
+    docs = [Section("a", "", "가나"), Section("b", "", "가나다라"), Section("c", "", "마바")]
+    index = BM25(docs)
+    # 제목이 비어 토큰은 본문 2-gram뿐: a=[가나], b=[가나, 나다, 다라], c=[마바]
+    n, df = 3, 2  # "가나"는 a·b에 있다
+    idf = math.log((n - df + 0.5) / (df + 0.5) + 1)
+    lengths = [1, 3, 1]
+    avg = sum(lengths) / 3
+    norm = 1.2 * (1 - 0.75 + 0.75 * lengths[1] / avg)
+    expected_b = idf * 1 * (1.2 + 1) / (1 + norm)
+    assert index._score(1, ["가나"]) == pytest.approx(expected_b)
     assert (index.k1, index.b) == (1.2, 0.75)
+
+
+def test_bm25_normalizes_fullwidth_and_single_char_query():
+    index = BM25(TOY)
+    assert index.search("ｇ/ｃｍ³", 1)[0].source == "t-2 밀도"
+    assert index.search("밀", 3) == []
+
+
+def test_not_found_wording_matches_fake_generator():
+    from guardrail import llm
+
+    assert llm._NOT_FOUND == NOT_FOUND
+
+
+async def test_empty_string_answer_is_returned_as_is():
+    llm = FakeLLM(script=[Ok("", tokens_in=1, tokens_out=0)])
+    # 빈 문자열도 응답이다(모델이 아무것도 안 씀). 판단은 하네스 채점이 한다
+    assert await MockTutor(llm).generate("q", [], []) == ""
 
 
 def test_textbook_loads_about_40_sections():

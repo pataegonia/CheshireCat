@@ -1,6 +1,6 @@
 # 가드레일 master-plan
 
-작성 2026-10-30 · 갱신 2026-11-03 · 담당 danielcho02 · 상태: v19 (S0.7 하네스 계약 보강 v19, S0.3 retry-after 규칙 v18, 11/3 일정 재기준 v17, 세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, 4회차 v9, 5회차 v10, 6회차 v11, 7회차 v12, 8회차 v13, 9회차 v14, 10회차 v15, 11회차 v16, §13)
+작성 2026-10-30 · 갱신 2026-11-03 · 담당 danielcho02 · 상태: v20 (GitHub 마일스톤 삭제 v20, S0.7 하네스 계약 보강 v19, S0.3 retry-after 규칙 v18, 11/3 일정 재기준 v17, 세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, 4회차 v9, 5회차 v10, 6회차 v11, 7회차 v12, 8회차 v13, 9회차 v14, 10회차 v15, 11회차 v16, §13)
 근거: [PRD.md](PRD.md)(요구사항 GR-xx, 마일스톤 §10) · [adr/](adr/README.md)(설계 결정) · [research/](research/README.md)(조사) · [skills.md](skills.md)(쓸 스킬)
 세부 플랜: [plan/GP0](plan/GP0-foundation.md) · [GP1](plan/GP1-output-guard.md) · [GP2](plan/GP2-input-crisis.md) · [GP3](plan/GP3-integration-eval.md) · [GP4](plan/GP4-presentation.md)
 
@@ -488,7 +488,6 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 
 | 항목 | 규칙 |
 |---|---|
-| 마일스톤 | `Guardrail GP0 기반`(11/4, v17에서 11/3 → 11/4) · `Guardrail GP1 출력 가드`(11/9) · `Guardrail GP2 입력·위기`(11/15) · `Guardrail GP3 통합·평가`(11/20) · `Guardrail GP4 발표`(11/25). Phase 구분은 마일스톤으로만 한다 |
 | 이슈 | Phase마다 에픽 1개(전부 지금 만든다), 슬라이스마다 이슈 1개(에픽의 하위 이슈). **슬라이스 이슈는 그 Phase가 시작될 때 만든다.** 지금은 GP0·GP1만. 뒤 Phase는 에픽 본문의 체크리스트와 Phase 문서가 대신한다. 제목 `[S1.4] 문장 분리·사전 필터 (GR-08)`. 본문은 Phase 문서의 해당 절을 옮긴다 |
 | 라벨 | 모두 `guardrail` 접두어: `guardrail`(전부) · `guardrail:epic` · `guardrail:P0` / `P1` / `P2` · `guardrail:blocked`(주최측·팀 답 대기). 팀이 쓸 일반 이름(`type:*`, `priority:*`)은 차지하지 않는다 |
 | 담당 | danielcho02 |
@@ -617,3 +616,5 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 **v19 (2026-11-03, S0.7 리뷰 반영)**: 하네스 계약을 보강했다. 튜터와 맞닿는 계약(§4.2·`TutorAdapter`)은 그대로다.
 - §4.5: 가림은 직렬화 전 문자열에만(S0.4 보안 리뷰: 직렬화한 줄을 치환하면 숫자·이스케이프 안을 건드려 JSON이 깨졌다). `respond()` 예외 항목의 `record_type: "error"` 레코드로 responses↔trace 1:1을 지킨다(GR-13 역추적).
 - §4.7: 판정기 입력 형식(턴 태그 + HTML 이스케이프), 같은 이름 재실행 거부, 중단된 반복 실행은 끝난 항목만 집계, 형식 재요청이 예산에 막히면 `budget`.
+
+**v20 (2026-11-03)**: 사용자 결정으로 GitHub 마일스톤 5개를 지웠다. Phase 구분은 에픽(#2–#6)과 이 문서 §2 일정으로만 한다. §11 마일스톤 행과 Phase 문서의 마일스톤 표기·닫기 항목을 뺐다. 일정·기한 자체(§2)는 그대로다.

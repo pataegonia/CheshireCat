@@ -1,7 +1,7 @@
 # GP3 통합·평가 — 세부 플랜
 
 작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/16(월)–11/20(금, **기능 동결**) · 마일스톤: Guardrail GP3 통합·평가
+상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/16(월)–11/20(금, **기능 동결**)
 
 본문에서 "(→§5)"는 이 문서 §5(master-plan에 반영할 점)를 가리킨다.
 
@@ -753,7 +753,7 @@ uv run pytest tests/test_llm.py tests/test_repair.py tests/test_pipeline_output.
 - [ ] 홀드아웃 santa 2명 PASS, `known_issues` 정리.
 - [ ] PRD §10 GP3 Status, ADR Status·README 표, `interface.md`, 이 문서 체크박스를 갱신했다.
 - [ ] 계약 대조 15분([master-plan §10][mp10]): §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 봤고, 다르면 master-plan을 먼저 고쳤다.
-- [ ] GP3 슬라이스 이슈를 닫고 에픽 체크리스트와 마일스톤 `Guardrail GP3 통합·평가`를 닫았다.
+- [ ] GP3 슬라이스 이슈를 닫고 에픽 체크리스트를 닫았다.
 - [ ] §1 산출물 표의 파일 이름을 GP4 `sources.yaml`과 맞췄다.
 
 ## 5. master-plan에 반영할 점

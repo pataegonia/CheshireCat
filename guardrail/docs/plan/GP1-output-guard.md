@@ -1,7 +1,7 @@
 # GP1 출력 가드 — 세부 플랜
 
 작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/4(수)–11/9(월) · 마일스톤: Guardrail GP1 출력 가드
+상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/4(수)–11/9(월)
 
 [GR-01]: ../PRD.md#gr-01-전처리-p0
 [GR-07]: ../PRD.md#gr-07-출력-코드-검사-p0
@@ -807,7 +807,7 @@ uv run python -m guardrail.eval.run --config configs/exp/r2-on.yaml --data data/
 - [ ] PRD §10 GP1 Status 갱신, Plan 열에 이 문서 링크
 - [ ] ADR-0005·PRD GR-08 갱신(부정 형태소 규칙, MISCITED·off_topic, 핵심 문장 정의, 세트 크기는 전체·합격선은 `report`(S1.7)), PRD GR-09 R1 조건(S1.6), ADR-0001 카나리아 행 수정(경계 넘는 매칭 인정)
 - [ ] `configs/default.yaml`에 출력 토글 4개(`code`·`prefilter`·`judge`·`repair`)가 슬라이스마다 켜졌고, `default.yaml`·`configs/exp/*.yaml`의 θ·G 보정값과 `policy_version`이 같다
-- [ ] 이 문서 체크박스 갱신, 마일스톤 `Guardrail GP1 출력 가드` 닫기. GP2 슬라이스 이슈는 GP2 시작(11/10)에 만든다(master-plan §11)
+- [ ] 이 문서 체크박스 갱신. GP2 슬라이스 이슈는 GP2 시작(11/10)에 만든다(master-plan §11)
 - [ ] 남은 열린 질문을 GP2 문서나 master-plan §8로 옮김
 - [ ] §4 계약과 코드 대조 15분(master-plan §10): 서명·설정 키·종료 코드·trace 필드를 맞춰 봤고, 다르면 GP2 슬라이스 전에 master-plan을 먼저 고쳤다
 

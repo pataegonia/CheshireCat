@@ -3,7 +3,7 @@
 **Date**: 2026-10-30
 **Status**: proposed (v2: "판정 백엔드 선택지"에서 "역할 분담"으로 바꿈)
 **Deciders**: danielcho02
-**PRD**: GR-02, GR-04, GR-05, GR-14, §11, §12
+**PRD**: GR-02, GR-04, GR-05, GR-14, §10, §11
 
 ## Context
 

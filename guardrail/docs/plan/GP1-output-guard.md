@@ -804,7 +804,6 @@ uv run python -m guardrail.eval.run --config configs/exp/r2-on.yaml --data data/
 - [ ] 관문: 개발 세트의 탐지율·오탐률·출처 정확도·⑧ p95가 `results/2026-11-09-gp1-output.*`에 있다
 - [ ] 관문: ⑧ 장애 주입 테스트(S1.6) 통과, CI green
 - [ ] GR-07·08·09 수용 기준 전부 체크. GR-01·14·15는 이 Phase 몫만 체크하고 나머지는 GP2·GP3 문서로 넘김
-- [ ] PRD §10 GP1 Status 갱신, Plan 열에 이 문서 링크
 - [ ] ADR-0005·PRD GR-08 갱신(부정 형태소 규칙, MISCITED·off_topic, 핵심 문장 정의, 세트 크기는 전체·합격선은 `report`(S1.7)), PRD GR-09 R1 조건(S1.6), ADR-0001 카나리아 행 수정(경계 넘는 매칭 인정)
 - [ ] `configs/default.yaml`에 출력 토글 4개(`code`·`prefilter`·`judge`·`repair`)가 슬라이스마다 켜졌고, `default.yaml`·`configs/exp/*.yaml`의 θ·G 보정값과 `policy_version`이 같다
 - [ ] 이 문서 체크박스 갱신. GP2 슬라이스 이슈는 GP2 시작(11/10)에 만든다(master-plan §11)

@@ -696,7 +696,6 @@ uv run pytest tests/test_pipeline.py -k adapter
 - [x] 새 모듈 줄 커버리지 ≥80%(`pytest --cov`) — 모듈마다 95–100%, 전체 98%
 - [x] `git ls-files runs data/raw data/seed/smoke_attack.jsonl data/seed/smoke_crisis.jsonl`이 비어 있다. gitleaks green(8.30.1, 해시 고정본)
 - [x] `configs/default.yaml`의 `stages` 토글이 모두 `false`이고(GP0에 머지된 가드 단계 없음), `deadlines_s.attack_judge`가 10.0이다
-- [ ] [PRD §10](../PRD.md#10-마일스톤) GP0 행: Status → done(키가 없으면 "done, 베이스라인 blocked"), Plan 열에 이 문서 링크 — 머지 전이라 "in-progress (S0.2–S0.7 구현, 베이스라인 blocked)"로 둠. `attack_judge.md` 적대 검증 미통과도 남음
 - [x] 이 문서 체크박스를 갱신했고, §5 남은 항목이 master-plan에 반영됐는지 확인했다(§5의 두 건은 S0.7 연락처 첫 판·S0.3 역할 상수로 이 문서 안에서 처리)
 - [x] [master-plan §10](../master-plan.md#10-개발-규칙) 계약 대조: §4 계약과 코드 대조(서명·설정 키·종료 코드·trace 필드). 다른 곳은 슬라이스 PR에서 master를 먼저 고쳤다(v18 §4.3 retry-after, v19 §4.5 오류 레코드·§4.7 판정기 입력). 남은 차이는 하위 호환 확장뿐이다: `Guard(cfg, *, llm=None)`·`Guard.from_config(..., *, llm=None)`(S0.3 문서대로), `run_item(..., *, rep, judge_prompt, contact_numbers)`, `LLM(..., wall=)`(retry-after 날짜용 벽시계)
 - [x] ADR: ADR-0006 수정(과잉 거절 채점 범위)이 S0.7 PR에 들어갔다. 구조화 출력 하강(S0.3)은 ADR-0004(판정 모델 계열)와 어긋나지 않는다

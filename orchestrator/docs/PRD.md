@@ -2,11 +2,11 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 상태 | v3 초안 (2026-11-07) |
+| 문서 상태 | v4 초안 (2026-11-08) — 튜터 PRD(#39) 리뷰 반영 |
 | 담당 | 플랫폼 담당 (오케스트레이터 · 통합 평가 · 튜터 기능 일부, PM 겸임) |
 | 상위 문서 | `docs/PRD.md` (기획서 · 팀 PRD) |
 | 참고 | 가드 인터페이스 제안서(`guardrail/docs/interface.md`) |
-| 범위 | 오케스트레이터 서버(OR) · 통합 평가(EV) · 플랫폼이 맡는 튜터 기능(TU-P) · 실행 환경. 가드 내부와 튜터 검색 내부는 다루지 않는다 |
+| 범위 | 오케스트레이터 서버(OR) · 통합 평가(EV) · 실행 환경. 튜터와의 분담은 §5에 확정. 가드 내부와 튜터 내부(인덱싱 · 검색 · 근거 판정 · 생성)는 다루지 않는다 |
 | 설계 원칙 | **빠르게, 싸게, 틀리지 않게.** 요청 바깥(API · 세션 · 어댑터 · 검증 · 렌더링 · 기록)만 맡고 요청 안의 흐름(동시 실행 · 합류 · 취소 · 재생성)은 가드에 둔다 |
 
 ---
@@ -14,7 +14,7 @@
 ## 1. 목표와 비목표
 
 **목표**
-- G1 `POST /v1/chat` 한 번으로 세션 복원 → 교수 전략 → `guard.respond()` → 인용구 검증 → 렌더링 → 저장이 끝난다.
+- G1 `POST /v1/chat` 한 번으로 세션 복원 → `guard.respond()`(어댑터 안에서 교수 전략 · 인용구 검증) → 렌더링 → 저장이 끝난다.
 - G2 튜터는 가드 타입에 의존하지 않고 HTTP 계약만 구현하면 연결된다.
 - G3 요청 전체 p95 ≤ (TBD)초, 요청당 LLM 호출 평균 ≤ 5회. 지연 · 비용은 설계로 줄이고 측정으로 증명한다.
 - G4 "교재 안에서만 답했다"를 인용구 검증 통과율이라는 수치로 보인다.
@@ -22,7 +22,7 @@
 
 **비목표**
 - 가드 판정 로직 · 임계값 · 프롬프트 · 응답 문구
-- 튜터 인덱싱 · 청킹 · 검색 전략 · 생성 프롬프트 (TU-P로 지정한 것 제외)
+- 튜터 인덱싱 · 청킹 · 검색 · 근거 판정(기권) · 생성 프롬프트 (튜터 PRD)
 - 실제 교사 연락 채널, 사용자 가입, 다중 테넌트, 운영 배포 자동화
 
 ## 2. 사용자와 시나리오
@@ -45,24 +45,24 @@ POST /v1/chat {session_id?, user_id, grade_band, message}
   API 키 검증 → 세션 ID HMAC 검증 → Redis에서 세션 복원
     (이력 ≤ 8턴 · R · level · flow_step · covered_sections · fail_count · last_chunks)
   → Helpy 흐름 상태 전이 (level_check → plan → explain → quiz → summary)
-  → 교수 전략 선택: 질문 유형 힌트 × level × fail_count
-    → 템플릿 ID · 스캐폴딩 단계(힌트/유도 질문/근거) · 검색 힌트(예제 우선 · 대조 · 직전 청크 유지)
+  → 검색 힌트 준비: flow_step · last_chunks · 직전 intent (교수 전략은 아직 고르지 않음 — 어댑터가 T1 결과를 본 뒤 고름)
   → 요청 시간 예산 시작 (기본 30s, 초과 시 진행 중 호출 취소 → 안전 응답)
   ▼
-  guard.respond(message, history, adapter, session, instruction=교수 전략)
+  guard.respond(message, history, adapter, session)
   │  [가드 소유 구간. 오케스트레이터는 어댑터로만 참여]
   │  ①~④ 입력 가드 (직렬) ─(③ 확실한 규칙)─▶ 차단 → Verdict 반환
   │  ├──────────────┬──────────────────────────────────────────────┐  [동시 실행]
   │  ▼              ▼                                               ▼
-  │  Jev(선택)       ⑤ 입력 판정 (LLM 1회)        [어댑터] retrieve ──HTTP──▶ [튜터] T1 질의 이해 (light 1회)
+  │  Jev(선택)       ⑤ 입력 판정 (LLM 1회)        [어댑터] retrieve (light 슬롯) ──HTTP──▶ [튜터] T1 질의 이해 (LLM 1회)
   │                                                                  → T2 유형별 검색 (BM25+벡터 → 리랭커 → 부모 확장)
   │                                                                  → T3 기권 게이트 (애매 구간만 자기 평가 1회)
-  │                                               [어댑터] 청크 + 타입 + 점수 + 기권 신호 수신
+  │                                               [어댑터] 청크 + retrieval_status · retrieval_context(intent · required_aspects) · usage 수신
   │                                                  → S# 번호 부여 · 출처 매핑 보관 · Chunk(sid, source, text)
+  │                                                  → 교수 전략 선택(규칙): T1 intent × level × fail_count → 템플릿 ID · 스캐폴딩 단계
   │                                               ⑥ 검색 가드 (청크 인젝션 검사)
   │                                               기권이면 → 생성 생략, 기권 응답 + 가장 가까운 단원
-  │                                               [어댑터] generate ──HTTP──▶ [튜터] T4 생성 (LLM 1회)
-  │                                                  llm.slot("generator") 안 · 비스트리밍 · system_extra 전달
+  │                                               [어댑터] generate (generator 슬롯) ──HTTP──▶ [튜터] T4 생성 (LLM 1회)
+  │                                                  instruction = 가드 지시 + 템플릿 ID · 스캐폴딩 단계 · retrieval_context 그대로 전달 · 비스트리밍 · system_extra
   │                                               [어댑터] 인용구 검증 (LLM 0회)
   │                                                  문장마다 quote ⊂ 인용 청크? 아니면 문장 제거
   │                                                  제거율 > 임계 → instruction 붙여 재생성 1회 (가드 ⑨ 켜져 있으면 가드에 위임)
@@ -80,7 +80,7 @@ POST /v1/chat {session_id?, user_id, grade_band, message}
   → 응답 {session_id, request_id, response, action, citations[], crisis_flag, latency_ms}
 ```
 
-LLM 호출: 기본 4회(⑤ · T1 · T4 · ⑧), 최대 6회(T3 자기 평가 · ⑨ 재생성), 기권 시 3회, ③ 규칙 차단 시 0회. 모든 호출은 가드 게이트 하나를 지나며 슬롯(`judge` · `generator` · `light`)별 동시성 한도를 따른다.
+LLM 호출: 기본 4회(⑤ · T1 · T4 · ⑧), 최대 6회(T3 자기 평가 · ⑨ 재생성 또는 형식 재요청), 기권 시 3회, ③ 규칙 차단 시 0회. 임베딩 호출은 이 상한에 세지 않고 비용에만 넣는다. 가드 판정은 가드 게이트를 직접 지나고, 튜터 호출은 어댑터가 `/retrieve`를 `light` 슬롯, `/generate`를 `generator` 슬롯으로 감싸 동시성을 맞춘다(OR-06).
 
 장애 시: 튜터 타임아웃 · 서킷 브레이커 열림 → 어댑터가 예외 반환 → 가드 생성 실패 행으로 안전 응답(fail-closed). 엘리스 API 429 · 장애 → 게이트 재시도 · AIMD, 예산 초과 시 `fallback_infra`.
 
@@ -110,8 +110,8 @@ cheshirecat/
 │  │  ├─ main.py                  # FastAPI 앱, Guard.from_config() 1회, 워밍업
 │  │  ├─ settings.py              # 환경 변수 (pydantic-settings)
 │  │  ├─ api/                     # chat · health · (sessions · traces)
-│  │  ├─ chat.py                  # 세션 복원 → 교수 전략 → guard.respond() → 검증 · 렌더링 → 저장
-│  │  ├─ pedagogy/                # Helpy 흐름 상태기계 · 교수 전략 선택 · 템플릿 (OR-07)
+│  │  ├─ chat.py                  # 세션 복원 → 검색 힌트 → guard.respond() → 검증 · 렌더링 → 저장
+│  │  ├─ pedagogy/                # Helpy 흐름 상태기계 · 교수 전략 선택(어댑터가 generate 직전에 호출) · 템플릿 (OR-07)
 │  │  ├─ adapters/
 │  │  │  ├─ tutor_http.py         # TutorAdapter 구현 · keep-alive · 타임아웃 · llm.slot
 │  │  │  └─ chunk_mapper.py       # 튜터 청크 → Chunk(sid, source, text), 출처 · 타입 · 점수 매핑
@@ -138,7 +138,7 @@ cheshirecat/
 └─ tutor/                         # 튜터 담당 · 내부 구조 자유, api.py가 계약 엔드포인트
 ```
 
-TU-P로 확정되는 기능은 위치가 둘 중 하나다: 구조 그래프 파서처럼 인덱싱에 속하면 `tutor/` 아래(튜터 담당과 합의), 교수 층 · 검증 · 세션처럼 요청 바깥이면 `orchestrator/` 아래.
+튜터와의 분담은 §5에 확정돼 있다. 파서 · 구조 트리 · 근거 판정은 `tutor/`, 교수 전략 · 인용구 검증 · 세션은 `orchestrator/`.
 
 ## 4. 기능 요구사항 — 오케스트레이터 (OR)
 
@@ -163,28 +163,33 @@ TU-P로 확정되는 기능은 위치가 둘 중 하나다: 구조 그래프 파
 
 ### OR-04 튜터 어댑터 (P0)
 - `TutorAdapter` 구현: `retrieve(question, history) -> list[Chunk]`, `generate(question, history, chunks, *, system_extra, instruction) -> str`
-- HTTP keep-alive 연결 풀, 타임아웃(retrieve 3s · generate 20s, 설정값), 재시도 1회, 서킷 브레이커
-- S# 번호 부여, `Chunk(sid, source, text)` 변환, 출처 매핑 · 청크 타입 · 점수 · 기권 신호 보관
+- HTTP keep-alive 연결 풀, 타임아웃(retrieve 8s · generate 20s, 설정값 — 11/13 측정 뒤 조정), 재시도 1회, 서킷 브레이커
+- S# 번호 부여(튜터가 돌려준 근거 묶음 순서 그대로), `Chunk(sid, source, text)` 변환(`text` = 튜터 `raw_text`), 출처 매핑 · 청크 타입 · `retrieval_status` · `retrieval_context` · `usage` 보관
+- `/retrieve` 요청에 검색 힌트(`flow_step`, `last_chunks`, 직전 `intent`)를 넣고, `/generate` 요청에는 `/retrieve`가 돌려준 `retrieval_context`를 그대로 넘긴다
+- 튜터 HTTP 오류(503 `INDEX_NOT_READY`, 502/504 `UPSTREAM_*`, 502 `GENERATION_FORMAT_ERROR`)는 기권과 구분해 예외로 올려 가드 생성 실패 행(fail-closed)을 타게 한다
 - 청크 래핑 · 비스트리밍 · `regenerate = generate(instruction=)` 담당
-- `generate`는 `guard.llm.slot("generator")` 안에서
+- `/retrieve`는 `guard.llm.slot("light")`, `/generate`는 `guard.llm.slot("generator")` 안에서 호출(동시성 제어). 교수 전략은 `/retrieve` 결과를 본 뒤 `generate` 호출 직전에 고른다(OR-07)
 - 튜터 HTTP 계약: `POST /retrieve` · `POST /generate` · `GET /info` · `GET /health` · (선택) `POST /ingest`. 스키마 `contracts/tutor_api.py`
 - 가드 하네스가 `TUTOR_MODULE`로 이 어댑터를 import할 수 있게 패키지 경로 고정 (어댑터 한 벌)
 
 ### OR-05 인용구 검증과 출처 렌더링 (P0)
-- 생성 출력(문장 · `cite` · `quote`)에서 quote가 인용 청크 텍스트에 **정규화 후 부분 문자열**로 존재하는지 대조. 실패 문장은 제거하고 `stages`에 기록. 제거율이 설정 임계(기본 30%)를 넘으면 `instruction`을 붙여 재생성 1회 요청(가드 ⑨와 중복 호출 방지: 가드 ⑨가 켜져 있으면 제거만 하고 재생성은 가드에 위임)
+- `/generate` 응답의 `sentences[]`(문장 · `kind` · `evidence[{sid, quote, quote_found}]`)를 입력으로, `claim` 문장의 quote가 인용 청크 `raw_text`에 **정규화 후 부분 문자열**로 존재하는지 대조(튜터의 `quote_found`는 참고만 하고 어댑터가 다시 확인). `non_claim` 문장은 근거 없이 허용. 실패 문장은 제거하고 `stages`에 기록. 제거율이 설정 임계(기본 30%)를 넘으면 `instruction`을 붙여 재생성 1회 요청(가드 ⑨와 중복 호출 방지: 가드 ⑨가 켜져 있으면 제거만 하고 재생성은 가드에 위임)
 - `[S#]` → "교재 › 단원 › 섹션" 치환. 매핑에 없는 번호는 가드 ⑦이 이미 제거
 - 정규화 규칙: 공백 · 문장부호 · 전각/반각 통일, 코드 블록은 원문 그대로
 
 ### OR-06 LLM 호출 관리 (P0)
-- 모든 엘리스 API 호출은 가드 `llm.py` 게이트 하나를 지남. 소유(설정 · 집계) = 오케스트레이터, 구현 = 가드
-- 슬롯별 동시성 한도: `judge` · `generator` · `light` (질의 이해용 경량 모델)
-- 요청당 호출 수 · 토큰 · 모델을 `Verdict.stages` + 어댑터 기록으로 집계, 응답 `latency_ms`와 함께 트레이스에 저장
+- 가드 판정 호출은 가드 `llm.py` 게이트를 직접 지난다. 소유(설정 · 집계) = 오케스트레이터, 구현 = 가드
+- 튜터는 별도 프로세스라 게이트를 import하지 않고 자체 `LLMClient`로 엘리스 API를 부른다. 대신 어댑터가 `/retrieve`를 `light` 슬롯, `/generate`를 `generator` 슬롯으로 감싸 **동시성만** 제어한다. 슬롯: `judge` · `generator` · `light`
+- 토큰 · 비용 집계: 가드 몫은 `Verdict.stages`, 튜터 몫은 `/retrieve` · `/generate` 응답의 `usage`(LLM 호출 수 · 임베딩 호출 수 · 토큰 · 단계별 지연). 요청 ID 단위로 합산해 트레이스에 저장
+- 요청당 LLM 호출 상한 6은 가드 판정 2 + 튜터 몫 최대 4(T1 · 자기 평가 · T4 · 재생성 또는 형식 재요청). 임베딩 호출은 상한에 세지 않는다
 - 서버 수준: 요청 동시성 상한, 세션별 속도 제한, 요청 전체 시간 예산(기본 30s), 예산 초과 시 진행 중 호출 취소 → 안전 응답
 
 ### OR-07 Helpy 흐름 상태기계와 교수 전략 (P1)
-- 상태: `level_check → plan → explain → quiz → summary`, 세션 `flow_step`에 저장. 전이는 규칙(첫 턴 · 질문 유형 · 다룬 섹션 수 · 학생 응답)
-- 교수 전략 선택(호출 없음): 질문 유형 × `level` × `fail_count` → 템플릿 ID · 스캐폴딩 단계(힌트 → 유도 질문 → 근거 제시) · 검색 힌트(예제 우선, 대조, 직전 청크 유지)
-- 결과는 `instruction`으로 가드 → 튜터 ④에 전달. 튜터는 템플릿 ID만 알면 됨
+- 상태: `level_check → plan → explain → quiz → summary`, 세션 `flow_step`에 저장. 전이는 규칙(첫 턴 · 직전 턴 `intent` · 다룬 섹션 수 · 학생 응답)
+- **선택 시점은 어댑터의 `/generate` 호출 직전**이다. `guard.respond()` 전에는 질문 유형을 알 수 없으므로(유형은 튜터 T1이 `/retrieve` 안에서 분류), 오케스트레이터는 세션에서 검색 힌트(`flow_step` · `last_chunks` · 직전 `intent`)만 준비해 `/retrieve` 요청에 넣는다
+- 어댑터가 `/retrieve` 응답의 `retrieval_context`(`intent` · `required_aspects` · `context_link`)를 받은 뒤, 규칙(호출 없음)으로 `intent` × `level` × `fail_count` → 템플릿 ID · 스캐폴딩 단계(힌트 → 유도 질문 → 근거 제시)를 정하고, 가드가 넘긴 `instruction`(전환 · 부분 · 재생성 지시)에 합쳐 `/generate`에 보낸다
+- 템플릿 ID 목록(`concept` · `example` · `compare` · `followup` · `quiz` · 기본)은 튜터 담당과 함께 정하고 `contracts/`에 둔다. 튜터는 ID별 생성 지시만 가진다
+- 응답 뒤 T1 `intent`와 `retrieval_status`를 세션에 저장해 다음 턴 힌트로 쓴다
 
 ### OR-08 트레이스 · 로그 (P0)
 - 요청 ID 아래 단계별 지연 · 호출 · 토큰 · 인용구 검증 결과 · 어댑터 지연을 JSONL로
@@ -238,18 +243,18 @@ TU-P로 확정되는 기능은 위치가 둘 중 하나다: 구조 그래프 파
 | ablation | top-k · 리랭커 유무 · 컨텍스트 청킹 유무 · 인용구 검증 유무를 통합 평가에서 비교 |
 
 ### OR-18 비용 통제 (P1)
-- 슬롯별 예산, 실행당 `--max-calls`, 요청당 호출 상한(6회) 초과 시 안전 응답
+- 슬롯별 예산, 실행당 `--max-calls`, 요청당 LLM 호출 상한(6회, 임베딩 제외) 초과 시 안전 응답
 - 모델별 토큰 단가표(`configs/pricing.yaml`)로 비용 집계
 
-## 5. 기능 요구사항 — 플랫폼이 맡는 튜터 기능 (TU-P, 튜터 담당 논의 후 확정)
+## 5. 튜터와의 분담 (확정, 튜터 PRD #39 §9 D-T1~D-T5)
 
-| ID | 기능 | 위치 | 우선 |
+| ID | 기능 | 소유 | 근거 |
 |---|---|---|---|
-| TU-P1 | 구조 그래프 파서: 교재 › 단원 › 섹션, 용어 정의 위치, 선수 관계 (LLM 없음) | `tutor/index/structure.py` 또는 `orchestrator/knowledge/` | P0 |
-| TU-P2 | 기권 게이트 로직: 점수 + 조건부 자기 평가 → 충분 / 재검색 / 기권, 가장 가까운 단원 산출 | 튜터 `/retrieve` 응답 필드 | P0 |
-| TU-P3 | 세션 학습 상태와 Helpy 흐름 (OR-02 · OR-07) | 오케스트레이터 | P1 |
-| TU-P4 | 질문 유형 라우팅: 유형 → 검색 힌트 · 템플릿 | 오케스트레이터 → `instruction` | P0 |
-| TU-P5 | 인용구 검증 (OR-05) | 어댑터 | P0 |
+| TU-P1 | 파서 · 구조 트리(교재 › 단원 › 섹션 › 블록, 원문 위치) | **튜터** (TU-01) | 파서 · 청킹과 한 몸. 따로 두면 두 번 파싱 |
+| TU-P2 | 근거 판정 · 기권 게이트(네 상태: answerable · partial · needs_clarification · insufficient_evidence) | **튜터** `/retrieve` (TU-08) | 검색 신호를 가진 쪽이 판정 |
+| TU-P3 | 세션 학습 상태 · Helpy 흐름 상태기계 | **오케스트레이터** (OR-02 · OR-07) | 튜터는 stateless |
+| TU-P4 | 질문 유형 → 교수 전략(템플릿 ID · 스캐폴딩) 선택 | **어댑터** (OR-07) — T1 `intent`를 받은 뒤 | 유형 분류는 튜터 T1, 전략 선택은 플랫폼 |
+| TU-P5 | 인용구 검증(문장 제거 · 재생성 요청) | **어댑터** (OR-05) | 튜터는 `quote_found` 표시까지 |
 
 튜터 담당 몫: 파서(형식별) · 청크 타입 분류 · 컨텍스트 청킹 · 하이브리드 인덱스 · 리랭커 · 요약 노드 · ① 질의 이해 · ② 검색 · ④ 생성 프롬프트.
 
@@ -323,6 +328,7 @@ TU-P로 확정되는 기능은 위치가 둘 중 하나다: 구조 그래프 파
 | 실제 튜터 11/17 미연결 | 스텁으로 OR · EV 수치 확보, 보고서 표기 |
 | 가드 ⑨ 재생성과 OR-05 재생성 중복 호출 | 가드 ⑨ 켜짐 여부로 분기(OR-05) |
 | 경량 모델이 ML API에 없음 | 생성 모델 하나로 `light` 슬롯 대체, 동시성만 분리 |
+| `/retrieve`가 8s를 넘김 (T1 + 임베딩 + 검색) | 자기 평가 끄기 · 독립 질문 T1 생략 · 타임아웃 조정 (튜터 PRD §6.2) |
 | 인용구 검증이 코드 · 수식에서 오탐 | 코드 블록은 정규화 없이 원문 대조, 수식은 검증 제외 플래그 |
 | API 한도 미공개 | 게이트 4로 시작, 답 오면 설정만 변경 |
 
@@ -330,8 +336,7 @@ TU-P로 확정되는 기능은 위치가 둘 중 하나다: 구조 그래프 파
 
 | 미결 | 기본값 | 늦어도 |
 |---|---|---|
-| 튜터 HTTP 스키마 · 기권 신호 필드 | `TutorAdapter` 시그니처 JSON + `abstain`, `nearest_section` | 11/10 |
+| 튜터 HTTP 스키마 (`contracts/tutor_api.py`) | 기본: `chunks` · `abstain` · `nearest_section` · `answer` · `sentences`. 확장: `retrieval_status` · `message` · `retrieval_context` · `source_locator` · `signals` · `usage` · `coverage` · `final_status`. `/retrieve` 요청 힌트 필드 이름은 플랫폼이 초안 | 11/10 |
 | 출처 메타데이터 항목 | `source` 단일 문자열 | 11/10 |
-| TU-P 범위 (튜터 담당 논의) | §5 표 | 11/9 |
 | 경량 모델 · 생성 모델 선택 | 11/9 모델 목록 | 11/10 |
 | p95 · 과잉 거절 · 통과율 합격선 | 통합 1차 후 | 11/13 |

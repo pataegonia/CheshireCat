@@ -3,6 +3,21 @@
 작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · `/ecc:skill-scout` 결과
 대상: [master-plan.md](master-plan.md)의 슬라이스. 슬라이스마다 쓸 스킬은 각 Phase 문서([plan/](plan/))에도 적혀 있다.
 
+## v5 (대회 기준, 2026-11-09)
+
+PRD v5 전환 작업에 쓴 스킬과, 코드 재계획에서 쓸 후보다. 아래 "Phase별 표"는 v4(GP0–GP4) 기준이라 재계획 때 다시 쓴다.
+
+| 단계 | 스킬·에이전트(모델) | 쓰는 이유 |
+|---|---|---|
+| 범위 산정·플랜 | `ecc:plan`, `ecc:skill-scout` | OT 대조, phase별 스킬 명세 |
+| 리서치(R12) | `ecc:research-ops` → `ecc:search-first`, `ecc:deep-research`(Opus), 로컬 자산 점검(Sonnet) | 라이브러리·설계 근거·자산 출처를 동시에 |
+| 설계 결정 | `ecc:council`(Skeptic·Pragmatist·Critic, Opus) | 결정 7건, 초안을 바꾼 근거를 남김 |
+| ADR | `ecc:architecture-decision-records` | 0004·0007·0008 폐기, 0009–0011 신규 |
+| 계약 | `ecc:api-design`, `ecc:contract-first` | `guard.schema.json` 하나를 기준으로 테스트 |
+| 문서 정리 | `ecc:docs-governance`, `ecc:living-docs-governance` | 링크·ADR 색인 점검, 문서 역할 |
+| 검증 | `ecc:santa-method`(독립 리뷰어 2명, Opus), `humanize-korean` | PRD·OT 사실 대조, 금지 항목 위반 확인, 문장 |
+| (코드 재계획 후보) | `ecc:fastapi-patterns`, `ecc:cost-aware-llm-pipeline`, `ecc:tdd-workflow`, `ecc:eval-harness`, `ecc:security-review` | 서버·nano 호출·TDD·채점식 재현·로그 규칙 |
+
 ## 찾은 방법과 결론
 
 - 로컬 ECC 2.2.1에 설치된 스킬·에이전트를 이름으로 확인했다(2026-10-30). 아래 표의 이름은 모두 설치되어 있다. `dataviz`, `humanize-korean`, `code-review`는 ECC 밖 플러그인이다.

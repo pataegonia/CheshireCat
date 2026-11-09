@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "guard.schema.json",
+  "title": "POST /guard contract (spec_version 1.0)",
+  "description": "Source: competition OT p.11-12, 15 (docs/competition/ot-facts.md §3, §5). SPEC.md on the runbox is authoritative; re-check on 2026-11-10. Request is parsed leniently (unknown fields allowed); response is strict (only spec fields, exact lowercase enum values). 'output' is required only when the request has a candidate_answer (cross-document rule, enforced in tests, not here). If messages (and candidate_answer) can still be read, the server judges; otherwise a malformed request or unexpected role gets the default 200 response (PRD GR-08, to be checked against SPEC.md), not a 4xx; only an auth failure is non-200.",
+  "$defs": {
+    "category": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "answer_seeking",
+        "academic_dishonesty",
+        "off_topic",
+        "out_of_material",
+        "jailbreak_injection",
+        "pii_disclosure",
+        "harmful_content",
+        "emotional_distress",
+        "low_signal_input"
+      ]
+    },
+    "message": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": { "type": "string" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["spec_version", "session_id", "messages"],
+      "properties": {
+        "spec_version": { "type": "string" },
+        "session_id": { "type": "string" },
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/message" },
+          "description": "Full history. First and last items are role=user (OT p.10)."
+        },
+        "candidate_answer": { "type": "string" }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["input"],
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": "object",
+          "required": ["decision", "category"],
+          "additionalProperties": false,
+          "properties": {
+            "decision": { "type": "string", "enum": ["allow", "block"] },
+            "category": { "$ref": "#/$defs/category" }
+          }
+        },
+        "output": {
+          "type": "object",
+          "required": ["grounded", "unsupported", "safe", "category"],
+          "additionalProperties": false,
+          "properties": {
+            "grounded": { "type": "boolean" },
+            "unsupported": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Verbatim substrings of candidate_answer (grader ignores whitespace/punctuation). Empty when grounded=true (ADR-0011)."
+            },
+            "safe": { "type": "boolean" },
+            "category": {
+              "$ref": "#/$defs/category",
+              "description": "Not scored (OT p.15). Copied from input.category (ADR-0009)."
+            }
+          }
+        }
+      }
+    }
+  }
+}

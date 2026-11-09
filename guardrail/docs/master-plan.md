@@ -1,10 +1,15 @@
 # 가드레일 master-plan
 
-작성 2026-10-30 · 갱신 2026-11-03 · 담당 danielcho02 · 상태: v21 (PRD 마일스톤 절 삭제 v21, GitHub 마일스톤 삭제 v20, S0.7 하네스 계약 보강 v19, S0.3 retry-after 규칙 v18, 11/3 일정 재기준 v17, 세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, 4회차 v9, 5회차 v10, 6회차 v11, 7회차 v12, 8회차 v13, 9회차 v14, 10회차 v15, 11회차 v16, §13)
+작성 2026-10-30 · 갱신 2026-11-09 · 담당 danielcho02 · 상태: v22 (PRD v5 대회 기준 전환 v22, PRD 마일스톤 절 삭제 v21, GitHub 마일스톤 삭제 v20, S0.7 하네스 계약 보강 v19, S0.3 retry-after 규칙 v18, 11/3 일정 재기준 v17, 세부 플랜 제안 반영 v2, santa 1차 v3, 2차 v4, 3차 v5, santa-loop 1회차 v6, 2회차 v7, 3회차 v8, 4회차 v9, 5회차 v10, 6회차 v11, 7회차 v12, 8회차 v13, 9회차 v14, 10회차 v15, 11회차 v16, §13)
 근거: [PRD.md](PRD.md)(요구사항 GR-xx) · [adr/](adr/README.md)(설계 결정) · [research/](research/README.md)(조사) · [skills.md](skills.md)(쓸 스킬)
 세부 플랜: [plan/GP0](plan/GP0-foundation.md) · [GP1](plan/GP1-output-guard.md) · [GP2](plan/GP2-input-crisis.md) · [GP3](plan/GP3-integration-eval.md) · [GP4](plan/GP4-presentation.md)
 
-이 문서는 PRD의 구조(구조 B2, PRD §4)를 코드로 옮기는 큰 줄기다. 무엇을 만들지는 PRD가 정하고, 이 문서는 **어떤 순서로, 어떤 모듈로, 어떤 계약으로** 만들지를 정한다. 슬라이스 하나는 PR 하나, GitHub 이슈 하나다. 세부 플랜과 이 문서가 다르면 이 문서가 맞고, 세부 플랜을 고친다.
+이 문서는 PRD의 구조(v5, PRD §4)를 코드로 옮기는 큰 줄기다. 무엇을 만들지는 PRD가 정하고, 이 문서는 **어떤 순서로, 어떤 모듈로, 어떤 계약으로** 만들지를 정한다. 슬라이스 하나는 PR 하나, GitHub 이슈 하나다. 세부 플랜과 이 문서가 다르면 이 문서가 맞고, 세부 플랜을 고친다.
+
+> **v22 (2026-11-09) 대회 기준 전환.** 대회 OT를 받고 PRD를 v5로 바꿨다([PRD](PRD.md), [OT 사실](competition/ot-facts.md), [R12](research/R12-competition-baseline.md), ADR-0009–0011). 가드는 튜터를 감싸는 패키지가 아니라 상태 없는 HTTP 판정기 `POST /guard`다.
+> - **v5 기준으로 다시 쓴 절**: §1 범위, §2 일정, §3 모듈 지도(제안), §8 외부 미결, §9 팀.
+> - **v4 기준으로 남긴 절**: §4 계약, §5 슬라이스, §6 의존, §7 자르는 순서, §11 추적, §12 리스크. 코드 재계획(다음 플랜)에서 다시 쓴다. 그 전까지 계약의 기준은 [contract/guard.schema.json](contract/guard.schema.json)과 ADR-0009–0011이다.
+> - Phase 문서(GP0–GP4)와 에픽 #2–#6은 v4 계획이다. 각 문서 맨 위에 같은 표시를 달았다.
 
 ---
 
@@ -12,79 +17,62 @@
 
 | 포함 | 제외 |
 |---|---|
-| `guardrail/` 패키지 구현, 테스트, 평가 하네스, 가드 CI | 튜터(KB·검색·생성·UI) 구현 |
-| 가드 ↔ 튜터 인터페이스 **제안서** | 팀원 업무 배정, 팀 전체 저장소 규칙 |
-| 가드 평가 수치와 발표용 표·차트·데모 | 공모전 일정 관리, 주최측 소통(리더 몫), 발표 형식 |
+| 대회 `POST /guard` 판정기(서버 라우터, 판정, KB 검색), 테스트, 공개 세트 평가 하네스, 가드 CI | `/tutor` 구현(검색·생성·action) |
+| `/tutor`와 공유할 수 있는 부분의 **제안**(PRD §9) | 팀원 업무 배정, 제출 계정·토큰 운영(리더 몫) |
+| 시연용 가드 수치·로그 코드 설명·provenance | 발표 형식 |
 
-팀과 맞닿는 결정은 PRD §9에 제안으로만 둔다. 이 문서의 "팀과 맞닿는 부분"(§9)은 정보이고 지시가 아니다. 팀원 도움이 필요한 항목은 모두 "요청(리더 결정)"이고, 도움 없이도 끝나는 대안이 있다.
+팀과 맞닿는 결정은 PRD §9에 제안으로만 둔다. 이 문서의 §9는 정보이고 지시가 아니다.
 
-## 2. 일정과 Phase 관문
+## 2. 일정 (v22, 제안)
 
-2026-10-30(금)에 시작했고 최종 발표는 11/25(수)다. 출력 가드가 배점에 가장 크게 걸려서 먼저 만든다.
+대회는 2026-11-10 09:00에 시작해 11/25 09:00에 마감하고, 13:00에 시연한다(OT §1). 제출 횟수 제한이 없고 계정별 **마지막 제출**이 점수다. 아래 단계는 코드 재계획에서 슬라이스로 쪼갠다.
 
-| Phase | 기간 | 목표(보이는 변화) | 관문(다음 Phase로 넘어가는 조건) |
+| 단계 | 기간 | 목표(보이는 변화) | 넘어가는 조건 |
 |---|---|---|---|
-| [GP0 기반](plan/GP0-foundation.md) | 10/30(금)–11/4(수). 11/3 사용자 결정: 주최측 답 대기로 관문 하루 연기 | 모의 튜터로 **무방비 베이스라인 수치** | 하네스가 무방비 설정으로 공격·정상·위기 스모크 세트를 끝까지 돌리고 리포트 CSV를 낸다(키가 없으면 `--fake`로, 실제 베이스라인은 막힘으로 표시). CI green |
-| [GP1 출력 가드](plan/GP1-output-guard.md) | 11/4(수)–11/9(월) | 근거 이탈 탐지율·오탐률·출처 정확도 **첫 수치** | 개발 세트에서 세 지표와 ⑧ p95 지연이 리포트에 나온다. ⑧ 장애 주입 테스트 통과 |
-| [GP2 입력·위기·멀티턴](plan/GP2-input-crisis.md) | 11/10(화)–11/15(일) | 차단율·과잉 거절·위기 재현율 첫 수치, 장애 주입 통과 | 위기 세트 재현율 ≥0.95 pass^3(판정 API 끔 포함). GR-14 장애 표 전 행 테스트 통과. 홀드아웃 봉인 |
-| [GP3 통합·평가](plan/GP3-integration-eval.md) | 11/16(월)–11/20(금) | 실제 튜터 연결, 임계값 확정, ablation, 홀드아웃 1회 | **11/20 기능 동결.** 홀드아웃 결과표·ablation 표·곡선·비용·지연 표 확정 |
-| [GP4 발표](plan/GP4-presentation.md) | 11/21(토)–11/25(수) | 전후 비교 데모, 표·차트, 현장 적용 자료 | **11/23 18:00 수치 동결**(`results/FROZEN.txt`). 데모 리허설 2회 통과, 수치 출처가 `results/` 파일과 일치 |
+| C0 문서 | 11/09 | PRD v5·ADR-0009–0011·R12·스키마 | PR 머지 |
+| C1 첫 제출 | 11/10 | `SPEC.md` 대조, 공개 세트 분석(PRD §11-2), 상수 응답 서버로 **첫 제출**, `llm.py` 파라미터 수정 | 런박스 주소로 200 JSON, 형식 오류 0 |
+| C2 판정 v1 | 11/11–11/14 | 입력·출력 판정 v1, KB 색인, 채점식 재현 하네스, 채점과 같은 부하(동시 64, 가드 약 300요청)까지 부하 시험 | 개발 분할에서 가드 점수가 상수 응답보다 높음, 동시성 64에서 시간 초과 0 |
+| C3 조정 | 11/15–11/20 | 정책 문구·경계 사례 조정, ablation, 홀드아웃(최대 3회) | 홀드아웃 점수·ablation 표 확정. **11/20 기능 동결** |
+| C4 마무리 | 11/21–11/24 | 로그 규칙·provenance 점검, 시연 자료, 최종 제출 | 제출 체크리스트(OT p.30, ot-facts §11) 통과. 마지막 제출은 마감 전날까지 |
 
-GP0 관문이 11/4로 밀려 GP1과 하루 겹친다. GP1이 떠안는 시간과 발동한 컷 행은 [GP0 §2](plan/GP0-foundation.md#2-용량-점검) "11/3 재기준"과 [GP1 §2](plan/GP1-output-guard.md#2-용량-점검)에 적는다(v17).
+- 마지막 제출이 점수이므로, 마감 직전에는 검증된 커밋만 제출한다.
+- 채점은 표본이 매번 달라 점수가 흔들린다. 제출 점수보다 로컬 홀드아웃을 기준으로 판단한다.
 
-관문을 못 넘으면 §7 순서대로 자른다. 각 Phase를 시작할 때 그 Phase 문서를 다시 읽고 남은 시간에 맞춘 뒤 슬라이스 이슈를 만든다(§11).
+## 3. 모듈 지도 (v22, 제안)
 
-## 3. 아키텍처 → 코드
-
-PRD §4의 단계 번호를 그대로 쓴다. 파일은 기능 단위로 하나씩 두고, 필요할 때만 나눈다.
+코드 재계획에서 확정한다. 재사용 판정은 [R12 §8](research/R12-competition-baseline.md#8-v4-자산-출처-점검-gr-13).
 
 ```
 guardrail/
   src/guardrail/
-    __init__.py        공개 API: Guard, 타입 재노출
-    types.py           Action·Category·Role·Turn·Chunk·Session·StageResult·Verdict·TutorAdapter (S0.2. `Role`은 여기 두고 llm.py가 가져다 쓴다)
-    config.py          YAML 설정 로드·검증, ${ENV} 치환, policy_version, config_hash, overrides (S0.2. CLI `--set`은 S0.7)
-    pipeline.py        Guard: respond()·check_input·guard_retrieval·check_output·new_canary, GR-14 등급표 (S0.2 → S1.6 → S2.5)
-    llm.py             OpenAI 호환 클라이언트 + 동시성 게이트(세마포어+AIMD) + 단일 재시도 + 예산 + 평가 전용 faults (S0.3. `FAKE_OK` 등록은 S1.5·S2.4·S2.10)
-    trace.py           요청별 trace JSONL, 평가/서비스 모드, alert 레코드 (S0.4 → S2.1 → S2.3)
-    preprocess.py      ① normalize / skeleton (있음) + skeleton_spans (S1.2)
-    match.py           골격 뷰 어휘 매처, 경계 규칙 (S1.2)
-    crisis.py          ② 위기 어휘·플래그 (S2.1)
-    rules.py           ③ 확실한 규칙(차단)·의심 패턴(플래그) (S2.2)
-    pii.py             ④ PII 탐지·마스킹, 위기 연락처 허용 목록 (S2.3)
+    server.py        FastAPI 라우터 POST /guard: 인증, 200 보장, 요청 마감 25초 (신규, ADR-0009)
+    schema.py        요청·응답 pydantic 모델. contract/guard.schema.json과 같게 (types.py 대체)
+    config.py        재사용(v4 단계·정책 항목 정리)
+    llm.py           재사용(temperature·max_tokens 제거, effort low, 역할 2개, 기동 시 파라미터 시험)
+    preprocess.py    재사용(정규화본·골격 뷰, ADR-0001)
+    signals.py       결정적 신호: 위기·PII·인젝션·저신호 (신규, GR-06)
+    kb.py            KB 로드·섹션 청크·문자 2-gram BM25 (mock_tutor의 BM25를 옮김, ADR-0010)
+    sentences.py     답변 문장 분리·번호 (GR-07)
+    prefilter.py     문자 3-gram 사전 필터 (GR-07)
     judges/
-      input_judge.py   ⑤ 정책·맥락·위기 하위 분류 (S2.4)
-      jev.py           Jev 탈옥·인젝션 확률 (S2.10, 선택)
-      exchange.py      ⑧ 교환 판정, 인용 실재 확인, G (S1.5)
-    retrieval_guard.py ⑥ datamarking, 링크 허용 목록 (S2.9)
-    output_checks.py   ⑦ 카나리아(S1.2), [S#] 실재, PII 재검사, 금지 표현 (S1.3)
-    sentences.py       문장 분리·제외 문장 태깅 (S1.4)
-    prefilter.py       사전 필터: 문자 3-gram 포함률 + 숫자·라틴 용어 + 부정 형태소 (S1.1 → S1.4)
-    repair.py          ⑨ R0–R3, ⑧ 실패 시 응답 (S1.6)
-    session.py         세션 위험 R (S2.8)
-    templates.py       거절·전환·부분·위기 응답 조립 (S2.1, S2.6)
+      input_judge.py   evidence → category → decision (GR-04)
+      output_judge.py  근거 없는 문장 번호 + safe (GR-07)
     eval/
-      datasets.py      형식 무관 로더, 원 요청 단위 분할, 중복 제거, 홀드아웃 봉인 확인 (S0.5, S2.0, 주최측 로더 S3.2)
-      build_grounding.py · build_input.py   평가 세트 조립 스크립트 (S1.1, S2.0)
-      mock_tutor.py    모의 튜터: 교재 1권 최소 RAG (S0.6)
-      real_tutor.py    실제 튜터 어댑터 (S3.1)
-      run.py           CLI: 데이터셋 × 설정 → 응답·trace·지표. run_item()을 데모가 재사용 (S0.7)
-      metrics.py       공격 성공·과잉 거절·근거·위기 지표, 스윕 (S0.7 → S1.7 → S2.7 → S3.3)
-      stats.py         Clopper-Pearson·Wilson·McNemar·Holm·표본 수 (S0.7)
-      demo.py · figures.py   전후 비교 데모, 차트·표 생성과 --check (S4.1, S4.2)
-      ext.py · nemo_baseline.py   확장 평가 (S4.5, P2)
-  prompts/             input_judge.md, exchange_judge.md, attack_judge.md (버전 헤더 포함)
-  configs/             default.yaml, unguarded.yaml, ablation/*.yaml(5개), faults/*.yaml, exp/*.yaml, demo-outage.yaml, nemo/·ext/(P2)
-  resources/           crisis_resources.yaml, templates.yaml, lexicons/*.txt
-  data/                seed/ · dev/ · holdout/ · raw/ (커밋 규칙은 §4.6)
-  results/             요약 지표 CSV·JSON, figures/, demo-replay.jsonl, FROZEN.txt (원문 응답·trace는 runs/, gitignore)
-  tests/               fakes.py(FakeLLM·FakeClock·FakeTutor·FakeGateway) 포함
+      datasets.py      재사용(로더·분할·중복 제거), 공개 세트 형식으로
+      score.py         대회 채점식 재현, score_local.py와 대조 (GR-12)
+      run.py           새로 씀: 공개 세트 × 설정 → 응답 JSON·점수
+  prompts/           input_judge.md, output_judge.md (팀 작성, 버전 헤더)
+  configs/           default.yaml(nano·임베딩만), ablation/*.yaml
+  tests/
 ```
 
-- `prompts/`·`configs/`·`resources/`·`data/`는 패키지 밖 데이터 디렉터리다. 경로는 `config.py`가 `guardrail/` 기준으로 푼다.
-- 루트 `.gitignore`의 `data/raw/`는 저장소 루트에만 걸린다. `guardrail/.gitignore`에 따로 둔다(S0.1, §4.6).
+- **폐기**: `pipeline.py`(래퍼), `trace.py`(원문 저장, 로그 규칙과 충돌), `types.py`의 `Session`·`Chunk`·`CrisisTier`, `eval/mock_tutor.py`(BM25 제외), `eval/build_grounding.py`, `configs/`의 Jev 항목.
+- 서버 로그는 시간·길이·상태 코드·오류만(PRD GR-11). 평가 결과 저장은 서버 밖 하네스에서만 한다.
 
 ## 4. 공통 계약
+
+> **v4 기준(v22에서 그대로 둠).** 코드 재계획에서 다시 쓴다. 그 전까지 v5 기준은 PRD v5, [contract/guard.schema.json](contract/guard.schema.json), ADR-0009–0011이다.
+
 
 모든 슬라이스가 이 계약을 따른다. 바꿔야 하면 이 절을 먼저 고치고 PR 설명에 적는다.
 
@@ -343,7 +331,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
 | 스키마·설정 검증 | `pydantic` 2.x, `pyyaml` | pydantic-settings: 키는 `os.environ`로 충분 |
 | 통계 (dev 그룹) | `scipy`(binomtest로 정확 McNemar, Clopper-Pearson·Wilson). Holm은 6줄 직접 | statsmodels: pandas·patsy까지 끌어온다 |
 | 차트 (dev 그룹) | `matplotlib` | |
-| 문장 분리 | 정규식(종결어미·문장부호, 코드 블록 보존) | kss: 의존성 고정 문제. `kiwipiepy`는 정규식이 부족할 때 선택 의존성 |
+| 문장 분리 | 정규식(종결어미·문장부호, 코드 블록 보존) | kss: 의존성 고정 문제. `kiwipiepy`는 정규식이 부족할 때 선택 의존성(**v5: 모델·사전 파일을 담고 있어 대회 규칙상 불가**, R12 §6-1) |
 | PII | 직접 구현(정규식 + 체크섬) | Presidio: 한국 전화·계좌 없음, spaCy 필요 |
 | 동시성 게이트 | 직접 구현(약 60줄) | aiolimiter: 고정 속도라 적응형이 아님 |
 | 테스트 | `pytest`, `pytest-cov`, `hypothesis`, anyio pytest 플러그인 | respx: httpx2 미지원. 녹화 재생: 프롬프트가 바뀔 때마다 깨짐 |
@@ -352,6 +340,9 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --data data/de
 출처: 2026-10-30 search-first·선행 구현 조사(OpenAI Agents SDK, NeMo Guardrails IORails, LlamaFirewall, Inspect AI, OpenAI SDK `_base_client.py`, Google check-grounding). 결론만 여기 적고, 슬라이스 문서가 근거 URL을 단다.
 
 ## 5. 슬라이스 목록
+
+> **v4 기준(v22에서 그대로 둠).** 코드 재계획에서 다시 쓴다. 그 전까지 v5 기준은 PRD v5, [contract/guard.schema.json](contract/guard.schema.json), ADR-0009–0011이다.
+
 
 예상 시간은 집중 작업 기준이다. 매 Phase 시작 때 남은 시간과 다시 맞춘다.
 
@@ -414,6 +405,9 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 
 ## 6. 의존 관계와 임계 경로
 
+> **v4 기준(v22에서 그대로 둠).** 코드 재계획에서 다시 쓴다. 그 전까지 v5 기준은 PRD v5, [contract/guard.schema.json](contract/guard.schema.json), ADR-0009–0011이다.
+
+
 선행 관계는 §5 표의 "선행" 열이 기준이다. 아래는 그 열을 Phase 순서로 펼친 것이다(→는 "끝나야 시작").
 
 | 묶음 | 선행 → 후행 |
@@ -434,6 +428,9 @@ Phase 합계: GP0 40h(S1.1 준비 2h 포함, 밀리면 S0.8을 11/4로) · GP1 4
 
 ## 7. 자르는 순서 (일정이 밀릴 때)
 
+> **v4 기준(v22에서 그대로 둠).** 코드 재계획에서 다시 쓴다. 그 전까지 v5 기준은 PRD v5, [contract/guard.schema.json](contract/guard.schema.json), ADR-0009–0011이다.
+
+
 1. S4.5 확장 평가 → 보고서에 "미실행과 이유"(GR-16)
 2. S2.10 Jev → `jev: false`로 ⑤ 단독(ADR-0008 저하 모드). **11/10까지 주최측 허용이 없으면 바로 자른다**
 3. S2.9 검색 가드 → ablation 표에 "꺼짐"으로 표시
@@ -445,34 +442,31 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 
 자르지 않는 것: 위기 경로(S2.1, GR-14 위기 행), 홀드아웃 1회 규칙, 키·PII 로그 금지, 무방비 베이스라인, attack_judge 일치도.
 
-## 8. 외부 미결 사항과 기본값
+## 8. 외부 미결 사항과 기본값 (v22)
 
-주최측 질문은 리더를 통해 묻는다(PRD §11). 답이 오기 전에는 아래 기본값으로 진행하고, 답이 오면 설정만 바꾼다.
+주최측 질문은 리더를 통해 묻는다(PRD §11-1). 답이 오기 전에는 아래 기본값으로 진행하고, 답이 오면 설정만 바꾼다.
 
-| 미결 | 걸리는 슬라이스 | 답 오기 전 기본값 | 늦어도 |
+| 미결 | 걸리는 곳 | 답 오기 전 기본값 | 늦어도 |
 |---|---|---|---|
-| 엘리스 API: OpenAI 호환 여부, base URL, 키 | S0.3, S0.6, S0.7 | FakeLLM으로 개발. 키가 오면 live 스모크 | 11/3 (없으면 실제 베이스라인이 막힘 → 사용자에게 대안을 묻는다) |
-| 모델 목록·계열 | S1.5, S2.4 | 모델명은 설정. 판정은 생성과 다른 계열(ADR-0004) | 11/5 |
-| JSON 스키마 강제·프롬프트 캐싱 | S0.3, S1.5 | `json_schema` → `json_object` → 프롬프트 + 파싱 | 11/5 |
-| 동시 호출·RPM·TPM | S0.3, S2.7, S3.6 | 게이트 초기 4, `pipeline.mode: serial` 유지 가능 | 11/12 |
-| 외부 API(Jev) 허용, 학생 입력 외부 전송 | S2.10, S2.3 | `jev: false`, 마스킹 후 전송 | 11/10 |
-| 평가셋 형식·공개 시기·채점 방식 | S0.5, S3.2 | 형식 무관 로더, S3.2는 `guardrail:blocked` | 11/16 (그 뒤로는 11/19 18:00까지 받은 것만 S3.2에서 처리) |
-| 교재 원문 형식 | S0.6, S1.1 | 대체 교재(라이선스 확인된 공개 자료 또는 자작). 근거 세트는 11/6 이후 다시 만들지 않는다. 실제 교재가 늦게 오면 GP1 수치는 대체 교재 기준이라고 표기하고, 시간이 남으면 GP3에서 실제 교재로 작은 확인 세트를 만든다 | 11/6 |
-| 평가 API 총예산 | S2.7, S3.4, S3.5 | 실행마다 `--max-calls` 상한. 11/12 전에는 누적 약 3,000회(GP0 약 320, S1.1 약 560, S1.7 약 1,350 예상)를 넘으면 사용자에게 먼저 묻는다. 총액은 크레딧 공지를 보고 사용자가 정한다(GP2 예상: S2.4 약 660, S2.6 표본 약 60, S2.7 약 11,100, S2.8 약 6,400, S2.9 약 2,900 → 약 2.1만 회(S2.10을 하면 τ_J·비교표 약 4,000 더). GP3 예상: 무조건 실행 약 9.9만 회, 조건부 포함 약 11.4만 회. 예약은 홀드아웃 상한 여유(× 1.2)를 더해 약 11.2만·12.7만 회. GP4 예상: S4.1 약 650(안정성 실행 490 + 리허설·당일 실연), S4.5 약 3,630(P2)) | 11/12 (S2.7 대량 실행 전) |
-| 대상 연령대 | S2.6 | 최연소 기준 어조 | 11/12 |
-| GPU·파라미터 제한 | (P2 Kanana) | 쓰지 않음 | — |
+| `SPEC.md`가 OT와 다른 곳(인증 실패 응답, 파싱 실패, 빈 `candidate_answer`일 때 `output`) | GR-01, 스키마 | OT 기준 | 11/10 |
+| 공개 세트 라벨 분포(범주 × decision, 구간 길이, safe 정의) | PRD §3, GR-04·07·08 | PRD 자리표시 | 11/10 |
+| 대회 프록시의 파라미터 지원(json_schema, reasoning_effort, verbosity) | `llm.py` | 기동 시 시험 호출 후 단계적 강등 | 11/10 |
+| 프록시의 실제 처리량(429가 나는 동시성), 채점기의 실제 동시성. 키 한도는 따로 없음(OT p.27) | GR-09 | 투표 없음(k=1), 호출마다 재시도 1회, 게이트 초기 64(AIMD) | 11/12 채점과 같은 부하(동시 64, 가드 약 300요청)까지 부하 시험, 그 이상은 운영진 확인 |
+| 외부 공개 데이터셋을 서버 밖 평가에만 쓰는 것 | PRD §8 | 쓰지 않음 | 리더 질문 |
 
-## 9. 팀과 맞닿는 부분 (정보, 결정은 리더)
+## 9. 팀과 맞닿는 부분 (v22, 정보, 결정은 리더)
 
 | 언제 | 가드가 내는 것 | 가드가 바라는 것(요청, 리더 결정) | 도움이 없으면 |
 |---|---|---|---|
-| GP0 끝(11/3–11/4) | 인터페이스 제안서 `interface.md`(사용자 확인 후 공유) | 리더 검토 | 가드는 모의 튜터로 계속 진행 |
-| GP2(11/10–) | 입력 판정 라벨 지침 | 팀원 1명이 50건 교차 라벨(κ), 템플릿 체크리스트 검토 1회 | 본인 라벨만으로 보고하고 한계로 적는다 |
-| GP3 시작(11/16) | `Guard.respond()`, `TutorAdapter`, `LLM.slot()` 사용 예 | 튜터의 `retrieve`·`generate`를 어댑터에 연결 | 11/18 12:00까지 안 되면 모의 튜터로 확정, 보고서에 명시 |
-| GP4 | 가드 표·차트·데모 시나리오 | 발표 형식에 맞춰 넣을 자리 | 가드 쪽 자료만 완성해 넘긴다 |
-| S0.8 인터페이스 초안 | PRD §9 D2(생성 모델 계열)·D5(시험 시간 신호)의 기본값: D2는 엘리스 모델 목록을 보고 정하고(판정은 생성과 다른 계열이라는 것은 ADR-0004), 시험 시간 신호가 없으면 S2 탐지는 막지 않고 전환만 한다(REQ-34) | 신호를 줄지(리더 결정) | 기본값 그대로 |
+| 11/10 | PRD v5·ADR·스키마·[interface.md](interface.md) | PRD §9 D1(가드 판정 로직을 `/tutor`가 재사용)·D4(한 서버·한 프로세스) 결정 | 가드는 독립 FastAPI 라우터로 만들어 어느 쪽이든 붙게 한다 |
+| 11/10 | — | 팀 토큰·키 이름(`kosa_{팀 이름}`)·git 방식 합의(OT p.30) | 리더 결정 대기, 개발은 로컬 토큰으로 |
+| 11/11– | 공개 세트 기반 범주 정의 초안 | 팀원 1명 교차 검토 | 본인 정의로 진행, 한계로 적음 |
+| 11/09 | 저장소가 공개라는 사실(OT p.34 팀 코드 비공개) | PRD §9 D6: 11/10 전 비공개 전환 또는 대회용 비공개 저장소 | 결정 전에는 대회 작업을 push하지 않는다 |
+| 11/24 | 가드 수치·로그 코드 설명·provenance | 시연 자료에 넣을 자리 | 가드 쪽 자료만 완성해 넘긴다 |
 
 ## 10. 개발 규칙
+
+> v22: 슬라이스·PR·TDD·santa 규칙은 그대로 쓴다. 바뀐 점: santa 대상 판정 프롬프트는 `input_judge`·`output_judge` 2개, 홀드아웃 규칙은 ADR-0006 v5(공개 세트 30% 잠금, 최대 3회), 로그 코드는 PR마다 본문 기록 경로가 없는지 본다(PRD GR-11).
 
 - **슬라이스 = 브랜치 = PR = 이슈.** 브랜치 이름 `gr/s1.4-prefilter`. PR 본문에 `Closes #이슈`. 작은 PR로 `main`에 넣는다.
 - **테스트 먼저.** 새 모듈은 줄 커버리지 80% 이상(CI는 패키지 전체 80%를 강제하고, 새 모듈 각각은 PR 리뷰에서 본다). 결정적 단계(정규화·매처·규칙·PII·카나리아·사전 필터·합류 규칙)는 단위 테스트로, LLM 단계는 FakeLLM으로 계약을 고정한다.
@@ -485,6 +479,9 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 - **동결 뒤**(11/20): [GP3 S3.7의 버그 수정 규칙](plan/GP3-integration-eval.md#s37-기능-동결-점검-1120)을 통과한 PR만 들어간다. 11/23 이후 `results/` 변경은 정정 기록이 있어야 한다(GP4).
 
 ## 11. 진행 추적 (GitHub)
+
+> **v4 기준(v22에서 그대로 둠).** 코드 재계획에서 다시 쓴다. 그 전까지 v5 기준은 PRD v5, [contract/guard.schema.json](contract/guard.schema.json), ADR-0009–0011이다.
+
 
 | 항목 | 규칙 |
 |---|---|
@@ -508,6 +505,9 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 - 저장소 태그: 팀 공용 이름공간이라 쓰지 않는다. 동결 시점은 커밋 SHA로 기록한다.
 
 ## 12. 리스크
+
+> **v4 기준(v22에서 그대로 둠).** 코드 재계획에서 다시 쓴다. 그 전까지 v5 기준은 PRD v5, [contract/guard.schema.json](contract/guard.schema.json), ADR-0009–0011이다.
+
 
 | 리스크 | 가능성 | 대응 |
 |---|---|---|
@@ -620,3 +620,5 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 **v20 (2026-11-03)**: 사용자 결정으로 GitHub 마일스톤 5개를 지웠다. Phase 구분은 에픽(#2–#6)과 이 문서 §2 일정으로만 한다. §11 마일스톤 행과 Phase 문서의 마일스톤 표기·닫기 항목을 뺐다. 일정·기한 자체(§2)는 그대로다.
 
 **v21 (2026-11-06)**: 사용자 결정으로 PRD §10 마일스톤 표를 지우고 §11–§14를 §10–§13으로 당겼다. 일정은 이 문서 §2, 진행 상태는 Phase 문서 체크박스와 에픽(#2–#6)에만 둔다. PRD §10 Status 갱신 항목을 Phase 문서에서 빼고, 기록처를 결과 노트·ADR-0008로 바꿨다.
+
+**v22 (2026-11-09)**: 대회 OT 수령 뒤 PRD를 v5로 바꾼 것에 맞췄다. §1 범위, §2 일정(C0–C4, 11/20 기능 동결), §3 모듈 지도(제안), §8 외부 미결, §9 팀을 다시 썼다. §4–§7·§11·§12는 v4 기준이라는 표시만 달고 코드 재계획에서 다시 쓴다. §10에 v5 규칙 메모. 근거: PRD v5, R12, ADR-0009–0011(council 2026-11-09).

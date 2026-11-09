@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "guard.schema.json",
   "title": "POST /guard contract (spec_version 1.0)",
-  "description": "Source: competition OT p.11-12, 15 (docs/competition/ot-facts.md §3, §5). SPEC.md on the runbox is authoritative; re-check on 2026-11-10. Request is parsed leniently (unknown fields allowed); response is strict (only spec fields, exact lowercase enum values). 'output' is required only when the request has a candidate_answer (cross-document rule, enforced in tests, not here). If messages (and candidate_answer) can still be read, the server judges; otherwise a malformed request or unexpected role gets the default 200 response (PRD GR-08, to be checked against SPEC.md), not a 4xx; only an auth failure is non-200.",
+  "description": "Source: competition OT p.11-12, 15 (docs/competition/ot-facts.md §3, §5). SPEC.md on the runbox is authoritative; re-check on 2026-11-10. Request is parsed leniently (unknown fields allowed); response is strict (only spec fields, exact lowercase enum values). 'output' is required only when the request has a candidate_answer (cross-document rule, enforced in tests, not here). If messages (and candidate_answer) can still be read, the server judges; otherwise a malformed request gets the default 200 response, including a default 'output' when the raw body has a candidate_answer key (PRD GR-08, to be checked against SPEC.md). Not a 4xx; only an auth failure is non-200.",
   "$defs": {
     "category": {
       "type": "string",

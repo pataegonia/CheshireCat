@@ -11,7 +11,7 @@ PRD v5 전환 작업에 쓴 스킬과, 코드 재계획에서 쓸 후보다. 아
 |---|---|---|
 | 범위 산정·플랜 | `ecc:plan`, `ecc:skill-scout` | OT 대조, phase별 스킬 명세 |
 | 리서치(R12) | `ecc:research-ops` → `ecc:search-first`, `ecc:deep-research`(Opus), 로컬 자산 점검(Sonnet) | 라이브러리·설계 근거·자산 출처를 동시에 |
-| 설계 결정 | `ecc:council`(Skeptic·Pragmatist·Critic, Opus) | 결정 7건, 초안을 바꾼 근거를 남김 |
+| 설계 결정 | `ecc:council`(Architect는 본 세션, Skeptic·Pragmatist·Critic은 서브에이전트, Opus) | 결정 7건, 초안을 바꾼 근거를 남김 |
 | ADR | `ecc:architecture-decision-records` | 0004·0007·0008 폐기, 0009–0011 신규 |
 | 계약 | `ecc:api-design`, `ecc:contract-first` | `guard.schema.json` 하나를 기준으로 테스트 |
 | 문서 정리 | `ecc:docs-governance`, `ecc:living-docs-governance` | 링크·ADR 색인 점검, 문서 역할 |

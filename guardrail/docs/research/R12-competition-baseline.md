@@ -184,7 +184,7 @@ R 문서의 수치는 대부분 다른 모델 기준이라 nano에서 다시 잰
 | 모듈 | 판정 |
 |---|---|
 | `preprocess.py` | 그대로 재사용 |
-| `llm.py` | 재시도·AIMD 게이트·예산·스키마 파싱 재사용. `temperature`·`max_tokens` 제거, 역할 5종·가짜 응답·다른 계열 가정 삭제, 임베딩 호출 추가 |
+| `llm.py` | 재시도·AIMD 게이트·예산·스키마 파싱 재사용. `temperature`·`max_tokens` 제거, `MAX_ATTEMPTS = 3` → 호출마다 재시도 1회(게이트 대기도 마감에 포함), 역할 5종·가짜 응답·다른 계열 가정 삭제, 임베딩 호출 추가 |
 | `config.py` | 환경 치환·해시·경로 재사용, v4 단계·정책 항목 정리 |
 | `types.py` | `/guard` 요청·응답 스키마로 교체(`Session`·`Chunk`·`CrisisTier` 폐기) |
 | `pipeline.py` | 폐기, HTTP 핸들러로 새로 씀 |

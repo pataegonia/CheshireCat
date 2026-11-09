@@ -14,7 +14,7 @@
 | [0005](0005-sentence-level-grounding-with-quote-check.md) | 문장 단위 근거 판정 (v5: 문장 번호 선택 / 구절 정렬) | proposed, v5 수정 | 2026-10-30 |
 | [0006](0006-evaluation-scope.md) | 평가 범위 (v5: 공개 세트 + 채점식 재현) | proposed, v5 수정 | 2026-10-30 |
 | [0007](0007-parallel-two-call-structure.md) | 입력 판정과 생성 병렬, 요청당 판정 2회, 차단 권한 4곳 | superseded by 0011 (0009도 대체) | 2026-10-30 |
-| [0008](0008-input-role-split-jev.md) | 입력 단계 역할 분담: Jev는 탈옥·인젝션 고신뢰 차단, LLM은 정책 판단 | superseded by 0009 | 2026-10-30 |
+| [0008](0008-input-role-split-jev.md) | 입력 단계 역할 분담: Jev는 탈옥·인젝션 고신뢰 차단, LLM은 정책 판단 | superseded by 0011 | 2026-10-30 |
 | [0009](0009-stateless-http-judge.md) | `/guard`는 상태 없는 HTTP 판정기 | proposed | 2026-11-09 |
 | [0010](0010-guard-side-kb-retrieval.md) | 가드 쪽 KB 검색: 섹션 단위, 문자 2-gram BM25, 문장별 질의 | proposed | 2026-11-09 |
 | [0011](0011-llm-call-structure.md) | LLM 호출: 입력·출력 2회 병렬, gpt-5-nano low, 투표 k=1 | proposed | 2026-11-09 |

@@ -1,7 +1,7 @@
 # ADR-0008: 입력 단계 역할 분담 — Jev는 탈옥·인젝션 고신뢰 차단, LLM은 정책 판단
 
 **Date**: 2026-10-30
-**Status**: superseded by ADR-0009
+**Status**: superseded by ADR-0011
 **이력**: v2: "판정 백엔드 선택지"에서 "역할 분담"으로 바꿈
 **Deciders**: danielcho02
 **PRD**: (v4 번호) GR-02, GR-04, GR-05, GR-14, §10, §11

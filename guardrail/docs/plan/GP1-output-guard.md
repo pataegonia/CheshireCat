@@ -1,20 +1,20 @@
 # GP1 출력 가드 — 세부 플랜
 
 작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/4(수)–11/9(월)
+상위: [master-plan](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md) · 요구사항: [PRD](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md) · 기간: 11/4(수)–11/9(월)
 
-> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9, [ADR-0009–0011](../adr/README.md)이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. v5에서 사라진 PRD 절로 가던 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
+> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9, [ADR-0009–0011](../adr/README.md)과 ADR-0001·0002·0003·0005·0006의 v5 수정 블록이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. 이 문서 본문의 PRD·master-plan·interface·skills 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
 
-[GR-01]: ../PRD.md#gr-01-전처리-p0
-[GR-07]: ../PRD.md#gr-07-출력-코드-검사-p0
-[GR-08]: ../PRD.md#gr-08-llm-교환-판정--근거인용안전-p0
-[GR-09]: ../PRD.md#gr-09-수리-p0-r2만-p1
-[GR-11]: ../PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0
-[GR-14]: ../PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2
-[GR-15]: ../PRD.md#gr-15-평가-하네스-p0
-[PRD §6]: ../PRD.md#6-비기능-요구사항
-[PRD §7]: ../PRD.md#7-지표와-합격선
-[PRD §9]: ../PRD.md#9-튜터팀과-맞닿는-결정-제안-결정은-리더
+[GR-01]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-01-전처리-p0
+[GR-07]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-07-출력-코드-검사-p0
+[GR-08]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-08-llm-교환-판정--근거인용안전-p0
+[GR-09]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-09-수리-p0-r2만-p1
+[GR-11]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0
+[GR-14]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2
+[GR-15]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-15-평가-하네스-p0
+[PRD §6]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#6-비기능-요구사항
+[PRD §7]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#7-지표와-합격선
+[PRD §9]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#9-튜터팀과-맞닿는-결정-제안-결정은-리더
 [ADR-0001]: ../adr/0001-korean-normalization-skeleton-view.md
 [ADR-0004]: ../adr/0004-judge-model-family.md
 [ADR-0005]: ../adr/0005-sentence-level-grounding-with-quote-check.md
@@ -814,7 +814,7 @@ uv run python -m guardrail.eval.run --config configs/exp/r2-on.yaml --data data/
 
 ## 5. master-plan에 반영할 점
 
-> 2026-10-31: 아래 제안은 [master-plan v2](../master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
+> 2026-10-31: 아래 제안은 [master-plan v2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
 
 > v3(2026-10-31): santa 1차 지적을 반영했다. 남은 항목만 아래에 둔다.
 

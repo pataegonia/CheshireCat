@@ -1,6 +1,6 @@
 # 가드레일 작업 스킬 명세
 
-작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · `/ecc:skill-scout` 결과
+작성 2026-10-30 · 갱신 2026-11-09 · 담당 danielcho02 · `/ecc:skill-scout` 결과
 대상: [master-plan.md](master-plan.md)의 슬라이스. 슬라이스마다 쓸 스킬은 각 Phase 문서([plan/](plan/))에도 적혀 있다.
 
 ## v5 (대회 기준, 2026-11-09)

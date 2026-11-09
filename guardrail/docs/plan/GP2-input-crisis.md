@@ -1,15 +1,15 @@
 # GP2 입력·위기·멀티턴 — 세부 플랜
 
 작성 2026-10-30 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/10(화)–11/15(일)
+상위: [master-plan](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md) · 요구사항: [PRD](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md) · 기간: 11/10(화)–11/15(일)
 
-> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9, [ADR-0009–0011](../adr/README.md)이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. v5에서 사라진 PRD 절로 가던 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
+> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9, [ADR-0009–0011](../adr/README.md)과 ADR-0001·0002·0003·0005·0006의 v5 수정 블록이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. 이 문서 본문의 PRD·master-plan·interface·skills 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
 
 ## 1. 목표와 관문
 
 **보이는 변화**: dev 세트에서 입력 쪽 차단율·과잉 거절·위기 재현율 첫 수치가 리포트에 나온다. 판정 API를 죽여도 위기 입력에는 위기 템플릿과 연락처가 나간다. 장애 주입 표의 모든 행이 테스트로 돈다.
 
-**관문** ([master-plan §2](../master-plan.md#2-일정과-phase-관문)과 같음)
+**관문** ([master-plan §2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#2-일정과-phase-관문)과 같음)
 
 | 관문 조건 | 판정 방법 | 슬라이스 |
 |---|---|---|
@@ -58,7 +58,7 @@
 
 | 날짜 | 할 일 | 시간 | 백그라운드 |
 |---|---|---|---|
-| 11/10(화) | S2.0 조립·분할·중복 제거·dev 10% 사람 검수·봉인 → S2.2 시작. GP2 슬라이스 이슈 생성(Phase 시작일, [master-plan §11](../master-plan.md#11-진행-추적-github)), 팀 요청 2건 초안(사용자 확인 후 리더에게) | 6+1 | 남은 번역 배치 |
+| 11/10(화) | S2.0 조립·분할·중복 제거·dev 10% 사람 검수·봉인 → S2.2 시작. GP2 슬라이스 이슈 생성(Phase 시작일, [master-plan §11](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#11-진행-추적-github)), 팀 요청 2건 초안(사용자 확인 후 리더에게) | 6+1 | 남은 번역 배치 |
 | 11/11(수) | S2.2 끝(GR-01 수용, ③은 block Verdict만 돌려줌) → S2.1 어휘·탐지·자원 파일·T1–T3 | 2+5 | 위기 dev 누락분 변형 보강 |
 | 11/12(목) | S2.1 끝(`_finalize` 16칸(경로별 차단 지점 × 플래그), 판정 끔 어휘 재현율) → S2.3 로그(P0) → S2.6 템플릿·instruction | 2+2+3 | S2.1 santa, 템플릿 검토 표본 생성 |
 | 11/13(금) | S2.4 스키마·프롬프트·FakeLLM·`instruction` 채우기 → 라벨(판정 출력 보기 전) → dev 실행·κ·혼동행렬 | 7 | S2.4 santa |
@@ -243,7 +243,7 @@ uv run python -m guardrail.eval.run --config configs/exp/gp2-judge-off.yaml --da
 - [ ] 템플릿에 하드코딩 번호 0, `verified_at` 90일 초과 시 경고([R9 REQ-07](../research/R9-student-safety-and-law.md))
 - [ ] 최종 `action == "crisis"`인 응답마다 trace `alert` 레코드 `{request_id, ts, crisis_tier, category}` 하나, 평가·서비스 모드·장애 중 모두, 위기 아닌 응답은 0개(테스트, [GR-14][gr14] 위기 행 "교사 알림 이벤트 대기", [R9 REQ-12](../research/R9-student-safety-and-law.md), master §4.5 v7)
 - [ ] PRD GR-12 문구 수정(평가 모드 개발 설정의 위기 끔 허용)이 이 PR에 들어감(master §13 v4)
-- [ ] santa 독립 리뷰어 2명 모두 통과([master-plan §10](../master-plan.md#10-개발-규칙))
+- [ ] santa 독립 리뷰어 2명 모두 통과([master-plan §10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙))
 
 **스킬·에이전트**: `ecc:santa-method`(Opus 리뷰어 2명), `humanize-korean`(템플릿은 뜻을 바꾸지 않고 다듬기만), 어휘 작성 Opus
 
@@ -415,7 +415,7 @@ class InputJudgeOutFlagged(InputJudgeOut): ...   # 플래그 입력용. 스키�
   5. 경계 사례 3–6개: **dev 오분류에서만** 뽑는다. 6. 출력 형식.
 - D1 기본값은 "튜터 PRD 원안 + S2만 전환"이다([PRD §9][p9]). S1은 코드에서 `policy.d1`(기본 `s2`: S1 허용, `s1_s2`: S1도 전환)로 action을 덮고 프롬프트는 그대로 둔다. ⑧의 정답 유출 판정도 같은 키를 쓴다(S1.5).
 - 모델 `models.input_judge`: 생성과 다른 계열, temperature 0, 마감 `deadlines_s.input_judge` 2.5s([ADR-0004][a4]). `max_tokens`는 GP0 S0.3 역할 상수 384를 그대로 쓴다(`reason` ≤120자 + JSON 필드라 256이면 잘려 `bad_json`이 될 수 있다. `complete(max_tokens=)`로 덮지 않는다). 잘림이 없는지는 live 스모크가 본다. 설정 로드 때 두 모델명 접두어가 같으면 경고한다.
-- 라벨·κ: dev 고정 표본 `judge_strat600.jsonl`에서 범주별 층화 150건을 dev 실행 전에(판정 출력을 보지 않고) 본인이 범주·대응으로 라벨한다. 그중 50건 교차 라벨은 **요청(리더 결정)**이고([master-plan §9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)), 팀원도 판정 출력 없이 라벨한다. 대체: 본인 150건으로만 κ를 내고 "교차 라벨 없음"을 한계로 적는다. κ는 범주(15값)·대응(5값)별로 판정기–본인, 판정기–팀원, 본인–팀원.
+- 라벨·κ: dev 고정 표본 `judge_strat600.jsonl`에서 범주별 층화 150건을 dev 실행 전에(판정 출력을 보지 않고) 본인이 범주·대응으로 라벨한다. 그중 50건 교차 라벨은 **요청(리더 결정)**이고([master-plan §9](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)), 팀원도 판정 출력 없이 라벨한다. 대체: 본인 150건으로만 κ를 내고 "교차 라벨 없음"을 한계로 적는다. κ는 범주(15값)·대응(5값)별로 판정기–본인, 판정기–팀원, 본인–팀원.
 
 **검증**
 ```bash
@@ -440,11 +440,11 @@ uv run pytest -m live tests/test_input_judge.py   # 로컬, 키 있을 때만. �
 - [ ] 출력 `max_tokens` 384(GP0 S0.3 역할 상수)에서 잘림 없음: live 스모크에서 `LLMResult.finish_reason is not None`이고 `!= "length"`(master §4.3), 형식 재요청 0
 - [ ] 입력 = 정규화된 현재 메시지 + 최근 N턴 요약(4, R 임계 이상이면 8) + R, 학생 메시지는 태그로 감쌈([GR-04][gr04])
 - [ ] 위기 하위 분류를 같은 호출에서, 별도 호출 0([GR-02][gr02])
-- [ ] santa 독립 리뷰어 2명 모두 통과([master-plan §10](../master-plan.md#10-개발-규칙))
+- [ ] santa 독립 리뷰어 2명 모두 통과([master-plan §10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙))
 
 **스킬·에이전트**: `ecc:prompt-optimizer`, `ecc:santa-method` · `ecc:mle-reviewer`(Opus)
 
-**리스크 → 대응**: 엘리스 키가 없음 → 코드·테스트는 FakeLLM으로 끝내고 조정·κ·p95는 키가 오는 날 한다(GP2 안에 못 하면 GP3 S3.3 조건부 단계, §2 자르는 선 A). 11/12까지 없으면 사용자에게 대안을 묻는다([master-plan §12](../master-plan.md#12-리스크)). 다른 계열이 없음 → ADR-0004대로 같은 계열 다른 크기 + κ로 품질을 따로 보인다.
+**리스크 → 대응**: 엘리스 키가 없음 → 코드·테스트는 FakeLLM으로 끝내고 조정·κ·p95는 키가 오는 날 한다(GP2 안에 못 하면 GP3 S3.3 조건부 단계, §2 자르는 선 A). 11/12까지 없으면 사용자에게 대안을 묻는다([master-plan §12](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#12-리스크)). 다른 계열이 없음 → ADR-0004대로 같은 계열 다른 크기 + κ로 품질을 따로 보인다.
 
 ### S2.5 병렬 합류 · 장애 등급
 
@@ -467,7 +467,7 @@ uv run pytest -m live tests/test_input_judge.py   # 로컬, 키 있을 때만. �
 **작업 순서**
 - [ ] 1. `test_join.py`: 합류 표 12행 parametrize. Jev 행(1·3·4행)은 Jev `StageResult`를 인자로 넣어 순수 함수 `decide_input()`으로만 시험한다. 1행은 ⑤가 이미 끝나 `crisis_tier`가 있으면 그 등급이 `_finalize`로 가 위기 템플릿이 되는지, ⑤가 아직이면(⑤ 기록 `reason_code="input_judge_cancelled"`) 플래그 없을 때 거절 템플릿 + 연락처 줄, 플래그면 T1인지도 본다. 5·6행: ⑤ `skipped`는 `fallback_infra=False`, 연락처 줄 없음. 8행 경계: `input_block` 0·0.7·1.01에서 refuse·partial이 차단/허용으로 갈리고 위기는 그대로. 10행: `JoinDecision.instruction == templates.instruction(action, category)`, 최종 `verdict="modified"`, `check_input()`은 `response=None`(S2.4 불변식 유지), 허용·차단이면 `instruction=None`. 10행 + 플래그 + `crisis_fp`는 위기 템플릿이 아니라 `light_notice`(`_finalize` 1번은 block에만). 11행: allow로 나오고 `light_notice`는 `_finalize`가 한 번만 붙인다. `test_failure_table.py`: `FAILURE_TABLE` 행마다 parametrize(LLM 행은 장애 4종, ①·②·③·④·⑦·사전 필터·⑨·튜터 검색·⑥ 행은 예외를 내는 스텁. PII·검색 가드를 잘랐어도 `pii.mask`·`guard_retrieval` 스텁으로 돈다) × 경로 3개(`respond()` 병렬, `respond()` 직렬, `check_input()`→`check_output()`) × 위기 플래그 유무. 방식 B 경로는 입력 행(위기·①·②·규칙 차단·③·④·⑤·Jev·⑤+Jev)을 `check_input()` 다음 `check_output()`으로, 출력 행(⑦·사전 필터·⑧·⑨)을 `check_output()`으로 돈다. `check_input()`이 막으면 그 `response`가 최종이고, 아니면 모의 튜터 답으로 `check_output()`까지 간다. 튜터 검색·⑥ 행과 생성 실패 행은 방식 B에서 튜터가 검색·생성하므로 두 `respond()` 모드에만 있다(이유를 주석으로). 칸마다 최종 표시 문자열에서 행이 요구하는 위기 템플릿·연락처 줄을 단언한다. 위기 템플릿 칸은 trace에 같은 `request_id`의 `alert` 레코드 1개도 단언한다(S2.1, master §4.5 v7). PII 행은 모드별로 단언한다(S2.3 PII 부분이 아직이면 S2.3 로그 테스트와 같은 테스트용 Guard(`pii.mask` 스텁, `_IMPLEMENTED`에 pii)로 서비스 모드를 만든다): 서비스 모드는 ⑤·생성·Jev 호출 0, 안전 템플릿 + 연락처 줄 정확히 한 번 + `fallback_infra`(플래그면 T1 위기 템플릿과 alert 1개). 평가 모드는 Jev 스텁 호출 0이고 ⑤·생성이 정규화본을 받음(Jev를 실제로 켠 경로는 S2.10 `test_jev.py`). `FAILURE_TABLE` PII 행은 모드별 동작을 행 안의 필드로 가진다(코드에서 모드를 따로 분기하지 않게). 연락처 줄이 필요한 칸은 정확히 한 번(⑤ 실패와 ⑧ 실패가 겹친 요청, `r2_fail` 포함)이고, 위기 템플릿·`light_notice` 응답에는 더 붙지 않는다. ⑤ 실패 행은 플래그 없음에서 출력 차단 칸 둘을 더 가진다: ⑦ 카나리아 차단(모의 튜터 답에 그 요청의 카나리아)과 ⑧ 유해 R0 차단(FakeLLM ⑧이 유해 위반). ⑤ 장애 4종 × 경로 3개(`respond()` 병렬·직렬, `check_input()`→`check_output()`, Jev 꺼짐이라 합류 3행)에서 최종 표시 문자열(안전 템플릿)에 연락처 줄이 정확히 한 번 있는지 단언한다. "장애 중 모든 응답에 연락처"(master §4.2)를 차단 지점마다 고정하려는 칸이다. 행이 아니라 ⑤ 실패 행의 parametrize 칸이라 행 수(16) 단언은 그대로다
 - [ ] 2. `test_respond_concurrency.py`: 동시 시작, 차단 시 취소 후 대기, 생성이 먼저 끝나면 판정 대기, 끝난 뒤 남은 태스크 0. "Jev 고신뢰면 ⑤를 기다리지 않음"은 Jev가 생기는 S2.10의 `test_jev.py`가 맡는다
-- [ ] 3. `decide_input()` → `respond()` → `_finalize` 연락처 줄(`repair.py`의 임시 연락처 줄 제거) → 직렬 모드 → 호출 수 테스트 → santa 2명 통과 후 머지(위기 행, [master-plan §10](../master-plan.md#10-개발-규칙))
+- [ ] 3. `decide_input()` → `respond()` → `_finalize` 연락처 줄(`repair.py`의 임시 연락처 줄 제거) → 직렬 모드 → 호출 수 테스트 → santa 2명 통과 후 머지(위기 행, [master-plan §10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙))
 
 **세부 설계**
 ```python
@@ -546,7 +546,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
 - [ ] 차단 시 생성 취소 후 대기 완료, 남은 태스크 0(master-plan §4.2)
 - [ ] 요청당 LLM 판정 호출 기본 2회(⑤, ⑧), Jev를 켜면 +1([PRD §6][p6])
 - [ ] 직렬 모드 설정과 방식 B(`check_input()`→`check_output()`, 튜터 검색·⑥·생성 실패 행 제외)로 같은 표 통과([ADR-0007][a7], master §4.2 v6)
-- [ ] santa 독립 리뷰어 2명 모두 통과(위기 행, [master-plan §10](../master-plan.md#10-개발-규칙))
+- [ ] santa 독립 리뷰어 2명 모두 통과(위기 행, [master-plan §10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙))
 
 **스킬·에이전트**: `ecc:error-handling`, `ecc:latency-critical-systems`, `ecc:santa-method`(Opus 리뷰어 2명) · `ecc:silent-failure-hunter`(Opus), `ecc:code-reviewer`(Sonnet)
 
@@ -577,7 +577,7 @@ def decide_input(judge: StageResult | None, out: InputJudgeOut | None,
 - 문구 = 짧은 이유 한 문장 + 교재 안 학습 대안 한 문장([GR-10][gr10], REQ-36). 범주 안에서는 하나로 고정한다(⑤·규칙·Jev 어디서 막혀도 같은 문구).
 - `instruction`은 학생에게 보이지 않는 재생성 지시다. `redirect.S1`: 최종 답 없이 첫 단계 힌트와 질문 하나(REQ-32 L0–L1). `redirect.S4`: 한두 문장 답 뒤 교과로 연결. `partial.S3`: 원리·방어·안전 수칙만, 실행 절차·수량·조건은 쓰지 않음([GR-10][gr10]).
 - `boundary.S12`: "나는 공부를 돕는 AI 튜터라서 친구나 연인 역할은 할 수 없어"류 + 사람 관계·상담 자원 안내(REQ-09). `boundary`는 Action이 아니라 문구 이름이다: `render("refuse", "S12")`가 이 문구를 낸다(⑤의 S12 역할 요구 refuse, S2.4 매핑). 테스트 1개.
-- 어조는 대상 연령이 정해질 때까지 최연소 기준([master-plan §8](../master-plan.md#8-외부-미결-사항과-기본값)).
+- 어조는 대상 연령이 정해질 때까지 최연소 기준([master-plan §8](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#8-외부-미결-사항과-기본값)).
 - 체크리스트(표본마다 예/아니오): REQ-01 위기면 템플릿·대화 유지 / REQ-02 방법·도구·장소·양 없음 / REQ-03 비밀 약속 없음, 어른 연결 권유 / REQ-06 금지 표현 없음 / REQ-09 친구·연인·치료자 역할 없음.
 - 검토자: 본인 + 팀원 1명은 **요청(리더 결정)**. 대체: 본인 + Opus 독립 리뷰어 2명(santa 방식), "팀원 검토 없음"을 한계로 적는다.
 - 전환·부분 표본은 생성 결과라 실제 게이트웨이가 필요하다. 키가 없으면 템플릿 표본만 먼저 검토하고 생성 표본은 키가 오는 날 검토한다.
@@ -801,7 +801,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 - `configs/default.yaml`: `thresholds.tau_J`·`tau_m`, `deadlines_s.jev`(1.5). `stages.input.jev`는 전제 4개를 채웠을 때만 이 PR에서 켠다 · `tests/test_jev.py`
 
 **작업 순서**
-- [ ] 1. 전제 점검(0.5h). 전제 ①(주최측 허용)은 [master-plan §8](../master-plan.md#8-외부-미결-사항과-기본값) 기한 11/10까지 답이 없으면 여기서 멈추고 `jev: false` + 이유 기록
+- [ ] 1. 전제 점검(0.5h). 전제 ①(주최측 허용)은 [master-plan §8](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#8-외부-미결-사항과-기본값) 기한 11/10까지 답이 없으면 여기서 멈추고 `jev: false` + 이유 기록
 - [ ] 2. 테스트: `jev: true` + `pii: false` 설정은 `check_toggles`가 오류를 낸다(`Guard` 생성·`--estimate` 둘 다), 페이로드는 마스킹된 현재 메시지만(history 없음), 켰는데 키가 없으면 `status="error"`(꺼짐이 아니라 실패, master §4.2. Jev 실패 행으로 감), Jev 장애 4종이면 ⑤만으로 진행, ④ PII 오류면 Jev 호출 0(평가 모드는 Jev 실패 행으로 가고, 서비스 모드는 S2.5 PII 행대로 막힌다, master §4.2 v13), `respond()`에서 Jev가 먼저 τ_J 이상이면 ⑤를 기다리지 않고 취소하며 응답에 연락처 줄이 붙음(S2.5에서 넘어온 동시성 테스트, ⑤ 결과 모름). `--fake` 테스트: `jev: true` 설정을 `--fake --max-calls 0`으로 돌려 Jev 고정 응답 0.0이면 ⑤ 판정대로 감
 - [ ] 3. 구현 → live 스모크 1개(`-m live`) → τ_J·τ_m → 비교표 → 전제 ② 판정
 
@@ -838,12 +838,12 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 - [ ] PRD GR-14 생성 실패 행·오류 행(장애 처리)·PII 행(서비스 모드 차단)·§7 위기 행과 GR-14 수용 기준의 장애 중 합격선 분리(S2.5 PR)와 GR-12 위기 끔 문구(S2.1 PR)가 들어갔는지 확인
 - [ ] `default.yaml`이 머지된 단계만 켜고 있음(위기·규칙·⑤, PII·세션·검색·Jev는 머지됐을 때만)
 - [ ] ADR 갱신: ADR-0008(Jev 켬/끔과 이유), ADR-0003(위기 오탐 안내의 연락처 한 줄), ADR-0007(직렬 모드로 바꿨다면 그 결과)
-- [ ] 계약 대조 15분([master-plan §10](../master-plan.md#10-개발-규칙)): master §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 보고, 다르면 GP3 슬라이스 전에 master-plan을 먼저 고친다. 이 Phase에서 특히 `check_output()`에 `session` 인자가 없음(방식 B 출력 레코드는 `input_request_id`로 잇는다), 서비스 모드 기록 주인(`Guard`, `Verdict.request_id`), `gate.max_wait_s`와 마감 분리, `FAILURE_TABLE` 16행을 본다
-- [ ] 이 문서의 체크박스 갱신, 11/16에 GP3 슬라이스 이슈 생성([master-plan §11](../master-plan.md#11-진행-추적-github))
+- [ ] 계약 대조 15분([master-plan §10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙)): master §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 보고, 다르면 GP3 슬라이스 전에 master-plan을 먼저 고친다. 이 Phase에서 특히 `check_output()`에 `session` 인자가 없음(방식 B 출력 레코드는 `input_request_id`로 잇는다), 서비스 모드 기록 주인(`Guard`, `Verdict.request_id`), `gate.max_wait_s`와 마감 분리, `FAILURE_TABLE` 16행을 본다
+- [ ] 이 문서의 체크박스 갱신, 11/16에 GP3 슬라이스 이슈 생성([master-plan §11](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#11-진행-추적-github))
 
 ## 5. master-plan에 반영할 점
 
-> 2026-10-31: 아래 제안은 [master-plan v2](../master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
+> 2026-10-31: 아래 제안은 [master-plan v2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
 >
 > v3(2026-10-31): santa 1차 지적을 반영했다. 남은 항목만 아래에 둔다.
 >
@@ -872,23 +872,23 @@ v1의 15개 제안은 master v2·v3에서 모두 정리됐다(설정 키·`input
 
 예상 시간은 master-plan §5와 같다. 단 S2.4 8h는 엘리스 키가 11/12까지 오지 않으면 dev 실행·κ·p95가 GP3 S3.3 조건부 단계로 밀린다(라벨은 키 없이 dev 실행 전에 한다, §2 자르는 선 A, master §13 v8).
 
-[p6]: ../PRD.md#6-비기능-요구사항
-[p7]: ../PRD.md#7-지표와-합격선
-[p8]: ../PRD.md#8-데이터
-[p9]: ../PRD.md#9-튜터팀과-맞닿는-결정-제안-결정은-리더
-[gr01]: ../PRD.md#gr-01-전처리-p0
-[gr02]: ../PRD.md#gr-02-위기-탐지-p0-신설
-[gr03]: ../PRD.md#gr-03-pii-탐지마스킹-p1
-[gr04]: ../PRD.md#gr-04-입력-판정-p0
-[gr05]: ../PRD.md#gr-05-세션-위험멀티턴-p1
-[gr06]: ../PRD.md#gr-06-검색-가드-p1
-[gr10]: ../PRD.md#gr-10-거절안내위기-응답-p0
-[gr13]: ../PRD.md#gr-13-로깅추적-p0
-[gr14]: ../PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2
-[gr15]: ../PRD.md#gr-15-평가-하네스-p0
-[mp5]: ../master-plan.md#5-슬라이스-목록
-[mp6]: ../master-plan.md#6-의존-관계와-임계-경로
-[mp7]: ../master-plan.md#7-자르는-순서-일정이-밀릴-때
+[p6]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#6-비기능-요구사항
+[p7]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#7-지표와-합격선
+[p8]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#8-데이터
+[p9]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#9-튜터팀과-맞닿는-결정-제안-결정은-리더
+[gr01]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-01-전처리-p0
+[gr02]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-02-위기-탐지-p0-신설
+[gr03]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-03-pii-탐지마스킹-p1
+[gr04]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-04-입력-판정-p0
+[gr05]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-05-세션-위험멀티턴-p1
+[gr06]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-06-검색-가드-p1
+[gr10]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-10-거절안내위기-응답-p0
+[gr13]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-13-로깅추적-p0
+[gr14]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2
+[gr15]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-15-평가-하네스-p0
+[mp5]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#5-슬라이스-목록
+[mp6]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#6-의존-관계와-임계-경로
+[mp7]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#7-자르는-순서-일정이-밀릴-때
 [a1]: ../adr/0001-korean-normalization-skeleton-view.md
 [a2]: ../adr/0002-input-cascade-rules-then-llm.md
 [a3]: ../adr/0003-deterministic-crisis-first.md

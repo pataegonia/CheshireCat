@@ -8,7 +8,7 @@
 
 > **v22 (2026-11-09) 대회 기준 전환.** 대회 OT를 받고 PRD를 v5로 바꿨다([PRD](PRD.md), [OT 사실](competition/ot-facts.md), [R12](research/R12-competition-baseline.md), ADR-0009–0011). 가드는 튜터를 감싸는 패키지가 아니라 상태 없는 HTTP 판정기 `POST /guard`다.
 > - v5 판단 기준: PRD v5, ADR-0009–0011, 그리고 ADR-0001·0002·0003·0005·0006의 "v5 수정" 블록.
-> - **v5 기준으로 다시 쓴 절**: §1 범위, §2 일정, §3 모듈 지도(제안), §8 외부 미결, §9 팀.
+> - **v5 기준으로 다시 쓴 절**: §1 범위, §2 일정, §3 모듈 지도(제안), §8 외부 미결, §9 팀, §10의 v22 메모(push·PR은 PRD §9 D6 결정 뒤), §13의 v22 기록.
 > - **v4 기준으로 남긴 절**: §4 계약, §5 슬라이스, §6 의존, §7 자르는 순서, §11 추적, §12 리스크. 코드 재계획(다음 플랜)에서 다시 쓴다. 그 전까지 계약의 기준은 [contract/guard.schema.json](contract/guard.schema.json)과 ADR-0009–0011이다.
 > - Phase 문서(GP0–GP4)와 에픽 #2–#6은 v4 계획이다. 각 문서 맨 위에 같은 표시를 달았다.
 
@@ -53,7 +53,7 @@ guardrail/
     server.py        FastAPI 라우터 POST /guard: 인증, 200 보장, 요청 마감 25초 (신규, ADR-0009)
     schema.py        요청·응답 pydantic 모델. contract/guard.schema.json과 같게 (types.py 대체)
     config.py        재사용(v4 단계·정책 항목 정리)
-    llm.py           재사용(temperature·max_tokens 제거, effort low, 역할 2개, 기동 시 파라미터 시험, MAX_ATTEMPTS 3 → 호출마다 재시도 1회, 게이트 대기도 마감에 포함)
+    llm.py           재사용(temperature·max_tokens 제거, effort low, 역할 2개, 기동 시 파라미터 시험, MAX_ATTEMPTS 3 → 호출마다 재시도 1회, 게이트 대기도 마감에 포함, 환경변수 GUARD_LLM_* → 런박스의 OPENAI_*·EMBEDDING_*)
     preprocess.py    재사용(정규화본·골격 뷰, ADR-0001)
     signals.py       결정적 신호: 위기·PII·인젝션·저신호 (신규, GR-06)
     kb.py            KB 로드·섹션 청크·문자 2-gram BM25 (mock_tutor의 BM25를 옮김, ADR-0010)
@@ -455,7 +455,7 @@ Phase 안의 작은 컷(GP2 컷 선 A·B, GP4의 S4.3·d5·존댓말 행 등)은
 
 | 미결 | 걸리는 곳 | 답 오기 전 기본값 | 늦어도 |
 |---|---|---|---|
-| `SPEC.md`가 OT와 다른 곳(인증 실패 응답, 파싱 실패, 빈 `candidate_answer`일 때 `output`) | GR-01, 스키마 | OT 기준 | 11/10 |
+| `SPEC.md`가 OT와 다른 곳(인증 실패 응답, 파싱 실패, 빈 `candidate_answer`일 때 `output`) | GR-01, 스키마 | 인증 실패 401, 읽을 수 있으면 판정, `candidate_answer` 키가 있으면 `output` 기본값 포함(PRD GR-01·GR-08) | 11/10 |
 | 공개 세트 라벨 분포(범주 × decision, 구간 길이, safe 정의) | PRD §3, GR-04·07·08 | PRD 자리표시 | 11/10 |
 | 대회 프록시의 파라미터 지원(json_schema, reasoning_effort, verbosity) | `llm.py` | 기동 시 시험 호출 후 단계적 강등 | 11/10 |
 | 프록시의 실제 처리량(429가 나는 동시성), 채점기의 실제 동시성. 키 한도는 따로 없음(OT p.27) | GR-09 | 투표 없음(k=1), 호출마다 재시도 1회, 게이트 초기 64(AIMD) | 11/12 채점과 같은 부하(동시 64, 가드 약 300요청)까지 부하 시험, 그 이상은 운영진 확인 |

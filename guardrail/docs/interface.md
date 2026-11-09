@@ -29,7 +29,7 @@ Content-Type: application/json
 | 상태 코드 | 인증 실패를 뺀 모든 경우 200. 판정 실패·마감 초과는 기본값 응답. 요청 검증 오류는 `messages`(와 `candidate_answer`)를 읽을 수 있으면 판정하고, 못 읽으면 기본값 응답. 원본 본문에 `candidate_answer` 키가 있으면 `output` 기본값도 넣는다(ADR-0009, PRD GR-08). 인증 실패 응답은 `SPEC.md` 대조(확인 전 401) |
 | 경로 | `/guard` 하나. `/guard/` 리다이렉트 없음(FastAPI `redirect_slashes=False`) |
 | 형식 | JSON 하나, 비스트리밍, 256KB 미만, 소문자 enum 그대로, `null` 없음 |
-| `output` | `candidate_answer`가 있을 때만 넣는다(OT). 빈 문자열일 때만 `SPEC.md` 대조 |
+| `output` | `candidate_answer`가 있을 때만 넣는다(OT). 빈 문자열일 때만 `SPEC.md` 대조(확인 전에는 `output`을 넣고 `grounded=true`·`unsupported=[]`·`safe=true`) |
 | 시간 | 요청 마감 25초(규격 30초) |
 | 상태 | 없음. 매 요청의 `messages`만 본다 |
 | 로그 | 시간·길이·상태 코드·오류만(PRD GR-11) |

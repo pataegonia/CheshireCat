@@ -12,12 +12,12 @@ v4는 튜터를 감싸는 Python 패키지였다. 입력 판정과 생성을 합
 ## Decision
 
 - `/guard`는 **요청 하나 → 판정 JSON 하나**인 순수 함수다. 세션 객체, 세션 위험 R 누적, 응답 문구, 수리는 없다. 멀티턴 문맥은 매 요청의 `messages`에서 다시 만든다(ADR-0011).
-- **인증 실패를 뺀 모든 경우 HTTP 200 + 규격 JSON.** 예외·마감 초과는 기본값 응답으로 바꾼다. 요청 검증 오류는 `messages`(와 `candidate_answer`)를 읽을 수 있으면 판정하고, 못 읽으면 기본값 응답을 낸다. 원본 본문에 `candidate_answer` 키가 있으면 `output` 기본값도 넣는다(PRD GR-08). 인증 실패 응답은 `SPEC.md`를 따른다(OT: 맞지 않는 토큰은 거절). `/guard/` 리다이렉트를 만들지 않는다.
+- **인증 실패를 뺀 모든 경우 HTTP 200 + 규격 JSON.** 예외·마감 초과는 기본값 응답으로 바꾼다. 요청 검증 오류는 `messages`(와 `candidate_answer`)를 읽을 수 있으면 판정하고, 못 읽으면 기본값 응답을 낸다. 원본 본문에 `candidate_answer` 키가 있으면 `output` 기본값도 넣는다(PRD GR-08). 인증 실패 응답은 `SPEC.md`를 따른다(OT: 맞지 않는 토큰은 거절). 확인 전 기본값은 401과 짧은 JSON 오류 본문. `/guard/` 리다이렉트를 만들지 않는다.
 - **요청 마감 25초.** 그 안에서 호출마다 재시도 1회까지. 마감이 되면 그때까지의 결과와 기본값으로 응답한다.
 - **기본값**(설정으로 바꿀 수 있음):
-  - 입력: 결정적 신호가 있으면 그것을 따르고, 없으면 `allow`·`normal`.
-  - 출력: `grounded=true`, `unsupported=[]`, `safe=true`.
-- `candidate_answer`가 없으면 출력 판정 호출을 하지 않고 `output`을 생략한다(OT: 후보 답변이 있을 때만 필수). 빈 문자열일 때 처리는 `SPEC.md`를 따른다.
+  - 입력: 마지막 학습자 발화의 결정적 신호가 있으면 우선순위(jailbreak_injection > emotional_distress > pii_disclosure > low_signal_input)로 하나를 골라 그 범주와 PRD §3의 decision(임시값 포함)을 쓰고, 없으면 `allow`·`normal`(PRD GR-08).
+  - 출력: `grounded=true`, `unsupported=[]`, `safe`는 출력 쪽 결정적 신호(숨긴 문자·금지 표현·PII)가 있으면 `false`, 없으면 `true`.
+- `candidate_answer`가 없으면 출력 판정 호출을 하지 않고 `output`을 생략한다(OT: 후보 답변이 있을 때만 필수). 빈 문자열일 때 처리는 `SPEC.md`를 따른다. 확인 전 기본값은 키가 있으면 `output`을 넣는다(빈 답변은 `grounded=true`·`unsupported=[]`·`safe=true`).
 - `output.category`는 채점하지 않으므로 `input.category`를 복사한다. 응답은 매번 스키마로 검사한다.
 - 서버 로그는 시간·길이·상태 코드·오류만. 판정 사유와 본문은 메모리에서만 쓰고 버린다.
 

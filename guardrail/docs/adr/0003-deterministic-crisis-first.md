@@ -8,8 +8,8 @@
 ## v5 수정 (2026-11-09)
 
 가드 응답에는 문구가 없으므로 위기 템플릿·연락처·T1–T3 하위 분류·"막을 때 위기 템플릿으로 응답"은 가드 범위에서 빠진다(응답 문구는 `/tutor`의 `escalate`가 맡는다). 남는 결정은 다음뿐이다.
-- 골격 뷰 위 결정적 위기 어휘 매칭은 유지하고, 결과는 `emotional_distress` 후보 **힌트**로 입력 판정에 넘긴다(ADR-0002 v5). 입력 판정이 실패하면 이 힌트로 범주를 정한다(ADR-0009 기본값).
-- `emotional_distress`의 decision(allow/block)은 공개 세트로 정한다.
+- 골격 뷰 위 결정적 위기 어휘 매칭은 유지하고, 결과는 `emotional_distress` 후보 **힌트**로 입력 판정에 넘긴다(ADR-0002 v5). 입력 판정이 실패하면 이 힌트로 범주를 정한다(ADR-0009 기본값, 신호가 여럿이면 우선순위 jailbreak_injection > emotional_distress > pii_disclosure > low_signal_input).
+- `emotional_distress`의 decision(allow/block)은 공개 세트로 정한다. 그 전 임시값은 block이다(PRD §3).
 - 위기 어휘는 팀이 직접 쓴다. v4에는 어휘 파일이 없었다(R12 §8).
 - 아래 v4 본문의 "위기 전용 분류 모델(P2)"은 대회 규칙상 불가다(학습 모델 파일 금지, OT p.25).
 

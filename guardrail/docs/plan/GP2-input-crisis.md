@@ -3,7 +3,7 @@
 작성 2026-10-30 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
 상위: [master-plan](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md) · 요구사항: [PRD](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md) · 기간: 11/10(화)–11/15(일)
 
-> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9, [ADR-0009–0011](../adr/README.md)과 ADR-0001·0002·0003·0005·0006의 v5 수정 블록이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. 이 문서 본문의 PRD·master-plan·interface·skills 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
+> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9·§10의 v22 메모(push·PR은 PRD §9 D6 결정 뒤), [ADR-0009–0011](../adr/README.md)과 ADR-0001·0002·0003·0005·0006의 v5 수정 블록이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. 이 문서 본문의 PRD·master-plan·interface·skills 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
 
 ## 1. 목표와 관문
 

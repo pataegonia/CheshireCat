@@ -2,8 +2,10 @@
 
 G = guard 후보 grounded=true·비block(32), T = tutor 참조 답변 action∈{answer,scaffold,abstain}·evidence 있음(119),
 U = guard ungrounded(35). 실행: `python -X utf8 guardrail/scripts/r13/q6_rule_fp.py` (repo 루트).
+`--window`: 질의를 전체 user 발화 대신 서버 창(첫 학습자 발화 + 마지막 메시지 6개의 학습자 발화)으로 만든다.
 """
 
+import argparse
 import re
 
 from common import BLOCK_CATS, BM25, all_user, guard_rows, kb_chunks, load_kb, norm, scoring, tutor_rows
@@ -27,14 +29,26 @@ VARIANTS = {
 }
 
 
-def corpora():
+def window_user(r, last=6):
+    """첫 학습자 발화 + 마지막 메시지 `last`개 중 학습자 발화(첫 발화가 그 안에 있으면 한 번만)."""
+    msgs = r["messages"]
+    users = [i for i, m in enumerate(msgs) if m["role"] == "user"]
+    tail = {i for i in range(max(0, len(msgs) - last), len(msgs)) if msgs[i]["role"] == "user"}
+    return "\n".join(msgs[i]["content"] for i in sorted(set(users[:1]) | tail))
+
+
+_W = {"messages": [{"role": "user" if i % 2 == 0 else "assistant", "content": str(i)} for i in range(9)]}
+assert window_user(_W) == "0\n4\n6\n8", window_user(_W)
+
+
+def corpora(query=all_user):
     g = [r for r in guard_rows() if "candidate_answer" in r]
-    U = [(r["id"], all_user(r), r["candidate_answer"], r) for r in g
+    U = [(r["id"], query(r), r["candidate_answer"], r) for r in g
          if r["labels"]["category"] == "normal" and not r["labels"]["grounded"]]
-    G = [(r["id"], all_user(r), r["candidate_answer"], r) for r in g
+    G = [(r["id"], query(r), r["candidate_answer"], r) for r in g
          if r["labels"]["category"] not in BLOCK_CATS and r["labels"]["grounded"]]
     t_all = [r for r in tutor_rows() if r["labels"]["action"] in ("answer", "scaffold", "abstain")]
-    T = [(r["id"], all_user(r), r["labels"]["reference_answer"], r) for r in t_all if r["labels"]["evidence"]]
+    T = [(r["id"], query(r), r["labels"]["reference_answer"], r) for r in t_all if r["labels"]["evidence"]]
     assert (len(U), len(G), len(t_all)) == (35, 32, 147), (len(U), len(G), len(t_all))
     return U, G, T, t_all
 
@@ -158,8 +172,12 @@ def refusal_table():
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--window", action="store_true", help="질의 = 첫 학습자 발화 + 마지막 6메시지의 학습자 발화 + 답변")
+    args = ap.parse_args()
     kb = load_kb()
-    U, G, T, t_all = corpora()
+    U, G, T, t_all = corpora(window_user if args.window else all_user)
+    print("질의:", "창(첫 학습자 발화 + 마지막 6메시지)" if args.window else "전체 user", "+ 답변")
     print(f"코퍼스: U {len(U)}, G {len(G)}, T {len(T)} (answer/scaffold/abstain 전체 {len(t_all)})\n")
     ret = Retriever(kb)
     res, info = rule_table(ret, U, G, T)

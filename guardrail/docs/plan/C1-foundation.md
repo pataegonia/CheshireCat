@@ -7,7 +7,7 @@
 
 **보이는 변화**: 런박스 터널 주소의 `/guard`가 인증을 확인하고 어떤 입력에도 200 JSON(상수 판정)을 낸다. 그 서버로 첫 제출을 한다. 로컬에서는 채점 코드를 import한 채점기가 `score_local.py`와 같은 값을 낸다. nano의 실제 지연과 파라미터 수용 여부를 표로 안다.
 
-**관문**([master-plan §2](../master-plan.md#2-일정과-phase-관문)): ① 터널 주소로 200 JSON, 3xx 0, 형식 오류 0 ② 채점 재현 차 ≤0.005(같은 저장 응답 기준) ③ PRD §11-2-1 실측 표 ④ CI green.
+**관문**([master-plan §2](../master-plan.md#2-일정과-phase-관문)): ① 터널 주소로 200 JSON, 3xx 0, 형식 오류 0 ② 채점 재현 차 ≤0.005(같은 상수 응답 기준, S1.5) ③ PRD §11-2-1 실측 표 ④ CI green.
 
 이 Phase는 판정 품질을 다루지 않는다. 상수 응답(`allow`·`normal`, `true/[]/safe=true`)이 기준선이다.
 
@@ -18,7 +18,7 @@
 | 11/11 수 오전 | S1.1(C1 에픽 #42·이슈 #46–#51은 11/10에 만들었고 v4 에픽 #2–#6·이슈 #15–#21도 11/10에 닫았다, [master-plan §11](../master-plan.md#11-진행-추적-github)) | — | S1.1 PR 머지 |
 | 11/11 수 오후 | S1.2(서버 골격) → 보안 리뷰 | S1.3(LLM 게이트) · S1.4(로더·채점·분할) | S1.2 PR |
 | 11/11 수 밤 | S1.5 런박스 배포·첫 제출 | — | 첫 제출 기록 |
-| 11/12 목 오전 | S1.3·S1.4 리뷰·머지 → S1.6 실측 → Phase 끝 점검 | — | 관문 판정, C2 시작 |
+| 11/12 목 오전 | S1.3·S1.4 리뷰·머지 → 채점 대조(S1.5 항목) → S1.6 실측 → Phase 끝 점검 | — | 관문 판정, C2 시작 |
 
 합계 20h(본인 약 12h + 병렬 8h). S1.3·S1.4는 S1.1 머지 뒤에만 시작한다(설정 모델을 같이 쓴다).
 
@@ -37,21 +37,21 @@
 **배경**: v4 코드는 튜터 래퍼 구조다. v6는 상태 없는 판정기라 대부분이 필요 없다. 처리 목록은 [master-plan §3 기존 코드 처리](../master-plan.md#3-아키텍처--코드).
 
 **만들거나 바꿀 파일**
-- 삭제: `src/guardrail/{pipeline,trace,types}.py`, `src/guardrail/eval/{build_grounding,metrics,datasets,run,mock_tutor}.py`, 해당 테스트(`test_pipeline`·`test_trace`·`test_build_grounding`·`test_metrics`·`test_datasets`·`test_run`·`test_mock_tutor`), `configs/unguarded.yaml`, `prompts/attack_judge.md`, `resources/`, `data/seed/`, `data/README.md`, `results/`(v4 파일), `tests/fixtures/mini*`
+- 삭제: `src/guardrail/{pipeline,trace,types,llm}.py`, `src/guardrail/eval/{build_grounding,metrics,datasets,run,mock_tutor}.py`, 해당 테스트(`test_pipeline`·`test_trace`·`test_build_grounding`·`test_metrics`·`test_datasets`·`test_run`·`test_mock_tutor`·`test_llm`), `tests/fakes.py`(파일 전체. `FakeLLM`은 v4 `LLM`을 상속하고 `FakeTutor`는 `Chunk`·`Turn`을 써서 남길 것이 없다), `configs/unguarded.yaml`, `prompts/attack_judge.md`, `resources/`, `data/seed/`, `data/README.md`, `results/`(v4 파일), `tests/fixtures/mini*`
 - 남김: `preprocess.py`(S2.1). `eval/mock_tutor.py`는 남기지 않는다: S2.2의 BM25 원본은 `scripts/r13/common.py`다(master-plan §3)
-- **S1.1에서 import만 고치는 파일**(동작 변경은 S1.3): `types.py`를 지우므로 `ROLES`·`Role`을 `llm.py` 안으로 옮기고, `llm.py`·`tests/fakes.py`·`tests/test_llm.py`·`tests/test_config.py`의 `guardrail.types`·`GuardConfig`·`Guard` import를 새 설정 모델에 맞춘다. `tests/fakes.py`의 `Chunk`·`Turn`을 쓰는 가짜 튜터 부분과 `test_llm.py`의 "Guard가 llm을 갖는다" 테스트(743–749행), `test_config.py`의 `Guard(cfg)` 테스트(322·332행)는 v4 구조라 지운다. 이렇게 해서 S1.1 머지 때 CI가 green이다. S1.3은 `llm.py`를 §4.3대로 다시 쓰는 슬라이스다
+- **LLM 계층은 S1.1에서 지우고 S1.3이 새로 쓴다**: v4 `llm.py`·`tests/test_llm.py`·`tests/fakes.py`는 `types.py`와 v4 `Guard`에 묶여 있어 남기지 않는다. S1.3이 `llm.py`·`tests/test_llm.py`·`tests/fakes.py`(`FakeLLM`·`FakeClock`)를 §4.3대로 새로 만든다(v4 파일은 git 이력의 참고용). `tests/test_config.py`는 아래 `config.py`와 함께 §4.4 모델로 다시 쓴다(`Guard(cfg)` 테스트 등 v4 부분은 지움). 그래서 S1.1 머지 때 CI(ruff + pytest + 남은 코드 커버리지 ≥80%)가 green이다
 - `eval/stats.py`: `wilson`만 남기고 `test_stats.py`도 줄인다
-- `config.py`: 로더·`overrides`·`${ENV}` 치환·`config_hash`·`load_prompt`·`resolve_path` 유지. 모델을 [§4.4](../master-plan.md#44-설정-configsyaml)로 바꾼다. `check_toggles` → 토글 조합 검증(`third_call`은 `knn_vote`·`lr` 둘 다 켰을 때만, `nano_span`은 `literal_rule`을 켰을 때만)
-- `configs/default.yaml`(§4.4 그대로), `configs/baseline.yaml`(토글 11개 모두 false + `output.mode: baseline`: 출력은 베이스라인 프롬프트의 nano 값을 grounded·safe에 바로 쓰고 `unsupported=[]`, 입력은 `input_judge.md`를 예시 블록만 비워 쓴다. 정의와 대조 문구는 그대로이고 따로 파일을 두지 않는다. `output.failure_default`는 토글이 아니다), `configs/ablation/`(빈 폴더 + `.gitkeep`)
+- `config.py`: 로더·`overrides`·`${ENV}` 치환·`config_hash`·`load_prompt`·`resolve_path` 유지. 설정에 프롬프트 매핑 `prompts`(이름 → `prompts/` 아래 파일)를 두고, `config_hash`가 그 매핑의 각 프롬프트 파일 머리말에서 version을 읽어 넣는다. `load_prompt`는 지금처럼 `---\nid: …\nversion: …\n---` 머리말을 요구한다(없거나 id가 이름과 다르면 거부). 모델을 [§4.4](../master-plan.md#44-설정-configsyaml)로 바꾼다. `check_toggles` → 토글 조합 검증(`third_call`은 `knn_vote`·`lr` 둘 다 켰을 때만, `nano_span`은 `literal_rule`을 켰을 때만)
+- `configs/default.yaml`(§4.4 그대로. `prompts`는 S1.1에서 빈 매핑이고 S2.6·S2.7이 자기 프롬프트를 더한다), `configs/baseline.yaml`(토글 11개 모두 false + `output.mode: baseline`: 출력은 베이스라인 프롬프트의 nano 값을 grounded·safe에 바로 쓰고 `unsupported=[]`, 입력은 `input_judge.md`를 예시 블록만 비워 쓴다. 정의와 대조 문구는 그대로이고 따로 파일을 두지 않는다. `output.failure_default`는 토글이 아니다), `configs/ablation/`(빈 폴더 + `.gitkeep`)
 - `src/guardrail/__init__.py`: 재노출 정리
 - `pyproject.toml`·`uv.lock`: 런타임 `fastapi==0.162.2`, `uvicorn==0.54.0`, `scikit-learn==1.9.1`, `rapidfuzz==3.14.6` / dev `jsonschema==4.26.0`. `description`을 "대회 POST /guard 판정기"로
 - `.gitignore`: v4 데이터 규칙 삭제, `runs/`·`logs/`·`.env` 유지
 
-**테스트 먼저**: 설정 로드(default·baseline), 모르는 키 거부, `${ENV}` 치환, `config_hash`가 프롬프트 version을 포함, 금지 토글 조합 2개, ablation 깊은 병합(덮어쓴 키만 달라짐).
+**테스트 먼저**: 설정 로드(default·baseline), 모르는 키 거부, `${ENV}` 치환, `config_hash`가 `prompts` 매핑의 각 프롬프트 머리말 version을 포함(픽스처 프롬프트 `tests/fixtures/prompts/`로: version만 바꿔도 해시가 바뀜), `load_prompt`가 머리말 없음·id 불일치를 거부, 금지 토글 조합 2개, ablation 깊은 병합(덮어쓴 키만 달라짐).
 
 **수용 기준**
-- [ ] 삭제 목록이 모두 반영되고 `rg "(from|import) guardrail(\.(pipeline|trace|types|eval\.mock_tutor)| import Guard)" src tests`가 0건이다
-- [ ] `uv sync --locked`, `ruff`, `pytest --cov --cov-fail-under=80` green
+- [ ] 삭제 목록이 모두 반영되고 `rg "(from|import) guardrail(\.(pipeline|trace|types|llm|eval\.mock_tutor)| import Guard)" src tests`가 0건이다
+- [ ] `uv sync --locked`, `ruff`, `pytest --cov --cov-fail-under=80` green(남은 코드 기준. LLM 계층은 S1.3이 새로 씀)
 - [ ] `uv lock`이 풀린다(numpy·scikit-learn·Python 3.12). 안 풀리면 버전을 낮추고 PR에 적는다
 
 **스킬·에이전트**: `ecc:tdd-workflow`, `ecc:refactor-clean`. 리뷰 `ecc:python-reviewer`.
@@ -66,23 +66,24 @@
 | 브랜치 | `gr/s1.2-server-skeleton` |
 | 보이는 변화 | `uvicorn guardrail.server:app --port 8000 --no-access-log`가 뜨고 `/guard`가 상수 판정을 낸다 |
 
-**만들 파일**: `src/guardrail/schema.py`, `src/guardrail/server.py`, `tests/test_schema.py`, `tests/test_server.py`.
+**만들 파일**: `src/guardrail/schema.py`, `src/guardrail/server.py`, `src/guardrail/guard.py`(`Judgement`·`ConstantGuard`만. `Guard`는 S2.8), `src/guardrail/signals.py`(`Signals` dataclass만. 함수는 S2.3), `tests/test_schema.py`, `tests/test_server.py`, (`TestClient`가 요구하면) `pyproject.toml`·`uv.lock`의 dev `httpx`.
 
 **계약**([master-plan §4.1](../master-plan.md#41-타입-schemapy와-모듈별-dataclass))
 - `schema.py`: `Category`, `Decision`, `decision_of(category, block)`(표는 설정 `block_categories`, ADR-0012), `Message`, `GuardRequest`, `parse_request(body: bytes) -> GuardRequest`, `OutputVerdict`, `GuardResponse.to_json(block)`(block = 설정 `block_categories`, `frozenset[Category]`).
 - `parse_request`는 예외를 내지 않는다. JSON이 아니거나 `messages`가 목록이 아니면 `messages=()`. 메시지 항목 중 `content`가 문자열인 것만 받는다. `candidate_answer` 키가 있으면 `has_candidate=True`. 값이 문자열이면 그대로 두고(빈 문자열 `""`은 출력 `true/[]`·`safe=true`), 문자열이 아니면 `candidate_answer=None`으로 둔다. 이 경우는 출력에 한해 요청 파싱 실패다: `output`은 `output.failure_default`(GR-09), `safe`는 GR-08 그대로.
-- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `Guard` 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`. `/tutor`는 시작용 라우트를 팀 모듈에 **복사해** 붙인다(`competition/server.py`는 import 때 환경변수를 읽고 자기 앱을 만들므로 import하지 않는다). 아래 인증은 시작용 server.py처럼 **앱 수준 의존성**으로 걸어 `/guard`와 `/tutor`에 똑같이 적용한다.
+- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `TEAM_TOKEN`을 읽고 판정기 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`. `/tutor`는 시작용 라우트를 팀 모듈에 **복사해** 붙인다(`competition/server.py`는 import 때 환경변수를 읽고 자기 앱을 만들므로 import하지 않는다). 아래 인증은 시작용 server.py처럼 **앱 수준 의존성**으로 걸어 `/guard`와 `/tutor`에 똑같이 적용한다.
   - 본문은 `await request.body()`로 직접 읽는다. pydantic 요청 모델을 라우트 인자로 두지 않는다(422 반사 방지).
-  - 인증: `Authorization` 헤더를 `f"Bearer {TEAM_TOKEN}"`와 `hmac.compare_digest`로 비교(바이트). 틀리면 401 + `{"error": "unauthorized"}`(SPEC은 코드를 정하지 않는다. 시작용 `competition/server.py`의 `HTTPException(401)`이 근거). `TEAM_TOKEN`이 없으면 기동 실패.
+  - 인증: `Authorization` 헤더를 `f"Bearer {TEAM_TOKEN}"`와 `hmac.compare_digest`로 비교(바이트). 틀리면 401 + `{"error": "unauthorized"}`(SPEC은 코드를 정하지 않는다. 시작용 `competition/server.py`의 `HTTPException(401)`이 근거). `TEAM_TOKEN`은 import 때가 아니라 lifespan에서 읽어 `app.state`에 둔다(테스트가 환경변수 없이 `guardrail.server`를 import할 수 있게). 없거나 비면 lifespan이 예외를 내 기동이 실패한다.
   - 예외 처리기: 라우트 안의 어떤 예외도 GR-09 기본 응답 200으로. 전역 422 처리기도 같은 기본 응답(본문 반사 없음).
-  - 이 슬라이스의 판정기는 상수다: `Guard`가 아직 없으므로 `ConstantGuard.judge()`가 `GuardResponse("normal", OutputVerdict(True, (), True) if has_candidate else None)`.
+  - 서버 계약은 하나다: `await guard.judge(req) -> Judgement`이고 서버는 `judgement.response.to_json(block)`만 낸다(S2.8의 `Guard`도 같은 계약). 이 슬라이스의 판정기는 상수다: `Guard`가 아직 없으므로 `ConstantGuard.judge()`가 `Judgement(response=GuardResponse("normal", OutputVerdict(True, (), True) if req.has_candidate else None), input_source="default", output_tier=None, nano_grounded=None, signals=Signals(False, False, False), knn_major=None, lr_pred=None, calls=0, errors=(), latency_ms={})`를 돌려준다. `Judgement`·`Signals`는 §4.1 그대로 `guard.py`·`signals.py`에 dataclass만 먼저 둔다.
   - 로그 미들웨어: 한 줄 = 시각, 경로, 요청 바이트 수, 응답 바이트 수, 상태 코드, 처리 ms, 오류 클래스 이름. 그 밖은 남기지 않는다(GR-12). `print`·`logger.exception` 금지.
 - 응답 크기 256KB 미만 확인(`unsupported`가 길어질 때 대비해 `to_json`에서 상한 검사, 넘으면 `unsupported`를 비운다).
 
-**테스트 먼저**(FastAPI `TestClient`, 요구하면 dev `httpx`)
+**테스트 먼저**(FastAPI `TestClient`. `TestClient`가 `httpx`를 요구하면 이 슬라이스가 `pyproject.toml` dev 의존성에 `httpx`를 더하고 `uv.lock`을 갱신한다. 런타임 의존성은 아니다, master-plan §4.7)
 - 공개 세트 400행 전부 → 200, `contract/guard.schema.json`(jsonschema)로 검증, `candidate_answer` 키 유무에 따라 `output` 유무
 - 퍼징(`hypothesis`): 빈 본문, JSON 아님, `messages` 누락·타입 오류, 깨진 유니코드, 매우 긴 이력(1MB) → 모두 200·스키마 통과
 - 인증: 헤더 없음·틀림·`Bearer ` 접두 없음 → 401, 본문에 토큰 없음. `create_app()`의 `/tutor`도 같은 경우에 401
+- 기동: `TEAM_TOKEN` 없이 `guardrail.server` import는 성공하고, lifespan 기동은 실패
 - `/guard/`(끝 슬래시) → 3xx가 아님(404 허용)
 - 반사: 요청에 넣은 표지 문자열이 오류·기본값 경로의 응답과 `input` 객체에 없음. `unsupported`는 후보 답변의 원문 구간이라 이 검사에서 뺀다
 - 로그: `caplog`로 퍼징 전체를 돌린 뒤 로그에 요청 표지 문자열 0건
@@ -104,9 +105,9 @@
 | 브랜치 | `gr/s1.3-llm-gate` |
 | 보이는 변화 | `LLM.complete()`가 마감 안에서만 1회 재시도하고, 실패는 오류 코드로 돌려준다 |
 
-**배경**: 기존 `llm.py`(663줄)는 v4 역할 5개, AIMD, 시도 3회, `faults`를 가진다. v6 계약은 [master-plan §4.3](../master-plan.md#43-llm-호출-llmpy). 재시도 대기 파싱(`_parse_retry_after`)과 오류 분류(`classify`)는 그대로 쓴다.
+**배경**: v4 `llm.py`(663줄, S1.1에서 삭제, git 이력에 있음)는 v4 역할 5개, AIMD, 시도 3회, `faults`를 가진다. v6 계약은 [master-plan §4.3](../master-plan.md#43-llm-호출-llmpy). 재시도 대기 파싱(`_parse_retry_after`)과 오류 분류(`classify`)는 이력의 v4 파일에서 옮겨 쓴다.
 
-**바꿀 파일**: `src/guardrail/llm.py`, `tests/test_llm.py`(다시 씀), `tests/fakes.py`(`FakeLLM`·`FakeClock`만).
+**만들 파일**(S1.1이 v4 파일을 지웠으므로 새로 씀): `src/guardrail/llm.py`, `tests/test_llm.py`, `tests/fakes.py`(`FakeLLM`·`FakeClock`).
 
 **작업**
 - `Role = Literal["input_judge", "output_judge"]`. `types.py`가 사라졌으므로 `Role`은 `llm.py`에 둔다.
@@ -135,19 +136,19 @@
 | 우선 · 예상 · 모델 | P0 · 4h · Sonnet(분할 규칙은 Opus 검토) |
 | 선행 | S1.1 |
 | 브랜치 | `gr/s1.4-data-score-cv` |
-| 보이는 변화 | `python -m guardrail.eval.cv --write`가 `splits/v1.json`을 만들고, 상수 응답 점수가 공개 세트에서 재현된다 |
+| 보이는 변화 | `python -m guardrail.eval.cv --write`가 `splits/v1.json`을 만들고, in-process로 만든 상수 응답을 `score.py`로 채점한 가드 점수가 R13-A Q4와 같다 |
 
 **만들 파일**: `src/guardrail/data.py`, `src/guardrail/clusters.py`, `src/guardrail/eval/score.py`, `src/guardrail/eval/cv.py`, `src/guardrail/eval/splits/v1.json`, `tests/test_data.py`, `tests/test_score.py`, `tests/test_cv.py`.
 
 **계약**([master-plan §4.5](../master-plan.md#45-데이터-datapy-evalcvpy))
 - `data.py`: `PublicRow`, `LabeledRow`, `load_public(public_dir)`, `labeled_rows(rows)`. `LabeledRow.text`는 마지막 `user` 발화의 `preprocess.normalize()` 결과, `category`는 `labels["category"]`(가드·튜터 둘 다 있음, R13 M3).
 - `eval/score.py`: `competition/grader`와 `competition/harness`를 `sys.path`에 넣고 `scoring.score_guard`·`scoring.guard_score`, `score_local.as_scoring_input`을 import한다. `score_responses(rows, responses: dict[id, dict]) -> dict`(가드 점수, block F1, 범주 정확도, 출력 평균과 항목별). `score_guard`·`guard_score`에는 `endpoint=='guard'` 행만 넣고, 가드 점수는 가드 200행으로 보고한다. 튜터 행(decision 라벨 없음)은 범주 정확도와, 범주에서 도출한 decision으로 block F1을 따로 계산한다. 채점 로직을 다시 쓰지 않는다.
-- `eval/cv.py`: `build_clusters(rows, jaccard=0.5) -> dict[id, cid]`(서버 쪽 모듈 `src/guardrail/clusters.py`에 두고 `cv.py`가 import한다. S2.5의 `KnnIndex`도 기동 때 같은 함수로 묶음을 계산하고, 서버는 eval 패키지에 의존하지 않는다. **마지막 학습자 발화** 정규화본의 문자 3-gram Jaccard, union-find. 빠른 질문 버튼 첫 발화는 여러 행이 같은 문장을 써 무관한 행을 이으므로 넣지 않는다), `make_splits(rows, folds=5, holdout=0.2, seed)`, `load_splits()`, `train_rows(split, fold=k | holdout)`(평가 묶음과 홀드아웃 묶음을 뺀 `LabeledRow`). CLI `--write`.
+- `eval/cv.py`: `build_clusters(rows, jaccard=0.5) -> dict[id, cid]`(서버 쪽 모듈 `src/guardrail/clusters.py`에 두고 `cv.py`가 import한다. S2.5의 `KnnIndex`도 기동 때 같은 함수로 묶음을 계산하고, 서버는 eval 패키지에 의존하지 않는다. **마지막 학습자 발화** 정규화본의 문자 3-gram Jaccard, union-find. 빠른 질문 버튼 문구는 여러 행이 같은 문장을 써 무관한 행을 이으므로 넣지 않는다. 검출 목록은 R13-A §1.4의 8종이고 정확한 접두 일치로 본다: "학습자료의 내용을 요약해 주세요.", "실습 도중 어려운 부분이 있어요. 도움을 받을 수 있을까요?", "영상의 내용을 요약해주세요.", "이 코드를 설명해주세요.", "문제 의도를 자세히 알고 싶어요.", "힌트를 알려주세요.", "문제를 푸는 방법을 차근차근 설명해주세요.", "이 퀴즈를 푸는 데 힌트를 받을 수 있을까요?". 묶음 텍스트가 마지막 학습자 발화라 이 제외는 첫 발화가 버튼인 멀티턴 행(공개 튜터 66행, 가드 0행)에서 마지막 발화도 버튼 문구일 때만 작동한다. 공개 세트에 그런 행은 0이다), `make_splits(rows, folds=5, holdout=0.2, seed)`, `load_splits()`, `train_rows(split, fold=k | holdout)`(평가 묶음과 홀드아웃 묶음을 뺀 `LabeledRow`). CLI `--write`.
 - 홀드아웃은 가드 행 기준 20% 묶음. 튜터 행만 있는 묶음은 홀드아웃에 넣지 않는다.
 
 **테스트 먼저**
 - 400행 로드, `candidate_answer` 키가 있는 가드 행 수 86
-- 상수 응답(`allow`·`normal`·`true/[]/true`)의 가드 점수가 R13 M7 "전부 allow" 값과 같다(소수 둘째 자리)
+- 서버 없이 in-process로 만든 응답을 `score_responses`로 채점: 상수 응답(`allow`·`normal`·`true/[]/true`) 29.48, 정답 decision·category + 상수 출력 84.48([R13-A Q4](../research/R13-public-set-analysis.md#q4-가드-점수-상하한과-민감도), 소수 둘째 자리)
 - 짝 예시(R13-A §1.1의 "최대 ↔ 최소" 쌍)가 같은 묶음
 - 빠른 질문 버튼 첫 발화만 같은 행끼리는 그것 때문에 묶이지 않음
 - 같은 묶음이 두 폴드에 걸치지 않음, 홀드아웃과 폴드가 겹치지 않음, `seed`가 같으면 같은 파일
@@ -157,7 +158,7 @@
 
 **수용 기준**
 - [ ] 위 테스트 green
-- [ ] 로컬에서 상수 서버(S1.2의 `ConstantGuard`)를 띄워 같은 저장 응답을 `score_local.py`와 `score.py`에 넣어 가드 점수 차 ≤0.005(GR-13. `guard_score`가 소수 둘째 자리로 반올림하므로 같은 저장 응답이면 실제로는 완전히 같아야 한다), 결과를 이 문서 §4에 적는다
+- [ ] 위 두 값(29.48·84.48)이 R13-A Q4와 같다. 서버를 띄워 `score_local.py`와 대조하는 항목(GR-13 차 ≤0.005)은 S1.2 서버가 필요해 S1.5로 옮겼다
 - [ ] `splits/v1.json` 커밋, 이후 바꾸지 않는다
 
 **스킬·에이전트**: `ecc:eval-harness`, 에이전트 `ecc:mle-reviewer`(누수 점검).
@@ -168,18 +169,18 @@
 |---|---|
 | GR / ADR | GR-01, GR-14 · ADR-0009 |
 | 우선 · 예상 · 모델 | P0 · 2h · 본인 |
-| 선행 | S1.2 |
+| 선행 | S1.2(채점 대조 항목은 S1.4 머지 뒤) |
 | 라벨 | `guardrail`, `guardrail:P0`, `orchestrator` |
 | 보이는 변화 | `https://<런박스>.tunnel.elice.io/proxy/8000/guard`가 200 JSON을 낸다. 첫 채점 결과 메시지를 받는다 |
 
 **작업**
-- [ ] 런박스 확인: Python 버전(≥3.12인가), PyPI 설치 가능 여부(`uv sync`), 저장소 clone 방법. 비공개 저장소 접근 토큰은 런박스에 남기지 않는다(clone 뒤 지운다). 결과를 §4에 적는다
-- [ ] `/home/elicer/competition/.env`에 `OPENAI_API_KEY`, `TEAM_TOKEN`(영문·숫자·기호, 키와 다른 값). 커밋하지 않는다
+- [ ] 런박스 확인: Python 버전(≥3.12인가), PyPI 설치 가능 여부(`uv sync`), 저장소 clone 방법. Python이 3.12 미만이면 네트워크가 될 때 `uv python install 3.12`, 안 되면 `pyproject.toml`의 `requires-python`과 ruff `target-version`을 런박스 버전으로 낮추고 3.12 전용 문법(PEP 695 `type`·제네릭 문법, `typing.override` 등)이 없는지 `ruff check`로 확인한다. PyPI가 막혀 있으면 로컬에서 런박스와 같은 Python·플랫폼용 wheel 묶음을 미리 받아(`uv export` → `pip download --only-binary=:all: --python-version … --platform …`) 복사하고 `uv pip install --no-index --find-links <폴더>`로 설치한다. 비공개 저장소 접근 토큰은 런박스에 남기지 않는다(clone 뒤 지운다). 결과를 §4에 적는다
+- [ ] `/home/elicer/competition/.env`에 `OPENAI_API_KEY`, `TEAM_TOKEN`(`[A-Za-z0-9_-]+`만 권장, 키와 다른 값. 셸에서 `. .env`로 읽으므로 `$`·`&`·`;`·`#`·`!` 등이 들어가면 값이 깨진다). 커밋하지 않는다
 - [ ] 런박스의 KB·공개 세트·프롬프트 경로가 저장소 상대 경로와 다르면 `GUARD_KB_DIR`·`GUARD_PUBLIC_DIR`·`GUARD_PROMPTS_DIR`로 `paths.*`를 덮어쓴다([master-plan §4.4](../master-plan.md#44-설정-configsyaml)). 설정 파일은 고치지 않는다
 - [ ] 실행: `cd guardrail && set -a && . /home/elicer/competition/.env && set +a && uv run uvicorn guardrail.server:app --host 0.0.0.0 --port 8000 --no-access-log`
-- [ ] `/tutor`: 각 계정의 제출은 **그 계정 런박스의** `/tutor`·`/guard` 주소여야 한다(SPEC §7). 그래서 상수 응답 제출에도 이 런박스의 `/tutor`가 있어야 한다. `create_app()`은 `/guard` 옆에 시작용 `/tutor`(`competition/server.py`의 것 또는 팀 라우터)를 함께 붙인다. 같은 프로세스로 둘지는 팀 선택(PRD §9 D4, 리더 결정). 가드 담당은 `/tutor`를 고치지 않는다. 터널 주소로 `/tutor`도 200인지 확인한다
+- [ ] `/tutor`: 각 계정의 제출은 **그 계정 런박스의** `/tutor`·`/guard` 주소여야 한다(SPEC §7). 그래서 상수 응답 제출에도 이 런박스의 `/tutor`가 있어야 한다. `create_app()`은 `/guard` 옆에 시작용 `/tutor`(`competition/server.py`의 것 또는 팀 라우터)를 함께 붙인다. 같은 프로세스로 둘지는 팀 선택(PRD §9 T4, 리더 결정). 가드 담당은 `/tutor`를 고치지 않는다. 터널 주소로 `/tutor`도 200인지 확인한다
 - [ ] 터널 주소로 `curl -i`: 인증 성공 200, 실패 401(`/guard`·`/tutor` 둘 다), `/guard/` 리다이렉트 없음, `http`→`https` 전환 없음
-- [ ] 로컬 채점기: `python3 harness/score_local.py --guard-url …` 실행 → S1.4 대조
+- [ ] 채점 대조(GR-13, S1.4에서 옮김): 상수 서버(`ConstantGuard`)를 로컬이나 런박스에 띄우고 `python3 harness/score_local.py --tutor-url …/tutor --guard-url …/guard --token …`을 돌린다. 두 URL이 모두 필수이고 공개 400행(튜터 200 + 가드 200)을 다 보낸다. 시작용 `/tutor`가 행마다 nano 1회라 튜터 200행에 nano 약 200회가 팀 키로 나간다(상수 가드는 0회). `score_local.py`를 띄우는 셸에 `OPENAI_*`가 있으면 튜터 채점 판정 모델 호출도 붙으므로 그 셸에서는 빼고 돌린다(튜터는 action·인용만 채점). 가드 점수를 S1.4 `score.py`가 in-process 상수 응답으로 낸 29.48과 비교해 차 ≤0.005(같은 상수 응답이라 같아야 한다), 결과를 §4에 적는다. S1.4가 아직 머지 전이면 11/12 오전에 비교한다
 - [ ] `submission.json`(`token`, `guard_url`, `tutor_url` = 이 런박스의 `…/proxy/8000/tutor`, `commit`) 채우고 제출. 채점이 끝날 때까지 탭 유지
 - [ ] 런박스 재시작 절차(세션 2일 제한)를 §4에 적는다
 

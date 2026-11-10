@@ -27,7 +27,7 @@
 | Phase | 기간 | 보이는 변화 | 넘어가는 조건 |
 |---|---|---|---|
 | C0 문서 | 11/10(화) | PRD v6, ADR-0012–0014, 이 문서 v23, C1–C4 | 문서 PR 머지 |
-| [C1 기반·첫 제출](plan/C1-foundation.md) | 11/11(수)–11/12(목) 오전 | v4 코드 정리, 서버 골격(인증·200 보장·로그 규칙), 스키마, 채점 재현, 짝 묶음 분할, **상수 응답 첫 제출**, 런박스 실측 | 터널 주소로 200 JSON·3xx 0·형식 오류 0, 채점 재현 차 ≤0.005(같은 저장 응답 기준), 실측 표(PRD §11-2-1) |
+| [C1 기반·첫 제출](plan/C1-foundation.md) | 11/11(수)–11/12(목) 오전 | v4 코드 정리, 서버 골격(인증·200 보장·로그 규칙), 스키마, 채점 재현, 짝 묶음 분할, **상수 응답 첫 제출**, 런박스 실측 | 터널 주소로 200 JSON·3xx 0·형식 오류 0, 채점 재현 차 ≤0.005(같은 상수 응답 기준), 실측 표(PRD §11-2-1) |
 | [C2 판정 v1](plan/C2-judges.md) | 11/12(목) 오후–11/15(일) | 전처리·KB·신호·규칙·kNN·LR·nano 판정 2개·조립, 하네스 v1, 부하 시험, **v1 제출** | 교차 검증 가드 점수가 nano 단독 베이스라인보다 높고 3회 분산 밖, 동시 64에서 시간 초과 0 |
 | [C3 조정](plan/C3-tuning.md) | 11/16(월)–11/20(금) | 측정 기반 켜기 결정, 입력 프롬프트 조정, ablation, 홀드아웃 | 홀드아웃 결과·ablation 표 확정, 동결 커밋 SHA 기록 |
 | [C4 마무리](plan/C4-wrapup.md) | 11/21(토)–11/24(화) | 규칙 준수 점검, 시연 자료, **최종 제출** | 제출 체크리스트 통과, 최종 제출 11/24 18:00까지 |
@@ -55,7 +55,7 @@ PRD §4의 단계가 모듈 하나씩에 대응한다.
 | PRD §4 단계 | 모듈 | 주요 함수 | GR | ADR |
 |---|---|---|---|---|
 | 인증·요청 읽기·200 보장·로그 | `server.py`, `schema.py` | `create_app`, `router`, `parse_request` | 01·09·12 | 0009 |
-| ① 전처리 | `preprocess.py` | `normalize`, `reveal_hidden`, `decode_tags` | 02 | 0001 |
+| ① 전처리 | `preprocess.py` | `normalize`, `reveal_hidden`, `decode_tags`, `strip_tags` | 02 | 0001 |
 | ② 결정적 신호 | `signals.py` | `is_low_signal`, `is_refusal`, `has_hidden_tags` | 06 | 0014 |
 | ② 숫자·리터럴 | `rules.py` | `extract_literals`, `literal_rule` | 06·07 | 0014 |
 | ③ 보조 판정기 | `knn.py`, `classifier.py`, `clusters.py` | `KnnIndex`, `LrClassifier`, `build_clusters`(짝 묶음. `KnnIndex`가 기동 때 직접 계산하고 `eval.cv`도 import. 서버는 eval 패키지에 의존하지 않는다) | 05 | 0013 |
@@ -75,7 +75,7 @@ guardrail/
     preprocess.py  signals.py  rules.py  knn.py  classifier.py  clusters.py  kb.py
     judges/  input_judge.py  output_judge.py
     eval/    score.py  cv.py  run.py  load.py  probe.py  stats.py  splits/v1.json  splits/holdout_views.json
-  prompts/   input_judge.md  output_judge.md  output_judge_baseline.md   (팀 작성, 머리에 version)
+  prompts/   input_judge.md  output_judge.md  output_judge_baseline.md   (팀 작성, id·version 머리말)
   configs/   default.yaml  baseline.yaml  ablation/*.yaml
   tests/
 ```
@@ -85,17 +85,17 @@ guardrail/
 | 기존 | 처리 | 슬라이스 |
 |---|---|---|
 | `config.py` | 고쳐 씀. YAML 로드·`overrides`·`${ENV}` 치환·`config_hash`·`load_prompt`는 두고, 설정 모델을 §4.4로 바꾼다(`stages`·`policy`·`thresholds`·`tutor`·`service_log`·`faults` 삭제) | S1.1 |
-| `llm.py` | 고쳐 씀. 역할 2개, AIMD 삭제(고정 세마포어), 시도 2회(재시도 1), 대기는 요청 마감 안에서만, `Retry-After`가 남은 시간을 넘으면 바로 실패, GR-10 파라미터, 기동 시험 호출, `OPENAI_*` 환경변수, `slot()` 유지, `faults`·`FAKE_OK` 삭제 | S1.3 |
-| `preprocess.py` | 고쳐 씀. `normalize`(정규화본: 보이지 않는 문자 제거 → 전각·반각 접기 → 자모 조합, **NFKC 안 씀**)는 그대로 둔다. `skeleton`은 v6 서버 경로에서 쓰지 않아 지우고 `reveal_hidden`·`decode_tags`를 더한다(붙인 뷰 `joined`는 구현하지 않는다. 필요하면 ablation으로 추가) | S2.1 |
+| `llm.py` | S1.1에서 삭제(v4 `Guard`·`types`에 묶임), S1.3이 §4.3대로 새로 씀(v4 파일은 git 이력의 참고용). 역할 2개, AIMD 삭제(고정 세마포어), 시도 2회(재시도 1), 대기는 요청 마감 안에서만, `Retry-After`가 남은 시간을 넘으면 바로 실패, GR-10 파라미터, 기동 시험 호출, `OPENAI_*` 환경변수, `slot()` 유지, `faults`·`FAKE_OK` 삭제 | S1.3 |
+| `preprocess.py` | 고쳐 씀. `normalize`(정규화본: 보이지 않는 문자 제거 → 전각·반각 접기 → 자모 조합, **NFKC 안 씀**)는 그대로 둔다. `skeleton`은 v6 서버 경로에서 쓰지 않아 지우고 `reveal_hidden`·`decode_tags`·`strip_tags`(태그 문자 U+E0000–E007F만 지움, 자모 조합 없음. 저신호 뷰)를 더한다(붙인 뷰 `joined`는 구현하지 않는다. 필요하면 ablation으로 추가) | S2.1 |
 | `pipeline.py`, `trace.py`, `types.py` | 삭제. 튜터 래퍼(`Session`·`Chunk`·`Verdict`·`StageResult`·`TutorAdapter`)와 원문 trace는 v6에 없다. trace는 로그 규칙(GR-12)과 충돌 | S1.1 |
 | `eval/mock_tutor.py` | 삭제. `kb.py`의 BM25는 이 파일이 아니라 `scripts/r13/common.py`의 측정 변형(토큰화 = `scoring.normalize`식: NFKC·소문자·공백·문장부호 제거 뒤 문자 2-gram)을 옮긴다(ADR-0010 v6). 조각은 `common.kb_chunks`를 그대로 옮긴다. 섹션 텍스트(md + 붙은 CSV)를 `## `로 시작하는 줄 앞에서 자른다(`re.split(r"\n(?=## )")`). 코드 블록 안의 `## ` 줄에서도 자른다(PR-02-01에 3곳). 각 조각은 자기 `## ` 소제목 줄을 포함하고, 첫 `## ` 앞의 `# 제목` 머리말은 따로 한 조각이 된다. 조각마다 문서 제목을 덧붙이지 않는다. CSV는 섹션 끝에 붙어 마지막 조각에 들어간다. 코드 블록을 자르지 않는 변형은 다시 재야 하는 ablation이다. 이 NFKC는 BM25 토큰 안에서만 쓴다 | S1.1(BM25 이식은 S2.2) |
 | `eval/build_grounding.py`, `metrics.py`, `datasets.py`, `run.py` | 삭제(v4 데이터·지표). `run.py`는 S2.9가 새로 쓴다 | S1.1 |
 | `eval/stats.py` | `wilson`만 남긴다. 묶음 부트스트랩은 S2.9가 더한다 | S1.1 |
-| `tests/` | `test_preprocess.py` 유지·확장(골격 뷰 테스트는 S2.1이 지움), `test_config.py`·`test_llm.py` 다시 씀, `fakes.py`는 `FakeLLM`·`FakeClock`만, 나머지 v4 테스트 삭제 | S1.1·S1.3·S2.1 |
+| `tests/` | `test_preprocess.py` 유지·확장(골격 뷰 테스트는 S2.1이 지움), `test_config.py`는 S1.1이 다시 씀. `test_llm.py`·`fakes.py`는 S1.1이 지우고 S1.3이 새로 씀(`fakes.py`는 `FakeLLM`·`FakeClock`), 나머지 v4 테스트 삭제 | S1.1·S1.3·S2.1 |
 | `configs/unguarded.yaml`, `prompts/attack_judge.md`, `resources/`, `data/seed/`, `results/`(v4) | 삭제(git 이력에 남음). v4 스모크 세트는 쓰지 않는다(PRD §8) | S1.1 |
 
-- SPEC은 `/tutor`·`/guard`를 한 프로세스에 두라고 요구하지 않는다. 다만 각 계정의 제출은 **그 계정 런박스의** `/tutor`·`/guard` 주소여야 한다(SPEC §7). 그래서 모든 제출(C1 상수, C2 v1, 최종)에는 같은 런박스의 `/tutor`가 있어야 한다. 시작용 server.py는 둘을 한 앱에 둔다. 같은 프로세스로 둘지는 팀 선택(PRD §9 D4, 리더 결정). 가드는 APIRouter로 만들어 어느 쪽이든 붙는다. API 키는 어느 쪽이든 팀 키 하나라(SPEC §7.1) 한 프로세스를 함께 쓰면 전역 게이트가 중요하다. 가드는 `router`(FastAPI `APIRouter`)와 독립 실행용 `create_app()`을 함께 낸다. `create_app()`은 `/guard` 옆에 시작용 `/tutor`(`competition/server.py`의 것 또는 팀 라우터)를 함께 붙이고, 시작용 server.py처럼 `TEAM_TOKEN` Bearer 검사를 앱 수준 의존성으로 걸어 `/tutor`에도 같은 401을 적용한다. 팀 서버가 준비되기 전의 제출은 `create_app()`으로 하고, `tutor_url`은 이 런박스의 `…/proxy/8000/tutor`다. 포트는 8080을 피한다(VSCode가 씀, SPEC §7).
-- 판정 내부 값(`Judgement`)은 하네스만 받는다. 서버는 그것을 직렬화한 응답만 내고 로그에 남기지 않는다.
+- SPEC은 `/tutor`·`/guard`를 한 프로세스에 두라고 요구하지 않는다. 다만 각 계정의 제출은 **그 계정 런박스의** `/tutor`·`/guard` 주소여야 한다(SPEC §7). 그래서 모든 제출(C1 상수, C2 v1, 최종)에는 같은 런박스의 `/tutor`가 있어야 한다. 시작용 server.py는 둘을 한 앱에 둔다. 같은 프로세스로 둘지는 팀 선택(PRD §9 T4, 리더 결정). 가드는 APIRouter로 만들어 어느 쪽이든 붙는다. API 키는 어느 쪽이든 팀 키 하나라(SPEC §7.1) 한 프로세스를 함께 쓰면 전역 게이트가 중요하다. 가드는 `router`(FastAPI `APIRouter`)와 독립 실행용 `create_app()`을 함께 낸다. `create_app()`은 `/guard` 옆에 시작용 `/tutor`(`competition/server.py`의 것 또는 팀 라우터)를 함께 붙이고, 시작용 server.py처럼 `TEAM_TOKEN` Bearer 검사를 앱 수준 의존성으로 걸어 `/tutor`에도 같은 401을 적용한다. 팀 서버가 준비되기 전의 제출은 `create_app()`으로 하고, `tutor_url`은 이 런박스의 `…/proxy/8000/tutor`다. 포트는 8080을 피한다(VSCode가 씀, SPEC §7).
+- 서버 계약은 하나다: `Guard.judge(req) -> Judgement`(S1.2의 `ConstantGuard`도 같음). 서버는 `judgement.response.to_json(block)`만 내고, 나머지 필드는 하네스만 쓴다. 로그에 남기지 않는다.
 
 ## 4. 공통 계약
 
@@ -131,7 +131,7 @@ class GuardResponse:
     def to_json(self, block: frozenset[Category]) -> dict   # input.decision = decision_of(category, block), output.category = category
 
 @dataclass(frozen=True)
-class Signals:                   # signals.py
+class Signals:                   # signals.py(S1.2가 dataclass를 먼저 둠)
     low_signal: bool;  refusal: bool;  hidden_tags: bool
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ class Hit:  section_id: str;  text: str;  score: float          # kb.py
 class LabeledRow:  id: str;  text: str;  category: Category     # data.py. text = 마지막 학습자 발화의 정규화본
 
 @dataclass(frozen=True)
-class Judgement:                 # guard.py. 하네스 전용, 서버는 로그에 남기지 않는다
+class Judgement:                 # guard.py(S1.2가 dataclass를 먼저 둠). 서버는 .response만 직렬화, 로그에 남기지 않는다
     response: GuardResponse
     input_source: Literal["low_signal", "nano", "third_call", "fallback", "default"]
     output_tier: Literal[1, 2, 3, 4] | None                      # GR-07 표의 ①–④
@@ -164,7 +164,7 @@ class Judgement:                 # guard.py. 하네스 전용, 서버는 로그�
 - `literal_rule`은 점수 차를 인자로 받는다: `literal_rule(answer_raw, hits, margin, kb, cfg)`. `margin = KbIndex.margin(query)`이고 `margin < cfg.output.rule_min_margin`(기본 3.5)이면 `None`이다.
 - `rules.py`는 런타임에 `competition/grader`를 import하지 않는다. `scoring.normalize` 4줄 함수를 복사해 두고, 단위 테스트가 `scoring.normalize`와 출력이 같은지 대조한다(provenance 기록).
 - 응답 직렬화는 `GuardResponse.to_json(block)`(block = 설정 `block_categories`) 하나다. `has_candidate`면 `output`을 반드시 넣는다(GR-01).
-- 뷰(GR-02): 정규화본 = `normalize()`(NFKC 안 씀, LLM·kNN·LR용). 신호별 뷰는 측정한 뷰 그대로다. 거절 정규식 = 후보 답변 원문에서 인용(“” "" ‘’ '' 「」 『』)·백틱·코드 블록을 뺀 것(튜터 거절 36/36, 순응 답변 오감지 0/19, R13-A §6.4) / 숫자·리터럴 = 원문 / 저신호 = 조합 전 텍스트(태그 문자만 지운 원문). 붙인 뷰 = `joined(정규화본)`(한 음절짜리 한글 토큰이 공백 하나를 사이에 두고 2개 이상 이어진 구간의 공백만 지움, "광 고" → "광고")는 **구현하지 않는다**(필요하면 ablation으로 추가). 어떤 기본 신호도 읽지 않고 토글도 없다(거절 정규식에 걸면 "알려 줄 수 없어요"가 붙어 거절 33/36). NFKC는 `rules.py`의 숫자·리터럴 비교(양쪽 `scoring.normalize`)와 BM25 토큰에서만 쓴다.
+- 뷰(GR-02): 정규화본 = `normalize()`(NFKC 안 씀, LLM·kNN·LR용). 신호별 뷰는 측정한 뷰 그대로다. 거절 정규식 = 후보 답변 원문에서 인용(“” "" ‘’ '' 「」 『』)·백틱·코드 블록을 뺀 것(튜터 거절 36/36, 순응 답변 오감지 0/19, R13-A §6.4) / 숫자·리터럴 = 원문 / 저신호 = 조합 전 텍스트(`strip_tags(원문)`: 태그 문자만 지운 원문). 붙인 뷰 = `joined(정규화본)`(한 음절짜리 한글 토큰이 공백 하나를 사이에 두고 2개 이상 이어진 구간의 공백만 지움, "광 고" → "광고")는 **구현하지 않는다**(필요하면 ablation으로 추가). 어떤 기본 신호도 읽지 않고 토글도 없다(거절 정규식에 걸면 "알려 줄 수 없어요"가 붙어 거절 33/36). NFKC는 `rules.py`의 숫자·리터럴 비교(양쪽 `scoring.normalize`)와 BM25 토큰에서만 쓴다.
 
 ### 4.2 판정 흐름 (`guard.py`)
 
@@ -175,14 +175,14 @@ class Guard:
               llm: LLM | None = None) -> "Guard"
         # 기동 때 KB 색인·kNN 색인·LR 학습(합계 ≤30초). rows=None이면 공개 400행.
         # 하네스는 폴드마다 평가 묶음을 뺀 rows를 넘긴다(ADR-0013). 만든 뒤 색인은 바뀌지 않는다
-    async def judge(self, req: GuardRequest) -> Judgement     # 예외를 밖으로 내지 않는다(GR-09)
-    async def classify(self, messages: Sequence[Message]) -> Category   # judge의 입력 부분. /tutor 제안(PRD §9 D1)
+    async def judge(self, req: GuardRequest) -> Judgement     # 예외를 밖으로 내지 않는다(GR-09). 서버는 .response만 직렬화(S1.2 ConstantGuard와 같은 계약)
+    async def classify(self, messages: Sequence[Message]) -> Category   # judge의 입력 부분. /tutor 제안(PRD §9 T1)
 ```
 
 `judge()` 순서(요청 마감 = 시작 + `budget_s`):
 1. ① 뷰를 만든다. 대상 = 마지막 `user` 메시지. 창 = 첫 학습자 발화 + 마지막 메시지 `input.window_last`개(첫 학습자 발화가 이미 마지막 `window_last`개 안에 있으면 중복해서 넣지 않는다).
-2. ② 신호. `low_signal_direct`가 켜졌고 저신호면 범주는 `low_signal_input`, 입력 nano를 부르지 않는다. 저신호 검사는 **자모 조합 전** 텍스트(태그 문자만 지운 것)에 건다. "ㅋㅋㅠㅠ"가 음절로 조합되지 않게 하기 위해서다.
-3. ③ kNN 예시·다수 범주, LR 예측. ④ BM25 상위 `kb.top_k`(질의 = 창 안의 학습자 발화 + 후보 답변. 측정한 질의는 모든 user 발화 + 답변(`all_user + "\n" + candidate_answer`)이다. 가드 공개 세트는 메시지가 5개 이하라 창(첫 학습자 발화 + 마지막 6개) 안의 학습자 발화와 같다. 튜터 공개 세트는 최대 11메시지(7개 초과 58행)라 창과 다르지만, 창 질의로 q6를 다시 돌려도 U·G·T 수치와 F1이 같았다).
+2. ② 신호. `low_signal_direct`가 켜졌고 저신호면 범주는 `low_signal_input`, 입력 nano를 부르지 않는다. 저신호 검사는 **자모 조합 전** 텍스트(`preprocess.strip_tags`, 태그 문자만 지운 것)에 건다. "ㅋㅋㅠㅠ"가 음절로 조합되지 않게 하기 위해서다.
+3. ③ kNN 예시·다수 범주, LR 예측. ④ BM25 상위 `kb.top_k`(질의 = 창 안의 학습자 발화 + 후보 답변. 측정한 질의는 모든 user 발화 + 답변(`all_user + "\n" + candidate_answer`)이다. 가드 공개 세트는 메시지가 5개 이하라 창(첫 학습자 발화 + 마지막 6개) 안의 학습자 발화와 같다. 튜터 공개 세트는 최대 11메시지(7개 초과 58행)라 창과 다르지만, 창 질의로 q6를 다시 돌려도(`q6_rule_fp.py --window`) U·G·T 수치와 F1이 같았다([R13-A §6](research/R13-public-set-analysis.md#6-규칙-②-오탐-재측정-santa-4라운드))). 질의의 학습자 발화 부분과 kNN·LR 입력 텍스트는 `retrieval.max_query_chars`(기본 4000자, 공개 세트 학습자 발화는 최대 448자라 측정값에 영향 없음)에서 자른다(뒤쪽 = 최근 발화를 남김).
 4. ⑤·⑥을 태스크로 띄우고 마감까지 기다린다. ⑥은 후보 답변이 비어 있지 않으면 부른다(`nano_tier3: false`이고 `output.call_nano_when_unused: false`면 건너뜀. 기본 true라 측정 때는 늘 부른다). `output.mode: v6`이면 `output_judge.md`로 부르고 그 값은 ③(토글 `nano_tier3`가 켜졌을 때만)과 S3.1 정밀도 기록에 쓴다. `output.mode: baseline`이면 `output_judge_baseline.md`(reason → grounded → safe)로 부르고 그 값을 grounded·safe에 바로 쓴다(`unsupported=[]`).
 5. ⑦–⑨ `decide.py`. 마감을 넘기면 끝난 결과 + GR-09 기본값으로 바로 응답하고 남은 태스크는 취소한다.
 
@@ -208,7 +208,7 @@ class LLM:
     async def probe(self) -> Mapping[str, ErrorCode | None]              # 기동 때. 파라미터마다 따로 시험, 거절된 것만 끈다(self.params). 결과는 오류 코드로만 기록
     async def complete(self, role: Role, messages: list[dict], schema: type[BaseModel], *,
                        deadline: float) -> LLMResult                     # deadline = 요청 마감(monotonic)
-    def slot(self) -> AsyncContextManager[None]                          # 튜터가 같은 게이트를 쓰는 입구(PRD §9 D4)
+    def slot(self) -> AsyncContextManager[None]                          # 튜터가 같은 게이트를 쓰는 입구(PRD §9 T4)
     calls: Counter[Role];  max_calls: int | None                         # 하네스 예산(넘으면 error="budget", 호출 안 함)
 ```
 
@@ -227,8 +227,9 @@ class LLM:
 ### 4.4 설정 (`configs/*.yaml`)
 
 ```yaml
-version: "6.0.0"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 프롬프트 version도 든다
+version: "6.0.0"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
+prompts: {}                        # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.6·S2.7이 input_judge·output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
 block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, off_topic]   # 범주 → decision 표(ADR-0012)
 llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다
@@ -254,12 +255,13 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   embedding: false                 # GR-03·GR-05 임베딩, P2
 input:
   window_last: 6
-  max_chars: 2000                  # 메시지 하나를 LLM에 넣는 상한(긴 이력 대비)
+  max_chars: 2000                  # 메시지 하나를 LLM에 넣는 상한(판정 대상 <target>에도 적용, 긴 이력 대비)
   knn: {analyzer: char_wb, ngram: [1, 3], min_examples: 4, max_examples: 8, per_category: 2}
   knn_vote_k: 7                    # kNN 다수결 이웃 수(실패 기본값·3번째 호출)
   lr: {analyzer: char_wb, ngram: [1, 3], C: 1.0}
   oom_snippet_chars: 400
 kb: {top_k: 3, ngram: 2, k1: 1.2, b: 0.75}
+retrieval: {max_query_chars: 4000}   # BM25 질의·kNN·LR 입력 텍스트 상한(긴 이력 대비, 뒤쪽을 남김)
 output:
   mode: v6                         # v6 | baseline(출력 nano 베이스라인 프롬프트 → grounded·safe 바로, unsupported=[])
   failure_default: grounded        # grounded(true/[]) | ungrounded(false/[]). 토글 아님. S3.1이 정한다(PRD GR-07·GR-09)
@@ -336,15 +338,15 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 
 | ID | 슬라이스 | GR / ADR | 우선 | 예상 | 모델 | 선행 | 수용 기준(요지) |
 |---|---|---|---|---|---|---|---|
-| **S1.1** | v4 코드 정리·의존성·설정 v6 | 11·14 | P0 | 3h | Sonnet | — | §3 삭제 목록 반영(`mock_tutor.py` 포함), `types.py` 삭제에 맞춰 `llm.py`·`tests/fakes.py`·`test_llm.py`·`test_config.py`는 import만 고침(`Role`은 `llm.py`로, 동작 변경은 S1.3), `default.yaml`·`baseline.yaml` 로드, 토글 검증 테스트, CI green |
-| **S1.2** | 서버 골격·스키마(인증·200 보장·로그 규칙, 상수 판정) | 01·09·12 / 0009 | P0 | 5h | Sonnet + 보안 리뷰 | S1.1 | 퍼징·필드 누락에서 형식 오류 0·422 0·3xx 0·본문 반사 0(오류·기본값 경로와 `input` 객체. `unsupported`는 후보 답변의 원문 구간이라 예외), 인증 실패 401(`/guard`와 `create_app()`의 `/tutor` 둘 다), 스키마 대조, 로그 grep 0건(GR-01·12) |
-| **S1.3** | LLM 게이트 개편 | 10 / 0011 | P0 | 4h | Sonnet | S1.1 | §4.3 규칙 테스트(재시도 1·마감·Retry-After·게이트·파라미터·probe), 예외 메시지 미기록 |
-| **S1.4** | 공개 세트 로더·채점 재현·짝 묶음 분할 | 13 / 0006·0013 | P0 | 4h | Sonnet(분할은 Opus 검토) | S1.1 | 상수 응답 점수가 R13 M7과 같음, 같은 저장 응답에서 `score_local.py`와 차 ≤0.005, `splits/v1.json` 커밋(최대 묶음 크기 보고) |
-| **S1.5** | 런박스 배포·상수 응답 첫 제출 | 01·14 / 0009 | P0 | 2h | 본인 | S1.2 | 터널 주소 200 JSON·리다이렉트 없음, 토큰 없는 `/guard`·`/tutor` 요청 401, `submission.json`에 커밋 해시, 채점 메시지 기록 |
+| **S1.1** | v4 코드 정리·의존성·설정 v6 | 11·14 | P0 | 3h | Sonnet | — | §3 삭제 목록 반영(`mock_tutor.py` 포함), v4 `llm.py`·`test_llm.py`·`fakes.py`·`unguarded.yaml`도 삭제(S1.3이 LLM 계층을 새로 씀), `config.py`·`test_config.py`를 §4.4 모델로 다시 씀, `default.yaml`·`baseline.yaml` 로드, 토글 검증·`config_hash`(프롬프트 머리말 version) 테스트, 남은 코드로 CI green(커버리지 ≥80%) |
+| **S1.2** | 서버 골격·스키마(인증·200 보장·로그 규칙, 상수 판정) | 01·09·12 / 0009 | P0 | 5h | Sonnet + 보안 리뷰 | S1.1 | `ConstantGuard.judge()` → `Judgement`(서버는 `judgement.response`만 직렬화), `TEAM_TOKEN`은 lifespan에서 읽음(없으면 기동 실패), 퍼징·필드 누락에서 형식 오류 0·422 0·3xx 0·본문 반사 0(오류·기본값 경로와 `input` 객체. `unsupported`는 후보 답변의 원문 구간이라 예외), 인증 실패 401(`/guard`와 `create_app()`의 `/tutor` 둘 다), 스키마 대조, 로그 grep 0건(GR-01·12) |
+| **S1.3** | LLM 게이트 개편 | 10 / 0011 | P0 | 4h | Sonnet | S1.1 | `llm.py`·`tests/test_llm.py`·`tests/fakes.py`(`FakeLLM`·`FakeClock`) 새로 씀(v4 파일은 이력 참고), §4.3 규칙 테스트(재시도 1·마감·Retry-After·게이트·파라미터·probe), 예외 메시지 미기록 |
+| **S1.4** | 공개 세트 로더·채점 재현·짝 묶음 분할 | 13 / 0006·0013 | P0 | 4h | Sonnet(분할은 Opus 검토) | S1.1 | in-process 상수 응답을 `score.py`로 채점한 값이 R13-A Q4와 같음(전부 allow 29.48, 입력 완벽 + 상수 출력 84.48), `splits/v1.json` 커밋(최대 묶음 크기 보고). `score_local.py` 대조는 S1.5 |
+| **S1.5** | 런박스 배포·상수 응답 첫 제출 | 01·14 / 0009 | P0 | 2h | 본인 | S1.2(채점 대조는 S1.4) | 터널 주소 200 JSON·리다이렉트 없음, 토큰 없는 `/guard`·`/tutor` 요청 401, 상수 서버를 `score_local.py --tutor-url --guard-url`(공개 400행, 시작용 튜터 nano 약 200회)로 채점해 `score.py`와 가드 점수 차 ≤0.005, `submission.json`에 커밋 해시, 채점 메시지 기록 |
 | **S1.6** | 런박스 실측(nano 지연·파라미터) | 10 / 0011 | P0 | 2h | 본인(코드 초안은 Sonnet) | S1.3·S1.5 | PRD §11-2-1 표: 파라미터별 수용, json_schema 여부, `max_completion_tokens` 800 대 1200–1600의 `finish_reason=length` 비율, 동시 1·16·64 지연 p50·p95, 호출 ≤200 |
-| **S2.1** | 전처리 v6(숨긴 문자 드러내기) | 02 / 0001 | P0 | 3h | Sonnet | S1.1 | 임의 유니코드 예외 0, KB 코드 블록 정규식 오매칭 0, p95 ≤10ms, 기존 정규화 회귀 유지(GR-02) |
+| **S2.1** | 전처리 v6(숨긴 문자 드러내기) | 02 / 0001 | P0 | 3h | Sonnet | S1.1 | 임의 유니코드 예외 0, `strip_tags`(태그 문자만 지움, 조합 없음), p95 ≤10ms, 기존 정규화 회귀 유지(GR-02. KB 코드 블록 오매칭 0은 S2.3) |
 | **S2.2** | KB 색인·검색 | 03 / 0010 | P0 | 4h | Sonnet | S1.4·S2.1 | 튜터 `evidence` recall@1·@3 보고, block이 아닌 가드 후보 67행 정답 섹션 1위 ≥64/67·3위 ≥66/67, 색인 시간·메모리, 검색 p95 ≤20ms |
-| **S2.3** | 결정적 신호(저신호·거절·숨긴 태그) | 06·08 / 0014 | P0 | 4h | Opus | S2.1 | 저신호 400행 정밀도 100%, 거절 정규식 튜터 거절 36/36(표본 안 값)·순응 오탐 보고, LLM 없이 같은 값(GR-06) |
+| **S2.3** | 결정적 신호(저신호·거절·숨긴 태그) | 06·08 / 0014 | P0 | 4h | Opus | S2.1 | 저신호 400행 정밀도 100%, 거절 정규식 튜터 거절 36/36(표본 안 값)·순응 오탐 보고, LLM 없이 같은 값(GR-06), KB 코드 블록 신호 정규식 오매칭 0(GR-02) |
 | **S2.4** | 숫자·리터럴 규칙 ② | 06·07 / 0014·0010 | P0 | 5h | Opus | S2.2 | 정확한 이식 검증: `rule_min_margin` 0에서 U 18/35·G 0/32·T 6/119, 3.5에서 16/35·0/32·3/119, 구간은 `q6_rule_fp.py`의 `merged_pm4_spans` 출력과 같은 스팬이고 구간 F1은 ±0.005 안(BM25 1위 0.651 / 정답 섹션 0.638, R13-A §6). 기본 `rule_min_margin`은 3.5. U·G·T 탐지·오탐을 따로 보고(튜터 0건은 요구하지 않음), 구간 100% 원문 부분 문자열 |
 | **S2.5** | kNN·LR 보조 판정기 | 05·14 / 0013 | P0 | 5h | Sonnet | S1.4·S2.1 | 교차 검증 kNN 다수·LR 각각의 block F1·범주 정확도, 기동 학습 ≤10초, 요청당 p95 ≤20ms, 색인 불변 테스트 |
 | **S2.6** | 입력 판정 nano·프롬프트 v1 | 04 / 0012·0013 | P0 | 8h | Opus + santa | S1.3·S2.5 | `FakeLLM`으로 스키마·재시도·기본값 계약, 파싱 성공률 100%(기본값 포함), 호출 p95 ≤5s |
@@ -352,7 +354,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.8** | 판정 조립: decision·3단·safe·기본값·예산 | 07·08·09·01 / 0012·0014·0009 | P0 | 5h | Opus | S1.2·S2.3·S2.4·S2.6·S2.7 | GR-07 표 ①–④·GR-08·GR-09 표 전 행 테스트, 장애 주입에서 형식 오류 0·30초 안, 서버 연결 |
 | **S2.9** | 평가 하네스 v1·베이스라인 | 13·11 / 0006·0013 | P0 | 6h | Sonnet | S1.4·S2.8 | §4.6 `report.md` 전 항목, 3회 분산, nano 단독·kNN·LR 단독 점수(PRD §11-2-2), 설정만으로 ablation 실행 |
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
-| **S2.11** | 튜터 공유 API(제안 D1·D2·D4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
+| **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
 | **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
 | **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과 |
 | **S3.3** | OOM용 KB 조각 ablation | 04 / 0010 | P1 | 3h | Sonnet | S2.9 | `with_oom_kb_snippet` 순이득(3회 분산 밖에서 > 0이면 켬, 부트스트랩 구간은 보고)과 켜기 결정 |
@@ -371,11 +373,11 @@ Phase 합계: C1 20h · C2 50h(P1 2h) · C3 30h(P0 15h, P1 6h, P2 9h) · C4 11h.
 | GR | 슬라이스 | GR | 슬라이스 |
 |---|---|---|---|
 | GR-01 HTTP 규격·인증 | S1.2, S1.5, S2.8, S4.2 | GR-08 safe 규칙 | S2.3, S2.8 |
-| GR-02 전처리 | S2.1 | GR-09 장애·기본값 | S1.2, S2.8, S2.10 |
+| GR-02 전처리 | S2.1, S2.3 | GR-09 장애·기본값 | S1.2, S2.8, S2.10 |
 | GR-03 KB 색인·검색 | S2.2, S3.5 | GR-10 동시성·지연·게이트 | S1.3, S1.6, S2.10, S2.11, S4.2 |
 | GR-04 입력 범주 판정 | S2.6, S3.2, S3.3 | GR-11 설정·ablation | S1.1, S2.9, S3.6 |
 | GR-05 kNN·LR | S2.5, S2.6, S3.2, S3.4, S3.5 | GR-12 로깅 | S1.2, S4.1 |
-| GR-06 결정적 신호 | S2.3, S2.4 | GR-13 평가 하네스 | S1.4, S2.9, S3.6, S3.7 |
+| GR-06 결정적 신호 | S2.3, S2.4 | GR-13 평가 하네스 | S1.4, S1.5, S2.9, S3.6, S3.7 |
 | GR-07 출력 근거 판정 | S2.4, S2.7, S2.8, S3.1, S3.5 | GR-14 규칙 준수 | S1.1, S1.5, S2.5, S4.1, S4.2 |
 
 PRD §11-2 측정 항목: 1 → S1.6, 2 → S2.9, 3·5 → S3.1, 4 → S3.4.
@@ -386,7 +388,7 @@ PRD §11-2 측정 항목: 1 → S1.6, 2 → S2.9, 3·5 → S3.1, 4 → S3.4.
 
 | 묶음 | 선행 → 후행 |
 |---|---|
-| 기반 | S1.1 → {S1.2, S1.3, S1.4, S2.1} · S1.2 → S1.5 · {S1.3, S1.5} → S1.6 |
+| 기반 | S1.1 → {S1.2, S1.3, S1.4, S2.1} · S1.2 → S1.5(채점 대조 항목은 S1.4 → S1.5) · {S1.3, S1.5} → S1.6 |
 | 입력 | {S1.4, S2.1} → S2.5 → S2.6 ← S1.3 · S2.1 → S2.3 |
 | 출력 | {S1.4, S2.1} → S2.2 → {S2.4, S2.7} · S1.3 → S2.7 |
 | 조립·평가 | {S1.2, S2.3, S2.4, S2.6, S2.7} → S2.8 → {S2.9, S2.10, S2.11} · S1.6 → S2.10 |
@@ -409,7 +411,7 @@ ablation부터 자른다. 자른 토글은 기본값(꺼짐)으로 남기고 abl
 6. S3.1의 규칙 폭·점수 차 탐색 → 기본값(`pm4`, 3.5) 고정, ③ 정밀도와 출력 실패 기본값 측정만
 7. S4.3 → 수치 표 1장 + 로그 코드 설명만
 
-**자르지 않는 것**: 인증·200 보장·로그 규칙(S1.2, S4.1), block 범주 → decision(S2.8), safe 규칙(S2.3·S2.8), 채점 재현(S1.4), 짝 묶음 교차 검증·홀드아웃 3회 상한, 첫 제출과 최종 제출 체크리스트(S1.5·S4.2).
+**자르지 않는 것**: 인증·200 보장·로그 규칙(S1.2, S4.1), block 범주 → decision(S2.8), safe 규칙(S2.3·S2.8), 채점 재현(S1.4·S1.5), 짝 묶음 교차 검증·홀드아웃 3회 상한, 첫 제출과 최종 제출 체크리스트(S1.5·S4.2).
 
 ## 8. 외부 미결 사항과 기본값
 
@@ -422,21 +424,21 @@ ablation부터 자른다. 자른 토글은 기본값(꺼짐)으로 남기고 abl
 | 3. 비공개 거절형 답변의 `grounded`·`unsupported` 라벨 | S2.8 | block 문항은 GR-07 ①로 `true/[]`([추론] 공개 세트 block 후보 19/19가 grounded=true·unsafe, 채점은 문항 단위 `labels.output_label`을 씀, ADR-0014), 그 밖은 ②–④ | 11/19(동결 전) |
 | 4. 프록시의 json_schema strict·verbosity, 동시 처리 한도, `Retry-After` | S1.3·S1.6 | `probe()`가 파라미터별로 거절된 것만 끔, 게이트 64, 재시도 1회 | 11/12 실측으로 먼저 확인 |
 
-R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5에서 직접 확인한다. 3.12 미만이면 의존성 고정을 다시 한다(§12).
+R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5에서 직접 확인한다. 3.12 미만이면 네트워크가 될 때 `uv python install 3.12`, 안 되면 `requires-python`·ruff `target-version`을 런박스 버전으로 낮추고 3.12 전용 문법이 없는지 확인한다. PyPI가 막혀 있으면 미리 받은 wheel 묶음을 복사해 `--no-index --find-links`로 설치한다(C1 S1.5, §12).
 
 ## 9. 팀과 맞닿는 부분 (정보, 결정은 리더)
 
 | PRD §9 | 가드가 내는 것 | 가드가 바라는 것 | 답이 없으면 |
 |---|---|---|---|
-| D1 입력 범주를 `/tutor`가 쓸지 | `Guard.classify(messages)`(S2.11), 범주 → action 표(D3) | 리더 결정 | 가드는 혼자 쓴다 |
-| D2 KB 색인 공유 | `KbIndex`(S2.2) | 리더 결정 | 각자 색인 |
-| D4 한 프로세스(팀 선택)·전역 게이트. 같은 런박스의 `/tutor`는 SPEC §7 요구 | `router`, `create_app()`(`/guard` + 시작용 `/tutor`), `LLM.slot()`(S1.2·S1.3) | 같은 프로세스로 둘지와 팀 서버에 `router`를 붙이는 시점 | C1·C2 제출은 `create_app()`(같은 런박스의 `/tutor` 포함) |
-| D5 토큰·제출 | 제출 체크리스트(S4.2) | `TEAM_TOKEN` 값, 계정별 마지막 제출 순서 | 가드 담당 계정은 관문 제출만 |
-| D6 저장소 공개 범위 | — | 해결(비공개, 11/10) | — |
+| T1 입력 범주를 `/tutor`가 쓸지 | `Guard.classify(messages)`(S2.11), 범주 → action 표(T3) | 리더 결정 | 가드는 혼자 쓴다 |
+| T2 KB 색인 공유 | `KbIndex`(S2.2) | 리더 결정 | 각자 색인 |
+| T4 한 프로세스(팀 선택)·전역 게이트. 같은 런박스의 `/tutor`는 SPEC §7 요구 | `router`, `create_app()`(`/guard` + 시작용 `/tutor`), `LLM.slot()`(S1.2·S1.3) | 같은 프로세스로 둘지와 팀 서버에 `router`를 붙이는 시점 | C1·C2 제출은 `create_app()`(같은 런박스의 `/tutor` 포함) |
+| T5 토큰·제출 | 제출 체크리스트(S4.2) | `TEAM_TOKEN` 값, 계정별 마지막 제출 순서 | 가드 담당 계정은 관문 제출만 |
+| T6 저장소 공개 범위 | — | 해결(비공개, 11/10) | — |
 
 ## 10. 개발 규칙
 
-- **슬라이스 = 브랜치 = PR = 이슈.** 브랜치 `gr/s2.6-input-judge`. PR 본문에 `Closes #이슈`. 저장소가 비공개로 바뀌어(PRD §9 D6) push·PR을 지금부터 한다.
+- **슬라이스 = 브랜치 = PR = 이슈.** 브랜치 `gr/s2.6-input-judge`. PR 본문에 `Closes #이슈`. 저장소가 비공개로 바뀌어(PRD §9 T6) push·PR을 지금부터 한다.
 - **테스트 먼저**(`ecc:tdd-workflow`). 새 모듈은 줄 커버리지 80% 이상(CI는 패키지 전체 80%). 결정적 모듈(전처리·신호·규칙·kNN·KB·decide)은 단위 테스트, LLM 단계는 `FakeLLM`으로 계약을 고정한다.
 - **santa**: `prompts/input_judge.md`·`output_judge.md`(와 베이스라인 변형)는 `ecc:santa-method`로 독립 리뷰어 2명(Opus)이 모두 통과해야 머지한다. 프롬프트를 고칠 때마다 다시 한다.
 - **로그 리뷰**: PR마다 로그·예외 처리 경로를 본다. 본문·판정 값·정규화본·예외 메시지가 로그로 가는 길이 없어야 한다(GR-12). `server.py`·`llm.py`를 건드린 PR은 `ecc:security-reviewer`를 돌린다.
@@ -474,7 +476,7 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 | 로그·예외가 본문을 남겨 실격 | 낮음 | S1.2 미들웨어, PR마다 로그 리뷰, S4.1 grep |
 | 과한 호출로 키 회수 | 낮음 | 하네스 `--max-calls`, 부하 시험은 채점 수준까지, 제출은 관문마다 |
 | **C2 과부하**(3.5일에 50h) | 높음 | Sonnet 병렬 18h, §7 순서, 11/15 밤 관문 못 넘으면 C3 첫날 사용, 동결일 고정 |
-| 런박스 환경(설치 불가, Python <3.12, 세션 2일 제한) | 중간 | S1.5에서 먼저 확인, 재시작 절차를 C1 문서에 적음, 최종 제출 전 재시작(S4.2) |
+| 런박스 환경(설치 불가, Python <3.12, 세션 2일 제한) | 중간 | S1.5에서 먼저 확인(대안: `uv python install 3.12` / `requires-python` 낮춤 / wheel 묶음 복사, §8), `TEAM_TOKEN`은 `[A-Za-z0-9_-]+`(셸 `. .env`로 읽음), 재시작 절차를 C1 문서에 적음, 최종 제출 전 재시작(S4.2) |
 | 팀 서버 통합 지연·충돌 | 중간 | `router`와 `create_app()` 둘 다 유지, 통합은 리더 일정에 맞춤, 동결 뒤에는 붙이는 코드만 |
 | 마지막 제출이 서버 문제로 낮게 나옴 | 낮음 | 11/24 18:00까지 제출, 11/25 아침에는 상태 확인만, 제출 전 부하 시험 |
 

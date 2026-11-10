@@ -6,6 +6,8 @@ name: guardrail-ci
 
 on:
   pull_request:
+    # edited: base 브랜치를 바꾸면 diff 기준이 달라지므로 다시 검사한다
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
     paths: ["guardrail/**", ".github/workflows/guardrail-ci.yml"]
@@ -36,15 +38,18 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # push·수동 실행은 경로 필터를 이미 통과했으므로 항상 전체 검사
+          set -euo pipefail
+          # push는 경로 필터를 통과한 경우만, 수동 실행은 필터 없이 온다. 둘 다 항상 전체 검사.
           if [ "$EVENT" != "pull_request" ]; then
             echo "guardrail=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # diff 실패가 "변경 없음"으로 바뀌지 않도록 출력을 먼저 받는다(set -e로 즉시 실패).
+          # 목록을 파일로 먼저 받아 diff 실패가 "변경 없음"으로 바뀌지 않게 한다.
+          # -z·quotepath=false: 한글 등 비ASCII 파일명이 따옴표로 감싸져 필터를 빠져나가는 것을 막는다.
           # --no-renames: guardrail/ 밖으로 옮긴 파일도 변경으로 잡는다.
-          files=$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA")
-          if grep -qE '^(guardrail/|\.github/workflows/guardrail-ci\.yml$)' <<<"$files"; then
+          list="$RUNNER_TEMP/changed-files"
+          git -c core.quotepath=false diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA" > "$list"
+          if grep -zqE '^(guardrail/|\.github/workflows/guardrail-ci\.yml$)' "$list"; then
             echo "guardrail=true" >> "$GITHUB_OUTPUT"
           else
             echo "guardrail=false" >> "$GITHUB_OUTPUT"
@@ -103,8 +108,8 @@ jobs:
   gate:
     name: guardrail / gate
     needs: [changes, test, secrets]
-    # 취소된 실행(새 커밋에 밀린 경우)은 건너뛴다. 새 실행이 같은 이름으로 다시 보고한다.
-    if: ${{ !cancelled() }}
+    # always(): 취소돼도 실행해 실패로 보고한다. 건너뛴(skipped) job은 필수 검사에서 통과로 취급되기 때문.
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -118,8 +123,12 @@ jobs:
           if [ "$CHANGES" != "success" ]; then
             echo "::error::변경 감지 job이 실패했다"; exit 1
           fi
-          if [ "$GUARDRAIL" != "true" ]; then
+          # 값이 정확히 false일 때만 "변경 없음"으로 통과. 비었거나 이상한 값은 실패.
+          if [ "$GUARDRAIL" = "false" ]; then
             echo "guardrail/ 변경 없음: 통과"; exit 0
+          fi
+          if [ "$GUARDRAIL" != "true" ]; then
+            echo "::error::변경 감지 결과가 비정상이다: '$GUARDRAIL'"; exit 1
           fi
           if [ "$TEST" = "success" ] && [ "$SECRETS" = "success" ]; then
             exit 0

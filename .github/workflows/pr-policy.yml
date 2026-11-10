@@ -26,14 +26,21 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            // AI 도구 자동 서명 문구. 대소문자 무시.
+            // AI 도구 자동 서명 문구. 마크다운 이스케이프(\[)와 공백 변형을 먼저 지운 뒤 본다.
             const PATTERNS = [
-              /generated with \[?claude code/i,
+              /generated\s+with\s+\[?claude\s+code/i,
               // 이름이 Claude인 사람과 구분하려고 Anthropic 주소로만 판단한다
-              /co-authored-by:[^\n]*noreply@anthropic\.com/i,
+              /co-authored-by\s*:[^\n]*noreply@anthropic\.com/i,
             ];
-            const hit = (text) => PATTERNS.some((re) => re.test(text || ""));
-            const pr = context.payload.pull_request;
+            const normalize = (text) => (text || "").replace(/\\/g, "").replace(/[ \t ]+/g, " ");
+            const hit = (text) => PATTERNS.some((re) => re.test(normalize(text)));
+
+            // 재실행 때 이벤트 payload가 수정 전 값일 수 있어 최신 PR 정보를 읽는다
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
 
             // 커밋 메시지는 경고만: 고치려면 히스토리를 다시 써야 해서 막지 않는다
             const commits = await github.paginate(github.rest.pulls.listCommits, {
@@ -62,6 +69,9 @@ jobs:
     name: pr-policy / zizmor
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # 의존성 없는 단일 wheel이라 해시 하나로 고정할 수 있다(PyPI의 manylinux x86_64 wheel)
+      ZIZMOR_REQ: "zizmor==1.31.1 --hash=sha256:58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,12 +79,18 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.12.17"
-      # high 등급만 실패로 처리한다. 낮은 등급은 로컬에서 `uvx zizmor .github`로 본다.
-      # 온라인 감사(가짜 커밋 SHA, 취약 버전 액션)를 쓰려고 토큰을 넘긴다. 읽기 권한뿐이다.
+          enable-cache: false
+      - name: zizmor 설치 (해시 고정)
+        run: |
+          echo "$ZIZMOR_REQ" > "$RUNNER_TEMP/zizmor.txt"
+          uv venv -q "$RUNNER_TEMP/zizmor"
+          uv pip install -q --python "$RUNNER_TEMP/zizmor" --require-hashes --only-binary :all: -r "$RUNNER_TEMP/zizmor.txt"
+      # high 등급만 실패로 처리한다. 낮은 등급은 로컬에서 `uvx zizmor==1.31.1 .github`로 본다.
+      # 온라인 감사(가짜 커밋 SHA, 취약 버전 액션)를 쓰려고 읽기 전용 토큰을 넘긴다.
       - name: workflow·dependabot 보안 검사 (high만 실패)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: uvx --from zizmor==1.31.1 zizmor --min-severity high .github
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --min-severity high .github'
 
   hygiene:
     name: pr-policy / hygiene
@@ -90,12 +106,18 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            // 재실행 시 이벤트 payload가 오래된 값일 수 있어 최신 PR 정보를 다시 읽는다
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-            });
+            // 이 job은 필수 검사가 아니고 실패시키지 않는다. API 오류는 경고로만 남긴다.
+            let pr = context.payload.pull_request;
+            try {
+              // 재실행 때 payload가 오래된 값일 수 있어 최신 PR 정보를 읽는다
+              ({ data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              }));
+            } catch (err) {
+              core.warning(`최신 PR 정보 조회 실패, 이벤트 값으로 진행: ${err.message}`);
+            }
 
             // 담당자가 없으면 작성자를 지정한다. fork PR은 토큰이 읽기 전용이라 경고만 남긴다.
             if ((pr.assignees || []).length === 0) {
@@ -106,13 +128,13 @@ jobs:
                   issue_number: pr.number,
                   assignees: [pr.user.login],
                 });
-                core.info(`담당자를 ${pr.user.login}(으)로 지정했다.`);
+                core.info(`담당자 지정을 요청했다: ${pr.user.login}`);
               } catch (err) {
                 core.warning(`담당자 자동 지정 실패: ${err.message}`);
               }
             }
 
-            // 이슈 연결은 경고만. Closes #N은 main으로 가는 PR에서만 이슈를 자동으로 닫는다.
+            // 이슈 연결은 경고만. Closes #N은 기본 브랜치로 머지될 때만 이슈를 자동으로 닫는다.
             const LINK = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#\d+/i;
             if (!LINK.test(pr.body || "")) {
               core.warning("PR 본문에 연결된 이슈가 없다. `Closes #번호`를 적어 달라.");

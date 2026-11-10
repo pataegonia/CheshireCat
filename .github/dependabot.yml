@@ -8,7 +8,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # 새 릴리스는 7일 지난 뒤에만 올린다(오염된 릴리스 즉시 도입 방지)
+    # 버전 업데이트는 새 릴리스가 7일 지난 뒤에만 올린다(오염된 릴리스 즉시 도입 방지).
+    # 보안 업데이트에는 이 대기가 적용되지 않는다.
     cooldown:
       default-days: 7
     groups:

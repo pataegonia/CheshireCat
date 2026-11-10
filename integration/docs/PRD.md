@@ -81,7 +81,7 @@
 ```
 
 - 1단계 병렬: 검색과 입력 판정은 의존이 없다. `out_of_material` 판정은 입력 판정(가드 함수)이 하고, 검색 점수는 **힌트로만** 넘긴다(BM25는 항상 top-k를 돌려주므로 "검색 결과 없음"이라는 상태는 없다). normal 정답 문항에서 abstain으로 빠지면 action · 인용 · 사실 세 항목을 모두 잃으므로, 검색 점수가 낮아도 action은 표대로 간다.
-- 4단계는 가드 `Guard.judge_output(messages, candidate_answer, category=…)`(가드 interface.md D1-2). 가드 v6 출력 판정의 ①(block 범주)과 ⑨(safe)는 입력 범주에 의존하므로, **1단계에서 받은 범주를 넘겨** 입력 판정이 두 번 돌지 않게 한다(요청 사항, IN-01). 가드 v6는 `unsupported`를 규칙 구간(숫자 · 리터럴, 원문 부분 문자열)으로 내므로, 튜터는 **그 구간이 든 문장을 지운다**. 문장 분리는 튜터 쪽(`sentences` 리스트가 이미 문장 단위).
+- 4단계는 가드 `Guard.judge_output(messages, candidate_answer, category=…)`(가드 interface.md, 9cce438에서 `category` 인자 추가 ✅). `category=None`이면 가드가 `classify`를 다시 부르므로(nano +1) **1단계에서 받은 범주를 반드시 넘긴다**. 가드 v6는 `unsupported`를 규칙 구간(숫자 · 리터럴, 원문 부분 문자열)으로 내므로, 튜터는 **그 구간이 든 문장을 지운다**. 문장 분리는 튜터 쪽(`sentences` 리스트가 이미 문장 단위).
 - 시간 예산: 가드 설정 `budget_s`(v6 기본 약 20s, 설정값 공유) 안에서 1단계 6s → 3단계 10s → 4단계 남은 시간(<3s면 생략하고 abstain 기본값). 값은 `config/`에서 가드와 같은 키를 읽는다.
 
 ### 3-2. 디렉터리 (제안 `[회의]`)
@@ -116,7 +116,7 @@ CheshireCat/
 | I4 | 청크 | 섹션 = 파일 1개, CSV는 "열: 값" 문장 ✅ | 48섹션 3.4~5.3k자, 인용 단위 | 0 | — |
 | I5 | 생성에 넣는 섹션 수 | **top-2** | evidence 1개; top-3이면 ≈7.5k 입력 토큰 | −1~2s | recall@2 ≥ recall@3 − 2%p `[측정]` |
 | I6 | 문맥 창 | 첫 발화 + 최근 6턴 ✅ (가드 v5 기준, v6 창은 확인) | 튜터 ≤11턴(p50 7) | 0 | 7턴 초과 문항 점수 `[측정]` |
-| I7 | citations 개수 | **최대 1개** ✅ | evidence 0 또는 1; 2개면 F1 ≤0.67 | 0 | "애매하면 2개" 전략 recall@2 비교 `[측정]` |
+| I7 | citations 개수 | **기본 최대 1개** ✅, 상한은 설정값(튜터 TD-01 `max_citations` ablation = 2) | evidence 0 또는 1; 2개면 F1 ≤0.67 | 0 | "두 대상 명시 비교" 문항 수 · recall@2 비교 `[측정]` |
 | I8 | 범주→action | 설정 표, 통합 소유 ✅ | 교차표 순수(harmful만 2분) | 0 | harmful 세분 규칙 `[측정]` |
 | I9 | 응답 전 자기 판정 | 생성 직후 `judge_output` → 구간 든 문장 삭제, safe=false면 폐기, 재생성 없음 | SPEC §4; `/guard`는 튜터를 못 막음 | nano +1회 +2.6s | 삭제 후 빈 답변 비율 `[측정]` |
 | I10 | 투기 실행(생성 ∥ 판정) | 안 함 | block 28%에서 호출 낭비(+90/채점) | — | p95 >15s면 켬 `[측정]` |
@@ -134,8 +134,8 @@ class Evidence(BaseModel): sid: str; quote: str
 class Sentence(BaseModel): text: str; kind: Literal["claim","non_claim"]; evidence: list[Evidence]
 class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 # 가드 제공(가드 interface.md): Guard.judge_input(messages) -> InputVerdict{category,…}
-#                              Guard.judge_output(messages, candidate_answer, *, category=None) -> OutputVerdict{grounded, unsupported[], safe}
-#                              (요청) category 인자: 튜터가 1단계에서 받은 범주를 넘겨 가드 v6 ①(block이면 true/[])·⑨(safe)가 입력 판정을 다시 부르지 않게 한다
+#                              Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict{grounded, unsupported[], safe}  ✅ 가드 9cce438
+#                              category를 넘기지 않으면 classify()가 한 번 더 돈다(nano +1) → 튜터는 1단계 범주를 반드시 넘긴다
 #                              (요청) format_material(sections) -> str
 ```
 - 튜터 `generate()`는 `list[Sentence]`를 낸다(튜터 PRD TU-09 형식, `sid` = 섹션 ID).
@@ -170,7 +170,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 1. `Evidence.quote`가 `sid` 섹션 원문의 부분 문자열인지(`scoring.normalize` 기준) — 아니면 그 문장 evidence 제거.
 2. `judge_output.unsupported` 구간이 든 문장 **삭제**. `safe=false` → 전체 폐기 → refuse 템플릿.
 3. 남은 claim 0 → **action은 표 값 유지**(answer/scaffold), `citations` = 검색 1위, `answer` = non_claim 문장 + "이 부분은 자료에서 확인하지 못했어요" 안내. abstain으로 바꾸지 않는다 — 정답이 normal인 문항에서 abstain은 action 0 · 인용 0 · 사실 0 · faithful 1 ≈ 0.25인데, 유지하면 action 1 + 인용 p + 사실 0 + faithful 1 ≥ 0.5.
-4. `citations` = 남은 claim의 `sid` 최다 1개(동률은 검색 순위). 정규식 `^(PY|PR|FIN)-\d{2}-\d{2}$` + 실존 48개.
+4. `citations` = 남은 claim의 `sid`, 상한 `max_citations`(기본 1, 튜터 ablation 2; 동률은 검색 순위). 정규식 `^(PY|PR|FIN)-\d{2}-\d{2}$` + 실존 48개 + 중복 제거.
 5. `answer` = 문장 join, **4,000 유니코드 문자** 절단, 제어 문자 제거, JSON 직렬화 확인(판정 실패 5% 규칙 대비).
 - `answer` · `scaffold`(answer_seeking)는 citations를 **항상 1개** 채운다(남은 claim의 sid, 없으면 검색 1위). faithful 판정 근거가 우리 citations이므로 비워 두면 과목 사실이 전부 근거 없음이 된다.
 - **수용 기준**: quote 검증 100%, citations ⊆ 실존, 인용 F1 `[측정]`.

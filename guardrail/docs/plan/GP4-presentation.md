@@ -1,11 +1,15 @@
+> v4 계획(폐기). v6 기준은 [master-plan v23](../master-plan.md)과 plan/C1–C4.
+
 # GP4 발표 — 세부 플랜
 
 작성 2026-10-30 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/21(토)–11/25(수, 최종 발표)
+상위: [master-plan](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md) · 요구사항: [PRD](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md) · 기간: 11/21(토)–11/25(수, 최종 발표)
+
+> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9·§10의 v22 메모(push·PR은 PRD §9 T6 결정 뒤), [ADR-0009–0011](../adr/README.md)과 ADR-0001·0002·0003·0005·0006의 v5 수정 블록이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. 이 문서 본문의 PRD·master-plan·interface·skills 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
 
 ## 1. 목표와 관문
 
-발표 자체와 형식은 팀과 리더가 정한다. 가드는 **재료만** 넘긴다: 데모, 표·차트, 운영 사양 1쪽, 보고서 가드 절([master-plan §1](../master-plan.md#1-범위), [§9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)).
+발표 자체와 형식은 팀과 리더가 정한다. 가드는 **재료만** 넘긴다: 데모, 표·차트, 운영 사양 1쪽, 보고서 가드 절([master-plan §1](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#1-범위), [§9](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)).
 
 **보이는 변화**
 
@@ -16,14 +20,14 @@
 | 운영 사양 1쪽(현장 적용 재료) | `docs/ops-spec.md` | 11/22 |
 | 보고서 가드 절 | `docs/report-guard.md` | 11/24 |
 
-**관문** ([master-plan §2](../master-plan.md#2-일정과-phase-관문)): 데모 리허설 2회 통과, 수치 출처가 리포트 파일과 일치.
+**관문** ([master-plan §2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#2-일정과-phase-관문)): 데모 리허설 2회 통과, 수치 출처가 리포트 파일과 일치.
 
 | 관문 조건 | 판정 방법 |
 |---|---|
 | 데모 리허설 2회 통과 | S4.1 리허설 체크표 전 항목 통과가 2회 기록됨(11/22, 11/24) |
 | 수치 출처 일치 | `figures --check` 차이 0건 + 보고서 수치 대조를 santa 리뷰어 2명이 모두 PASS |
 
-**이 Phase에서 만드는 지표**: 새로 재는 지표는 없다. GP3 결과(S3.3–S3.6)를 옮기고, 필요하면 `runs/`에서 API 호출 없이 다시 집계만 한다(기법별·존댓말 효과). 예외는 S4.5(P2)를 할 때의 확장 평가 표 1개다. S4.1의 반복 실행은 데모 안정성 확인이라 지표가 아니다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy)). **홀드아웃은 다시 돌리지 않는다**([GR-15](../PRD.md#gr-15-평가-하네스-p0) "홀드아웃 1회 실행").
+**이 Phase에서 만드는 지표**: 새로 재는 지표는 없다. GP3 결과(S3.3–S3.6)를 옮기고, 필요하면 `runs/`에서 API 호출 없이 다시 집계만 한다(기법별·존댓말 효과). 예외는 S4.5(P2)를 할 때의 확장 평가 표 1개다. S4.1의 반복 실행은 데모 안정성 확인이라 지표가 아니다([master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy)). **홀드아웃은 다시 돌리지 않는다**([GR-15](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-15-평가-하네스-p0) "홀드아웃 1회 실행").
 
 ## 2. 용량 점검
 
@@ -72,17 +76,17 @@
 **만들거나 바꿀 파일**
 - `src/guardrail/eval/demo.py`: 시나리오 로드, 실시간 실행·녹화·재생, 화면 출력(약 150줄)
 - `data/seed/demo.yaml`: 시나리오 목록(항목 id, 제목, 돌릴 설정)
-- `data/dev/demo_items.jsonl`: 고른 항목 4–5개를 §4.6 형식 그대로 모은 로컬 전용 파일. `data/dev/*` gitignore 규칙에 걸려 커밋되지 않는다(공격·위기 원문 미커밋, [master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)). `demo.yaml`의 `data`가 이 파일을 가리키고, 실시간과 `--replay` 모두 학생 메시지를 여기서 읽는다. 발표 장비에는 git이 아니라 직접 복사하고, 발표 뒤 지운다
-- `configs/demo-outage.yaml`: `default.yaml` 복사본에 `faults: {input_judge: timeout, exchange_judge: timeout, jev: timeout}`만 더한 판정 장애 재현 설정([master-plan §4.3](../master-plan.md#43-llm-호출-llmpy) 평가 전용 장애 주입, `mode: eval`, `stages.crisis: true`). 두 판정은 호출 없이 timeout을 돌려받고 생성만 실제로 부른다. 마감을 줄여 장애를 내지 않는다. ⑤가 실패한 상태라 이 설정의 응답에는 모두 연락처 줄이 붙고(⑤ 전에 끝나는 ③ 규칙 차단만 빼고), 위기 템플릿은 ② 위기 어휘가 잡은 항목에만 나온다([master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy))
-- `results/demo-replay.jsonl`: 녹화본. 화면에 나간 문자열만 담는다. 커밋 전 원문 확인(작업 순서 5)을 마친 것만 커밋한다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy) results 예외)
+- `data/dev/demo_items.jsonl`: 고른 항목 4–5개를 §4.6 형식 그대로 모은 로컬 전용 파일. `data/dev/*` gitignore 규칙에 걸려 커밋되지 않는다(공격·위기 원문 미커밋, [master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)). `demo.yaml`의 `data`가 이 파일을 가리키고, 실시간과 `--replay` 모두 학생 메시지를 여기서 읽는다. 발표 장비에는 git이 아니라 직접 복사하고, 발표 뒤 지운다
+- `configs/demo-outage.yaml`: `default.yaml` 복사본에 `faults: {input_judge: timeout, exchange_judge: timeout, jev: timeout}`만 더한 판정 장애 재현 설정([master-plan §4.3](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#43-llm-호출-llmpy) 평가 전용 장애 주입, `mode: eval`, `stages.crisis: true`). 두 판정은 호출 없이 timeout을 돌려받고 생성만 실제로 부른다. 마감을 줄여 장애를 내지 않는다. ⑤가 실패한 상태라 이 설정의 응답에는 모두 연락처 줄이 붙고(⑤ 전에 끝나는 ③ 규칙 차단만 빼고), 위기 템플릿은 ② 위기 어휘가 잡은 항목에만 나온다([master-plan §4.2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#42-공개-api-pipelinepy))
+- `results/demo-replay.jsonl`: 녹화본. 화면에 나간 문자열만 담는다. 커밋 전 원문 확인(작업 순서 5)을 마친 것만 커밋한다([master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy) results 예외)
 - `tests/test_demo.py`
 
 **작업 순서**
 - [ ] 1. Sonnet 서브에이전트가 GP3 개발 세트 실행(`runs/`)에서 아래 선택 기준에 맞는 항목을 시나리오마다 3개씩 뽑는다. 후보 항목만 모아 고정 파일 `data/dev/demo_candidates.jsonl`(gitignore)로 두고, d3 후보 3개만 따로 `data/dev/demo_candidates_d3.jsonl`(gitignore, 장애 안정성 확인용)로 둔다. 최종 선택은 본인. 고른 항목은 `data/dev/demo_items.jsonl`로 모은다.
-- [ ] 2. **데모 안정성 확인(지표 아님, [master-plan §4.7](../master-plan.md#47-실행-evalrunpy))**: 후보 파일을 `unguarded`·`default`로, d3 후보 파일을 `demo-outage`로 `--repeat 3` 돌려 세 번 모두 같은 결과(켬의 action, 끔의 공격 성공 여부, 장애의 위기 템플릿·T1 연락처)인지 본다. 명령은 아래 검증 절이고, 실행마다 `--estimate`로 추정을 먼저 본 뒤 그 이상을 `--max-calls`에 준다(master-plan §4.7). 결과는 `runs/`에만 두고 `results/`로 복사하지 않으며, 어떤 표·보고서 수치에도 쓰지 않는다(이름에 `demo-stability`). 예상치(§4.7 추정 공식 × 3회 × 1.1, 예산용): 후보는 단일 턴 12건(d1 공격·d2 근거·d3 위기·d4 위험해 보이는 정상 각 3) + 멀티턴 3건(d5, 최대 5턴). 무방비 약 110, 가드 켬 약 360, 장애 d3 약 20(두 판정은 `faults`라 호출 0), 합 약 490.
+- [ ] 2. **데모 안정성 확인(지표 아님, [master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy))**: 후보 파일을 `unguarded`·`default`로, d3 후보 파일을 `demo-outage`로 `--repeat 3` 돌려 세 번 모두 같은 결과(켬의 action, 끔의 공격 성공 여부, 장애의 위기 템플릿·T1 연락처)인지 본다. 명령은 아래 검증 절이고, 실행마다 `--estimate`로 추정을 먼저 본 뒤 그 이상을 `--max-calls`에 준다(master-plan §4.7). 결과는 `runs/`에만 두고 `results/`로 복사하지 않으며, 어떤 표·보고서 수치에도 쓰지 않는다(이름에 `demo-stability`). 예상치(§4.7 추정 공식 × 3회 × 1.1, 예산용): 후보는 단일 턴 12건(d1 공격·d2 근거·d3 위기·d4 위험해 보이는 정상 각 3) + 멀티턴 3건(d5, 최대 5턴). 무방비 약 110, 가드 켬 약 360, 장애 d3 약 20(두 판정은 `faults`라 호출 0), 합 약 490.
 - [ ] 3. 테스트 8개를 먼저 쓴다(아래 목록).
 - [ ] 4. `demo.py`, `demo.yaml`, `demo-outage.yaml`을 만든다.
-- [ ] 5. **녹화본 커밋 전 원문 확인**([master-plan §4.7](../master-plan.md#47-실행-evalrunpy)). `--record runs/demo/replay.jsonl`로 `runs/`(gitignore)에 먼저 녹화한다(`--estimate` 뒤 `--max-calls <추정 이상>`). ① 키·base URL 검사(아래 검증 절)가 0건이다. ② 모든 `displayed_output`을 눈으로 읽어 유해 세부(특히 무방비 d1·d3 출력)와 PII가 0건이다. ③ 둘 다 통과하면 `results/demo-replay.jsonl`로 복사해 커밋하고, 확인한 날짜와 결과를 S4.1 이슈에 적는다. 하나라도 걸리면 그 항목을 바꾸고 다시 녹화한다.
+- [ ] 5. **녹화본 커밋 전 원문 확인**([master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy)). `--record runs/demo/replay.jsonl`로 `runs/`(gitignore)에 먼저 녹화한다(`--estimate` 뒤 `--max-calls <추정 이상>`). ① 키·base URL 검사(아래 검증 절)가 0건이다. ② 모든 `displayed_output`을 눈으로 읽어 유해 세부(특히 무방비 d1·d3 출력)와 PII가 0건이다. ③ 둘 다 통과하면 `results/demo-replay.jsonl`로 복사해 커밋하고, 확인한 날짜와 결과를 S4.1 이슈에 적는다. 하나라도 걸리면 그 항목을 바꾸고 다시 녹화한다.
 - [ ] 6. 리허설 1(11/22): 실시간 1회 + 녹화본 1회. 체크표를 이슈에 기록한다.
 - [ ] 7. 리허설 2(11/24): 발표 장비·네트워크 조건에서. `data/dev/demo_items.jsonl`을 발표 장비에 먼저 복사한다(git으로 오지 않는다). 체크표를 기록한다.
 - [ ] 8. 발표 당일 오전 점검: `--replay --no-pause --max-calls 0` 1회, 실시간 `--only d4` 1개(`--estimate` 뒤 `--max-calls <추정 이상>`).
@@ -102,7 +106,7 @@
 - 3회 반복 결과가 같은 항목만 쓴다(작업 순서 2, 지표 아님). 데모만을 위해 temperature를 바꾸지 않는다. 평가와 같은 설정이어야 같은 시스템이다.
 - d1의 "공격 성공"은 화면에 보여도 해롭지 않은 것(내부 지시 유출, 역할 탈취)만 고른다. 유해 세부가 나오는 항목은 쓰지 않는다([R8 B3](../research/R8-production-ops-and-evaluation.md) 8번 "유해 세부를 가린 대표 우회").
 - d2는 청크와 비교해 틀린 숫자가 한눈에 보이는 항목. d3은 무방비 출력에 연락처가 없는 항목을 먼저 고른다(코드로 확인).
-- d3은 ② 위기 어휘가 잡는 항목만 쓴다(`runs/` trace의 `crisis` 단계 `reason_code == "crisis_lexicon"`, 코드로 확인). ⑤만 잡는 완곡 표현은 장애 중에 위기 템플릿 없이 기본 응답 + 연락처 줄로만 나온다([master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy)). 그래서 `default.yaml`·`demo-outage.yaml` 모두 `stages.crisis: true`여야 한다(테스트 4).
+- d3은 ② 위기 어휘가 잡는 항목만 쓴다(`runs/` trace의 `crisis` 단계 `reason_code == "crisis_lexicon"`, 코드로 확인). ⑤만 잡는 완곡 표현은 장애 중에 위기 템플릿 없이 기본 응답 + 연락처 줄로만 나온다([master-plan §4.2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#42-공개-api-pipelinepy)). 그래서 `default.yaml`·`demo-outage.yaml` 모두 `stages.crisis: true`여야 한다(테스트 4).
 
 ```yaml
 # data/seed/demo.yaml
@@ -127,20 +131,20 @@ def render(sc: Scenario, shown: list[Shown], width: int = 72) -> str
 def main(argv: list[str] | None = None) -> int
 ```
 
-- 항목 실행은 하네스(S0.7)의 `run_item(guard, item, tutor, session) -> Record`를 그대로 쓴다. `tutor`는 하네스와 같은 어댑터(모의 또는 실제), `session`은 단일 턴이면 시나리오마다 새 `Session()`, d5(멀티턴)면 대화 하나에 같은 것이다. 그래야 화면 문자열이 하네스가 채점한 "사용자에게 보인 출력"과 같다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy)).
-- `render`는 `Shown`만 받는다. `rule_id`·`reason_code`·`confidence`·`category`·`request_id`·단계 이름은 구조적으로 화면에 갈 수 없다([GR-10](../PRD.md#gr-10-거절안내위기-응답-p0) 균일 거절, PRD §6 "점수 비공개"). `run_live`의 `Record`는 `--verify` 요약에만 쓴다.
+- 항목 실행은 하네스(S0.7)의 `run_item(guard, item, tutor, session) -> Record`를 그대로 쓴다. `tutor`는 하네스와 같은 어댑터(모의 또는 실제), `session`은 단일 턴이면 시나리오마다 새 `Session()`, d5(멀티턴)면 대화 하나에 같은 것이다. 그래야 화면 문자열이 하네스가 채점한 "사용자에게 보인 출력"과 같다([master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy)).
+- `render`는 `Shown`만 받는다. `rule_id`·`reason_code`·`confidence`·`category`·`request_id`·단계 이름은 구조적으로 화면에 갈 수 없다([GR-10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-10-거절안내위기-응답-p0) 균일 거절, PRD §6 "점수 비공개"). `run_live`의 `Record`는 `--verify` 요약에만 쓴다.
 - 화면 한 칸: `━━ 1/5 자모로 쪼갠 탈옥 ━━` → `학생:` 메시지 → `[가드 끔] (2.1s)` 출력 → `[가드 켬] (2.9s)` 출력. 출력은 72자로 줄바꿈하고 400자를 넘으면 `…(생략)`. 멀티턴은 앞 턴을 한 줄씩 줄여 보인다.
-- 녹화본 한 줄: `{scenario_id, config, displayed_output, latency_ms, policy_version, config_hash, recorded_at}`. 학생 입력은 넣지 않는다(공격·위기 원문 미커밋, [master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)). 화면의 학생 메시지는 `--replay` 때도 `data/dev/demo_items.jsonl`(로컬 전용)에서 읽는다. 이 파일이 없거나 시나리오 항목이 빠져 있으면 시작하지 않는다(종료 2). 학생 메시지 없는 화면으로 발표하지 않게 하려는 것이다.
+- 녹화본 한 줄: `{scenario_id, config, displayed_output, latency_ms, policy_version, config_hash, recorded_at}`. 학생 입력은 넣지 않는다(공격·위기 원문 미커밋, [master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)). 화면의 학생 메시지는 `--replay` 때도 `data/dev/demo_items.jsonl`(로컬 전용)에서 읽는다. 이 파일이 없거나 시나리오 항목이 빠져 있으면 시작하지 않는다(종료 2). 학생 메시지 없는 화면으로 발표하지 않게 하려는 것이다.
 
 | 상황 | 동작 |
 |---|---|
 | `--replay PATH` | API 호출 0회, 키 없이 동작. `--max-calls 0`을 함께 준다. 제목 줄에 "(녹화본)" |
 | 실시간 중 예외 또는 시나리오가 `--timeout-s`(기본 30) 초과 | 그 시나리오만 `--fallback PATH`의 녹화본으로 바꾸고 "(녹화본: 실시간 호출 실패)" 표시 |
-| 호출 상한 도달(`budget`) | GR-14 폴백으로 보이지 않는다. 실시간을 멈추고 남은 시나리오를 `--fallback` 녹화본으로 바꿔 "(녹화본: 호출 상한)" 표시. `--record`·`--verify`는 종료 3([master-plan §4.7](../master-plan.md#47-실행-evalrunpy) 예산 소진 중단) |
+| 호출 상한 도달(`budget`) | GR-14 폴백으로 보이지 않는다. 실시간을 멈추고 남은 시나리오를 `--fallback` 녹화본으로 바꿔 "(녹화본: 호출 상한)" 표시. `--record`·`--verify`는 종료 3([master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy) 예산 소진 중단) |
 | 가드 안의 판정 장애 폴백(GR-14) | 그대로 보여 준다. 시스템 동작이지 데모 실패가 아니다 |
-| 그 외 옵션 | `--only d1,d3`, `--no-pause`(기본은 Enter로 다음), `--verify`(리허설 전용: 끝에 시나리오별 켬·장애 결과가 항목 `expected`와 맞는지만 출력. kind별 필드는 [master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)대로 공격·정상 `action`, 위기 `crisis_tier`(+ 위기 템플릿), 근거 `violation`(+ R1·R3). 코드 비교라 attack_judge를 부르지 않는다), `--estimate`·`--max-calls N`(`run.py`와 같은 규칙: 없거나 추정보다 작으면 시작하지 않는다, master-plan §4.7) |
+| 그 외 옵션 | `--only d1,d3`, `--no-pause`(기본은 Enter로 다음), `--verify`(리허설 전용: 끝에 시나리오별 켬·장애 결과가 항목 `expected`와 맞는지만 출력. kind별 필드는 [master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)대로 공격·정상 `action`, 위기 `crisis_tier`(+ 위기 템플릿), 근거 `violation`(+ R1·R3). 코드 비교라 attack_judge를 부르지 않는다), `--estimate`·`--max-calls N`(`run.py`와 같은 규칙: 없거나 추정보다 작으면 시작하지 않는다, master-plan §4.7) |
 
-`demo`의 옵션은 모듈 전용 CLI라 S4.1이 정하고 하네스 계약을 바꾸지 않는다(`figures`도 같다, S4.2). 하네스와 맞추는 것은 `--estimate`·`--max-calls` 규칙뿐이다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy)).
+`demo`의 옵션은 모듈 전용 CLI라 S4.1이 정하고 하네스 계약을 바꾸지 않는다(`figures`도 같다, S4.2). 하네스와 맞추는 것은 `--estimate`·`--max-calls` 규칙뿐이다([master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy)).
 
 실시간 1회 실행의 예상치(예산용, 명령에는 `--estimate` 값을 쓴다): 학생 턴은 d1–d4 4개 + d5 최대 5개. 무방비는 생성만, 가드 켬은 ⑤·생성·⑧과 재생성 상한, 장애 d3은 생성과 재생성 상한만(두 판정은 `faults`) → × 1.1 약 50. 데모는 attack_judge를 부르지 않는다.
 
@@ -151,7 +155,7 @@ S4.1 합계(예산용): 안정성 확인 약 490 + 실시간 전체 실행 3회(
 테스트(`tests/test_demo.py`, FakeLLM):
 1. `rule_id="RULE_SECRET"`, `reason_code="REASON_SECRET"`, `confidence=0.987`, `request_id="REQ_SECRET"`인 Verdict로 만든 화면에 그 값과 단계 이름이 없다.
 2. 입력 판정이 refuse면 화면 문구가 `templates.yaml`의 그 범주 거절 문구와 같다.
-3. `demo-outage.yaml`로 만든 Guard(생성은 FakeLLM)에서 ② 위기 어휘가 잡는 위기 항목의 화면은 위기 템플릿이고 `crisis_resources.yaml`의 T1 연락처가 모두 있다. 어휘가 놓치는(⑤만 잡는) 위기 항목과 위기가 아닌 항목(③ 규칙에 걸리지 않는 것)의 화면에도, 통과한 답변이든 기본 응답(⑧ 실패 안내)이든 짧은 연락처 줄이 붙는다([master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy) ⑤ 실패 시 모든 응답).
+3. `demo-outage.yaml`로 만든 Guard(생성은 FakeLLM)에서 ② 위기 어휘가 잡는 위기 항목의 화면은 위기 템플릿이고 `crisis_resources.yaml`의 T1 연락처가 모두 있다. 어휘가 놓치는(⑤만 잡는) 위기 항목과 위기가 아닌 항목(③ 규칙에 걸리지 않는 것)의 화면에도, 통과한 답변이든 기본 응답(⑧ 실패 안내)이든 짧은 연락처 줄이 붙는다([master-plan §4.2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#42-공개-api-pipelinepy) ⑤ 실패 시 모든 응답).
 4. `demo-outage.yaml`과 `default.yaml`의 차이는 `faults: {input_judge: timeout, exchange_judge: timeout, jev: timeout}` 한 키뿐이고(S2.10이 Jev를 켰어도 장애 데모가 실제 Jev를 부르지 않게), 둘 다 `mode: eval`, `stages.crisis: true`다(서비스 모드는 `faults`를 거부한다).
 5. 홀드아웃 경로·`split: holdout`·NC 라이선스 항목이면 `load_scenarios`가 거부한다.
 6. `--replay`는 호출하면 예외를 내는 LLM을 넣어도 끝까지 돌고 녹화본과 같은 화면(학생 메시지는 `demo_items.jsonl`에서)을 낸다. 그 파일이 없으면 종료 2다.
@@ -187,12 +191,12 @@ uv run python -m guardrail.eval.demo --scenarios data/seed/demo.yaml --fallback 
 ```
 
 **수용 기준**
-- [ ] 같은 시나리오를 `unguarded.yaml`과 `default.yaml`로 코드 수정 없이 돌려 차이를 보인다([GG2](../PRD.md#2-목표와-비목표), [GR-12](../PRD.md#gr-12-설정토글무방비-모드-p0) "설정만 바꿔 ... 전후 비교가 돌아간다").
-- [ ] 화면에 판정 점수·규칙·사유 코드·단계 이름 0건, 거절 문구는 템플릿과 같다([GR-10](../PRD.md#gr-10-거절안내위기-응답-p0)).
-- [ ] d3(② 위기 어휘가 잡는 항목, `stages.crisis: true`): 가드 켬과 판정 장애(`demo-outage.yaml`의 `faults`) 모두 위기 템플릿·T1 연락처가 붙는다. 장애 설정에서는 위기가 아닌 응답(③ 규칙 차단 제외)과 어휘가 놓친 위기 응답에도 연락처 줄이 있다(테스트 3, [master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy), [GR-14](../PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2) "장애 중 위기 입력이 위기 템플릿·연락처 없이 응답된 경우 0건", [GR-02](../PRD.md#gr-02-위기-탐지-p0-신설) "판정 API가 꺼진 상태에서도").
+- [ ] 같은 시나리오를 `unguarded.yaml`과 `default.yaml`로 코드 수정 없이 돌려 차이를 보인다([GG2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#2-목표와-비목표), [GR-12](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-12-설정토글무방비-모드-p0) "설정만 바꿔 ... 전후 비교가 돌아간다").
+- [ ] 화면에 판정 점수·규칙·사유 코드·단계 이름 0건, 거절 문구는 템플릿과 같다([GR-10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-10-거절안내위기-응답-p0)).
+- [ ] d3(② 위기 어휘가 잡는 항목, `stages.crisis: true`): 가드 켬과 판정 장애(`demo-outage.yaml`의 `faults`) 모두 위기 템플릿·T1 연락처가 붙는다. 장애 설정에서는 위기가 아닌 응답(③ 규칙 차단 제외)과 어휘가 놓친 위기 응답에도 연락처 줄이 있다(테스트 3, [master-plan §4.2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#42-공개-api-pipelinepy), [GR-14](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2) "장애 중 위기 입력이 위기 템플릿·연락처 없이 응답된 경우 0건", [GR-02](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-02-위기-탐지-p0-신설) "판정 API가 꺼진 상태에서도").
 - [ ] 홀드아웃 항목 0건, NC 라이선스 원문 커밋 0건.
 - [ ] `--replay`는 API 호출 0회로 끝까지 돈다.
-- [ ] `results/demo-replay.jsonl`은 커밋 전 원문 확인(작업 순서 5) 기록이 S4.1 이슈에 있다([master-plan §4.7](../master-plan.md#47-실행-evalrunpy)).
+- [ ] `results/demo-replay.jsonl`은 커밋 전 원문 확인(작업 순서 5) 기록이 S4.1 이슈에 있다([master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy)).
 - [ ] 안정성 확인의 반복 실행 결과는 `runs/`에만 있고 `results/`·표·보고서에 없다(지표 아님).
 - [ ] 리허설 체크표 2회 통과 기록(관문).
 
@@ -219,7 +223,7 @@ uv run python -m guardrail.eval.demo --scenarios data/seed/demo.yaml --fallback 
 - `results/figures/sources.yaml`: 산출물마다 원천 결과 파일. 수치 출처 색인이다
 - `results/figures/<이름>.csv|md|png|svg`: 생성물(표는 `.md`도)
 - `tests/test_figures.py`
-- `pyproject.toml`: dev 그룹에 `matplotlib`([master-plan §4.8](../master-plan.md#48-의존성))
+- `pyproject.toml`: dev 그룹에 `matplotlib`([master-plan §4.8](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#48-의존성))
 
 **작업 순서**
 - [ ] 1. `dataviz` 스킬을 먼저 읽는다(팔레트·표기 규칙).
@@ -238,12 +242,12 @@ uv run python -m guardrail.eval.demo --scenarios data/seed/demo.yaml --fallback 
 | `t1b_by_technique` | 표 | S3.5(없으면 `runs/` 재집계) | 범주 × 기법(master-plan §4.6의 technique 전체: jamo·chosung·fullwidth·zerowidth·digit_insert·yamin·codeswitch·romaja·roundtrip·honorific·roleplay·encoding·indirect·none. 데이터에 있는 값에서 만든다): n, 공격 성공 k, Wilson CI, 무방비 대비 McNemar p(Holm) |
 | `f1_tradeoff` | 차트 | S3.3 스윕(개발 세트) | x 과잉 거절률, y 공격 통과율. `input_block` 격자(master-plan §4.4)의 임계값마다 점, 운영점 표시, 무방비 점, 합격선 5%·5% 보조선. 제목에 "개발 세트" |
 | `t2_ablation` | 표 | S3.4 | 전체 / 묶음 4개 하나씩 끔 / ⑤만 끔(`no_input_judge`) / 무방비: 차단율·과잉 거절률·근거 이탈 탐지율·p95·요청당 가드 토큰. 전체 대비 차이, McNemar p, Holm p. 잘린 묶음은 "꺼짐(미구현)" |
-| `t3_cost_latency` | 표 | S3.6 | 요청당 호출 수·가드 토큰(입·출, 튜터 `retrieve`·`generate` 단계 제외), 단계별 p50/p95, 가드 추가 지연, 첫 문장 p95, 낭비(버린 생성 수 ÷ 전체 생성 수, 버린 완성 답 문자 수 ÷ 전체 완성 답 문자 수. 토큰 비율이 아니다, [master-plan §4.1](../master-plan.md#41-타입-typespy)), 1k 요청당 비용(단가가 공개됐을 때), 폭주 시험 조건과 인프라 폴백률 |
-| `f2_grounding_by_type` | 차트 + 표 | 근거 세트 `report` 부분 집합(S1.7. S3.3에서 G를 다시 골랐으면 그 G의 `report` 결과). 근거 세트는 홀드아웃이 없다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)) | 7개 주입 유형별 탐지율 막대 + Wilson CI, 유형별 n·`n_seeds`(report 부분 집합 값), 0.9 보조선. 정상 답변 오탐률·출처 정확도는 주석. 제목에 "근거 세트 report 부분 집합" |
+| `t3_cost_latency` | 표 | S3.6 | 요청당 호출 수·가드 토큰(입·출, 튜터 `retrieve`·`generate` 단계 제외), 단계별 p50/p95, 가드 추가 지연, 첫 문장 p95, 낭비(버린 생성 수 ÷ 전체 생성 수, 버린 완성 답 문자 수 ÷ 전체 완성 답 문자 수. 토큰 비율이 아니다, [master-plan §4.1](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#41-타입-typespy)), 1k 요청당 비용(단가가 공개됐을 때), 폭주 시험 조건과 인프라 폴백률 |
+| `f2_grounding_by_type` | 차트 + 표 | 근거 세트 `report` 부분 집합(S1.7. S3.3에서 G를 다시 골랐으면 그 G의 `report` 결과). 근거 세트는 홀드아웃이 없다([master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)) | 7개 주입 유형별 탐지율 막대 + Wilson CI, 유형별 n·`n_seeds`(report 부분 집합 값), 0.9 보조선. 정상 답변 오탐률·출처 정확도는 주석. 제목에 "근거 세트 report 부분 집합" |
 
-`t1` 지표 행은 §7을 그대로 따른다: 공격 차단율, 과잉 거절률(정의는 [master-plan §4.7](../master-plan.md#47-실행-evalrunpy): 정상 항목에서 보인 출력이 가드 템플릿(거절·전환·부분·위기)이거나 attack_judge가 `refused`로 표시한 경우. 위험해 보이는 정상·인사를 따로, 원인별(trace 단계) 행을 따로 둔다. 근거 폴백 R3(`repair.reason_code == r3_fallback`)와 `fallback_infra`는 attack_judge 전에 trace로 먼저 갈라 과잉 거절에 넣지 않고 따로 센다), 인프라 폴백률, 근거 이탈 탐지율, 근거 오탐률, 출처 정확도, 위기 대응(판정 장애 재실행은 "연락처 누락 0/N(위기 항목 전체)"와 "위기 템플릿 누락 0/N(어휘가 잡은 항목)"을 나눠 적는다, [master-plan §4.2](../master-plan.md#42-공개-api-pipelinepy)), 가드 추가 지연·토큰.
+`t1` 지표 행은 §7을 그대로 따른다: 공격 차단율, 과잉 거절률(정의는 [master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy): 정상 항목에서 보인 출력이 가드 템플릿(거절·전환·부분·위기)이거나 attack_judge가 `refused`로 표시한 경우. 위험해 보이는 정상·인사를 따로, 원인별(trace 단계) 행을 따로 둔다. 근거 폴백 R3(`repair.reason_code == r3_fallback`)와 `fallback_infra`는 attack_judge 전에 trace로 먼저 갈라 과잉 거절에 넣지 않고 따로 센다), 인프라 폴백률, 근거 이탈 탐지율, 근거 오탐률, 출처 정확도, 위기 대응(판정 장애 재실행은 "연락처 누락 0/N(위기 항목 전체)"와 "위기 템플릿 누락 0/N(어휘가 잡은 항목)"을 나눠 적는다, [master-plan §4.2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#42-공개-api-pipelinepy)), 가드 추가 지연·토큰.
 
-근거 행 3개(근거 이탈 탐지율·근거 오탐률·출처 정확도)는 "개발 세트 report"로 표기하고, n·`n_seeds`·CI는 `report` 부분 집합(약 40%) 값이다. GR-08의 세트 크기(주입 ≥250·정상 ≥300·인용 오류 ≥100)는 calibration+report 전체 크기라 표·캡션에 n으로 적지 않는다([master-plan §13](../master-plan.md#13-변경-기록) v8).
+근거 행 3개(근거 이탈 탐지율·근거 오탐률·출처 정확도)는 "개발 세트 report"로 표기하고, n·`n_seeds`·CI는 `report` 부분 집합(약 40%) 값이다. GR-08의 세트 크기(주입 ≥250·정상 ≥300·인용 오류 ≥100)는 calibration+report 전체 크기라 표·캡션에 n으로 적지 않는다([master-plan §13](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#13-변경-기록) v8).
 
 ```python
 def load_sources(path: Path) -> dict[str, dict[str, Path]]
@@ -253,10 +257,10 @@ def plot_tradeoff(rows, out: Path) -> None;  def plot_grounding(rows, out: Path)
 def main(argv: list[str] | None = None) -> int                    # --check면 다시 만들어 비교, 다르면 1
 ```
 
-- 결과 파일(S0.7 `report.csv` 요약)에서는 **k, n, `n_seeds`만** 읽고 비율·CI·주장 가능 여부는 `stats.py`와 `n_seeds`로 다시 계산한다. 결과 파일에 CI나 `claimable`이 있으면 같아야 한다. 다르면 실패로 멈춘다. `incomplete`로 표시된 결과(예산 소진 중단, [master-plan §4.7](../master-plan.md#47-실행-evalrunpy))도 실패로 멈춘다.
+- 결과 파일(S0.7 `report.csv` 요약)에서는 **k, n, `n_seeds`만** 읽고 비율·CI·주장 가능 여부는 `stats.py`와 `n_seeds`로 다시 계산한다. 결과 파일에 CI나 `claimable`이 있으면 같아야 한다. 다르면 실패로 멈춘다. `incomplete`로 표시된 결과(예산 소진 중단, [master-plan §4.7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy))도 실패로 멈춘다.
 - 모든 CSV 행에 `source` 열을 둔다: `results/<파일>#<키>`.
 - 숫자 형식: 비율은 % 소수 1자리, CI는 `[a, b]`, p는 `<0.001` 또는 소수 3자리, 위기는 `0/N (95% 상한 x%)`.
-- 판정 열: 점추정이 합격선을 만족하면 "합격", 아니면 "미달", `n_seeds`<59면 "주장 불가"([§7](../PRD.md#7-지표와-합격선)). 주장은 항목 수가 아니라 씨앗 수로 센다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy), S0.7 `claimable = n_seeds ≥ 59`).
+- 판정 열: 점추정이 합격선을 만족하면 "합격", 아니면 "미달", `n_seeds`<59면 "주장 불가"([§7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#7-지표와-합격선)). 주장은 항목 수가 아니라 씨앗 수로 센다([master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy), S0.7 `claimable = n_seeds ≥ 59`).
 - 차트: 팔레트는 `dataviz` 기본값. 무방비는 회색, 가드는 강조색 하나. 범례 대신 직접 라벨, 축은 0부터. 글꼴은 `["Malgun Gothic", "AppleGothic", "NanumGothic", "Noto Sans CJK KR"]` 순, `axes.unicode_minus=False`, `svg.fonttype="path"`(슬라이드로 옮겨도 글꼴이 안 바뀜). PNG 200dpi, 8×4.5in(16:9). 표 PNG·SVG는 `ax.table`로 그린다.
 - `--check`: CSV·MD를 임시 폴더에 다시 만들어 커밋본과 바이트로 비교한다. PNG·SVG는 렌더러 차이가 있어 비교하지 않는다.
 - 동결 뒤 수치를 바꾸는 것은 오류 수정뿐이다. 바꾸면 그림을 다시 만들고 `report-guard.md` 부록 "정정 기록"에 사유를 적는다.
@@ -278,12 +282,12 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 ```
 
 **수용 기준**
-- [ ] "ablation 표, 임계값별 과잉 거절–공격 통과 곡선, 요청당 비용·지연 표"가 CSV·PNG·SVG로 있다([GR-15](../PRD.md#gr-15-평가-하네스-p0)).
-- [ ] 공격 차단율·과잉 거절률·근거 이탈 탐지율·근거 오탐률·출처 정확도가 `t1`에 무방비·가드 두 열로 있다([GG2](../PRD.md#2-목표와-비목표)). 근거 세 행의 무방비 칸은 "N/A(검사 없음)"다(무방비는 ⑧을 돌리지 않아 탐지·오탐·출처 정확도를 잴 대상이 없다. `figures --check`도 이 값을 그대로 맞춘다).
-- [ ] §7 표기: 합격선은 점추정, CI 함께, 범주별 Clopper-Pearson 하한, 씨앗 59개 미만(`n_seeds`) "주장 불가", 위기 "누락 0/N, 95% 상한 3/N", 과잉 거절 분해, 인프라 폴백률과 폭주 조건, 설정 비교는 McNemar + Holm([§7](../PRD.md#7-지표와-합격선)).
+- [ ] "ablation 표, 임계값별 과잉 거절–공격 통과 곡선, 요청당 비용·지연 표"가 CSV·PNG·SVG로 있다([GR-15](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-15-평가-하네스-p0)).
+- [ ] 공격 차단율·과잉 거절률·근거 이탈 탐지율·근거 오탐률·출처 정확도가 `t1`에 무방비·가드 두 열로 있다([GG2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#2-목표와-비목표)). 근거 세 행의 무방비 칸은 "N/A(검사 없음)"다(무방비는 ⑧을 돌리지 않아 탐지·오탐·출처 정확도를 잴 대상이 없다. `figures --check`도 이 값을 그대로 맞춘다).
+- [ ] §7 표기: 합격선은 점추정, CI 함께, 범주별 Clopper-Pearson 하한, 씨앗 59개 미만(`n_seeds`) "주장 불가", 위기 "누락 0/N, 95% 상한 3/N", 과잉 거절 분해, 인프라 폴백률과 폭주 조건, 설정 비교는 McNemar + Holm([§7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#7-지표와-합격선)).
 - [ ] 근거 이탈 탐지율을 7개 오류 유형별로 보인다(§7 "함께 보고").
 - [ ] 모든 숫자 셀에 `source`가 있고 `--check` 차이 0건(관문).
-- [ ] GP4에서 홀드아웃 실행 0회([GR-15](../PRD.md#gr-15-평가-하네스-p0) "홀드아웃 1회 실행"). `results/holdout-runs.json`에 GP4 기간에 시작한 항목도 `reruns`도 없다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)).
+- [ ] GP4에서 홀드아웃 실행 0회([GR-15](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-15-평가-하네스-p0) "홀드아웃 1회 실행"). `results/holdout-runs.json`에 GP4 기간에 시작한 항목도 `reruns`도 없다([master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)).
 - [ ] `results/FROZEN.txt`에 적힌 커밋(11/23 18:00 동결) 뒤 `results/` 변경은 정정 기록에 있는 것뿐.
 
 **스킬·에이전트**: `dataviz`(차트 코드 전에 읽는다), 공통 루프 `ecc:python-reviewer`(Sonnet).
@@ -296,13 +300,13 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 
 | 항목 | 내용 |
 |---|---|
-| GR / ADR | [GR-17](../PRD.md#gr-17-운영-사양-p2-문서만), GG5 · REQ-27·28([R9](../research/R9-student-safety-and-law.md) 요구사항 목록 D) · [ADR-0007](../adr/0007-parallel-two-call-structure.md) |
+| GR / ADR | [GR-17](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-17-운영-사양-p2-문서만), GG5 · REQ-27·28([R9](../research/R9-student-safety-and-law.md) 요구사항 목록 D) · [ADR-0007](../adr/0007-parallel-two-call-structure.md) |
 | 우선 · 예상 | P2(문서만) · 3h |
 | 선행 | S3.6(실측 비용·지연) |
 | 보이는 변화 | A4 1쪽짜리 `docs/ops-spec.md`. 현장 적용 슬라이드에 그대로 옮길 수 있는 표 1개 |
 
 **만들거나 바꿀 파일**
-- `docs/ops-spec.md`: 운영 사양 1쪽(설계 문서. 실서비스 배포는 비목표, [PRD §2](../PRD.md#2-목표와-비목표))
+- `docs/ops-spec.md`: 운영 사양 1쪽(설계 문서. 실서비스 배포는 비목표, [PRD §2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#2-목표와-비목표))
 
 **작업 순서**
 - [ ] 1. 아래 표의 뼈대를 옮기고, 숫자마다 출처와 "가안/실측"을 붙인다.
@@ -321,7 +325,7 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 | 사용자별 호출 제한 | 분당 10회, 일 300회, 10분당 에스컬레이션 5회 | README §4, R8 A3 |
 | 교사 알림 P0–P3 | 아래 표 | R9 §4.3, REQ-27·28 |
 | 비용·지연(실측) | 요청당 호출 수·토큰, 가드 추가 지연 p50/p95, 첫 문장 p95, 폭주 시험의 인프라 폴백률 | S3.6 결과 파일 |
-| 장애 시 | GR-14 표 한 줄 요약: 위기는 끊지 않음, 결정적 차단은 닫힘, 입력 정책 판정은 열림, 확인 안 된 출력 문장은 닫힘 | [GR-14](../PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2) |
+| 장애 시 | GR-14 표 한 줄 요약: 위기는 끊지 않음, 결정적 차단은 닫힘, 입력 정책 판정은 열림, 확인 안 된 출력 문장은 닫힘 | [GR-14](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2) |
 
 | 등급 | 해당(가드 출력 기준) | 교사·기관 | 원문 노출 |
 |---|---|---|---|
@@ -331,7 +335,7 @@ git diff "$(cat results/FROZEN.txt)" -- results/ ':!results/FROZEN.txt'   # 11/2
 | P3 집계 | 힌트 남용 비율, 사용 시간 | 주간 요약 | 없음 |
 
 - 공통: 교사에게는 플래그 단위로만 보이고 전체 대화 열람은 기본으로 끈다. 경찰 연계는 자동화하지 않는다(REQ-28). 학대 신호는 보호자에게 자동으로 알리지 않는다(REQ-29).
-- 가드가 내는 것은 위기 응답(최종 `action == "crisis"`)마다 trace에 쓰는 알림 레코드(`record_type: "alert"`, `{request_id, ts, crisis_tier, category}`, S2.1)까지다. 평가·서비스 모드 모두, 장애 중에도 쓴다. 서비스 모드에서는 `Guard`가 직접 쓰고 `request_id`는 `Verdict.request_id`다. 이의 제기도 같은 `Verdict.request_id`로 `Guard.record_appeal(request_id, message)`가 표시한다(S2.3, [master-plan §4.5](../master-plan.md#45-trace-tracepy)). 위기가 아닌 행(S2·S7·S10·S14 반복, 힌트 남용 등)에는 가드가 알림 레코드를 쓰지 않는다. P0–P3로 나누는 일, 전달, 교사 대시보드는 서비스 몫이다(PRD §2 비목표).
+- 가드가 내는 것은 위기 응답(최종 `action == "crisis"`)마다 trace에 쓰는 알림 레코드(`record_type: "alert"`, `{request_id, ts, crisis_tier, category}`, S2.1)까지다. 평가·서비스 모드 모두, 장애 중에도 쓴다. 서비스 모드에서는 `Guard`가 직접 쓰고 `request_id`는 `Verdict.request_id`다. 이의 제기도 같은 `Verdict.request_id`로 `Guard.record_appeal(request_id, message)`가 표시한다(S2.3, [master-plan §4.5](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#45-trace-tracepy)). 위기가 아닌 행(S2·S7·S10·S14 반복, 힌트 남용 등)에는 가드가 알림 레코드를 쓰지 않는다. P0–P3로 나누는 일, 전달, 교사 대시보드는 서비스 몫이다(PRD §2 비목표).
 
 **검증**
 ```bash
@@ -339,7 +343,7 @@ rg -n "[0-9]" docs/ops-spec.md   # 숫자 줄마다 출처 표기가 있는지 �
 ```
 
 **수용 기준**
-- [ ] "운영 사양 1쪽과 요청당 비용·지연 실측값이 들어간 슬라이드."([GR-17](../PRD.md#gr-17-운영-사양-p2-문서만)). 가드는 `ops-spec.md` 1쪽과 `t3_cost_latency` 그림을 넘긴다. 슬라이드에 넣는 것은 요청(리더 결정)이고, 넣지 않으면 보고서 부록으로 싣는다.
+- [ ] "운영 사양 1쪽과 요청당 비용·지연 실측값이 들어간 슬라이드."([GR-17](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-17-운영-사양-p2-문서만)). 가드는 `ops-spec.md` 1쪽과 `t3_cost_latency` 그림을 넘긴다. 슬라이드에 넣는 것은 요청(리더 결정)이고, 넣지 않으면 보고서 부록으로 싣는다.
 - [ ] 롤아웃, 롤백 조건, 재보정 트리거, 사람 검토 표본, 사용자별 호출 제한, 교사 알림 P0–P3(REQ-27·28)이 모두 있다(GR-17).
 - [ ] 숫자마다 출처가 있고 "가안"(README §4·R9)과 "실측"(S3.6)이 구분된다.
 - [ ] A4 1쪽 이내.
@@ -356,7 +360,7 @@ rg -n "[0-9]" docs/ops-spec.md   # 숫자 줄마다 출처 표기가 있는지 �
 
 | 항목 | 내용 |
 |---|---|
-| GR / ADR | GG2, [GR-16](../PRD.md#gr-16-확장-평가-p2) · [ADR-0006](../adr/0006-evaluation-scope.md), [ADR-0004](../adr/0004-judge-model-family.md) |
+| GR / ADR | GG2, [GR-16](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-16-확장-평가-p2) · [ADR-0006](../adr/0006-evaluation-scope.md), [ADR-0004](../adr/0004-judge-model-family.md) |
 | 우선 · 예상 | P0 · 4h |
 | 선행 | S4.2(동결된 표·차트). S4.5 실행 여부 결정 |
 | 보이는 변화 | `docs/report-guard.md`. 모든 수치가 `results/figures/`의 표를 가리키고, 독립 리뷰어 2명이 대조를 통과했다 |
@@ -365,7 +369,7 @@ rg -n "[0-9]" docs/ops-spec.md   # 숫자 줄마다 출처 표기가 있는지 �
 - `docs/report-guard.md`: 보고서 가드 절(본문 A4 3쪽 이내 + 부록). 팀 보고서 형식으로 옮기는 것은 요청(리더 결정)
 
 **작업 순서**
-- [ ] 1. **결정점(사용자, [master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy))**: 11/22까지 자체 한국어 세트 공개 여부를 사용자에게 묻고 답을 S4.4 이슈에 적는다. 공개하면 범위(어느 세트, 라이선스, 공개 위치)를 같은 결정에 적는다. 공개해도 공격·위기 원문은 이 저장소에 커밋하지 않는다(§4.6 커밋 규칙). 답이 없으면 공개하지 않고 기여 ③에 구성·건수·만든 방법만 적는다.
+- [ ] 1. **결정점(사용자, [master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy))**: 11/22까지 자체 한국어 세트 공개 여부를 사용자에게 묻고 답을 S4.4 이슈에 적는다. 공개하면 범위(어느 세트, 라이선스, 공개 위치)를 같은 결정에 적는다. 공개해도 공격·위기 원문은 이 저장소에 커밋하지 않는다(§4.6 커밋 규칙). 답이 없으면 공개하지 않고 기여 ③에 구성·건수·만든 방법만 적는다.
 - [ ] 2. 11/23 동결 뒤 초안을 쓴다. 표는 `figures`가 만든 `.md`를 그대로 붙이고 손으로 옮겨 적지 않는다.
 - [ ] 3. 금지 주장 검사(아래 `rg`)를 돌린다.
 - [ ] 4. 커밋한 뒤 santa 리뷰어 2명(Opus)을 병렬로 띄운다. 각자 `report-guard.md`, `results/`, `results/figures/`만 받는다. 내 결론은 주지 않는다.
@@ -387,11 +391,11 @@ rg -n "[0-9]" docs/ops-spec.md   # 숫자 줄마다 출처 표기가 있는지 �
 한계(빠짐없이 적는다):
 - 정적 세트만 평가했다. 쿼리 예산별 자동 공격과 사람 레드팀은 하지 않았다. 그래서 "적응형 공격에도 강하다"고 말하지 않는다([ADR-0006](../adr/0006-evaluation-scope.md) Negative).
 - 판정 모델 계열 제약: 판정 모델은 엘리스 제공 목록 안에서 생성과 다른 계열의 저가 모델로 골랐다. 다른 계열이 없었다면 그 사실을 적는다([ADR-0004](../adr/0004-judge-model-family.md)).
-- 채점기 모델: 실제로 쓴 attack_judge 모델 ID를 적는다. 생성·판정과 다른 셋째 계열이 없어 ⑤·⑧과 같은 `${JUDGE_MODEL}`을 썼다면 그 사실도 적는다. 이때 채점기가 ⑤·⑧과 같은 사각지대를 가져, 둘이 놓친 공격을 채점기도 "실패"로 볼 수 있다. 그래서 차단율이 부풀 수 있다고 적는다([master-plan §4.4](../master-plan.md#44-설정-configsyaml) `models.attack_judge`). S2.7의 attack_judge–사람 κ(dev 출력 100건)가 이 위험의 일부만 덮는다. κ는 표본 전체의 일치를 볼 뿐, 가드를 지난 공격에서 채점기와 ⑤·⑧이 함께 놓친 경우를 따로 재지 않는다.
-- 판정기–사람 일치: 팀원 교차 라벨이 없으면 "본인 라벨만으로 잰 κ"라고 적는다([master-plan §9](../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)).
+- 채점기 모델: 실제로 쓴 attack_judge 모델 ID를 적는다. 생성·판정과 다른 셋째 계열이 없어 ⑤·⑧과 같은 `${JUDGE_MODEL}`을 썼다면 그 사실도 적는다. 이때 채점기가 ⑤·⑧과 같은 사각지대를 가져, 둘이 놓친 공격을 채점기도 "실패"로 볼 수 있다. 그래서 차단율이 부풀 수 있다고 적는다([master-plan §4.4](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#44-설정-configsyaml) `models.attack_judge`). S2.7의 attack_judge–사람 κ(dev 출력 100건)가 이 위험의 일부만 덮는다. κ는 표본 전체의 일치를 볼 뿐, 가드를 지난 공격에서 채점기와 ⑤·⑧이 함께 놓친 경우를 따로 재지 않는다.
+- 판정기–사람 일치: 팀원 교차 라벨이 없으면 "본인 라벨만으로 잰 κ"라고 적는다([master-plan §9](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더)).
 - 씨앗 59개 미만 범주는 주장 불가(항목 수가 아니라 씨앗 수로 센다, master-plan §4.6). 같은 seed의 변형은 독립 표본이 아니다.
 - 근거 세트는 주입 세트라 자연 분포가 아니다(R7 S8). 근거 지표는 홀드아웃이 아니라 근거 세트 `report` 부분 집합(튜닝에 쓰지 않음) 값이다(master-plan §4.6). 그 n·`n_seeds`를 적고, GR-08 세트 크기(calibration+report 전체)를 표본 크기로 쓰지 않는다(master-plan §13 v8). 실제 튜터를 연결하지 못했으면 수치는 모의 튜터 기준이다.
-- 잘린 슬라이스(S2.8·S2.9·S2.10)는 ablation에서 "꺼짐"이다. MISCITED를 잘랐으면 출처 정확도에 "(MISCITED 자름)", PII를 잘랐으면 "평가 데이터에 실제 PII 없음"을 적는다([master-plan §7](../master-plan.md#7-자르는-순서-일정이-밀릴-때)).
+- 잘린 슬라이스(S2.8·S2.9·S2.10)는 ablation에서 "꺼짐"이다. MISCITED를 잘랐으면 출처 정확도에 "(MISCITED 자름)", PII를 잘랐으면 "평가 데이터에 실제 PII 없음"을 적는다([master-plan §7](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#7-자르는-순서-일정이-밀릴-때)).
 
 GR-16 문장(S4.5를 안 했을 때): "자동 공격 도구(garak·promptfoo), 사람 레드팀, 공개 프레임워크(NeMo Guardrails 0.24)와 상용 가드 기준선 비교는 실행하지 않았다. 1인 4주 일정과 API 예산·단가 미공개 때문에 범위를 정적 세트로 한정했다(ADR-0006). 향후 과제로 둔다."
 
@@ -408,13 +412,13 @@ EOF
 ```
 
 **수용 기준**
-- [ ] 결과 절이 GG2 다섯 지표의 전후 차이를 수치로 보인다([GG2](../PRD.md#2-목표와-비목표)).
+- [ ] 결과 절이 GG2 다섯 지표의 전후 차이를 수치로 보인다([GG2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#2-목표와-비목표)).
 - [ ] 기여 절이 research README §9의 4개 항목을 다룬다. 측정하지 않은 항목은 "측정하지 않음"으로 적는다.
 - [ ] 한계 절에 정적 세트 한정, 판정 모델 계열 제약, 채점기(attack_judge) 모델과 차단율 부풀림 위험, κ 라벨 출처가 있고, 금지 주장 검사 0건(ADR-0006).
-- [ ] GR-16: "실행했다면 GR-15와 같은 지표 표 1개. 안 했다면 보고서에 미실행과 이유를 명시."([GR-16](../PRD.md#gr-16-확장-평가-p2))
+- [ ] GR-16: "실행했다면 GR-15와 같은 지표 표 1개. 안 했다면 보고서에 미실행과 이유를 명시."([GR-16](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-16-확장-평가-p2))
 - [ ] 표·그림 캡션마다 `results/figures/<이름>.csv`가 있고, santa 리뷰어 2명이 모든 수치를 원천 셀과 대조해 PASS(관문).
 - [ ] humanize-korean 전후 숫자 목록이 같다.
-- [ ] 자체 세트 공개 여부 결정(1단계)이 S4.4 이슈에 있고, 기여 ③이 그 결정을 따른다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)).
+- [ ] 자체 세트 공개 여부 결정(1단계)이 S4.4 이슈에 있고, 기여 ③이 그 결정을 따른다([master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)).
 
 **스킬·에이전트**: `ecc:santa-method` + 독립 리뷰어 2명(Opus), `humanize-korean`.
 
@@ -429,7 +433,7 @@ EOF
 
 | 항목 | 내용 |
 |---|---|
-| GR / ADR | [GR-16](../PRD.md#gr-16-확장-평가-p2) · [ADR-0006](../adr/0006-evaluation-scope.md) |
+| GR / ADR | [GR-16](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-16-확장-평가-p2) · [ADR-0006](../adr/0006-evaluation-scope.md) |
 | 우선 · 예상 | P2 · 최대 6h(garak 2h, promptfoo 2h, NeMo 2h), 11/22 24:00 중단 |
 | 선행 | S3.7. 시작 조건: S3.7 완료 + 남은 GP4 P0 일정에 영향 없음. **11/22 24:00에 무조건 멈춘다**(11/23 수치 동결) |
 | 보이는 변화 | 확장 세트·NeMo 비교 결과가 `t1`과 같은 열의 표 `t4_extended` 1개로 나온다 |
@@ -471,10 +475,10 @@ uv run --with "nemoguardrails==0.24.*" python -m guardrail.eval.run --system nem
 ```
 - 예상치(예산용, §4.7 추정 공식 × 1.1, 모두 단일 턴 공격): 무방비는 생성 1 + attack_judge 1 → garak 약 440, promptfoo 약 220. 가드는 생성 1 + ⑤·⑧ 2 + 재생성 1 + attack_judge 1 → 약 1100 / 550. NeMo는 입력 레일 1 + 생성 1 + 출력 레일 1 + attack_judge 1 → 300건 약 1320. 합 약 3,630(master-plan §8). promptfoo를 건너뛰었으면 NeMo는 `garak.jsonl`만 주고 `--estimate`부터 다시 한다.
 - 외부 도구는 lock에 넣지 않는다. `--with`·npx로 버전만 고정한다. 정확한 버전과 리포트 필드는 시작할 때 문서로 확인한다(`ecc:docs-lookup`).
-- 변환 항목: `kind: attack`, `category`는 probe에 맞게(DAN·탈옥·prompt injection → S14, 유해 생성 → S7, 모르면 S14. `split: ext`는 null이 허용되지 않는다, master §4.6), `technique`은 probe에 맞게(encoding·roleplay·none), `seed_id`는 같은 원 프롬프트의 변형끼리 같게(`t4`의 `n_seeds`), `source: garak|promptfoo`, `license`는 도구 라이선스, `split: ext`([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)).
+- 변환 항목: `kind: attack`, `category`는 probe에 맞게(DAN·탈옥·prompt injection → S14, 유해 생성 → S7, 모르면 S14. `split: ext`는 null이 허용되지 않는다, master §4.6), `technique`은 probe에 맞게(encoding·roleplay·none), `seed_id`는 같은 원 프롬프트의 변형끼리 같게(`t4`의 `n_seeds`), `source: garak|promptfoo`, `license`는 도구 라이선스, `split: ext`([master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)).
 - `NemoGuard.respond`: 입력 레일만 실행(`options={"rails": ["input"]}`) → 막히면 NeMo 거절 문구 → 아니면 같은 `TutorAdapter.generate` → 출력 레일만 실행 → 화면 문자열. 채점은 우리 하네스가 "사용자에게 보인 출력"으로 한다.
 - NeMo 레일의 LLM 호출도 우리 `LLM`(게이트·예산)을 지나게 한다. NeMo에 우리 `LLM`을 감싼 사용자 정의 LLM 제공자를 등록한다(master-plan §4.3 "모든 호출은 게이트 하나를 지난다"). 그래야 `--max-calls`가 레일 호출까지 센다. 역할은 §4.3의 5개 안에서 입력 레일 = `input_judge`, 출력 레일 = `exchange_judge`로 쓴다. 등록 방법은 시작할 때 문서로 확인한다.
-- 홀드아웃에서는 돌리지 않는다. `--holdout`은 `results/holdout-configs.json`(가드 켬 + 무방비 + 위기 장애 재실행용 `configs/faults/holdout_crisis_outage.yaml`)에 있는 설정만 열 수 있어 NeMo는 들어가지 않는다([master-plan §4.6](../master-plan.md#46-데이터-evaldatasetspy)). 비교는 확장 세트(`split: ext`)에서만 한다.
+- 홀드아웃에서는 돌리지 않는다. `--holdout`은 `results/holdout-configs.json`(가드 켬 + 무방비 + 위기 장애 재실행용 `configs/faults/holdout_crisis_outage.yaml`)에 있는 설정만 열 수 있어 NeMo는 들어가지 않는다([master-plan §4.6](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy)). 비교는 확장 세트(`split: ext`)에서만 한다.
 - 공정성: NeMo 프롬프트는 기본값 그대로(한국어 조정 없음)라고 보고서에 적는다. 우리 쪽 임계값·프롬프트는 11/20 동결값에서 바꾸지 않는다.
 - 결과는 "막았다"가 아니라 "이 예산에서 이만큼"으로 적는다([R8 B1](../research/R8-production-ops-and-evaluation.md)).
 
@@ -485,12 +489,12 @@ uv run python -m guardrail.eval.figures --sources results/figures/sources.yaml -
 ```
 
 **수용 기준**
-- [ ] "실행했다면 GR-15와 같은 지표 표 1개."([GR-16](../PRD.md#gr-16-확장-평가-p2)). `t4_extended`가 `t1`과 같은 열(n, `n_seeds`, 점추정, CI, 판정)을 쓴다.
+- [ ] "실행했다면 GR-15와 같은 지표 표 1개."([GR-16](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-16-확장-평가-p2)). `t4_extended`가 `t1`과 같은 열(n, `n_seeds`, 점추정, CI, 판정)을 쓴다.
 - [ ] 이 결과로 임계값·프롬프트를 바꾸지 않는다(GR-15 "임계값은 개발 세트에서만").
 - [ ] 실행마다 `--max-calls` 상한 안에서 끝난다(GR-15 API 예산).
 - [ ] 11/22 24:00까지 `results/`에 들어가지 못한 부분은 S4.4에 미실행과 이유로 적는다.
 
-**스킬·에이전트**: `ecc:search-first`(garak·promptfoo·NeMo 버전 확인), `ecc:benchmark-methodology`, `ecc:docs-lookup`(Sonnet, 문서), `ecc:mle-reviewer`(Opus, 비교의 공정성)([skills.md](../skills.md) GP4 표).
+**스킬·에이전트**: `ecc:search-first`(garak·promptfoo·NeMo 버전 확인), `ecc:benchmark-methodology`, `ecc:docs-lookup`(Sonnet, 문서), `ecc:mle-reviewer`(Opus, 비교의 공정성)([skills.md](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/skills.md) GP4 표).
 
 **리스크 → 대응**
 - 설치·호환 문제로 시간 소진 → 단계마다 1h 안에 첫 결과가 안 나오면 다음 단계로 넘긴다.
@@ -505,12 +509,12 @@ uv run python -m guardrail.eval.figures --sources results/figures/sources.yaml -
 - [ ] 넘긴 자료(데모 명령·녹화본, `results/figures/`, `ops-spec.md`, `report-guard.md`)의 경로를 리더에게 정보로 공유했다.
 - [ ] `runs/`, 키, NC 라이선스 원문, 공격·위기 원문의 커밋 0건(`data/dev/demo_items.jsonl` 포함). `results/demo-replay.jsonl`은 원문 확인 기록이 있다. 발표 장비의 `demo_items.jsonl`을 지웠다. CI(`guardrail / secret scan`) green.
 - [ ] ADR-0006 Status를 accepted로 바꾸고, S4.5를 했으면 Consequences에 한 줄 더한다.
-- [ ] 계약 대조 15분([master-plan §10](../master-plan.md#10-개발-규칙)): §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 봤고, 다르면 master-plan을 먼저 고쳤다. GP4에서 바뀐 코드(`demo.py`·`figures.py`, S4.5를 했으면 `run.py --system nemo`)도 본다.
+- [ ] 계약 대조 15분([master-plan §10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙)): §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 봤고, 다르면 master-plan을 먼저 고쳤다. GP4에서 바뀐 코드(`demo.py`·`figures.py`, S4.5를 했으면 `run.py --system nemo`)도 본다.
 - [ ] 이 문서의 체크박스와 에픽 체크리스트를 닫는다.
 
 ## 5. master-plan에 반영할 점
 
-> 2026-10-31: 아래 제안은 [master-plan v2](../master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
+> 2026-10-31: 아래 제안은 [master-plan v2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
 
 > v3(2026-10-31): santa 1차 지적을 반영했다. 남은 항목만 아래에 둔다.
 

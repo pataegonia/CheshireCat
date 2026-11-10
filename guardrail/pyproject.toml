@@ -26,7 +26,7 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["docs"]  # 조사 메모 안의 코드 블록은 기록이라 손대지 않는다
+extend-exclude = ["docs", "scripts"]  # 조사 메모의 코드 블록과 R13 측정 스크립트는 기록이라 손대지 않는다(수치 재현 대상)
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]  # S: bandit 보안 규칙

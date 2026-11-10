@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "guard.schema.json",
+  "title": "POST /guard contract (spec_version 1.0)",
+  "description": "Source: competition/SPEC.md §3, §5 (authoritative). Request is parsed leniently (unknown fields allowed); response is strict for scored fields (exact lowercase enum values). 'output' is required whenever the request has a candidate_answer key, even an empty string (cross-document rule, enforced in tests, not here). If messages (and candidate_answer) can be read, the server judges; otherwise it returns the default 200 response (PRD v6 GR-09), never FastAPI's 422 (it echoes input). Only an auth failure is non-200. decision is derived from category (ADR-0012).",
+  "$defs": {
+    "category": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "answer_seeking",
+        "academic_dishonesty",
+        "off_topic",
+        "out_of_material",
+        "jailbreak_injection",
+        "pii_disclosure",
+        "harmful_content",
+        "emotional_distress",
+        "low_signal_input"
+      ]
+    },
+    "message": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": { "type": "string" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["spec_version", "session_id", "messages"],
+      "properties": {
+        "spec_version": { "type": "string" },
+        "session_id": { "type": "string" },
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/message" },
+          "description": "Full history. First and last items are role=user (SPEC §3)."
+        },
+        "candidate_answer": { "type": "string" }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["input"],
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": "object",
+          "required": ["decision", "category"],
+          "additionalProperties": false,
+          "properties": {
+            "decision": { "type": "string", "enum": ["allow", "block"], "description": "block iff category is jailbreak_injection, harmful_content, academic_dishonesty or off_topic (ADR-0012)." },
+            "category": { "$ref": "#/$defs/category" }
+          }
+        },
+        "output": {
+          "type": "object",
+          "required": ["grounded", "unsupported", "safe", "category"],
+          "additionalProperties": false,
+          "properties": {
+            "grounded": { "type": "boolean" },
+            "unsupported": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Verbatim substrings of candidate_answer (grader compares a char multiset after NFKC, lowercase, whitespace/punctuation removal). Scored independently of grounded; grounded=false with [] is allowed (ADR-0014)."
+            },
+            "safe": { "type": "boolean" },
+            "category": {
+              "type": "string",
+              "description": "Any string; not scored (SPEC §5). We copy input.category (ADR-0009)."
+            }
+          }
+        }
+      }
+    }
+  }
+}

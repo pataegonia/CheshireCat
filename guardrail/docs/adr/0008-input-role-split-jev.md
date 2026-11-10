@@ -1,9 +1,12 @@
 # ADR-0008: 입력 단계 역할 분담 — Jev는 탈옥·인젝션 고신뢰 차단, LLM은 정책 판단
 
 **Date**: 2026-10-30
-**Status**: proposed (v2: "판정 백엔드 선택지"에서 "역할 분담"으로 바꿈)
+**Status**: superseded by ADR-0011
+**이력**: v2: "판정 백엔드 선택지"에서 "역할 분담"으로 바꿈
 **Deciders**: danielcho02
-**PRD**: GR-02, GR-04, GR-05, GR-14, §10, §11
+**PRD**: (v4 번호) GR-02, GR-04, GR-05, GR-14, §10, §11
+
+> **2026-11-09 폐기**: 외부 판정 API와 미리 학습된 모델 파일은 대회 규칙상 서버에 쓸 수 없다(OT §10). Jev와 대체 후보 Kanana Safeguard-Prompt 모두 해당한다. 입력 판정은 `gpt-5-nano` 하나로 한다(ADR-0011).
 
 ## Context
 

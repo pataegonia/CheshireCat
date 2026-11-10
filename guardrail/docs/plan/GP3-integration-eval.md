@@ -230,7 +230,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --set tutor.ad
 - 예상치: (정상 50×5 + 공격 50×5 + 위기 30×4) × 1.1 ≈ 690. 스모크 세트는 S0.5의 것이다. `smoke_benign.jsonl`은 커밋돼 있고, `smoke_attack.jsonl`·`smoke_crisis.jsonl`은 gitignore라 로컬에만 있다.
 
 **수용 기준**
-- [ ] 가드 단독(모의 튜터)으로 하네스가 돈다. 실제 튜터는 어댑터만 바꿔 연결된다([GR-11][gr11]). 튜터가 준비되지 않으면 둘째 문장은 PRD §10에 "미충족(튜터 미준비)"으로 적는다.
+- [ ] 가드 단독(모의 튜터)으로 하네스가 돈다. 실제 튜터는 어댑터만 바꿔 연결된다([GR-11][gr11]). 튜터가 준비되지 않으면 둘째 문장은 결과 노트에 "미충족(튜터 미준비)"으로 적는다.
 - [ ] 같은 계약 스위트가 모의·실제 어댑터에서 모두 통과한다(실제는 `-m live`).
 - [ ] 의무 5개 각각 "없음" 스텁에서 GR-11 표의 저하 모드로 바뀐다(테스트 5개).
 - [ ] `faults.generator: fake_ok`인 설정(`tutor.adapter=real`, 스텁 튜터)에서 `probe_obligations`가 불리지 않고 설정의 `tutor.obligations`로 끝까지 돈다. 허용 목록이 있을 때(고정 뒤)도 `faults` 없이 같다(테스트).
@@ -259,7 +259,7 @@ uv run python -m guardrail.eval.run --config configs/default.yaml --set tutor.ad
 | 선행 | S0.5 + 형식 공개(주최측, 리더 경유. [master-plan §8][mp8] 기본 마감 11/16, 그 뒤로는 11/19 18:00까지 받은 것만) |
 | 보이는 변화 | 주최측 파일을 §4.6 형식 JSONL로 한 번 바꿔 두면 하네스가 보통 `--data`로 돌고, 결과가 홀드아웃과 다른 파일로 나온다 |
 
-**막힘과 대체**: 형식이 공개될 때까지 `guardrail:blocked`. 기본 마감은 11/16이고, 그 뒤로는 **11/19(목) 18:00까지 받은 것만** 처리한다([master-plan §8][mp8]). 그때까지 받지 못하면 형식 무관 로더(S0.5)를 그대로 두고 결과 노트와 PRD §10에 "주최측 평가셋: 형식 미공개로 미실행"을 적는다. 11/19 18:00 뒤에 온 형식은 GP3에서 처리하지 않는다(동결 예외 아님).
+**막힘과 대체**: 형식이 공개될 때까지 `guardrail:blocked`. 기본 마감은 11/16이고, 그 뒤로는 **11/19(목) 18:00까지 받은 것만** 처리한다([master-plan §8][mp8]). 그때까지 받지 못하면 형식 무관 로더(S0.5)를 그대로 두고 결과 노트에 "주최측 평가셋: 형식 미공개로 미실행"을 적는다. 11/19 18:00 뒤에 온 형식은 GP3에서 처리하지 않는다(동결 예외 아님).
 
 **만들거나 바꿀 파일**
 - `src/guardrail/eval/datasets.py`: `load_organizer()`, `convert_organizer()`(원본 → §4.6 JSONL 한 번 변환, `__main__`의 `organizer` 명령), `export_organizer()`, 라벨 대응 `ORG_LABEL_MAP`
@@ -311,7 +311,7 @@ git status --short data runs     # 원본·변환본·응답이 추적되지 않
 - [ ] 공개된 형식으로 입출력을 맞춘다. 형식이 나오기 전엔 형식 무관 로더([GR-15][gr15]).
 - [ ] 주최측 test는 직접 돌릴 수 있으면 별도 보고하고 홀드아웃에 넣지 않는다([PRD §8][prd8]).
 - [ ] 모르는 라벨·필드가 조용히 사라지지 않는다(테스트): 모르는 열은 `data/organizer/<part>.unmapped.csv`와 결과 메타에 건수로 남고, 대응 못 한 라벨, 빠진 필수 필드, 주최측 dev의 범주 대응 없음은 로드 실패다. 주최측 test만 `category: null`을 허용하고 기법이 없으면 `none`이다. 원본·변환본과 응답 원문이 커밋되지 않는다.
-- [ ] 미공개·미실행이면 그 사실과 이유가 결과 노트와 PRD §10에 있다.
+- [ ] 미공개·미실행이면 그 사실과 이유가 결과 노트에 있다.
 
 **스킬·에이전트**: `ecc:eval-harness` · 형식 변환 초안 general-purpose(Sonnet)
 
@@ -419,7 +419,7 @@ uv run python -m guardrail.eval.run --config configs/exp/prefilter-off.yaml --da
 
 | 항목 | 내용 |
 |---|---|
-| GR / ADR | [GR-12][gr12], [GR-15][gr15], [PRD §7][prd7](McNemar + Holm), [PRD §14][prd14], [ADR-0006][adr6], [ADR-0007][adr7] 대안 C |
+| GR / ADR | [GR-12][gr12], [GR-15][gr15], [PRD §7][prd7](McNemar + Holm), [PRD §13][prd13], [ADR-0006][adr6], [ADR-0007][adr7] 대안 C |
 | 우선 · 예상 | P0 · 4h |
 | 선행 | S3.3(`policy_version` 동결), S3.1 결정(11/18 12:00)과 `tutor` 절·의무 효과 키 고정([master-plan §5][mp5]). 설정 파일·테스트는 오전에 먼저 쓰고, 실행은 고정 뒤에 한다 |
 | 보이는 변화 | `results/<날짜>-ablation.csv·json`: 설정 7개 × 지표, 전체 켬 대비 차이, McNemar p와 Holm p, ⑤ 순기여 행 |
@@ -457,7 +457,7 @@ uv run python -m guardrail.eval.run --config configs/exp/prefilter-off.yaml --da
 - 모든 행에 차단율·과잉 거절률·근거 이탈 탐지율·p95 지연·요청당 토큰을 적는다(GP4 표 2). 실행하지 않은 칸은 "—(영향 없음)". 잘린 묶음은 "꺼짐(미구현)", 튜터 의무로 꺼진 검색 가드는 "꺼짐(튜터 의무 없음)".
 - 부분집합: 비교 세트마다 ≥300 문항. 불일치율 10%, 불일치 중 한쪽이 75%면 쌍 30개가 필요하다([R8 §B2⑤][r8]). 300보다 작은 세트(근거 `report`·멀티턴)와 인젝션 dev는 전부 쓴다. 표본은 seed_id 단위.
 - McNemar: 같은 항목 id의 결과 쌍. 멀티턴은 차례 줄이 아니라 `responses.jsonl`의 대화 요약 줄(`record_type: "dialogue"`)의 대화 단위 점수로 대화 id끼리 짝짓는다([master-plan §4.7][mp47]). 불일치 쌍 b, c로 `scipy.stats.binomtest(min(b, c), b + c, 0.5)` 양측. Holm은 표에 실린 p값 전부를 한 묶음으로 보정한다(`stats.py`의 `holm`). 불일치 쌍이 20개 미만이면 "검정력 부족"을 함께 적는다.
-- **⑤ 순기여**([PRD §14][prd14], ADR-0007 대안 C): `default` 대 `no_input_judge`의 Δ공격 차단율, Δ과잉 거절률, Δ정상 위기 오발동, 전환·부분 응답 건수(⑤만 낸다), Δ요청당 호출·토큰·p95. 결론 한 문단을 `ablation.json`의 `notes.input_judge_net`에 둔다.
+- **⑤ 순기여**([PRD §13][prd13], ADR-0007 대안 C): `default` 대 `no_input_judge`의 Δ공격 차단율, Δ과잉 거절률, Δ정상 위기 오발동, 전환·부분 응답 건수(⑤만 낸다), Δ요청당 호출·토큰·p95. 결론 한 문단을 `ablation.json`의 `notes.input_judge_net`에 둔다.
 - 반복 1회([ADR-0006][adr6]). 생성 온도가 0보다 크면 표 주석에 적는다.
 
 **검증**
@@ -497,7 +497,7 @@ $R --config configs/ablation/no_output.yaml      --data $A/grounding_report.json
 - [ ] 설정 비교는 McNemar + Holm 보정이고, 무방비 대비 차이의 p<0.05 여부가 표에 있다([PRD §7][prd7], [§1][prd1]).
 - [ ] (S2.8 머지) 멀티턴 공격 세트(≥60 대화)에서 R 켬/끔 공격 차단율 차이를 McNemar로 보고한다([GR-05][gr05]).
 - [ ] (S2.9 머지) 자체 인젝션 교재(≥50건)에서 간접 인젝션 성공률을 켬/끔으로 비교한다([GR-06][gr06]).
-- [ ] ⑤ 순기여 행과 요약이 있다([PRD §14][prd14]).
+- [ ] ⑤ 순기여 행과 요약이 있다([PRD §13][prd13]).
 - [ ] 실행마다 시작 전에 예상 호출 수를 출력했고 상한 안에서 돌았다([GR-15][gr15]).
 
 **스킬·에이전트**: `ecc:benchmark-methodology` · `ecc:mle-reviewer`(Opus)
@@ -631,7 +631,7 @@ uv run python -m guardrail.eval.run --config configs/faults/holdout_crisis_outag
 
 **세부 설계**
 - 폭주 시험 통과: 정상 질문 `fallback_infra` ≤1%([GR-14][gr14], [PRD §7][prd7]). 함께 기록: 동시성, 429 수, 재시도 수, AIMD 게이트 한도의 최소·최대, 게이트 대기가 `gate.max_wait_s`를 넘어 난 `timeout` 수([master-plan §4.3][mp43]), 단계별 p95. 50에서 실패하고 20에서 통과하면 통과한 최대 동시성을 하네스 기본으로 쓰고 그렇게 보고한다.
-- 게이트웨이가 동시성을 막으면(20에서도 >1%, 또는 주최측 공지) `--set pipeline.mode=serial`(직렬, ADR-0007 대안 A, [master-plan §4.4][mp44])로 같은 `benign_burst300.jsonl`을 동시성 20에서 돌려(예상치 1,650) 병렬과 지연·`fallback_infra`를 비교한다([PRD §11][prd11]). 실제 튜터로 확정돼도 폭주 시험은 다시 하지 않는다. 대신 홀드아웃 가드 실행의 정상 `fallback_infra`를 그 동시성과 함께 적는다.
+- 게이트웨이가 동시성을 막으면(20에서도 >1%, 또는 주최측 공지) `--set pipeline.mode=serial`(직렬, ADR-0007 대안 A, [master-plan §4.4][mp44])로 같은 `benign_burst300.jsonl`을 동시성 20에서 돌려(예상치 1,650) 병렬과 지연·`fallback_infra`를 비교한다([PRD §10][prd10]). 실제 튜터로 확정돼도 폭주 시험은 다시 하지 않는다. 대신 홀드아웃 가드 실행의 정상 `fallback_infra`를 그 동시성과 함께 적는다.
 - 지연(동시성 1 = 서비스 요청 1건): 비스트리밍이라 첫 문장 표시 시간 = `respond()` 전체 지연(`Verdict.latency_ms`, [PRD §9 D3][prd9]). 단계별 p50/p95는 `stages[].latency_ms`. 코드 단계 합 = `normalize`·`crisis`·`rules`·`pii`·`retrieval_guard`·`output_code`·`prefilter`·`repair`([master-plan §4.1][mp41] 단계 이름). 튜터 단계(`retrieve`·`generate`)는 따로 적는다.
 - 가드 추가 지연: 입력 쪽 = max(0, ⑤ 끝 − 생성 끝), 출력 쪽 = 코드 검사 + 사전 필터 + ⑧ + 수리. 단계 끝 = `StageResult.started_ms` + `latency_ms`.
 - 경로 분류: 허용 / 전환·부분 재생성 / 거절 / 위기 / R2 / R3 / `fallback_infra`. 경로마다 n, p50/p95. R2는 `tutor.obligations.regenerate`와 `stages.output.r2`가 둘 다 참일 때만 돈다([master-plan §4.4][mp44]). 모의 튜터는 `regenerate: true`라 `--set stages.output.r2=true`로 `data/dev/grounding_r2.jsonl`(≈60, GP1 S1.7 실행 D와 같은 파일)을 돌려 R2 경로 지연을 따로 적는다. 이 파일은 R2 조건에 걸린 항목만 모았으므로 이 실행은 R2를 일부러 일으킨다. 그래서 발생률은 이 실행으로 내지 않는다. **R2 발생률**은 GP1 S1.7과 같은 정의다: GP1 S1.7 실행 A(S3.3에서 `report`를 새로 만들었으면 그 재보정 실행)의 trace에서 `report` 부분 집합의 **정상 답변** 중 R2 조건(위반이지만 R0·R1이 아님, `grounding_r2.jsonl`을 고른 기준)에 걸린 수 ÷ 그 정상 답변 수. `report` 전체 비율은 참고로만 적는다. API 호출은 없다. GP1에서 실행 D를 미뤘으면 이 실행이 그것을 대신한다(따로 돌지 않음). GP1 S1.7의 R2 수용 기준 줄도 여기서 체크한다. 실제 튜터에 의무가 없으면 이 R2 실행만 `--set tutor.adapter=mock --set tutor.obligations.regenerate=true --set stages.output.r2=true`로 모의 튜터에서 돌려 가드의 R2 경로를 재고 "모의 튜터 기준"으로 적는다(근거 항목은 답이 고정돼 튜터와 무관하고 재생성만 모의 튜터가 한다). 고정 뒤에는 탐지하지 않고 YAML의 `tutor.obligations.regenerate: false`를 그대로 쓰므로, 이것을 덮지 않으면 `apply_obligations`가 (설정 값 AND 탐지 값)을 거짓으로 두고 `r2`를 다시 꺼 하네스가 멈춘다(종료 2, S3.1). 셋을 함께 덮으면 의무가 참이라 `apply_obligations`가 바꾸는 것이 없다(`test_real_tutor.py`). 실제 튜터 설정에 `r2=true`만 붙여도 같은 이유로 멈춘다. 홀드아웃(동시성 c)의 지연도 함께 적어 게이트 대기 영향을 보인다.
@@ -676,14 +676,14 @@ $R --config configs/default.yaml --data $B --name burst-serial-c20 --concurrency
 
 | 항목 | 내용 |
 |---|---|
-| GR / ADR | 전체. 특히 [GR-13][gr13]·[GR-14][gr14] 회귀, [PRD §10][prd10], [master-plan §10][mp10] |
+| GR / ADR | 전체. 특히 [GR-13][gr13]·[GR-14][gr14] 회귀, [master-plan §10][mp10] |
 | 우선 · 예상 | P0 · 3h |
 | 선행 | S3.5, S3.6 |
-| 보이는 변화 | 동결 커밋 SHA가 PRD §10과 이 문서에 있고 문서 상태가 코드와 맞는다. 이후 PR은 버그 수정 규칙을 통과한 것만 들어간다 |
+| 보이는 변화 | 동결 커밋 SHA가 이 문서에 있고 문서 상태가 코드와 맞는다. 이후 PR은 버그 수정 규칙을 통과한 것만 들어간다 |
 
 **만들거나 바꿀 파일**
 - 코드는 리뷰 발견 사항 수정 PR만(버그 수정 규칙 적용)
-- `docs/PRD.md` §10, `docs/adr/*.md`·`docs/adr/README.md`, `docs/interface.md`, 이 문서
+- `docs/adr/*.md`·`docs/adr/README.md`, `docs/interface.md`, 이 문서
 
 **작업 순서**
 - [ ] 1. `ecc:quality-gate`: `ruff check`, `ruff format --check`, `pytest --cov`, 새 모듈 줄 커버리지 ≥80%.
@@ -716,7 +716,6 @@ $R --config configs/default.yaml --data $B --name burst-serial-c20 --concurrency
 
 | 문서 | 바꿀 것 |
 |---|---|
-| PRD §10 | GP3 Status → done(미충족 항목은 괄호), Plan 열에 이 문서 링크. GR 본문은 여기서 더 바꾸지 않는다(GR-15는 S3.5 PR이 이미 고쳤다) |
 | ADR | 구현대로면 proposed → accepted. 0008은 Jev를 켰으면 accepted, 껐으면 proposed로 두고 "`jev: false`로 동결" 한 줄. 바뀐 결정은 `superseded by`([ADR README][adrr]). 0006의 과잉 거절 채점 확장(S0.7)과 홀드아웃 1회 해석(S3.5)은 그 PR에서 이미 적었는지만 확인하고, 나머지는 GP4가 S4.5 결과와 함께 바꾼다 |
 | `interface.md` | 최종 `TutorAdapter`, 의무 탐지 결과, 저하 모드, `tutor:` 설정 |
 | 이 문서 | 체크박스, S3.1 판정, 동결 SHA |
@@ -751,7 +750,7 @@ uv run pytest tests/test_llm.py tests/test_repair.py tests/test_pipeline_output.
 - [ ] GP1·GP2가 미룬 실행(GP1 실행 B·D, GP2 자르는 선 A)이 있었다면 S3.3·S3.6에서 돌았고, GP1 S1.7·GP2 S2.4의 해당 수용 기준을 체크했다.
 - [ ] `results/holdout-configs.json`이 11/18 S3.1 판정 뒤에 커밋됐고, 홀드아웃 실행 메타의 해시가 모두 그 안에 있다. `results/holdout-runs.json`이 커밋됐고 설정마다 `done`이 하나다(재실행은 `reruns`에 사유).
 - [ ] 홀드아웃 santa 2명 PASS, `known_issues` 정리.
-- [ ] PRD §10 GP3 Status, ADR Status·README 표, `interface.md`, 이 문서 체크박스를 갱신했다.
+- [ ] ADR Status·README 표, `interface.md`, 이 문서 체크박스를 갱신했다.
 - [ ] 계약 대조 15분([master-plan §10][mp10]): §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 봤고, 다르면 master-plan을 먼저 고쳤다.
 - [ ] GP3 슬라이스 이슈를 닫고 에픽 체크리스트를 닫았다.
 - [ ] §1 산출물 표의 파일 이름을 GP4 `sources.yaml`과 맞췄다.
@@ -814,9 +813,8 @@ v5 마무리에서 master §8 예산 예상치(약 9.9만 / 11.4만 회)로 맞�
 [mp8]: ../master-plan.md#8-외부-미결-사항과-기본값
 [mp9]: ../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더
 [prd1]: ../PRD.md#1-문제
-[prd10]: ../PRD.md#10-마일스톤
-[prd11]: ../PRD.md#11-리스크
-[prd14]: ../PRD.md#14-검토-기록
+[prd10]: ../PRD.md#10-리스크
+[prd13]: ../PRD.md#13-검토-기록
 [prd4]: ../PRD.md#4-구성-개요
 [prd6]: ../PRD.md#6-비기능-요구사항
 [prd7]: ../PRD.md#7-지표와-합격선

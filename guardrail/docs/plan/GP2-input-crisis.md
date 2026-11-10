@@ -790,7 +790,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 | GR / ADR | [GR-04][gr04] Jev 비교표, [GR-05][gr05] 중간 구간, [GR-14][gr14] Jev 행 · [ADR-0008][a8] · [R11 §1–2](../research/R11-role-split-and-output-latency.md) |
 | 우선 · 예상 | 선택 · 5h(기본 GP3 여유) |
 | 선행 | S2.5, S2.3(PII. Jev에는 마스킹한 글만 가서 `jev`는 `pii`가 켜졌을 때만 허용, master §4.4 v8) + 사용 전제 4개 |
-| 보이는 변화 | 전제를 채우면 ⑤ 단독 / Jev 단독 / 역할 분담 비교표가 나온다. 못 채우면 `jev: false`와 이유가 PRD §10과 ADR-0008에 적힌다 |
+| 보이는 변화 | 전제를 채우면 ⑤ 단독 / Jev 단독 / 역할 분담 비교표가 나온다. 못 채우면 `jev: false`와 이유가 ADR-0008에 적힌다 |
 
 **만들거나 바꿀 파일**
 - `src/guardrail/judges/jev.py`: S2.5 스텁을 `async score(llm, masked_norm_msg) -> StageResult`(`score` = p)로 채운다. 이 슬라이스 전에는 `stages.input.jev: true`를 쓸 수 없다
@@ -813,7 +813,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 **검증**: `uv run pytest tests/test_jev.py`, 로컬에서 `JEV_API_KEY`가 있을 때만 `uv run pytest -m live tests/test_jev.py`. τ_J·비교표 실행은 하네스 두 단계(master §4.7)로 돈다: `--config configs/exp/jev-only.yaml`(`stages.input.judge: false, jev: true`, `thresholds.tau_J: 1.01`로 점수만 기록) `--data data/dev/benign_student_a.jsonl --data data/dev/benign_student_b.jsonl --estimate` → `--max-calls <추정 이상>`. 그 trace의 Jev 점수로 τ_J를 고르고, 비교표의 세 행(⑤ 단독 = `default.yaml` + `--set stages.input.jev=false`, Jev 단독 = `jev-only.yaml`에 τ_J 적용, 역할 분담 = `default.yaml` + `--set stages.input.jev=true --set thresholds.tau_J=<고른 값>`(default는 전제 4개가 확인되기 전에는 Jev를 켜지 않으므로 명시한다))을 dev 공격 ≥100 + dev 정상으로 같은 방식으로 돈다
 
 **수용 기준**
-- [ ] 사용 전제 4개를 점검해 기록, 하나라도 빠지면 `jev: false`와 이유를 PRD §10·ADR-0008에 적음([ADR-0008][a8])
+- [ ] 사용 전제 4개를 점검해 기록, 하나라도 빠지면 `jev: false`와 이유를 ADR-0008에 적음([ADR-0008][a8])
 - [ ] τ_J: 한국어 정상 학생 질문 ≥300건에서 오탐 ≤0.5%, 별도 정상 세트로 확인([GR-04][gr04])
 - [ ] τ_m은 dev에서 정함([ADR-0008][a8])
 - [ ] ⑤ 단독 / Jev 단독 / 역할 분담의 차단율·과잉 거절·지연·비용 비교표([GR-04][gr04])
@@ -833,7 +833,7 @@ uv run python -m guardrail.eval.run --config configs/ablation/no_retrieval.yaml 
 - [ ] `crisis_resources.yaml`의 `verified_at`이 90일 이내
 - [ ] 팀 요청 2건(κ 교차 라벨, 템플릿 검토)의 결과 또는 "없음 + 한계"를 결과 파일에 적음
 - [ ] GP3로 넘긴 슬라이스(S2.3 PII·S2.8·S2.9·S2.10)와 이유를 GP3 에픽 체크리스트와 [GP3 문서](GP3-integration-eval.md)에 적음
-- [ ] PRD §10 GP2 행 Status 갱신(완료 / 부분 + 넘긴 목록), Plan 열에 이 문서 링크. PRD GR-14 생성 실패 행·오류 행(장애 처리)·PII 행(서비스 모드 차단)·§7 위기 행과 GR-14 수용 기준의 장애 중 합격선 분리(S2.5 PR)와 GR-12 위기 끔 문구(S2.1 PR)가 들어갔는지 확인
+- [ ] PRD GR-14 생성 실패 행·오류 행(장애 처리)·PII 행(서비스 모드 차단)·§7 위기 행과 GR-14 수용 기준의 장애 중 합격선 분리(S2.5 PR)와 GR-12 위기 끔 문구(S2.1 PR)가 들어갔는지 확인
 - [ ] `default.yaml`이 머지된 단계만 켜고 있음(위기·규칙·⑤, PII·세션·검색·Jev는 머지됐을 때만)
 - [ ] ADR 갱신: ADR-0008(Jev 켬/끔과 이유), ADR-0003(위기 오탐 안내의 연락처 한 줄), ADR-0007(직렬 모드로 바꿨다면 그 결과)
 - [ ] 계약 대조 15분([master-plan §10](../master-plan.md#10-개발-규칙)): master §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 보고, 다르면 GP3 슬라이스 전에 master-plan을 먼저 고친다. 이 Phase에서 특히 `check_output()`에 `session` 인자가 없음(방식 B 출력 레코드는 `input_request_id`로 잇는다), 서비스 모드 기록 주인(`Guard`, `Verdict.request_id`), `gate.max_wait_s`와 마감 분리, `FAILURE_TABLE` 16행을 본다

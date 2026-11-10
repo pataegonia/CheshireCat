@@ -49,11 +49,14 @@ jobs:
           # --no-renames: guardrail/ 밖으로 옮긴 파일도 변경으로 잡는다.
           list="$RUNNER_TEMP/changed-files"
           git -c core.quotepath=false diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA" > "$list"
-          if grep -zqE '^(guardrail/|\.github/workflows/guardrail-ci\.yml$)' "$list"; then
-            echo "guardrail=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "guardrail=false" >> "$GITHUB_OUTPUT"
-          fi
+          # grep 종료 코드: 0=일치, 1=불일치, 2 이상=오류. 오류를 "변경 없음"으로 보지 않는다.
+          rc=0
+          grep -zqE '^(guardrail/|\.github/workflows/guardrail-ci\.yml$)' "$list" || rc=$?
+          case "$rc" in
+            0) echo "guardrail=true" >> "$GITHUB_OUTPUT" ;;
+            1) echo "guardrail=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::변경 파일 검사 실패 (grep $rc)"; exit 1 ;;
+          esac
 
   test:
     name: guardrail / lint·test

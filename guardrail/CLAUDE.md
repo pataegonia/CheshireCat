@@ -8,4 +8,5 @@
 - 명령 (이 폴더에서): `uv sync` · `uv run pytest` · `uv run ruff check .` · `uv run ruff format .`
 - 대회 규칙: 채팅 `gpt-5-nano`·임베딩 `text-embedding-3-small`만. 모델 파일, 외부 API, 인터넷 사전·데이터셋, 다른 LLM이 만든 데이터 묶음은 서버에 넣지 않는다. 출처는 `docs/competition/provenance.md`.
 - **서버 로그는 시간·길이·상태 코드·오류만.** 요청·답변 본문을 저장하면 실격이다. API 키·토큰은 환경변수로만.
+- 커밋 메시지에 `Co-Authored-By:` 줄, PR 제목·본문에 `🤖 Generated with Claude Code` 줄을 넣지 않는다(`pr-policy / attribution` 검사가 PR 본문을 막는다. 설정은 저장소 `.claude/settings.json`의 `attribution`).
 - `/tutor` 코드는 수정하지 않는다. `/tutor`와 맞닿는 결정은 PRD §9에 제안으로만 쓴다.

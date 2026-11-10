@@ -174,7 +174,7 @@
 |---|---|---|---|
 | 선행 | S2.8 | 라벨 | + `orchestrator` |
 
-- `Guard.classify(messages) -> Category`, `KbIndex` 재사용, `LLM.slot()`을 팀 서버에서 import하는 예제(`tests/test_tutor_api.py`). 범주 → action 대응(PRD §9 D3)을 docstring에 둔다. 리더에게 PR 링크로 전달한다. `/tutor` 코드는 고치지 않는다.
+- `Guard.classify(messages) -> Category`, `Guard.judge_output(messages, candidate_answer) -> OutputVerdict`(PRD §9 D1-2), `KbIndex` 재사용, `LLM.slot()`을 팀 서버에서 import하는 예제(`tests/test_tutor_api.py`). 범주 → action 대응(PRD §9 D3)을 docstring에 둔다. 리더에게 PR 링크로 전달한다. `/tutor` 코드는 고치지 않는다.
 
 ## 4. Phase 끝 점검
 

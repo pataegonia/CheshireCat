@@ -63,7 +63,7 @@ PRD §4의 단계가 모듈 하나씩에 대응한다.
 | ⑤ 입력 판정 | `judges/input_judge.py` + `prompts/input_judge.md` | `judge_input` | 04 | 0012·0013 |
 | ⑥ 출력 근거 판정 | `judges/output_judge.py` + `prompts/output_judge.md` | `judge_output` | 07 | 0014 |
 | ⑦–⑨ decision·3단·safe·기본값 | `decide.py`(+ `schema.decision_of`) | `output_verdict`, `safe_of`, `fallback_category` | 07·08·09 | 0012·0014 |
-| 조율(병렬 2회·요청 예산) | `guard.py` | `Guard.build`, `Guard.judge`, `Guard.classify` | 09·10 | 0009·0011 |
+| 조율(병렬 2회·요청 예산) | `guard.py` | `Guard.build`, `Guard.judge`, `Guard.classify`, `Guard.judge_output` | 09·10 | 0009·0011 |
 | LLM 게이트 | `llm.py` | `LLM.complete`, `LLM.probe`, `LLM.slot` | 10 | 0011 |
 | 설정 | `config.py` | `load_config`, `config_hash`, `load_prompt` | 11 | — |
 | 공개 세트 로더 | `data.py` | `load_public`, `labeled_rows` | 05·13 | 0013 |
@@ -352,7 +352,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.8** | 판정 조립: decision·3단·safe·기본값·예산 | 07·08·09·01 / 0012·0014·0009 | P0 | 5h | Opus | S1.2·S2.3·S2.4·S2.6·S2.7 | GR-07 표 ①–④·GR-08·GR-09 표 전 행 테스트, 장애 주입에서 형식 오류 0·30초 안, 서버 연결 |
 | **S2.9** | 평가 하네스 v1·베이스라인 | 13·11 / 0006·0013 | P0 | 6h | Sonnet | S1.4·S2.8 | §4.6 `report.md` 전 항목, 3회 분산, nano 단독·kNN·LR 단독 점수(PRD §11-2-2), 설정만으로 ablation 실행 |
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
-| **S2.11** | 튜터 공유 API(제안 D1·D2·D4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
+| **S2.11** | 튜터 공유 API(제안 D1·D2·D4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
 | **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
 | **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과 |
 | **S3.3** | OOM용 KB 조각 ablation | 04 / 0010 | P1 | 3h | Sonnet | S2.9 | `with_oom_kb_snippet` 순이득(3회 분산 밖에서 > 0이면 켬, 부트스트랩 구간은 보고)과 켜기 결정 |

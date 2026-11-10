@@ -61,9 +61,9 @@ PRD §4의 단계가 모듈 하나씩에 대응한다.
 | ③ 보조 판정기 | `knn.py`, `classifier.py`, `clusters.py` | `KnnIndex`, `LrClassifier`, `build_clusters`(짝 묶음. `KnnIndex`가 기동 때 직접 계산하고 `eval.cv`도 import. 서버는 eval 패키지에 의존하지 않는다) | 05 | 0013 |
 | ④ KB 검색(R13-A가 잰 BM25 변형) | `kb.py` | `KbIndex.load`, `KbIndex.search` | 03 | 0010 |
 | ⑤ 입력 판정 | `judges/input_judge.py` + `prompts/input_judge.md` | `judge_input` | 04 | 0012·0013 |
-| ⑥ 출력 근거 판정 | `judges/output_judge.py` + `prompts/output_judge.md` | `judge_output` | 07 | 0014 |
+| ⑥ 출력 근거 판정 | `judges/output_judge.py` + `prompts/output_judge.md` | `ask_grounded` | 07 | 0014 |
 | ⑦–⑨ decision·3단·safe·기본값 | `decide.py`(+ `schema.decision_of`) | `output_verdict`, `safe_of`, `fallback_category` | 07·08·09 | 0012·0014 |
-| 조율(병렬 2회·요청 예산) | `guard.py` | `Guard.build`, `Guard.judge`, `Guard.classify`, `Guard.judge_output` | 09·10 | 0009·0011 |
+| 조율(병렬 2회·요청 예산) | `guard.py` | `Guard.build`, `Guard.judge`, `Guard.classify`, `Guard.judge_output(messages, candidate_answer, category=None)` | 09·10 | 0009·0011 |
 | LLM 게이트 | `llm.py` | `LLM.complete`, `LLM.probe`, `LLM.slot` | 10 | 0011 |
 | 설정 | `config.py` | `load_config`, `config_hash`, `load_prompt` | 11 | — |
 | 공개 세트 로더 | `data.py` | `load_public`, `labeled_rows` | 05·13 | 0013 |
@@ -94,7 +94,7 @@ guardrail/
 | `tests/` | `test_preprocess.py` 유지·확장(골격 뷰 테스트는 S2.1이 지움), `test_config.py`는 S1.1이 다시 씀. `test_llm.py`·`fakes.py`는 S1.1이 지우고 S1.3이 새로 씀(`fakes.py`는 `FakeLLM`·`FakeClock`), 나머지 v4 테스트 삭제 | S1.1·S1.3·S2.1 |
 | `configs/unguarded.yaml`, `prompts/attack_judge.md`, `resources/`, `data/seed/`, `results/`(v4) | 삭제(git 이력에 남음). v4 스모크 세트는 쓰지 않는다(PRD §8) | S1.1 |
 
-- SPEC은 `/tutor`·`/guard`를 한 프로세스에 두라고 요구하지 않는다. 다만 각 계정의 제출은 **그 계정 런박스의** `/tutor`·`/guard` 주소여야 한다(SPEC §7). 그래서 모든 제출(C1 상수, C2 v1, 최종)에는 같은 런박스의 `/tutor`가 있어야 한다. 시작용 server.py는 둘을 한 앱에 둔다. 같은 프로세스로 둘지는 팀 선택(PRD §9 T4, 리더 결정). 가드는 APIRouter로 만들어 어느 쪽이든 붙는다. API 키는 어느 쪽이든 팀 키 하나라(SPEC §7.1) 한 프로세스를 함께 쓰면 전역 게이트가 중요하다. 가드는 `router`(FastAPI `APIRouter`)와 독립 실행용 `create_app()`을 함께 낸다. `create_app()`은 `/guard` 옆에 시작용 `/tutor`(`competition/server.py`의 것 또는 팀 라우터)를 함께 붙이고, 시작용 server.py처럼 `TEAM_TOKEN` Bearer 검사를 앱 수준 의존성으로 걸어 `/tutor`에도 같은 401을 적용한다. 팀 서버가 준비되기 전의 제출은 `create_app()`으로 하고, `tutor_url`은 이 런박스의 `…/proxy/8000/tutor`다. 포트는 8080을 피한다(VSCode가 씀, SPEC §7).
+- SPEC은 `/tutor`·`/guard`를 한 프로세스에 두라고 요구하지 않는다. 다만 각 계정의 제출은 **그 계정 런박스의** `/tutor`·`/guard` 주소여야 한다(SPEC §7). 그래서 모든 제출(C1 상수, C2 v1, 최종)에는 같은 런박스의 `/tutor`가 있어야 한다. 시작용 server.py는 둘을 한 앱에 둔다. 같은 프로세스로 둘지는 팀 선택(PRD §9 T4, 리더 결정). 가드는 APIRouter로 만들어 어느 쪽이든 붙는다. API 키는 어느 쪽이든 팀 키 하나라(SPEC §7.1) 한 프로세스를 함께 쓰면 전역 게이트가 중요하다. 가드는 `router`(FastAPI `APIRouter`)와 독립 실행용 `create_app()`을 함께 낸다. `create_app()`은 `/guard` 옆에 시작용 `/tutor`(`competition/server.py`의 것 또는 팀 라우터)를 함께 붙이고, `TEAM_TOKEN` Bearer 검사(`check_token`)는 가드 `APIRouter` 자체의 의존성(`APIRouter(dependencies=[Depends(check_token)])`)이라 팀 서버가 `router`만 붙여도 `/guard`는 인증된다. `create_app()`은 복사한 `/tutor` 라우트에 같은 검사를 따로 걸어 같은 401을 적용한다. 팀 서버가 준비되기 전의 제출은 `create_app()`으로 하고, `tutor_url`은 이 런박스의 `…/proxy/8000/tutor`다. 포트는 8080을 피한다(VSCode가 씀, SPEC §7).
 - 서버 계약은 하나다: `Guard.judge(req) -> Judgement`(S1.2의 `ConstantGuard`도 같음). 서버는 `judgement.response.to_json(block)`만 내고, 나머지 필드는 하네스만 쓴다. 로그에 남기지 않는다.
 
 ## 4. 공통 계약
@@ -162,7 +162,7 @@ class Judgement:                 # guard.py(S1.2가 dataclass를 먼저 둠). �
 - `decision`은 어디에서도 따로 저장하지 않는다. `decision_of()` 하나가 설정의 범주 → decision 표(`block_categories`)로 정한다(ADR-0012). 표 값은 공개 세트에서 잰 block 4범주다(PRD §3).
 - 규칙 ②(`rules.py`)의 추출기는 `guardrail/scripts/r13/q5_ungrounded.py`의 `NUM_RX`와 비교 방식을 옮기되 두 곳만 고친 기본 변형 **V2**다(`guardrail/scripts/r13/q6_rule_fp.py`): 추출 전에 답변의 섹션 ID 인용 `\(?\b(?:PY|PR|FIN)-\d{2}-\d{2}\b\)?`을 지우고, ⓕ의 글자 클래스 `[한두세네다섯]`("다 번"에도 걸림)을 `(?:한|두|세|네|다섯)`으로 바꾼다. 토큰 종류: ⓐ 숫자(`.`·`,` 자릿수 허용) + 공백 0–1개 + 단위 `만 원·천 원·원·%·세·개월·점·번·개·씩·배·단계·권·명·회·줄` ⓑ `.`·`,`가 든 숫자(1.3, 1,000) ⓒ 두 자리 이상 수 ⓓ 숫자 리스트 리터럴(`[3, 7, 12]`) ⓔ 영문·코드 리터럴(`[A-Za-z_][A-Za-z_0-9.()]*`, 공백으로 이어진 영문 단어까지 한 토큰) ⓕ 한글 수사 `한·두·세·네·다섯` + 공백 0–1개 + `번·개·단계·가지·배`. 비교: 토큰의 `scoring.normalize` 값(NFKC·소문자·공백·문장부호 제거)이 BM25 1위 섹션 전체(`section_text`)를 같은 식으로 정규화한 문자열에 부분 문자열로 없으면 걸린다. 값 정규화(콤마·만·천·억), 단위 주·일·년·글자, 단위 없는 한글 수사, 백틱 안 영문만 보기는 기본이 아니고 ablation `rule_extra_tokens`다. 실측(V2, BM25 1위 섹션): U(가드 근거 없음) 18/35, G(가드 근거 있음) 0/32, T(튜터 참조 답변 answer·scaffold·abstain 중 evidence 있는 119행) 6/119. 점수 차 3.5 게이트면 16/35, 0/32, 3/119([R13-A §6](research/R13-public-set-analysis.md#6-규칙-②-오탐-재측정-santa-4라운드)). 원래 `NUM_RX`(V0)의 18/35·0/32는 가드만 본 기록이고 V0는 T에서 16/119가 오탐이다. "규칙 경보 ⇒ p≈1"은 측정한 곳(가드)에서만 성립하므로 S3.1이 규칙 정밀도 P(U 대 G∪T)로 정한다: P ≥ 1/(1+s)면 `false` + 규칙 구간, 0.5 ≤ P < 1/(1+s)면 `false/[]`(`output.rule_emit_spans: false`), P < 0.5면 규칙을 끈다. 구간(`rule_span: pm4`, `q6_rule_fp.py`의 `merged_pm4_spans`와 같은 방식): 걸린 토큰 중 서로 다른 문자열마다 답변에서 처음 나온 위치(`ans.find(t)`) 하나에 ±4자 창을 만들고(같은 토큰이 여러 번 나와도 첫 위치만 쓴다), 겹치는 창은 하나로 합치고, 같은 구간은 한 번만 낸다. 여기에 `scoring.normalize` 뒤 1글자 이상 남는 구간만 낸다는 필터를 더한다(`merged_pm4_spans`에는 없는 추가 조건). (이 방식의 구간 F1: V2 경보 행에서 BM25 1위 기준 0.651, 정답 섹션 기준 0.638. 합치지 않은 V0의 0.627은 기록).
 - `literal_rule`은 점수 차를 인자로 받는다: `literal_rule(answer_raw, hits, margin, kb, cfg)`. `margin = KbIndex.margin(query)`이고 `margin < cfg.output.rule_min_margin`(기본 3.5)이면 `None`이다.
-- `rules.py`는 런타임에 `competition/grader`를 import하지 않는다. `scoring.normalize` 4줄 함수를 복사해 두고, 단위 테스트가 `scoring.normalize`와 출력이 같은지 대조한다(provenance 기록).
+- `rules.py`는 런타임에 `competition/grader`를 import하지 않는다. `scoring.normalize` 4줄 함수와 그것이 쓰는 `PUNCT` 상수를 함께 복사해 두고, 단위 테스트가 `scoring.normalize`와 출력이 같은지 대조한다(provenance 기록).
 - 응답 직렬화는 `GuardResponse.to_json(block)`(block = 설정 `block_categories`) 하나다. `has_candidate`면 `output`을 반드시 넣는다(GR-01).
 - 뷰(GR-02): 정규화본 = `normalize()`(NFKC 안 씀, LLM·kNN·LR용). 신호별 뷰는 측정한 뷰 그대로다. 거절 정규식 = 후보 답변 원문에서 인용(“” "" ‘’ '' 「」 『』)·백틱·코드 블록을 뺀 것(튜터 거절 36/36, 순응 답변 오감지 0/19, R13-A §6.4) / 숫자·리터럴 = 원문 / 저신호 = 조합 전 텍스트(`strip_tags(원문)`: 태그 문자만 지운 원문). 붙인 뷰 = `joined(정규화본)`(한 음절짜리 한글 토큰이 공백 하나를 사이에 두고 2개 이상 이어진 구간의 공백만 지움, "광 고" → "광고")는 **구현하지 않는다**(필요하면 ablation으로 추가). 어떤 기본 신호도 읽지 않고 토글도 없다(거절 정규식에 걸면 "알려 줄 수 없어요"가 붙어 거절 33/36). NFKC는 `rules.py`의 숫자·리터럴 비교(양쪽 `scoring.normalize`)와 BM25 토큰에서만 쓴다.
 
@@ -177,12 +177,15 @@ class Guard:
         # 하네스는 폴드마다 평가 묶음을 뺀 rows를 넘긴다(ADR-0013). 만든 뒤 색인은 바뀌지 않는다
     async def judge(self, req: GuardRequest) -> Judgement     # 예외를 밖으로 내지 않는다(GR-09). 서버는 .response만 직렬화(S1.2 ConstantGuard와 같은 계약)
     async def classify(self, messages: Sequence[Message]) -> Category   # judge의 입력 부분. /tutor 제안(PRD §9 T1)
+    async def judge_output(self, messages: Sequence[Message], candidate_answer: str,
+                           category: Category | None = None) -> OutputVerdict
+        # None이면 classify(messages)를 먼저 부른다(nano +1회). 3단 ①과 safe는 그 범주를 쓴다. /tutor 제안(PRD §9 T1-2)
 ```
 
 `judge()` 순서(요청 마감 = 시작 + `budget_s`):
 1. ① 뷰를 만든다. 대상 = 마지막 `user` 메시지. 창 = 첫 학습자 발화 + 마지막 메시지 `input.window_last`개(첫 학습자 발화가 이미 마지막 `window_last`개 안에 있으면 중복해서 넣지 않는다).
 2. ② 신호. `low_signal_direct`가 켜졌고 저신호면 범주는 `low_signal_input`, 입력 nano를 부르지 않는다. 저신호 검사는 **자모 조합 전** 텍스트(`preprocess.strip_tags`, 태그 문자만 지운 것)에 건다. "ㅋㅋㅠㅠ"가 음절로 조합되지 않게 하기 위해서다.
-3. ③ kNN 예시·다수 범주, LR 예측. ④ BM25 상위 `kb.top_k`(질의 = 창 안의 학습자 발화 + 후보 답변. 측정한 질의는 모든 user 발화 + 답변(`all_user + "\n" + candidate_answer`)이다. 가드 공개 세트는 메시지가 5개 이하라 창(첫 학습자 발화 + 마지막 6개) 안의 학습자 발화와 같다. 튜터 공개 세트는 최대 11메시지(7개 초과 58행)라 창과 다르지만, 창 질의로 q6를 다시 돌려도(`q6_rule_fp.py --window`) U·G·T 수치와 F1이 같았다([R13-A §6](research/R13-public-set-analysis.md#6-규칙-②-오탐-재측정-santa-4라운드))). 질의의 학습자 발화 부분과 kNN·LR 입력 텍스트는 `retrieval.max_query_chars`(기본 4000자, 공개 세트 학습자 발화는 최대 448자라 측정값에 영향 없음)에서 자른다(뒤쪽 = 최근 발화를 남김).
+3. ③ kNN 예시·다수 범주, LR 예측. ④ BM25 상위 `kb.top_k`(질의 = 창 안의 학습자 발화 + 후보 답변. 측정한 질의는 모든 user 발화 + 답변(`all_user + "\n" + candidate_answer`)이다. 가드 공개 세트는 메시지가 5개 이하라 창(첫 학습자 발화 + 마지막 6개) 안의 학습자 발화와 같다. 튜터 공개 세트는 최대 11메시지(7개 초과 58행)라 창과 다르지만, 창 질의로 q6를 다시 돌려도(`q6_rule_fp.py --window`) U·G·T 수치와 F1이 같았다([R13-A §6](research/R13-public-set-analysis.md#6-규칙-②-오탐-재측정-santa-4라운드))). 길이 상한: 전처리 전에 메시지 하나와 후보 답변을 각각 `input.max_chars`로 자른다(원문 길이 상한. 1MB 메시지를 전처리하면 CPU 약 1.3초). BM25 질의 = 창 안의 학습자 발화(`retrieval.max_query_chars // 2`자로 자름) + 후보 답변(`retrieval.max_query_chars // 2`자로 자름), kNN·LR 입력 = 판정 대상 발화(`retrieval.max_query_chars`자로 자름). 기본 4000자이고 공개 세트 학습자 발화는 최대 444자라 측정값에 영향 없다(학습자 부분은 뒤쪽 = 최근 발화를 남김). CPU가 큰 단계(전처리·BM25·kNN·LR)는 스레드 풀에서 돌린다(S2.10이 이벤트 루프를 확인).
 4. ⑤·⑥을 태스크로 띄우고 마감까지 기다린다. ⑥은 후보 답변이 비어 있지 않으면 부른다(`nano_tier3: false`이고 `output.call_nano_when_unused: false`면 건너뜀. 기본 true라 측정 때는 늘 부른다). `output.mode: v6`이면 `output_judge.md`로 부르고 그 값은 ③(토글 `nano_tier3`가 켜졌을 때만)과 S3.1 정밀도 기록에 쓴다. `output.mode: baseline`이면 `output_judge_baseline.md`(reason → grounded → safe)로 부르고 그 값을 grounded·safe에 바로 쓴다(`unsupported=[]`).
 5. ⑦–⑨ `decide.py`. 마감을 넘기면 끝난 결과 + GR-09 기본값으로 바로 응답하고 남은 태스크는 취소한다.
 
@@ -255,13 +258,13 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   embedding: false                 # GR-03·GR-05 임베딩, P2
 input:
   window_last: 6
-  max_chars: 2000                  # 메시지 하나를 LLM에 넣는 상한(판정 대상 <target>에도 적용, 긴 이력 대비)
+  max_chars: 2000                  # 메시지 하나·후보 답변의 원문 길이 상한(전처리 전에 자름. 판정 대상 <target>에도 적용, 긴 이력 대비)
   knn: {analyzer: char_wb, ngram: [1, 3], min_examples: 4, max_examples: 8, per_category: 2}
   knn_vote_k: 7                    # kNN 다수결 이웃 수(실패 기본값·3번째 호출)
   lr: {analyzer: char_wb, ngram: [1, 3], C: 1.0}
   oom_snippet_chars: 400
 kb: {top_k: 3, ngram: 2, k1: 1.2, b: 0.75}
-retrieval: {max_query_chars: 4000}   # BM25 질의·kNN·LR 입력 텍스트 상한(긴 이력 대비, 뒤쪽을 남김)
+retrieval: {max_query_chars: 4000}   # BM25 질의(학습자 부분·답변 부분 각 //2)·kNN·LR 입력(발화 하나) 상한(긴 이력 대비, 뒤쪽을 남김)
 output:
   mode: v6                         # v6 | baseline(출력 nano 베이스라인 프롬프트 → grounded·safe 바로, unsupported=[])
   failure_default: grounded        # grounded(true/[]) | ungrounded(false/[]). 토글 아님. S3.1이 정한다(PRD GR-07·GR-09)
@@ -313,7 +316,7 @@ uv run python -m guardrail.eval.load --url http://localhost:8000 --token "$TEAM_
 uv run python -m guardrail.eval.probe --calls 200               # 런박스 실측(PRD §11-2-1)
 ```
 
-- `run`은 서버를 띄우지 않고 폴드마다 `Guard.build(rows=…)`로 `judge()`를 직접 부른다. 응답은 `eval/score.py`가 `competition/grader/scoring.py`의 `score_guard`·`guard_score`와 `harness/score_local.py`의 `as_scoring_input`을 그대로 import해 채점한다. `score_guard`·`guard_score`에는 `endpoint=='guard'` 행만 넣는다. 교차 검증 가드 점수는 홀드아웃을 뺀 가드 행(약 160행)으로 보고하고, 홀드아웃 가드 행(약 40행, 20%)은 `--holdout`으로 따로 잰다. 튜터 행(decision 라벨 없음)은 범주 정확도와, 범주에서 도출한 decision으로 block F1을 따로 계산한다.
+- `run`은 서버를 띄우지 않고 폴드마다 `Guard.build(rows=…)`로 `judge()`를 직접 부른다. 응답은 `eval/score.py`가 `competition/grader/scoring.py`의 `score_guard`·`guard_score`와 `harness/score_local.py`의 `as_scoring_input`을 그대로 import해 채점한다. `score_guard`·`guard_score`에는 `endpoint=='guard'` 행만 넣는다. 교차 검증 가드 점수는 홀드아웃을 뺀 가드 행(약 160행)으로 보고하고, 홀드아웃 가드 행(약 40행, 20%)은 `--holdout`으로 따로 잰다. 튜터 행(decision 라벨 없음)은 범주 정확도와, 범주에서 도출한 decision으로 block F1을 따로 계산한다(`eval/score.py`가 합성 dict를 `scoring.block_f1`에 넘겨 계산한다).
 - 실행 전에 예상 호출 수를 찍고 `--max-calls`(기본은 설정 `eval.max_calls` = 5,000)를 넘으면 멈춘다. `--estimate`는 호출 0회, `--fake`는 `FakeLLM` 고정 응답(입력 `normal`, 출력 grounded)으로 API 0회.
 - 산출: `runs/<name>/responses.jsonl`(공개 세트 응답 + `Judgement` 요약, 배포 자료 분석이라 서버 밖에서 저장 가능), `summary.json`, `report.md`. `runs/`는 커밋하지 않는다. 남길 표는 `results/<날짜>-<이름>.md`로 옮겨 커밋한다.
 - `report.md` 내용: 가드 점수(3회 범위), block F1·정밀도·재현율, 짝 문항만의 block 정확도, 범주 정확도(non-normal)와 혼동행렬, 출력 평균·항목별·단별(①–④) 적중, kNN·LR 단독 점수, 튜터 200행 범주 정확도(따로), 호출 수, 지연 p50·p95. 설정 비교는 묶음 단위 부트스트랩 95% 구간을 보고한다(채택 기준은 아님, PRD §7).
@@ -339,14 +342,14 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | ID | 슬라이스 | GR / ADR | 우선 | 예상 | 모델 | 선행 | 수용 기준(요지) |
 |---|---|---|---|---|---|---|---|
 | **S1.1** | v4 코드 정리·의존성·설정 v6 | 11·14 | P0 | 3h | Sonnet | — | §3 삭제 목록 반영(`mock_tutor.py` 포함), v4 `llm.py`·`test_llm.py`·`fakes.py`·`unguarded.yaml`도 삭제(S1.3이 LLM 계층을 새로 씀), `config.py`·`test_config.py`를 §4.4 모델로 다시 씀, `default.yaml`·`baseline.yaml` 로드, 토글 검증·`config_hash`(프롬프트 머리말 version) 테스트, 남은 코드로 CI green(커버리지 ≥80%) |
-| **S1.2** | 서버 골격·스키마(인증·200 보장·로그 규칙, 상수 판정) | 01·09·12 / 0009 | P0 | 5h | Sonnet + 보안 리뷰 | S1.1 | `ConstantGuard.judge()` → `Judgement`(서버는 `judgement.response`만 직렬화), `TEAM_TOKEN`은 lifespan에서 읽음(없으면 기동 실패), 퍼징·필드 누락에서 형식 오류 0·422 0·3xx 0·본문 반사 0(오류·기본값 경로와 `input` 객체. `unsupported`는 후보 답변의 원문 구간이라 예외), 인증 실패 401(`/guard`와 `create_app()`의 `/tutor` 둘 다), 스키마 대조, 로그 grep 0건(GR-01·12) |
+| **S1.2** | 서버 골격·스키마(인증·200 보장·로그 규칙, 상수 판정) | 01·09·12 / 0009 | P0 | 5h | Sonnet + 보안 리뷰 | S1.1 | `ConstantGuard.judge()` → `Judgement`(서버는 `judgement.response`만 직렬화), `TEAM_TOKEN`은 lifespan에서 읽음(없으면 기동 실패), 퍼징·필드 누락에서 형식 오류 0·422 0·3xx 0·본문 반사 0(오류·기본값 경로와 `input` 객체. `unsupported`는 후보 답변의 원문 구간이라 예외), 인증은 가드 `APIRouter`의 의존성(`APIRouter(dependencies=[Depends(check_token)])`)이고 `create_app()`이 복사한 `/tutor`에도 같은 검사를 건다, 인증 실패 401(`/guard`와 `create_app()`의 `/tutor` 둘 다, 라우터만 맨 FastAPI 앱에 붙여도 토큰 없으면 401인 테스트), 스키마 대조, 로그 grep 0건(GR-01·12) |
 | **S1.3** | LLM 게이트 개편 | 10 / 0011 | P0 | 4h | Sonnet | S1.1 | `llm.py`·`tests/test_llm.py`·`tests/fakes.py`(`FakeLLM`·`FakeClock`) 새로 씀(v4 파일은 이력 참고), §4.3 규칙 테스트(재시도 1·마감·Retry-After·게이트·파라미터·probe), 예외 메시지 미기록 |
 | **S1.4** | 공개 세트 로더·채점 재현·짝 묶음 분할 | 13 / 0006·0013 | P0 | 4h | Sonnet(분할은 Opus 검토) | S1.1 | in-process 상수 응답을 `score.py`로 채점한 값이 R13-A Q4와 같음(전부 allow 29.48, 입력 완벽 + 상수 출력 84.48), `splits/v1.json` 커밋(최대 묶음 크기 보고). `score_local.py` 대조는 S1.5 |
 | **S1.5** | 런박스 배포·상수 응답 첫 제출 | 01·14 / 0009 | P0 | 2h | 본인 | S1.2(채점 대조는 S1.4) | 터널 주소 200 JSON·리다이렉트 없음, 토큰 없는 `/guard`·`/tutor` 요청 401, 상수 서버를 `score_local.py --tutor-url --guard-url`(공개 400행, 시작용 튜터 nano 약 200회)로 채점해 `score.py`와 가드 점수 차 ≤0.005, `submission.json`에 커밋 해시, 채점 메시지 기록 |
 | **S1.6** | 런박스 실측(nano 지연·파라미터) | 10 / 0011 | P0 | 2h | 본인(코드 초안은 Sonnet) | S1.3·S1.5 | PRD §11-2-1 표: 파라미터별 수용, json_schema 여부, `max_completion_tokens` 800 대 1200–1600의 `finish_reason=length` 비율, 동시 1·16·64 지연 p50·p95, 호출 ≤200 |
 | **S2.1** | 전처리 v6(숨긴 문자 드러내기) | 02 / 0001 | P0 | 3h | Sonnet | S1.1 | 임의 유니코드 예외 0, `strip_tags`(태그 문자만 지움, 조합 없음), p95 ≤10ms, 기존 정규화 회귀 유지(GR-02. KB 코드 블록 오매칭 0은 S2.3) |
 | **S2.2** | KB 색인·검색 | 03 / 0010 | P0 | 4h | Sonnet | S1.4·S2.1 | 튜터 `evidence` recall@1·@3 보고, block이 아닌 가드 후보 67행 정답 섹션 1위 ≥64/67·3위 ≥66/67, 색인 시간·메모리, 검색 p95 ≤20ms |
-| **S2.3** | 결정적 신호(저신호·거절·숨긴 태그) | 06·08 / 0014 | P0 | 4h | Opus | S2.1 | 저신호 400행 정밀도 100%, 거절 정규식 튜터 거절 36/36(표본 안 값)·순응 오탐 보고, LLM 없이 같은 값(GR-06), KB 코드 블록 신호 정규식 오매칭 0(GR-02) |
+| **S2.3** | 결정적 신호(저신호·거절·숨긴 태그) | 06·08 / 0014 | P0 | 4h | Opus | S2.1 | 저신호 400행 정밀도 100%(표본 안 값: 규칙이 이 400행의 관찰에서 나왔다. 비공개 일반화는 가정), 거절 정규식 튜터 거절 36/36(표본 안 값)·순응 오탐 보고, LLM 없이 같은 값(GR-06), KB 코드 블록 신호 정규식 오매칭 0(GR-02) |
 | **S2.4** | 숫자·리터럴 규칙 ② | 06·07 / 0014·0010 | P0 | 5h | Opus | S2.2 | 정확한 이식 검증: `rule_min_margin` 0에서 U 18/35·G 0/32·T 6/119, 3.5에서 16/35·0/32·3/119, 구간은 `q6_rule_fp.py`의 `merged_pm4_spans` 출력과 같은 스팬이고 구간 F1은 ±0.005 안(BM25 1위 0.651 / 정답 섹션 0.638, R13-A §6). 기본 `rule_min_margin`은 3.5. U·G·T 탐지·오탐을 따로 보고(튜터 0건은 요구하지 않음), 구간 100% 원문 부분 문자열 |
 | **S2.5** | kNN·LR 보조 판정기 | 05·14 / 0013 | P0 | 5h | Sonnet | S1.4·S2.1 | 교차 검증 kNN 다수·LR 각각의 block F1·범주 정확도, 기동 학습 ≤10초, 요청당 p95 ≤20ms, 색인 불변 테스트 |
 | **S2.6** | 입력 판정 nano·프롬프트 v1 | 04 / 0012·0013 | P0 | 8h | Opus + santa | S1.3·S2.5 | `FakeLLM`으로 스키마·재시도·기본값 계약, 파싱 성공률 100%(기본값 포함), 호출 p95 ≤5s |
@@ -354,13 +357,13 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.8** | 판정 조립: decision·3단·safe·기본값·예산 | 07·08·09·01 / 0012·0014·0009 | P0 | 5h | Opus | S1.2·S2.3·S2.4·S2.6·S2.7 | GR-07 표 ①–④·GR-08·GR-09 표 전 행 테스트, 장애 주입에서 형식 오류 0·30초 안, 서버 연결 |
 | **S2.9** | 평가 하네스 v1·베이스라인 | 13·11 / 0006·0013 | P0 | 6h | Sonnet | S1.4·S2.8 | §4.6 `report.md` 전 항목, 3회 분산, nano 단독·kNN·LR 단독 점수(PRD §11-2-2), 설정만으로 ablation 실행 |
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
-| **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
+| **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output(messages, candidate_answer, category=None)`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
 | **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
 | **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과 |
 | **S3.3** | OOM용 KB 조각 ablation | 04 / 0010 | P1 | 3h | Sonnet | S2.9 | `with_oom_kb_snippet` 순이득(3회 분산 밖에서 > 0이면 켬, 부트스트랩 구간은 보고)과 켜기 결정 |
 | **S3.4** | 3번째 호출 ablation | 05 / 0011·0013 | P2 | 4h | Sonnet → Opus 판정 | S2.9 | PRD §11-2-4 순이득이 3회 분산 밖에서 0보다 클 때만 켬, 호출 수·지연 증가 보고 |
 | **S3.5** | nano 구간·임베딩 ablation | 07·03·05 / 0014·0010 | P2 | 5h | Sonnet | S3.1 | 각 순이득과 켜기 결정, 임베딩은 기동 시간·호출 수 함께 |
-| **S3.6** | ablation 표·분산·지연 표 확정 | 11·13 / 0006 | P1 | 3h | Sonnet | S3.1–S3.5 | 베이스라인·전체·토글 하나씩, 3회 범위, 지연 표(GR-11·13 수용 기준) |
+| **S3.6** | ablation 표·분산·지연 표 확정 | 11·13 / 0006 | P1 | 3h | Sonnet | S3.1–S3.5 | 베이스라인·전체·토글 하나씩, 3회 범위, 지연 표(GR-11·13 수용 기준). 모든 행(베이스라인 포함)을 S3.2 머지 뒤 동결 후보 프롬프트로 (다시) 잰다. 11/18 1차는 입력 프롬프트를 건드리지 않는 토글만이고, 프롬프트 버전이 다른 결과는 재사용하지 않는다 |
 | **S3.7** | 홀드아웃·기능 동결(11/20) | 13 / 0006 | P0 | 3h | Opus | S3.1·S3.2(S3.3–S3.5는 11/19 12:00까지 결정된 것만 반영, 나머지는 꺼짐) | 동결 설정 1회 홀드아웃, 열람 기록, 동결 커밋 SHA, 동결본 제출 |
 | **S4.1** | 규칙 준수 점검(provenance·로그·색인 불변·하드코딩) | 12·14 / 0009·0013 | P0 | 4h | Opus + 보안 리뷰 | S3.7 | provenance 서버 자산 전수, 로그 코드 리뷰 본문 경로 0, 공개 세트·퍼징 뒤 로그 grep 0건 |
 | **S4.2** | 최종 부하·최종 제출 | 01·10·14 / 0009 | P0 | 3h | 본인 | S4.1 | 런박스 재시작 뒤 부하 시험 통과, `submission.json` 커밋 해시, 11/24 18:00까지 제출 |
@@ -448,7 +451,7 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - **보안**: 키·토큰은 환경변수와 `.env`(git 제외). 테스트 픽스처는 공개 세트에서만 가져온다.
 - **결정이 갈리면** `/ecc:council`로 정리하고, 사용자 몫이면 묻는다. 설계가 바뀌면 ADR을 고친다.
 - **계약 대조**: Phase 끝마다 15분을 써서 §4 계약과 실제 코드(서명·설정 키·CLI)를 맞춘다. 다르면 이 문서를 먼저 고친다.
-- **동결 뒤**(11/20 18:00): 형식 오류·시간 초과·로그 규칙 위반을 고치는 PR만 넣는다. 각 PR은 교차 검증 1회와 부하 시험으로 확인한다.
+- **동결 뒤**(11/20 18:00): 형식 오류·시간 초과·로그 규칙 위반을 고치는 PR과 팀 서버에 가드 라우터를 붙이는 연결 코드(판정 로직 변경 없음)만 넣는다. 각 PR은 교차 검증 1회와 부하 시험으로 확인한다.
 - **문서**: 슬라이스가 끝나면 Phase 문서 체크박스와 에픽 체크리스트를 갱신한다.
 
 ## 11. 진행 추적 (GitHub)
@@ -477,7 +480,7 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 | 과한 호출로 키 회수 | 낮음 | 하네스 `--max-calls`, 부하 시험은 채점 수준까지, 제출은 관문마다 |
 | **C2 과부하**(3.5일에 50h) | 높음 | Sonnet 병렬 18h, §7 순서, 11/15 밤 관문 못 넘으면 C3 첫날 사용, 동결일 고정 |
 | 런박스 환경(설치 불가, Python <3.12, 세션 2일 제한) | 중간 | S1.5에서 먼저 확인(대안: `uv python install 3.12` / `requires-python` 낮춤 / wheel 묶음 복사, §8), `TEAM_TOKEN`은 `[A-Za-z0-9_-]+`(셸 `. .env`로 읽음), 재시작 절차를 C1 문서에 적음, 최종 제출 전 재시작(S4.2) |
-| 팀 서버 통합 지연·충돌 | 중간 | `router`와 `create_app()` 둘 다 유지, 통합은 리더 일정에 맞춤, 동결 뒤에는 붙이는 코드만 |
+| 팀 서버 통합 지연·충돌 | 중간 | `router`와 `create_app()` 둘 다 유지, 통합은 리더 일정에 맞춤, 동결 뒤에는 붙이는 연결 코드(판정 로직 변경 없음)만 |
 | 마지막 제출이 서버 문제로 낮게 나옴 | 낮음 | 11/24 18:00까지 제출, 11/25 아침에는 상태 확인만, 제출 전 부하 시험 |
 
 ## 13. 변경 기록

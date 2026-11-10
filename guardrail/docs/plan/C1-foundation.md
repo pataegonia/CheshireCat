@@ -38,6 +38,7 @@
 
 **만들거나 바꿀 파일**
 - 삭제: `src/guardrail/{pipeline,trace,types,llm}.py`, `src/guardrail/eval/{build_grounding,metrics,datasets,run,mock_tutor}.py`, 해당 테스트(`test_pipeline`·`test_trace`·`test_build_grounding`·`test_metrics`·`test_datasets`·`test_run`·`test_mock_tutor`·`test_llm`), `tests/fakes.py`(파일 전체. `FakeLLM`은 v4 `LLM`을 상속하고 `FakeTutor`는 `Chunk`·`Turn`을 써서 남길 것이 없다), `configs/unguarded.yaml`, `prompts/attack_judge.md`, `resources/`, `data/seed/`, `data/README.md`, `results/`(v4 파일), `tests/fixtures/mini*`
+- 새로: v6 타입만 먼저 만든다(로직 없음, 뒤 슬라이스가 병렬로 쓰도록). `src/guardrail/schema.py`의 `Category`·`Decision`·`decision_of(category, block)`·`Message`·`GuardRequest`·`OutputVerdict`·`GuardResponse`(`to_json(block)` 포함) dataclass, `src/guardrail/signals.py`의 `Signals` dataclass, `src/guardrail/guard.py`의 `Judgement` dataclass와 `tests/test_schema.py`(`decision_of`·`to_json`)
 - 남김: `preprocess.py`(S2.1). `eval/mock_tutor.py`는 남기지 않는다: S2.2의 BM25 원본은 `scripts/r13/common.py`다(master-plan §3)
 - **LLM 계층은 S1.1에서 지우고 S1.3이 새로 쓴다**: v4 `llm.py`·`tests/test_llm.py`·`tests/fakes.py`는 `types.py`와 v4 `Guard`에 묶여 있어 남기지 않는다. S1.3이 `llm.py`·`tests/test_llm.py`·`tests/fakes.py`(`FakeLLM`·`FakeClock`)를 §4.3대로 새로 만든다(v4 파일은 git 이력의 참고용). `tests/test_config.py`는 아래 `config.py`와 함께 §4.4 모델로 다시 쓴다(`Guard(cfg)` 테스트 등 v4 부분은 지움). 그래서 S1.1 머지 때 CI(ruff + pytest + 남은 코드 커버리지 ≥80%)가 green이다
 - `eval/stats.py`: `wilson`만 남기고 `test_stats.py`도 줄인다
@@ -66,14 +67,14 @@
 | 브랜치 | `gr/s1.2-server-skeleton` |
 | 보이는 변화 | `uvicorn guardrail.server:app --port 8000 --no-access-log`가 뜨고 `/guard`가 상수 판정을 낸다 |
 
-**만들 파일**: `src/guardrail/schema.py`, `src/guardrail/server.py`, `src/guardrail/guard.py`(`Judgement`·`ConstantGuard`만. `Guard`는 S2.8), `src/guardrail/signals.py`(`Signals` dataclass만. 함수는 S2.3), `tests/test_schema.py`, `tests/test_server.py`, (`TestClient`가 요구하면) `pyproject.toml`·`uv.lock`의 dev `httpx`.
+**만들 파일**: `src/guardrail/schema.py`에 `parse_request` 추가(타입은 S1.1), `src/guardrail/server.py`, `src/guardrail/guard.py`에 `ConstantGuard` 추가(`Judgement`는 S1.1, `Guard`는 S2.8), `tests/test_schema.py`(파싱 테스트 추가), `tests/test_server.py`, (`TestClient`가 요구하면) `pyproject.toml`·`uv.lock`의 dev `httpx`.
 
 **계약**([master-plan §4.1](../master-plan.md#41-타입-schemapy와-모듈별-dataclass))
 - `schema.py`: `Category`, `Decision`, `decision_of(category, block)`(표는 설정 `block_categories`, ADR-0012), `Message`, `GuardRequest`, `parse_request(body: bytes) -> GuardRequest`, `OutputVerdict`, `GuardResponse.to_json(block)`(block = 설정 `block_categories`, `frozenset[Category]`).
 - `parse_request`는 예외를 내지 않는다. JSON이 아니거나 `messages`가 목록이 아니면 `messages=()`. 메시지 항목 중 `content`가 문자열인 것만 받는다. `candidate_answer` 키가 있으면 `has_candidate=True`. 값이 문자열이면 그대로 두고(빈 문자열 `""`은 출력 `true/[]`·`safe=true`), 문자열이 아니면 `candidate_answer=None`으로 둔다. 이 경우는 출력에 한해 요청 파싱 실패다: `output`은 `output.failure_default`(GR-09), `safe`는 GR-08 그대로.
-- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `TEAM_TOKEN`을 읽고 판정기 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`. `/tutor`는 시작용 라우트를 팀 모듈에 **복사해** 붙인다(`competition/server.py`는 import 때 환경변수를 읽고 자기 앱을 만들므로 import하지 않는다). 아래 인증은 시작용 server.py처럼 **앱 수준 의존성**으로 걸어 `/guard`와 `/tutor`에 똑같이 적용한다.
+- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `TEAM_TOKEN`을 읽고 판정기 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`. `/tutor`는 시작용 라우트를 팀 모듈에 **복사해** 붙인다(`competition/server.py`는 import 때 환경변수를 읽고 자기 앱을 만들므로 import하지 않는다). 아래 인증(`check_token`)은 가드 `APIRouter` 자체의 의존성으로 건다: `APIRouter(dependencies=[Depends(check_token)])`. 팀 서버가 `router`만 붙여도 `/guard`가 인증 없이 열리지 않는다. `create_app()`은 복사한 `/tutor` 라우트에 같은 `check_token`을 따로 건다.
   - 본문은 `await request.body()`로 직접 읽는다. pydantic 요청 모델을 라우트 인자로 두지 않는다(422 반사 방지).
-  - 인증: `Authorization` 헤더를 `f"Bearer {TEAM_TOKEN}"`와 `hmac.compare_digest`로 비교(바이트). 틀리면 401 + `{"error": "unauthorized"}`(SPEC은 코드를 정하지 않는다. 시작용 `competition/server.py`의 `HTTPException(401)`이 근거). `TEAM_TOKEN`은 import 때가 아니라 lifespan에서 읽어 `app.state`에 둔다(테스트가 환경변수 없이 `guardrail.server`를 import할 수 있게). 없거나 비면 lifespan이 예외를 내 기동이 실패한다.
+  - 인증: `Authorization` 헤더를 `f"Bearer {TEAM_TOKEN}"`와 `hmac.compare_digest`로 비교(바이트). 틀리면 401 + `{"error": "unauthorized"}`(SPEC은 코드를 정하지 않는다. 시작용 `competition/server.py`의 `HTTPException(401)`이 근거). `TEAM_TOKEN`은 import 때가 아니라 lifespan에서 읽어 `app.state`에 두고, `check_token`은 `request.app.state`에서 읽는다(없으면 닫힌 채 401. 테스트가 환경변수 없이 `guardrail.server`를 import할 수 있게). 없거나 비면 lifespan이 예외를 내 기동이 실패한다.
   - 예외 처리기: 라우트 안의 어떤 예외도 GR-09 기본 응답 200으로. 전역 422 처리기도 같은 기본 응답(본문 반사 없음).
   - 서버 계약은 하나다: `await guard.judge(req) -> Judgement`이고 서버는 `judgement.response.to_json(block)`만 낸다(S2.8의 `Guard`도 같은 계약). 이 슬라이스의 판정기는 상수다: `Guard`가 아직 없으므로 `ConstantGuard.judge()`가 `Judgement(response=GuardResponse("normal", OutputVerdict(True, (), True) if req.has_candidate else None), input_source="default", output_tier=None, nano_grounded=None, signals=Signals(False, False, False), knn_major=None, lr_pred=None, calls=0, errors=(), latency_ms={})`를 돌려준다. `Judgement`·`Signals`는 §4.1 그대로 `guard.py`·`signals.py`에 dataclass만 먼저 둔다.
   - 로그 미들웨어: 한 줄 = 시각, 경로, 요청 바이트 수, 응답 바이트 수, 상태 코드, 처리 ms, 오류 클래스 이름. 그 밖은 남기지 않는다(GR-12). `print`·`logger.exception` 금지.
@@ -82,7 +83,7 @@
 **테스트 먼저**(FastAPI `TestClient`. `TestClient`가 `httpx`를 요구하면 이 슬라이스가 `pyproject.toml` dev 의존성에 `httpx`를 더하고 `uv.lock`을 갱신한다. 런타임 의존성은 아니다, master-plan §4.7)
 - 공개 세트 400행 전부 → 200, `contract/guard.schema.json`(jsonschema)로 검증, `candidate_answer` 키 유무에 따라 `output` 유무
 - 퍼징(`hypothesis`): 빈 본문, JSON 아님, `messages` 누락·타입 오류, 깨진 유니코드, 매우 긴 이력(1MB) → 모두 200·스키마 통과
-- 인증: 헤더 없음·틀림·`Bearer ` 접두 없음 → 401, 본문에 토큰 없음. `create_app()`의 `/tutor`도 같은 경우에 401
+- 인증: 헤더 없음·틀림·`Bearer ` 접두 없음 → 401, 본문에 토큰 없음. `create_app()`의 `/tutor`도 같은 경우에 401. 라우터만 맨 FastAPI 앱에 붙여도(`create_app()` 없이, lifespan 없이) 토큰 없는 `/guard` 요청이 401
 - 기동: `TEAM_TOKEN` 없이 `guardrail.server` import는 성공하고, lifespan 기동은 실패
 - `/guard/`(끝 슬래시) → 3xx가 아님(404 허용)
 - 반사: 요청에 넣은 표지 문자열이 오류·기본값 경로의 응답과 `input` 객체에 없음. `unsupported`는 후보 답변의 원문 구간이라 이 검사에서 뺀다

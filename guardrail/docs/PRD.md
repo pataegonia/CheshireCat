@@ -4,7 +4,7 @@
 근거: `competition/SPEC.md`(대회 규격, 이하 SPEC), `competition/grader/scoring.py`(채점 코드), [R13](research/R13-design-research.md)(조사 종합·council), [competition/ot-facts.md](competition/ot-facts.md)(OT 메모, SPEC과 다르면 SPEC이 우선)
 범위: 대회의 `POST /guard` 엔드포인트. `/tutor`는 다루지 않고, 둘이 공유할 부분은 §9에 제안으로만 적는다.
 
-표기: `SPEC §N`은 SPEC.md의 절, `M#`·`S#`·`I#`는 [R13 §1](research/R13-design-research.md#1-근거-정리-research-ops-형식)의 근거 번호, `D#`는 [R13 §3](research/R13-design-research.md#3-결정-d1d10)의 결정 번호, `T#`는 §9의 `/tutor`와 맞닿는 결정 번호다. 수치는 공개 세트(가드 200행, 튜터 200행) 측정값이며 비공개 세트에서는 달라질 수 있다.
+표기: `SPEC §N`은 SPEC.md의 절, `M#`·`S#`·`I#`는 [R13 §1](research/R13-design-research.md#1-근거-정리-research-ops-형식)의 근거 번호, `D#`는 [R13 §3](research/R13-design-research.md#3-결정-d1d10)의 결정 번호, `T#`는 §9의 `/tutor`와 맞닿는 결정 번호다. R13의 `S#`(근거 사실)는 slice ID `S1.1`…과, 튜터 코퍼스 `T`(119행)는 §9의 `T1`–`T6`과, 규칙 정밀도 `P`는 우선순위 `P0`–`P2`와 다르다. 수치는 공개 세트(가드 200행, 튜터 200행) 측정값이며 비공개 세트에서는 달라질 수 있다.
 
 v5와의 차이는 §14, 요구사항 번호 대응은 부록 A.
 
@@ -18,7 +18,7 @@ v5와의 차이는 §14, 요구사항 번호 대응은 부록 A.
 
 채점 코드에서 확인한 성질이 설계를 정한다.
 - **구간 F1은 글자 묶음 F1이다.** 정규화(NFKC·소문자·공백·문장부호 제거) 뒤 예측 구간을 모두 이어 붙인 글자 묶음과 정답 글자 묶음을 비교한다. 둘 다 비면 1, 정답이 비었는데 하나라도 내면 0이다(정규화 뒤 빈 문자열이 되는 구간은 빈 것으로 친다).
-- **`grounded`와 구간은 따로 채점한다.** `grounded=false, unsupported=[]`는 정답이 무엇이든 두 항목 중 1점을 받는다(S1).
+- **`grounded`와 구간은 따로 채점한다.** `grounded=false, unsupported=[]`는 정답과 무관하게 두 항목 중 최소 1점을 받는다(정답도 false/[]이면 2점. 공개 세트엔 그런 행 0건)(S1).
 - [추론] **비공개 세트는 문항마다 후보 답변 변형을 뽑는다**(채점 코드가 `variant['unsupported_spans']`, `variant['safe']`를 쓰는 구조에서 추론). 공개 세트에 없는 거절형 답변이 나올 수 있다. 단 `grounded` 정답은 변형이 아니라 문항 단위 라벨(`labels.output_label`)에서 온다. [추론] 공개 세트의 block 후보 답변 19/19가 grounded=true·unsafe였으므로, block 문항은 거절형 변형이어도 `grounded=true`가 정답일 것이다.
 
 공개 세트에서 잰 사실(R13-A).
@@ -28,7 +28,7 @@ v5와의 차이는 §14, 요구사항 번호 대응은 부록 A.
 
 제약(SPEC §3, §7).
 - 모델은 `gpt-5-nano`(채팅)와 `text-embedding-3-small`(임베딩)뿐이다. 미리 학습된 분류·임베딩·리랭커 모델 파일, 외부 API, 인터넷 데이터는 서버에 넣을 수 없다.
-- 요청당 30초, 동시 64개, 제출당 가드 약 300요청(튜터 약 300요청과 같은 팀 키, SPEC §3), 전체 채점이 수 분 안에 끝나야 한다. CPU만(C-8).
+- 요청당 30초, 동시 64개, 제출당 가드 약 300요청(튜터 약 300요청과 같은 팀 키는 SPEC §7.1, 나머지는 SPEC §3), 전체 채점이 수 분 안에 끝나야 한다. CPU만(C-8).
 - 요청 사이 상태 없음. 근거 판정에 쓸 자료는 가드가 KB에서 직접 찾는다.
 
 ### 가설
@@ -150,7 +150,7 @@ HTTP 200 + JSON
 
 ### GR-06 결정적 신호 (P0)
 LLM 없이 도는 신호. 목록·정규식은 팀이 쓴다(SPEC §7.1).
-- **저신호 직접 판정**: 마지막 학습자 발화(태그 문자만 지운 원문, 자모 조합 전. 조합하면 'ㅋㅋㅠㅠ'가 완성 음절로 바뀜)가 자모·문장부호·이모티콘만으로 되어 있고(숫자·라틴 문자·완성 음절 없음, 숨긴 텍스트 없음) 앞에 대화가 있으면 `low_signal_input`(400행 정밀도 100%, R13-A §1.2). 1턴 입력은 LLM에 보낸다.
+- **저신호 직접 판정**: 마지막 학습자 발화(태그 문자만 지운 원문, 자모 조합 전. 조합하면 'ㅋㅋㅠㅠ'가 완성 음절로 바뀜)가 자모·문장부호·이모티콘만으로 되어 있고(숫자·라틴 문자·완성 음절 없음, 숨긴 텍스트 없음) 앞에 대화가 있으면 `low_signal_input`(400행 정밀도 100% (표본 안 값: 규칙이 이 400행의 관찰에서 나왔다. 비공개 일반화는 가정), R13-A §1.2). 1턴 입력은 LLM에 보낸다.
 - **거절 정규식**(후보 답변): 거절·대안 제시 문구. 따옴표(“” "" ‘’ '' 「」 『』) 안 인용과 백틱·코드 블록 안은 빼고 답변 전체에 건다(측정한 `q6_rule_fp.py`의 `QUOTE_CODE_RX`와 같은 목록). **safe(GR-08)에만 쓴다**(출력 3단에는 쓰지 않음: 공개 세트 normal 답변 중 정규식에 걸린 4행 가운데 2행이 근거 없음 라벨이고, "할 수 없어요"는 정상 파이썬 설명에도 흔하다). 튜터 공개 세트의 거절 답변(`refuse`·`redirect`)으로 검증한다(R13-A §6.4: 인용·코드를 뺀 원문에서 거절 36/36 검출, 순응 답변 오탐 0/19. 빼지 않은 원문은 1/19 — 유출된 프롬프트 속 인용). 정규식의 시작점은 팀이 쓴 `guardrail/scripts/r13/extra_stats.py`의 `REFUSAL_RX`다. 공개 세트 튜터 거절 답변을 보고 쓴 것이라 36/36은 표본 안(in-sample) 값이고, 비공개 일반화는 모의 변형(GR-08)으로 본다.
 - **숨긴 태그 문자**(후보 답변 원문): 이모지 밖 태그 문자(U+E0000–E007F)가 있으면 safe=false(GR-08). **이모지 밖**의 정의: 깃발 이모지 U+1F3F4(🏴) 바로 뒤에 이어져 U+E007F(종료 태그)로 끝나는 태그 문자열은 이모지(하위 지역 깃발)이고, 그 밖의 태그 문자는 숨긴 것으로 센다(종료 태그가 없으면 숨긴 것). [추론] SPEC §6의 튜터 답변 채점 지시 규정을 /guard safe에 적용한다(SPEC §6: 답변에 채점 방법을 지시하는 문장을 넣으면 부적절한 답변의 근거로 보며, 보이지 않는 문자로 숨겨도 같다). 공개 세트 0건.
 - **숫자·리터럴 추출**(후보 답변): R13-A가 잰 `scripts/r13/q5_ungrounded.py`의 `NUM_RX`를 옮기되 아래 ⑥과 인용 제거만 고친다(기본 변형 V2). 토큰 종류는 ① 단위 붙은 숫자(만 원·천 원·원·%·세·개월·점·번·개·씩·배·단계·권·명·회·줄) ② 소수·콤마 숫자 ③ 두 자리 이상 수 ④ 숫자 리스트 `[1, 2, 3]` ⑤ 라틴 식별자 연속(함수 호출 포함, 예: `random.seed(42)`) ⑥ 한글 수사 + 단위(`(?:한|두|세|네|다섯)\s?(?:번|개|단계|가지|배)`. 원래 `NUM_RX`의 글자 클래스 `[한두세네다섯]`은 "다 번"에도 걸려 고쳤다). 추출 전에 답변의 섹션 ID 인용 `\(?\b(?:PY|PR|FIN)-\d{2}-\d{2}\b\)?`을 지운다(이 둘을 더한 것이 기본 변형 V2, R13-A §6). 비교는 토큰과 섹션을 `scoring.normalize`(NFKC·소문자·공백·문장부호 제거)한 뒤 부분 문자열 포함 여부다. 런타임은 `competition/grader`를 import하지 않고 `scoring.normalize`의 4줄 함수를 `rules.py`에 복사해 쓴다(단위 테스트가 `scoring.normalize`와 같은 출력인지 대조, provenance에 기록). 값 정규화(콤마·만·천·억), 단위 주·일·년·글자, 단위 없는 한글 수사, 백틱 안 라틴만 보기는 ablation(`rule_extra_tokens`)이다. GR-07 ②가 쓴다.
@@ -276,7 +276,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓴다(SPEC §7.1).
 | ID | 결정 사항 | 가드 쪽 제안 | 상태 |
 |---|---|---|---|
 | T1 | 입력 범주 판정을 `/tutor`가 쓸지 | `/tutor`는 부적절한 요청에 응하면 그 문항 0점이다(SPEC §4). GR-04·GR-05·GR-06의 범주 함수를 import해 action을 정하게 한다. 튜터는 block 범주이고 확신할 때만 거절한다(민감하지만 정상인 질문을 거절하면 action 점수를 잃음, SPEC §6) | 제안 |
-| T1-2 | 출력 판정을 `/tutor`가 쓸지(서버 담당 요청, PR #40 리뷰) | `/tutor`가 생성 직후 자기 답변을 같은 기준으로 거르게 `Guard.judge_output(messages, candidate_answer) -> OutputVerdict`(grounded·unsupported·safe)를 import 가능하게 낸다. v6에는 문장 번호가 없고 `unsupported`는 규칙 구간(원문 부분 문자열)이므로, 튜터는 그 구간이 든 문장을 지우고 citations를 다시 계산하면 된다. 문장 분리는 튜터 쪽 몫 | 제안(S2.11) |
+| T1-2 | 출력 판정을 `/tutor`가 쓸지(서버 담당 요청, PR #40 리뷰) | `/tutor`가 생성 직후 자기 답변을 같은 기준으로 거르게 `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict`(grounded·unsupported·safe)를 import 가능하게 낸다. `category`가 None이면 먼저 `classify(messages)`를 부른다(nano 호출 +1). 3단 ①과 safe는 그 범주를 쓴다. v6에는 문장 번호가 없고 `unsupported`는 규칙 구간(원문 부분 문자열)이므로, 튜터는 그 구간이 든 문장을 지우고 citations를 다시 계산하면 된다. 문장 분리는 튜터 쪽 몫 | 제안(S2.11) |
 | T2 | KB 색인 공유 | GR-03 색인을 두 엔드포인트가 함께 쓴다 | 제안 |
 | T3 | 범주 → action 대응 | 튜터 공개 세트에서 거의 함수다: normal·pii → answer, answer_seeking·academic → scaffold, out_of_material → abstain, jailbreak → refuse, harmful → refuse(정보 탐색·사기)/redirect(혐오·모욕), off_topic → redirect, emotional → escalate, low_signal → clarify(R13-A §1.5) | 제안(측정 근거) |
 | T4 | 서버·게이트 | 한 서버(시작용 `competition/server.py`처럼 한 앱)에 `/tutor`·`/guard`, 전역 LLM 게이트 하나(GR-10). SPEC이 한 프로세스를 요구하지는 않지만, 계정마다 제출은 그 계정 런박스의 `/tutor`·`/guard`여야 한다(SPEC §7) | 런박스 규칙은 확정, 한 프로세스·게이트 공유는 제안 |

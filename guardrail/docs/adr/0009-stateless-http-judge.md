@@ -8,8 +8,8 @@
 ## v6 수정 (2026-11-10, R13 council)
 
 이 블록이 본문보다 우선한다(이 ADR은 v5에서 새로 썼으므로 본문이 v5다). PRD v6 GR-01·GR-09·GR-12 기준.
-- **인증**: 토큰은 환경변수 `TEAM_TOKEN`에서 읽는다. 코드·커밋에 쓰지 않고 LLM API 키와 다른 값을 쓴다(SPEC §9). `Authorization: Bearer` 값을 `hmac.compare_digest`로 비교하고, 틀리면 401과 짧은 JSON 오류로 거절한다. SPEC은 상태 코드를 정하지 않는다. 401은 시작용 `competition/server.py`가 `HTTPException(401)`을 내는 것을 근거로 한다. 이것만 200이 아니다.
-- **`/tutor`와 같은 서버(선택)**: SPEC은 `/tutor`와 `/guard`를 한 서버에 두라고 요구하지 않는다. 시작용 server.py는 둘을 한 앱에 둔다. 같은 서버(프로세스)로 둘지는 팀 선택(PRD §9 D4, 리더 결정). 가드는 APIRouter로 만들어 어느 쪽이든 붙는다. `redirect_slashes=False`. API 키는 어느 쪽이든 팀 키 하나라(SPEC §7.1), 한 프로세스를 함께 쓰면 전역 LLM 게이트가 중요해진다(ADR-0011 v6). 그때 KB 색인·kNN 색인·LR·게이트를 함께 쓴다.
+- **인증**: 토큰은 환경변수 `TEAM_TOKEN`에서 읽는다. 코드·커밋에 쓰지 않고 LLM API 키와 다른 값을 쓴다(SPEC §9). `Authorization: Bearer` 값을 `hmac.compare_digest`로 비교하고, 틀리면 401과 짧은 JSON 오류로 거절한다. 이 검사는 가드 `APIRouter` 자체의 의존성이다(`APIRouter(dependencies=[Depends(check_token)])`). 팀 서버가 `router`만 붙여도 인증이 따라오고, `create_app()`은 복사한 `/tutor` 라우트에 같은 검사를 따로 건다. SPEC은 상태 코드를 정하지 않는다. 401은 시작용 `competition/server.py`가 `HTTPException(401)`을 내는 것을 근거로 한다. 이것만 200이 아니다.
+- **`/tutor`와 같은 서버(선택)**: SPEC은 `/tutor`와 `/guard`를 한 서버에 두라고 요구하지 않는다. 시작용 server.py는 둘을 한 앱에 둔다. 같은 서버(프로세스)로 둘지는 팀 선택(PRD §9 T4, 리더 결정). 가드는 APIRouter로 만들어 어느 쪽이든 붙는다. `redirect_slashes=False`. API 키는 어느 쪽이든 팀 키 하나라(SPEC §7.1), 한 프로세스를 함께 쓰면 전역 LLM 게이트가 중요해진다(ADR-0011 v6). 그때 KB 색인·kNN 색인·LR·게이트를 함께 쓴다.
 - **항상 200**: 인증 실패를 뺀 모든 경우 200 + 규격 JSON 하나(v5와 같음, SPEC §3).
 - **422·예외 본문 제거**: FastAPI 기본 422 응답은 요청 입력값을 되돌려 주고, SDK 예외 메시지에는 요청 본문이 실릴 수 있다([R13 §1 S6](../research/R13-design-research.md#1-근거-정리-research-ops-형식), [R13-B2 §3-5](../research/R13-B2-libraries.md#3-5-서버-fastapi--uvicorn)). 검증 오류 핸들러를 덮어써 읽을 수 있는 만큼 판정하고 200으로 답한다. 오류 로그는 예외 종류·오류 코드만 남긴다(SPEC §8, GR-12). uvicorn 접근 로그도 허용 항목만.
 - **`output.category`**: 문자열이면 무엇이든 된다(SPEC §5, 채점 안 함). `input.category`를 복사한다. `input.category`는 10범주 밖이면 형식 오류이므로 nano 출력이 enum 밖이면 실패로 본다(ADR-0012).

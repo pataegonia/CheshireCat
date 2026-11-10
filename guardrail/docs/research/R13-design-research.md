@@ -23,7 +23,7 @@
 - M8 보이지 않는 문자 0건, "광 고"처럼 음절 사이 띄우기 11건.
 
 ### 출처 사실 (R13-B, 확신도는 원문 표시를 따름)
-- S1 채점은 `grounded`와 구간을 따로 본다: `grounded=false, []`는 정답과 무관하게 두 항목 중 1점(`scoring.py`).
+- S1 채점은 `grounded`와 구간을 따로 본다: `grounded=false, []`는 정답과 무관하게 두 항목 중 최소 1점(정답도 false/[]이면 2점; 공개 세트엔 그런 행 0건)(`scoring.py`).
 - S2 GPT-5 계열 프롬프트 판정은 구간을 과하게 잡는다(정밀도 약 30%, RAGTruth).
 - S3 gpt-5-nano `reasoning_effort=minimal`은 단순 과제에서 정확도가 무너진다. `low`·`verbosity=low` 권장.
 - S4 유사 예시 few-shot이 무작위보다 낫고, 예시를 늘린다고 꾸준히 좋아지지 않는다.

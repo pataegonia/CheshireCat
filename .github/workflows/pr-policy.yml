@@ -33,7 +33,7 @@ jobs:
               /co-authored-by\s*:[^\n]*noreply@anthropic\.com/i,
             ];
             // 백슬래시와 zero-width 문자(U+200B~200D, U+FEFF)를 지운 뒤 공백을 하나로 합친다
-            const normalize = (text) => (text || "").replace(/[\\​-‍﻿]/g, "").replace(/[ \t ]+/g, " ");
+            const normalize = (text) => (text || "").replace(/[\\\u200b-\u200d\ufeff]/g, "").replace(/[ \t\u00a0]+/g, " ");
             const hit = (text) => PATTERNS.some((re) => re.test(normalize(text)));
 
             // 재실행 때 이벤트 payload가 수정 전 값일 수 있어 최신 PR 정보를 읽는다

@@ -9,7 +9,7 @@
 
 | ADR | 제목 | 상태 | 날짜 |
 |-----|------|------|------|
-| [0001](0001-korean-normalization-skeleton-view.md) | 한국어 정규화와 골격 뷰 (v6: 정규화본 + 붙인 뷰, 골격 뷰 미사용, Kiwi 미사용) | proposed, v6 수정 | 2026-10-30 |
+| [0001](0001-korean-normalization-skeleton-view.md) | 한국어 정규화와 골격 뷰 (v6: 정규화본, 붙인 뷰는 구현하지 않음, 골격 뷰 미사용, Kiwi 미사용) | proposed, v6 수정 | 2026-10-30 |
 | [0002](0002-input-cascade-rules-then-llm.md) | 입력 판정: 규칙 → LLM (v6: 학습 분류기 허용하되 보조, 직접 결정은 저신호만) | proposed, v6: 일부 superseded by 0012·0013 | 2026-10-30 |
 | [0003](0003-deterministic-crisis-first.md) | 위기 탐지를 결정적으로 먼저 (v6: `emotional_distress`는 allow인 범주 하나, 어휘 목록 삭제) | proposed, v6 수정 | 2026-10-30 |
 | [0004](0004-judge-model-family.md) | 판정 모델은 생성과 다른 계열 | superseded by 0011 | 2026-10-30 |

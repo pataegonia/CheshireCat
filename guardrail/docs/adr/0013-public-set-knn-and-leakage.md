@@ -16,7 +16,7 @@ SPEC §7.1은 세 가지를 명시적으로 허용한다. 공개 세트를 few-s
 **예시 풀과 색인 (D3)**
 - 풀은 `public/guard.jsonl` 200행 + `public/tutor.jsonl` 200행이다. 서버 기동 때 이 두 파일만 읽어 메모리에 색인한다(SPEC §3). 요청을 처리하는 동안 색인에 아무것도 더하지 않고 디스크에 쓰지 않는다(SPEC §8).
 - 색인 대상은 각 행의 마지막 학습자 발화(정규화본)이고, 예시는 발화 + 범주만 넣는다. 유사도는 문자 n-gram TF-IDF 코사인이다(scikit-learn `TfidfVectorizer(analyzer="char_wb")`, [R13-B2 §3-3](../research/R13-B2-libraries.md#3-3-분류기)).
-- 고르는 규칙([R13 D3](../research/R13-design-research.md#3-결정-d1d10)): 4–8개. 규칙끼리 부딪치면 이 순서로 따른다. ① block/allow 반대쪽 최근접 예시 1개는 반드시 넣는다 ② 범주당 최대 2개 ③ 전체 최대 8개 ④ 고른 예시가 짝 묶음에 속하면 그 짝은 ②·③을 지킬 때만 더한다(santa 4라운드, PRD GR-05). 묶음은 `KnnIndex`가 기동 때 서버 쪽 모듈(`guardrail/clusters.py`)의 공용 함수로 직접 계산한다. `eval.cv`도 같은 함수를 import하고, 서버는 eval 패키지에 의존하지 않는다. 가장 비슷한 예시를 마지막(질의 바로 앞)에 둔다([R13-B §2-2](../research/R13-B-external-research.md#2-2-라벨-균형순서개수)). 개수는 이 범위 안에서 교차 검증으로 고른다.
+- 고르는 규칙([R13 D3](../research/R13-design-research.md#3-결정-d1d10)): 4–8개. 규칙끼리 부딪치면 이 순서로 따른다. ① block/allow 반대쪽 최근접 예시 1개(kNN 1위 이웃의 block/allow 판정과 판정이 다른 예시 중 가장 가까운 것)는 반드시 넣는다 ② 범주당 최대 2개 ③ 전체 최대 8개 ④ 고른 예시가 짝 묶음에 속하면 그 짝은 ②·③을 지킬 때만 더한다(santa 4라운드, PRD GR-05). 묶음은 `KnnIndex`가 기동 때 서버 쪽 모듈(`guardrail/clusters.py`)의 공용 함수로 직접 계산한다. `eval.cv`도 같은 함수를 import하고, 서버는 eval 패키지에 의존하지 않는다. 가장 비슷한 예시를 마지막(질의 바로 앞)에 둔다([R13-B §2-2](../research/R13-B-external-research.md#2-2-라벨-균형순서개수)). 개수는 이 범위 안에서 교차 검증으로 고른다.
 - 교란이 붙은 normal 예시(거절하지 말고·소설 틀 등)가 이웃이면 그대로 넣는다. 과잉 차단을 막는 예시다([R13-A 설계 시사점 2](../research/R13-public-set-analysis.md#설계-시사점)).
 - 임베딩 kNN(`text-embedding-3-small`, 400행 임베딩은 기동 때 계산)은 ablation이다. 요청마다 임베딩 호출이 하나 는다.
 

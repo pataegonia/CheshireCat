@@ -49,7 +49,7 @@
 **테스트 먼저**: 설정 로드(default·baseline), 모르는 키 거부, `${ENV}` 치환, `config_hash`가 프롬프트 version을 포함, 금지 토글 조합 2개, ablation 깊은 병합(덮어쓴 키만 달라짐).
 
 **수용 기준**
-- [ ] 삭제 목록이 모두 반영되고 `rg "pipeline|trace|types" src tests`에 v4 import가 없다
+- [ ] 삭제 목록이 모두 반영되고 `rg "(from|import) guardrail\.(pipeline|trace|types)" src tests`에 v4 import가 없다
 - [ ] `uv sync --locked`, `ruff`, `pytest --cov --cov-fail-under=80` green
 - [ ] `uv lock`이 풀린다(numpy·scikit-learn·Python 3.12). 안 풀리면 버전을 낮추고 PR에 적는다
 
@@ -68,9 +68,9 @@
 **만들 파일**: `src/guardrail/schema.py`, `src/guardrail/server.py`, `tests/test_schema.py`, `tests/test_server.py`.
 
 **계약**([master-plan §4.1](../master-plan.md#41-타입-schemapy와-모듈별-dataclass))
-- `schema.py`: `Category`, `Decision`, `decision_of(category, block)`(표는 설정 `block_categories`, ADR-0012), `Message`, `GuardRequest`, `parse_request(body: bytes) -> GuardRequest`, `OutputVerdict`, `GuardResponse.to_json()`.
-- `parse_request`는 예외를 내지 않는다. JSON이 아니거나 `messages`가 목록이 아니면 `messages=()`. 메시지 항목 중 `content`가 문자열인 것만 받는다. `candidate_answer` 키가 있으면 `has_candidate=True`(값이 문자열이 아니면 `""`).
-- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `Guard` 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`. 아래 인증은 시작용 server.py처럼 **앱 수준 의존성**으로 걸어 `/guard`와 `/tutor`에 똑같이 적용한다.
+- `schema.py`: `Category`, `Decision`, `decision_of(category, block)`(표는 설정 `block_categories`, ADR-0012), `Message`, `GuardRequest`, `parse_request(body: bytes) -> GuardRequest`, `OutputVerdict`, `GuardResponse.to_json(block)`(block = 설정 `block_categories`, `frozenset[Category]`).
+- `parse_request`는 예외를 내지 않는다. JSON이 아니거나 `messages`가 목록이 아니면 `messages=()`. 메시지 항목 중 `content`가 문자열인 것만 받는다. `candidate_answer` 키가 있으면 `has_candidate=True`. 값이 문자열이면 그대로 두고(빈 문자열 `""`은 출력 `true/[]`·`safe=true`), 문자열이 아니면 `candidate_answer=None`으로 둔다. 이 경우는 출력에 한해 요청 파싱 실패다: `output`은 `output.failure_default`(GR-09), `safe`는 GR-08 그대로.
+- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `Guard` 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`. `/tutor`는 시작용 라우트를 팀 모듈에 **복사해** 붙인다(`competition/server.py`는 import 때 환경변수를 읽고 자기 앱을 만들므로 import하지 않는다). 아래 인증은 시작용 server.py처럼 **앱 수준 의존성**으로 걸어 `/guard`와 `/tutor`에 똑같이 적용한다.
   - 본문은 `await request.body()`로 직접 읽는다. pydantic 요청 모델을 라우트 인자로 두지 않는다(422 반사 방지).
   - 인증: `Authorization` 헤더를 `f"Bearer {TEAM_TOKEN}"`와 `hmac.compare_digest`로 비교(바이트). 틀리면 401 + `{"error": "unauthorized"}`(SPEC은 코드를 정하지 않는다. 시작용 `competition/server.py`의 `HTTPException(401)`이 근거). `TEAM_TOKEN`이 없으면 기동 실패.
   - 예외 처리기: 라우트 안의 어떤 예외도 GR-09 기본 응답 200으로. 전역 422 처리기도 같은 기본 응답(본문 반사 없음).
@@ -141,7 +141,7 @@
 **계약**([master-plan §4.5](../master-plan.md#45-데이터-datapy-evalcvpy))
 - `data.py`: `PublicRow`, `LabeledRow`, `load_public(public_dir)`, `labeled_rows(rows)`. `LabeledRow.text`는 마지막 `user` 발화의 `preprocess.normalize()` 결과, `category`는 `labels["category"]`(가드·튜터 둘 다 있음, R13 M3).
 - `eval/score.py`: `competition/grader`와 `competition/harness`를 `sys.path`에 넣고 `scoring.score_guard`·`scoring.guard_score`, `score_local.as_scoring_input`을 import한다. `score_responses(rows, responses: dict[id, dict]) -> dict`(가드 점수, block F1, 범주 정확도, 출력 평균과 항목별). `score_guard`·`guard_score`에는 `endpoint=='guard'` 행만 넣고, 가드 점수는 가드 200행으로 보고한다. 튜터 행(decision 라벨 없음)은 범주 정확도와, 범주에서 도출한 decision으로 block F1을 따로 계산한다. 채점 로직을 다시 쓰지 않는다.
-- `eval/cv.py`: `clusters(rows, jaccard=0.5) -> dict[id, cid]`(서버 쪽 모듈 `src/guardrail/clusters.py`에 두고 `cv.py`가 import한다. S2.5의 `KnnIndex`도 기동 때 같은 함수로 묶음을 계산하고, 서버는 eval 패키지에 의존하지 않는다. **마지막 학습자 발화** 정규화본의 문자 3-gram Jaccard, union-find. 빠른 질문 버튼 첫 발화는 여러 행이 같은 문장을 써 무관한 행을 이으므로 넣지 않는다), `make_splits(rows, folds=5, holdout=0.2, seed)`, `load_splits()`, `train_rows(split, fold=k | holdout)`(평가 묶음과 홀드아웃 묶음을 뺀 `LabeledRow`). CLI `--write`.
+- `eval/cv.py`: `build_clusters(rows, jaccard=0.5) -> dict[id, cid]`(서버 쪽 모듈 `src/guardrail/clusters.py`에 두고 `cv.py`가 import한다. S2.5의 `KnnIndex`도 기동 때 같은 함수로 묶음을 계산하고, 서버는 eval 패키지에 의존하지 않는다. **마지막 학습자 발화** 정규화본의 문자 3-gram Jaccard, union-find. 빠른 질문 버튼 첫 발화는 여러 행이 같은 문장을 써 무관한 행을 이으므로 넣지 않는다), `make_splits(rows, folds=5, holdout=0.2, seed)`, `load_splits()`, `train_rows(split, fold=k | holdout)`(평가 묶음과 홀드아웃 묶음을 뺀 `LabeledRow`). CLI `--write`.
 - 홀드아웃은 가드 행 기준 20% 묶음. 튜터 행만 있는 묶음은 홀드아웃에 넣지 않는다.
 
 **테스트 먼저**
@@ -189,14 +189,14 @@
 | 항목 | 내용 |
 |---|---|
 | GR / ADR | GR-10, PRD §11-2-1 · ADR-0011 |
-| 우선 · 예상 · 모델 | P0 · 2h · Sonnet |
+| 우선 · 예상 · 모델 | P0 · 2h · 본인(코드 초안은 Sonnet) |
 | 선행 | S1.3, S1.5 |
 | 브랜치 | `gr/s1.6-probe` |
 
 **만들 파일**: `src/guardrail/eval/probe.py`, `tests/test_probe.py`(FakeLLM으로 집계만).
 
 **작업**
-- `probe.py --calls 200`: ① 파라미터 수용(`reasoning_effort=low`, `verbosity=low`, json_schema strict, `max_completion_tokens=800`) 각각 따로 1회 ①-2 `max_completion_tokens` 800 대 1200–1600에서 `finish_reason=length` 비율(같은 `InputOut`·`OutputOut` 프롬프트), 길이 잘림이 보이면 큰 값으로 `default.yaml`을 바꾸는 PR ② `InputOut` 크기의 프롬프트로 동시 1·16·64에서 지연 p50·p95, 오류 코드 분포, 출력 토큰 ③ 총 호출 ≤200, 시작 전에 예상 호출 수를 찍는다.
+- `probe.py --calls 200`: ① 파라미터 수용(`reasoning_effort=low`, `verbosity=low`, json_schema strict, `max_completion_tokens=800`) 각각 따로 1회 ② `max_completion_tokens` 800 대 1200–1600에서 `finish_reason=length` 비율(같은 `InputOut`·`OutputOut` 프롬프트), 길이 잘림이 보이면 큰 값으로 `default.yaml`을 바꾸는 PR ③ `InputOut` 크기의 프롬프트로 동시 1·16·64에서 지연 p50·p95, 오류 코드 분포, 출력 토큰 ④ 총 호출 ≤200, 시작 전에 예상 호출 수를 찍는다.
 - 결과를 §4 표에 적는다. json_schema가 안 되면 `default.yaml`의 `structured_output`을 바꾸는 PR을 함께 낸다.
 
 - 게이트 크기(`llm.gate`, 기본 64)는 이 실측 뒤에 정한다. 가드는 요청마다 2회를 병렬로 부르고, 같은 프로세스면 튜터와 게이트를 함께 쓰기 때문이다.

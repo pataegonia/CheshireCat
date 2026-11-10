@@ -59,7 +59,8 @@
 ```
 채점기 ──POST /tutor──┐                          ┌──POST /guard── 채점기
                       ▼                          ▼
-   guardrail.server.create_app()  ← 가드 #47: 인증 · 예외→200 · 메타 로그 · lifespan
+   app.py(통합) = FastAPI + guardrail.server.router + tutor.router  ← 가드 #47 S1.5 "팀 서버가 router만 붙여도 인증 유지"
+   (가드 create_app()은 가드 단독 제출 #50용으로 그대로)
    llm.py 게이트 · probe()         ← 가드 #48: 세마포어 · 재시도 1 · slot()
                       │                          │
                       ▼                          ▼
@@ -88,7 +89,7 @@
 
 ```
 CheshireCat/
-  app.py                 (선택) 조립 5줄: guardrail.server.create_app(guard, tutor_router)
+  app.py                 통합 — FastAPI 앱 + `guardrail.server.router` + 튜터 라우터 + 라우터별 예외 기본값 + 메타 로그 + lifespan(Guard · 색인 · 게이트 생성)
   guardrail/             가드 — server.py(골격) · llm.py(게이트) · judge · eval/score · probe
   tutor/                 튜터 — judge · prompts · answer · retrieval/(공유 색인 · 이름 사전 · 임베딩) · runtime · eval
   integration/           통합 — contracts.py · actions.py
@@ -100,7 +101,7 @@ CheshireCat/
   .github/workflows/integration-ci.yml, .gitleaks.toml
 ```
 
-- 가드 #47의 `create_app(guard_factory)`가 "시작용 `/tutor` 또는 팀 라우터"를 붙인다고 돼 있으므로, 튜터 라우터 주입 인자만 요청한다(IN-05). 루트 `app.py`는 가드가 반대하면 두지 않는다.
+- 가드 #47 S1.5는 가드 `router`가 `APIRouter(dependencies=[Depends(check_token)])`라 "팀 서버가 `router`만 붙여도 인증이 유지"된다고 적고, "가드 담당은 `/tutor`를 고치지 않는다"고 했다. 따라서 **루트 `app.py`를 통합이 만들고 가드 `router` + 튜터 라우터를 붙인다**(IN-05). 가드 `create_app()`은 가드 단독 제출(#50)용으로 그대로 둔다.
 
 ---
 
@@ -126,6 +127,18 @@ CheshireCat/
 ---
 
 ## 5. 기능 요구사항
+
+### 5-0. 세 트랙 분담 (튜터 PRD v2 §15.2 A · B 기준, `[회의]` 확정)
+
+| | 튜터 A — 판단 · 답변 | 튜터 B — 검색 · 런타임 | 통합 — 경계 · 측정 · 운영 |
+|---|---|---|---|
+| 만든다 | 범주→action 판단 기준 · 프롬프트(TU-05 · 06), 답변 방식 · 후처리(TU-07), kNN few-shot(TU-08), 검증 · 투표(TU-09 · 10) | 검색 전부(TU-03 · 04 · 11, #70 · #81), 튜터 골격 · 계약 · 기본값 · 스키마(TU-01 · 12, #69), LLM 호출 · 설정 · 토글 · 로깅(TU-13 · 14 · 15, #78) | 계약 타입 · action 표 파일 · 결정적 수정(IN-01 · 03 · 04), 루트 `app.py` · CI · 계약 테스트(IN-05 · 09), 하네스 골격 · 총점 · ablation 실행 · recall 측정(IN-06 · 02), 부하 실행 · 레드팀(IN-07 · 08), 제출 당번 · provenance · 질의 묶음 · 발표 뼈대(IN-10 · 11 · 12) |
+| 하네스 | ablation **판단**(채택 여부), 매일 오답 분석 | 튜터 세부 지표(혼동행렬 · 오차단 · 놓친 행 · 안정 만점 비율)를 통합 하네스 위에 얹음(#71 축소) | 골격 · 가드+튜터 총점 · 3회 분산 · 프리셋 실행(#61) |
+| 부하 | — | 모의 부하 코드(#79) | 실제 API 부하 실행(2회, 세 트랙 같은 실행) |
+| 점검 세트 | 0~50개(통합이 받으면 0) | 50개 | 0~50개(열린 역할) |
+| 대략 시간 | 변동 없음(11/16~20 집중) | 원안 63h → 약 50h | 약 55h, 11/16~20 공백은 열린 역할로 |
+
+겹침 해소 원칙: **검색은 B, 판단은 A, 측정 · 조립 · 제출은 통합.** 범주→action 표는 파일 하나(주인 `[회의]`), 코드는 한 저장소 · 한 실행.
 
 ### IN-01 공용 계약 `integration/contracts.py` (P0)
 ```python
@@ -176,7 +189,8 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **수용 기준**: quote 검증 100%, citations ⊆ 실존, 인용 F1 `[측정]`.
 
 ### IN-05 튜터 라우터 조립 (P0)
-- 가드 #47 `create_app()`에 **튜터 라우터 주입 인자**(또는 루트 `app.py` 조립)를 요청 `[회의]`. 가드 게이트 `llm.slot()` · `probe()` 결과를 튜터 호출이 공유.
+- **루트 `app.py`(통합)**: `FastAPI(redirect_slashes=False)` + `guardrail.server.router` + 튜터 라우터(#69). lifespan에서 `Guard`(가드 진입점 — #47에 확인 요청: `create_app()` 밖에서도 같은 방식으로 만들 수 있는 `guard_factory`/`Guard.from_config`) · 가드 `KbIndex` · 게이트 `llm` 하나를 만들어 두 라우터에 넘긴다. 가드 게이트 `slot()` · `probe()` 결과를 튜터 호출이 공유.
+- 예외 처리기는 **라우터별**: `/guard` 예외 → 가드 GR-09 기본 응답, `/tutor` 예외 → 튜터 규격 기본값. 가드 `create_app()`의 앱 수준 처리기는 쓰지 않으므로 형식 오류 문제가 생기지 않는다.
 - 라우터 흐름 = §3-1. **튜터 라우터는 자기 예외를 전부 안에서 잡아 튜터 규격 기본값(`abstain` · `citations []`)으로 200을 낸다.** 가드 #47의 전역 예외 처리기는 가드 규격 기본값을 돌려주므로 `/tutor`에서 예외가 거기까지 가면 형식 오류가 된다. 가드에 "라우터별 기본값" 또는 "튜터 라우터는 예외를 올리지 않음"을 전제로 알린다.
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마(`tutor.schema.json`), `/tutor/` 3xx 없음.
 
@@ -276,7 +290,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 5. 채점기 실제 동시성(64 고정인지)
 
 ### 10-2. 회의 `[회의]`
-I1 검색 소유 · 디렉터리(`integration/` · 루트 `app.py`) · 역할 · `create_app` 튜터 라우터 주입 · 라우터별 예외 기본값 · `judge_output(category=)` · `format_material` · T1 분리(I11) · **파이썬 프로젝트 구성**: 루트 `pyproject.toml`을 uv workspace(`members = ["guardrail"]`)로 둘지, `integration/` · `tutor/`를 가드 패키지 밖 별도 패키지로 둘지(가드 CI의 `guardrail/uv.lock` 캐시 경로는 그대로 유지 가능)
+I1 검색 소유 ✅ · 디렉터리(`integration/` · 루트 `app.py`) · 역할 분담(§5-0) · `Guard` 생성 진입점 · `judge_output(category=)` · `format_material` · T1 분리(I11) · **파이썬 프로젝트 구성**: 루트 `pyproject.toml`을 uv workspace(`members = ["guardrail"]`)로 둘지, `integration/` · `tutor/`를 가드 패키지 밖 별도 패키지로 둘지(가드 CI의 `guardrail/uv.lock` 캐시 경로는 그대로 유지 가능)
 
 ---
 
@@ -284,7 +298,7 @@ I1 검색 소유 · 디렉터리(`integration/` · 루트 `app.py`) · 역할 ·
 
 | 가드 이슈 | 받는 것 | 우리 쪽 대응 |
 |---|---|---|
-| #47 서버 골격 | `create_app()`, 인증 · 예외→200 · 메타 로그 · lifespan | 튜터 라우터 주입 요청(IN-05) |
+| #47 서버 골격 | `router`(인증 의존성 포함) · `create_app()` · 메타 로그 | `router`를 루트 `app.py`에 붙임. `Guard` 생성 진입점 확인(IN-05) |
 | #48 LLM 게이트 | `llm.complete()` · `slot()` · `probe()` | 튜터 호출이 같은 게이트 사용 |
 | #49 채점 · 분할 | `eval/score.py` · `splits/v1.json` | IN-06이 import, 분할 공유(I12) |
 | #50 첫 제출 | 런박스 절차 · 재기동 | IN-10 체크리스트와 합침 |

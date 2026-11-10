@@ -73,10 +73,10 @@
    └────────────────────────────────┘
                       │
    ┌──────────── integration/ ────────────┐   ┌──── harness/ ────┐
-   │ kb.py        색인 · retrieve()        │   │ run_public.py    │
-   │ contracts.py Section·Sentence·Verdict │   │ load_test.py     │
-   │ actions.py   범주→action · 결정적 수정│   │ redteam/         │
-   │ templates 호출(튜터 소유 문구)         │   │ check_logs.sh    │
+   │ contracts.py Section·Sentence·Verdict │   │ run_public.py    │
+   │ actions.py   범주→action · 결정적 수정│   │ load_test.py     │
+   │ (검색은 tutor/retrieval/ — 튜터 B 소유, │   │ redteam/         │
+   │  통합은 recall 측정만)                 │   │ check_logs.sh    │
    └──────────────────────────────────────┘   └──────────────────┘
 ```
 
@@ -90,10 +90,10 @@
 CheshireCat/
   app.py                 (선택) 조립 5줄: guardrail.server.create_app(guard, tutor_router)
   guardrail/             가드 — server.py(골격) · llm.py(게이트) · judge · eval/score · probe
-  tutor/                 튜터 — understand · generate · templates · router
-  integration/           통합 — kb.py · contracts.py · actions.py
+  tutor/                 튜터 — judge · prompts · answer · retrieval/(공유 색인 · 이름 사전 · 임베딩) · runtime · eval
+  integration/           통합 — contracts.py · actions.py
   harness/               통합 — run_public.py · load_test.py · redteam/ · check_logs.sh
-  config/                통합 — actions.yaml · retrieval.yaml · ablation/*.yaml
+  config/                통합 — actions.yaml · ablation/*.yaml (튜터 `tutor/configs/`와 형식 통일 `[회의]`)
   competition/           배포 자료(변경 금지)
   docs/PRD.md            팀 기획서
   integration/docs/PRD.md 이 문서
@@ -110,8 +110,8 @@ CheshireCat/
 
 | # | 쟁점 | 현재 결정 | 근거 | 비용 | 확정 조건 |
 |---|---|---|---|---|---|
-| I1 | 검색 소유 | **공용 `integration/kb.py`의 `retrieve()`**, 튜터 · (원하면) 가드가 import | 인용 F1 · faithful 둘 다 검색에 걸림; 가드 BM25는 판정용 | — | `[튜터 PRD]` 튜터가 내부 검색을 고집하면 IN-02는 "검색 품질 측정"으로 축소 |
-| I2 | 검색 방식 | 이름 색인 → BM25(문자 2-gram) ∥ 임베딩 → RRF, top-k=3 | 교안 RAG p27; evidence 1개라 top-1 적중이 핵심 | 임베딩 +1회 +0.1~0.3s | recall@1: BM25 / +kiwi / +임베딩 / +doc2query `[측정]` |
+| I1 | 검색 소유 | **튜터 소유**(`tutor/retrieval/`, 튜터 PRD v2 TU-03 · 04 · 11, 가드 `KbIndex` 공유). 통합은 recall@k · 놓친 행 측정만(IN-02) ✅ | 튜터 PRD v2가 recall@5 0.96을 이미 재 놓음; 튜터 코드 안이 자연스러움 | — | 튜터가 요청하면 이름 색인 · doc2query · 임베딩 구현을 통합이 보조 |
+| I2 | 검색 방식(튜터 결정, 통합은 측정) | 튜터 PRD v2: 가드 BM25 섹션 상위 5 + 이름 사전(P1) + 임베딩 RRF(P2) | 교안 RAG p27; evidence 1개라 top-1 적중이 핵심 | 임베딩 +1회 +0.1~0.3s | recall@1: BM25 / +이름 사전 / +임베딩 / +doc2query `[측정]` |
 | I3 | doc2query | 켬, 기동 시 48회, `index/` 저장 | SPEC §7.1 "운영진 LLM으로 만든 예시" 허용 ✅ | 기동 ≈10s, 요청당 0 | recall@1 기여 `[측정]`; 파일 저장은 운영진 확인 |
 | I4 | 청크 | 섹션 = 파일 1개, CSV는 "열: 값" 문장 ✅ | 48섹션 3.4~5.3k자, 인용 단위 | 0 | — |
 | I5 | 생성에 넣는 섹션 수 | **top-2** | evidence 1개; top-3이면 ≈7.5k 입력 토큰 | −1~2s | recall@2 ≥ recall@3 − 2%p `[측정]` |
@@ -141,11 +141,12 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - 튜터 `generate()`는 `list[Sentence]`를 낸다(튜터 PRD TU-09 형식, `sid` = 섹션 ID).
 - **수용 기준**: 세 트랙이 같은 모듈을 import, 타입 중복 0.
 
-### IN-02 검색 `integration/kb.py` (P0, 소유 `[튜터 PRD]`)
+### IN-02 검색 품질 측정 (P0, 검색 구현은 튜터 TU-03 · 04 · 11)
+- 통합은 **측정**만 맡는다: `public/tutor.jsonl` evidence 기준 recall@1 · @3 · @5, 놓친 행 목록, 이름 색인 · 임베딩 · doc2query 켜기 전후 비교를 하네스(IN-06) 지표로 낸다.
+- 아래는 튜터가 요청할 때 통합이 보조할 수 있는 구현 메모(튜터 PRD와 겹치지 않는 부분만: doc2query · 이름 색인 추출 규칙):
 - 기동(lifespan)에서 `competition/kb/` 48섹션 로드 → 이름 색인(실습 · 예제 · 모듈 · 상품명: "~예제" · "~실습" · 백틱 식별자 · 고유명사) → BM25 문자 2-gram(**가드 모듈을 import**, 색인 객체 하나를 가드 ④와 공유 — 두 번 만들지 않는다) → 임베딩(섹션 + doc2query 예상 질문, `text-embedding-3-small`, numpy 코사인, `index/` 저장).
 - `async retrieve(query, history, *, subject=None, k=3, use_embedding=True) -> list[Section]`: ① 이름 정확 일치 상위 고정 ② 과목 추정(불확실하면 전 과목) ③ BM25 ∥ 임베딩 RRF ④ top-k. 질의 = 첫 발화 + 최근 6턴 학습자 발화 + `query`, 버튼 문구 불용 목록 제외.
-- 우선순위: 로드 · 이름 색인 · BM25 **P0** / 임베딩 · doc2query · kiwi **P1**.
-- **수용 기준**: 섹션 48 · ID 중복 0 · 색인 ≤30s(재사용 ≤3s), `public/tutor.jsonl` evidence 기준 recall@1 · @3 `[측정]`, 검색 p95 ≤300ms.
+- **수용 기준(측정)**: 하네스 매 실행에 recall@1 · @3 · @5와 놓친 행 목록. 튜터 수용 기준(recall@5 ≥ 0.95, p95 ≤20ms)과 같은 값을 쓴다.
 
 ### IN-03 범주 → action 표 `config/actions.yaml` (P0) ✅
 
@@ -207,6 +208,12 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 
 ---
 
+### IN-12 열린 역할 (요청 시 통합이 맡음, 주인 결정은 회의)
+- **런박스 배포 · 제출 실행**: 관문마다(11/15 · 11/20 · 11/24) 리더가 정한 커밋을 4개 런박스에 띄우고 순차 제출을 돕는 당번. 가드 #50 · #51의 실행 · 표 작성(코드는 가드).
+- **팀 작성 점검 세트 50개**: 튜터 TU-16의 100개 중 50개를 통합이 쓴다(가드 쪽 변형 포함, 레드팀 IN-08과 겸함). 튜터 A가 11/16~20 오답 분석에 집중하도록.
+- **운영진 질의 묶음**: 가드 §11-1 · 튜터 §11-1 · 이 PRD §10-1을 한 번에 보내고 답을 세 PRD에 배포.
+- **발표 자료 뼈대 · 팀 provenance 합본**: 튜터 PRD §9 "서버 전체 provenance · 시연 체크리스트 위치는 리더 결정"의 후보.
+
 ## 6. 예산
 
 전제: nano `effort=low` 판정 p50 2.6s · p95 3.9s(R12 §4, 가드 #51 실측으로 교체 `[측정]`), 생성 p50 ≈4s(추정), 임베딩 0.1~0.3s.
@@ -239,8 +246,8 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 | 단계 | 기간 | 통합 산출 | 의존 |
 |---|---|---|---|
 | S0 | 11/10 | 공개 세트 분석(완료), 이 PRD · CI PR, 회의(I1 · 디렉터리 · 역할) | 가드 C0 · 튜터 T0 |
-| S1 | 11/11–11/15 | `contracts` · `kb.py`(이름 색인 · BM25 · 임베딩) · `actions.py` · 튜터 라우터 조립 · 하네스 v1 · **부하 1차(실제 API, 가드 · 튜터와 같은 실행)** → **M1 11/15 v1 제출** | 가드 C1(#47 · #48 · #49, 11/11~12) · C2, 튜터 T1 · T2 |
-| S2 | 11/16–11/20 18:00 | doc2query · kiwi · ablation 전부 · 레드팀 · 홀드아웃 ≤3회 → **M2 동결 11/20 18:00 · 동결본 제출** | 가드 C3, 튜터 T3 |
+| S1 | 11/11–11/15 | `contracts` · `actions.py` · 결정적 수정 · 튜터 라우터 조립 · 하네스 v1(recall 측정 포함) · **부하 1차(실제 API, 가드 · 튜터와 같은 실행)** · 11/15 제출 당번 → **M1 11/15 v1 제출** | 가드 C1(#47 · #48 · #49, 11/11~12) · C2, 튜터 T1 · T2 |
+| S2 | 11/16–11/20 18:00 | ablation 프리셋 전부 · 레드팀 · 홀드아웃 ≤3회 실행 · 열린 역할(IN-12: 점검 세트 50개 · 운영진 질의 묶음 · 발표 뼈대) → **M2 동결 11/20 18:00 · 동결본 제출 당번** | 가드 C3, 튜터 T3 |
 | S3 | 11/21–11/24 | provenance · 체크리스트 · 발표 자료 · 최종 회귀 → **M3 최종 제출 11/24 18:00** (검증된 커밋을 11/22~23에 미리 내고 11/24는 비상용) | 가드 C4, 튜터 T4 |
 | S4 | 11/25 오전 | 제출 없음. 서버 상태 확인 · 리허설 | |
 
@@ -250,7 +257,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 
 | 리스크 | 대응 |
 |---|---|
-| 검색 소유가 튜터로 가서 IN-02가 사라짐 | IN-06 · IN-08 · IN-10만으로 한 사람 몫. 검색 품질 측정은 통합이 계속 |
+| 11/16~20 통합 부하가 비는 주 | 열린 역할로 채운다(§5 IN-12): 팀 작성 점검 세트 50개 · 런박스 배포 · 제출 실행 · 운영진 질의 묶음 · 발표 뼈대 |
 | 가드 #47 골격이 11/12 넘어감 | 베이스라인 `server.py`에 튜터 라우터만 붙인 임시 조립으로 S1 진행 |
 | `judge_output` 시그니처가 가드 v6에서 바뀜(messages 기반) | IN-01에서 가드 interface.md를 기준으로 맞춤, 튜터는 어댑터 1함수 |
 | 프록시 처리량 → 채점 5분 초과 | 부하 64 · 게이트 크기는 가드 #51 실측 후 |

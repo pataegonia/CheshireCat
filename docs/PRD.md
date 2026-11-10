@@ -40,7 +40,8 @@ v1(11/7, 제품형 오케스트레이터 전제)은 OT 이후 폐기. 이 문서
 채점기 → guardrail.server:create_app (가드 #47: 인증 · 마감 · 예외→200 · 메타 로그 · LLM 게이트 #48)
           ├─ /guard   guardrail/  정규화 → 신호 → BM25 → judge_input ∥ judge_output → 후처리
           ├─ /tutor   tutor/      (retrieve ∥ judge_input) → 범주→action → 생성 → judge_output → 결정적 수정
-          └─ integration/  kb.py(색인·retrieve) · contracts.py · actions.py(범주→action 표) · 결정적 수정
+          │             tutor/retrieval/ 가드 KbIndex 공유 + 이름 사전 · 임베딩 (튜터 B)
+          └─ integration/  contracts.py · actions.py(범주→action 표) · 결정적 수정
              harness/      공개 세트 채점(가드 eval/score 사용) · 부하 · 레드팀 · check_logs
 ```
 
@@ -53,9 +54,9 @@ v1(11/7, 제품형 오케스트레이터 전제)은 OT 이후 폐기. 이 문서
 
 | 트랙 | 소유 | 제공 | 받음 |
 |---|---|---|---|
-| 가드 | `guard/`: 정규화 · 신호 · `judge_input` · `judge_output` · `split_sentences` · 정책 프롬프트 · `/guard` 라우터 | 판정 함수 3개 | `retrieve`, `llm`, 색인 |
-| 튜터 | `tutor/`: 질의 이해 · 생성 프롬프트 · `sentences` 출력 · 템플릿 7종 · `/tutor` 라우터 | `generate() -> sentences`, 템플릿 | `retrieve`, `judge_*`, `llm`, 범주→action 표, 결정적 수정 |
-| 통합 · 평가 | `integration/` · `harness/` · `config/` · CI · 최종 제출 · 발표 조립 | 검색(`kb.py`) · 계약 타입 · 범주→action 표 · 결정적 수정 · 하네스 · 부하 시험 | 서버 골격 · 게이트 · 첫 제출(가드 #47 · #48 · #50), 라우터 2개 |
+| 가드 | `guardrail/`: 정규화 · 신호 · `KbIndex`(BM25) · `judge_input` · `judge_output` · `/guard` 라우터 · 서버 골격 · LLM 게이트 | 판정 함수 2개 · `KbIndex` · `slot()` · `create_app` | 튜터 생성, 하네스 총점 |
+| 튜터(A · B) | `tutor/`: A 판단 · 프롬프트 · 답변 방식 · 후처리 / B 검색(`retrieval/`: 공유 색인 · 이름 사전 · 임베딩) · 런타임 · 설정 · 로깅 · 스키마 | `generate()` · `retrieve()` · `tutor.schema.json` | `judge_*`, `slot()`, 범주→action 표, 결정적 수정, 하네스 총점 |
+| 통합 · 평가 | `integration/` · `harness/` · `config/` · CI · 최종 제출 · 발표 조립 | 계약 타입 · 범주→action 표 · 결정적 수정 · 하네스(가드+튜터 총점 · ablation · recall 측정) · 부하 · 레드팀 · 제출 체크리스트 | 검색 구현(튜터 B) · 서버 골격 · 게이트(가드). **열린 역할**(요청 시): 런박스 배포 · 제출 실행 당번, 점검 세트 50개, 운영진 질의 묶음, 발표 뼈대 · provenance 합본 |
 | 팀 공통 | 공개 세트 분할 파일, 범주→action 표, 토큰, provenance, 발표 자료 | | |
 
 인원 구성(4명: 가드 1 · 튜터 2 · 통합 · 평가 1)은 제안이며 회의에서 확정. 서버 골격은 가드 C1 범위이므로 통합 트랙은 처음부터 검색 · 계약 · 하네스에 집중한다.
@@ -65,7 +66,7 @@ v1(11/7, 제품형 오케스트레이터 전제)은 OT 이후 폐기. 이 문서
 | # | 결정 | 제안 | 근거 |
 |---|---|---|---|
 | D1 | 판정 함수 공유 | 가드가 `judge_input` · `judge_output` 노출, 튜터 · 통합이 import | SPEC §4 튜터 자체 가드 의무; 기준 한 곳 |
-| D2 | 색인 공유 | `integration/kb.py` 하나(BM25는 가드 모듈 import) | 48섹션, 중복 구현 낭비 |
+| D2 | 색인 공유 | 가드 `KbIndex` 하나, 튜터 `retrieval/`이 그 위에 이름 사전 · 임베딩을 얹음(튜터 PRD TD-03) | 48섹션, 중복 구현 낭비 |
 | D3 | 범주 → action 표 | 통합 `config/actions.yaml`(공개 세트 교차표 그대로) | 가드 200 · 튜터 200 라벨로 확인 |
 | D4 | 프로세스 | FastAPI + uvicorn 1 | 게이트 단일 |
 | D5 | 디렉터리 | `guardrail/`(유지) · `tutor/` · `integration/` · `harness/` · `config/`; 루트 `app.py`는 `create_app` 한 줄 호출(선택) | 가드 #47 골격을 그대로 씀 |
@@ -102,7 +103,7 @@ v1(11/7, 제품형 오케스트레이터 전제)은 OT 이후 폐기. 이 문서
 ### S1 — 11/11 (수) ~ 11/15 (일) 통합 v1 · v1 제출
 | 트랙 | 할 일 | 산출 |
 |---|---|---|
-| 통합 | `kb.py`(섹션 · 이름 색인 · 가드 BM25 공유 · 임베딩 · doc2query) · `retrieve()` · 결정적 수정 · 하네스(가드 #49 score 사용) · 부하 시험 | recall@1/3, 지연 p95, ablation 골격 |
+| 통합 | `contracts.py` · `actions.yaml` · 결정적 수정 · 튜터 라우터 조립 · 하네스(가드 #49 score 사용, recall 측정 포함) · 부하 시험 · 11/15 제출 당번 | 총점 표, recall@1/3, 지연 p95, ablation 골격 |
 | 가드 | 정규화 · 신호 · `judge_input` · `judge_output`(문장 번호 + 구절) · `/guard` 라우터 · 정책 프롬프트 v1 | 가드 점수 v1 |
 | 튜터 | 질의 이해 · 생성 프롬프트(`sentences`) · 템플릿 · `/tutor` 라우터 · 자기 판정 연결 | 튜터 점수 v1 |
 | 공통 | 11/12 중간 연결(빈 라우터라도 기동, 가드 C1 관문), 11/15 실제 부하 1회(세 트랙 같은 실행), **11/15 M1 관문 · v1 제출** | |

@@ -72,17 +72,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      # 루트 pyproject.toml이 생기기 전(문서·CI만 있는 PR)에는 건너뛴다. 생긴 뒤에는 반드시 돈다.
+      # setup-uv도 그 뒤에 둔다: 캐시할 게 없으면 post 단계가 "Cache path does not exist"로 job을 실패시킨다.
+      - name: 프로젝트 유무 확인
+        id: proj
+        run: |
+          if [ -f pyproject.toml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::warning::루트 pyproject.toml 없음 — lint·test 건너뜀 (통합 코드가 들어오면 반드시 추가)"; fi
+      - if: steps.proj.outputs.present == 'true'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.12.17"
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: uv.lock
-      # 루트 pyproject.toml이 생기기 전(문서·CI만 있는 PR)에는 건너뛴다. 생긴 뒤에는 반드시 돈다.
-      - name: 프로젝트 유무 확인
-        id: proj
-        run: |
-          if [ -f pyproject.toml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::warning::루트 pyproject.toml 없음 — lint·test 건너뜀 (통합 코드가 들어오면 반드시 추가)"; fi
       - if: steps.proj.outputs.present == 'true'
         run: uv sync --locked
       # 존재하는 경로만 검사한다(tutor/ 등이 아직 없을 수 있다)

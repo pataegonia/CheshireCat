@@ -14,6 +14,8 @@
 | `src/guardrail/preprocess.py` 자모 변환표·정규화 규칙 | 유니코드 한글 조합 규칙(공개 사양) | 팀(R5 조사 단계 참고 코드를 옮겨 고침, ADR-0001) | 있음 |
 | `kb/<과목>/` 색인(문자 2-gram BM25) | 대회 배포 자료 | 주최측 | 기동 때 색인(PRD v6 GR-03) |
 | kNN 색인·few-shot 예시 | `public/guard.jsonl`·`public/tutor.jsonl` 400행(배포 자료). SPEC §7.1이 공개 세트 few-shot·유사도 검색을 허용 | 주최측 | 기동 때 색인(GR-05, ADR-0013). 요청 처리 중 바뀌지 않음 |
+| `src/guardrail/clusters.py`의 빠른 질문 버튼 문구 목록(8종, 짝 묶음에서 제외) | 공개 세트 튜터 첫 발화(배포 자료)에서 뽑음([R13-A §1.4](../research/R13-public-set-analysis.md#14-빠른-질문-버튼-첫-발화-spec-2)) | 주최측 문구, 팀이 목록화 | S1.4. `KnnIndex`가 기동 때 묶음 계산에 씀 |
+| 설정 `block_categories` 표(범주 → decision) | 공개 세트 라벨(배포 자료, 200/200에서 범주의 함수, R13 M1) | 팀(라벨에서 도출) | ADR-0012. `configs/default.yaml` |
 | 문자 n-gram LR | 위 400행으로 기동 때 처음부터 학습(SPEC §7.1 허용). 학습된 모델 파일은 저장소에 두지 않음 | 팀(코드) | GR-05 |
 | 결정적 신호: 거절 정규식, 숫자·단위·한글 수사 표, 저신호 판정, 숨긴 태그 문자 | — | 팀이 직접 씀 | GR-06. 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
 | 거절 정규식 시작점: `guardrail/scripts/r13/extra_stats.py`의 `REFUSAL_RX` | 공개 세트 튜터 거절 답변 36건을 보고 팀이 쓴 분석 스크립트의 정규식. 36/36은 표본 안(in-sample) 값 | 팀 | GR-06. 서버 모듈로 옮겨 다듬음(S2.3). 인용·코드를 뺀 뷰에 적용 |
@@ -35,6 +37,7 @@
 | 외부 공개 데이터셋(wildguardmix, MultiJail 등) | 인터넷 | 저장소에 없음. 서버 밖 평가 사용도 운영진 확인 전에는 하지 않음 |
 | `configs/*.yaml`의 `typesafe-ai/jev-1.14.0` | 외부 모델 | 코드 재계획에서 삭제 |
 | `guardrail/scripts/r13/` 분석 스크립트 | 공개 세트 로컬 분석(R13-A) | 개발 전용 |
+| `src/guardrail/eval/splits/v1.json`(짝 묶음·폴드·홀드아웃 분할) | 공개 세트에서 만든 분할 파일(S1.4) | 개발 전용. 서버는 읽지 않는다(하네스만 씀) |
 
 ## 3. 시연 전 확인
 

@@ -9,7 +9,7 @@
 ## Context
 
 SPEC §7.1은 세 가지를 명시적으로 허용한다. 공개 세트를 few-shot 예시로 쓰는 것, 질문과 비슷한 공개 세트 예시를 유사도 검색으로 찾아 넣는 것, 배포 자료와 운영진 제공 LLM으로 만든 예시로 처음부터 학습한 분류기다. 다른 LLM이나 본인 키로 만든 예시 묶음, 인터넷 데이터, 미리 학습된 모델 파일은 금지다. 받은 채점 요청으로 예시·규칙을 만들거나 유사도 캐시를 두면 실격이다(SPEC §8).
-공개 세트는 같은 문장 틀에서 1–5어절을 바꿔 범주를 뒤집는 짝으로 만들어졌다(비normal의 35%, [R13-A §1.1](../research/R13-public-set-analysis.md#11-최소쌍-근접-중복)). `tutor.jsonl`도 같은 10범주 라벨을 가져 분류 자료가 400행이 된다([R13 §1 M3](../research/R13-design-research.md#1-근거-정리-research-ops-형식)). 유사 예시는 무작위보다 낫지만, 예시를 늘린다고 꾸준히 좋아지지는 않는다(S4, [R13-B §2-1](../research/R13-B-external-research.md#2-1-예시-선택-knn유사도-vs-무작위)).
+공개 세트는 같은 문장 틀에서 1–5어절을 바꿔 범주를 뒤집는 짝으로 만들어졌다(비normal의 35%, [R13-A §1.1](../research/R13-public-set-analysis.md#11-최소쌍-근접-중복)). `tutor.jsonl`도 같은 10범주 라벨을 가져 분류 자료가 400행이 된다([R13 §1 M3](../research/R13-design-research.md#1-근거-정리-research-ops-형식)). 유사 예시는 무작위보다 낫지만, 예시를 늘린다고 꾸준히 좋아지지는 않는다(S4, [R13-B §2-1](../research/R13-B-external-research.md#2-1-예시-선택-knn유사도-vs-무작위)). 근거의 한계: 유사 예시 이득은 7B 오픈 모델(Qwen2.5-7B-Instruct) 한 논문의 값이고 세트별로 편중됐으며 일부 세트는 소폭 하락했다. gpt-5-nano에서 잰 값이 아니다([verification.md §R13 #5](../research/verification.md#r13-2026-11-10)). 우리 데이터의 효과는 `no_knn_fewshot` ablation(S3.6)으로 잰다.
 
 ## Decision
 
@@ -43,7 +43,7 @@ SPEC §7.1은 세 가지를 명시적으로 허용한다. 공개 세트를 few-s
 ### 팀이 쓴 고정 few-shot (v5)
 - **Pros**: 예시가 늘 같아 재현이 쉽다.
 - **Cons**: 경계는 문항마다 다르다. 고정 예시로는 질의와 가까운 짝을 보여 줄 수 없다.
-- **Why not**: SPEC §7.1이 공개 세트 유사도 검색을 허용하고, 유사 예시가 고정·무작위보다 낫다.
+- **Why not**: SPEC §7.1이 공개 세트 유사도 검색을 허용하고, 유사 예시가 고정·무작위보다 낫다는 보고가 있다(7B 오픈 모델 한 논문, [verification.md §R13 #5](../research/verification.md#r13-2026-11-10)의 한계 참고).
 
 ### 임베딩 kNN을 기본으로
 - **Pros**: 바꿔 말한 표현에 강하다.

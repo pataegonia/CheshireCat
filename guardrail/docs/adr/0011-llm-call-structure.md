@@ -17,7 +17,7 @@
 - 요청당 호출 상한: nano 2회 + 조건부 1회 + 호출마다 재시도 1회. 임베딩 0회(임베딩 ablation을 켜지 않는 한).
 
 **모델 파라미터**
-- `reasoning_effort="low"`, `verbosity="low"`. **`minimal`은 쓰지 않는다**(지연 ablation도 안 함). 쉬운 과제에서 정확도가 무너진다(ObviousBench minimal 37.5 대 low 91.0, [R13-B §4-3](../research/R13-B-external-research.md#4-3-정확도-effort별), [R13 §1 S3](../research/R13-design-research.md#1-근거-정리-research-ops-형식)). `medium` + verbosity low는 nano에서 오히려 39% 느렸다([R13-B §4-2](../research/R13-B-external-research.md#4-2-지연처리량)).
+- `reasoning_effort="low"`, `verbosity="low"`. **`minimal`은 쓰지 않는다**(지연 ablation도 안 함). 쉬운 과제에서 정확도가 무너진다(ObviousBench minimal 37.5 대 low 91.0 (약한 근거, 단일 출처, verification.md #2), [R13-B §4-3](../research/R13-B-external-research.md#4-3-정확도-effort별), [R13 §1 S3](../research/R13-design-research.md#1-근거-정리-research-ops-형식)). `medium` + verbosity low는 nano에서 오히려 39% 느렸다([R13-B §4-2](../research/R13-B-external-research.md#4-2-지연처리량)).
 - json_schema strict, `max_completion_tokens` ≥800, `temperature`·`max_tokens`·`logprobs` 미전송.
 - **기동 시험 호출(`probe()`)**: `reasoning_effort`·`verbosity`·`max_completion_tokens`·`response_format` json_schema를 **하나씩 따로** 시험하고 거절된 것만 끈다(json_schema가 거절되면 json_object로 내린다). 모든 파라미터는 설정에서 `null`(보내지 않음)로 둘 수 있다. 결과는 기동 때 오류 코드로만 남긴다. `max_completion_tokens`는 S1.6에서 800과 1200–1600을 `finish_reason=length` 비율로 비교해 정한다. 프롬프트는 고정 부분을 앞에, 요청별 부분(예시·대화·답변)을 뒤에 둔다(프롬프트 캐시 접두 일치).
 

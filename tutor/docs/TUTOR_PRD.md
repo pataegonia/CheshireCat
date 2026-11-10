@@ -252,7 +252,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 
 ### TU-14 설정·ablation (P0)
 - 모델 파라미터, 근거 묶음 크기 K, 예시 수, 프롬프트 버전, 단별 켜기·끄기를 설정 파일로 뺀다. 형식은 가드 GR-11과 같게 하고, 통합 `config/`(actions.yaml·ablation 프리셋)와 한 형식으로 둔다(위치는 통합 PRD §3-2와 함께 정함 `[회의]`). ablation 프리셋 실행은 통합 하네스가 한다(통합 IN-06).
-- 켜기·끄기: 이름 사전(`name_dict`) / kNN few-shot(`fewshot`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | self | guard`) / 가드 범주(`guard_classify`) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결) / scaffold 기준 밝히기(`scaffold_state_rule`) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`). 값: `retrieval.k`(2·3·5·8), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
+- 켜기·끄기: 이름 사전(`name_dict`) / kNN few-shot(`fewshot`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | self | guard`) / 가드 범주(`guard_classify`) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결) / scaffold 기준 밝히기(`scaffold_state_rule`) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`. 켜면 근거 1개 문항에서 둘 중 하나만 맞을 때 인용 F1이 0.67이 되므로, 켜기 전에 통합 하네스로 공개 세트·점검 세트의 "두 대상 명시 비교" 문항 수를 센다). 값: `retrieval.k`(2·3·5·8), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
 - 모드 `mode: v2 | baseline`. **베이스라인**은 "검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리"다(위 항목 모두 끔).
 - 설정은 기동 때만 읽는다. 요청 내용 말고는 동작을 바꾸는 입력이 없다(TU-18). 제출 서버와 로컬 평가 서버는 같은 설정으로 띄운다.
 - 개발 실행의 API 호출 상한(`eval.max_calls`, 기본 실행당 5,000)을 둔다(가드 GR-11과 같음).

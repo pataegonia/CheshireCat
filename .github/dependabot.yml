@@ -1,0 +1,27 @@
+# 의존성 업데이트 봇.
+# - GitHub Actions: SHA로 고정한 액션을 주 1회 한 PR로 묶어 올린다.
+# - uv(guardrail): 대회 중 lock 변동을 막으려고 버전 업데이트는 끈다(limit 0).
+#   보안 업데이트는 저장소 설정의 Dependabot security updates가 켜져 있으면 따로 올라온다.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # 버전 업데이트는 새 릴리스가 7일 지난 뒤에만 올린다(오염된 릴리스 즉시 도입 방지).
+    # 보안 업데이트에는 이 대기가 적용되지 않는다.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: uv
+    directory: /guardrail
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore

@@ -1,11 +1,13 @@
-# 가드레일 전용 CI. guardrail/ 변경에만 돈다.
-# 경로 필터가 있으므로 저장소 전체의 필수 검사(required check)로 지정하면 안 된다.
-# guardrail/을 건드리지 않는 PR에서는 이 검사가 돌지 않아 머지가 영영 대기 상태가 된다.
+# 가드레일 CI. 모든 PR에서 돌고, guardrail/을 건드린 경우에만 lint·test·비밀 키 검사를 실행한다.
+# 필수 검사(required check)로는 `guardrail / gate` 하나만 지정한다.
+# 경로 필터를 workflow가 아니라 job에 둔 이유: 필터로 workflow 자체가 안 돌면
+# 필수 검사가 보고되지 않아 guardrail/을 건드리지 않은 PR이 영영 대기한다.
 name: guardrail-ci
 
 on:
   pull_request:
-    paths: ["guardrail/**", ".github/workflows/guardrail-ci.yml"]
+    # edited: base 브랜치를 바꾸면 diff 기준이 달라지므로 다시 검사한다
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
     paths: ["guardrail/**", ".github/workflows/guardrail-ci.yml"]
@@ -19,8 +21,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: guardrail / changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      guardrail: ${{ steps.diff.outputs.guardrail }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # push는 경로 필터를 통과한 경우만, 수동 실행은 필터 없이 온다. 둘 다 항상 전체 검사.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "guardrail=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 목록을 파일로 먼저 받아 diff 실패가 "변경 없음"으로 바뀌지 않게 한다.
+          # -z·quotepath=false: 한글 등 비ASCII 파일명이 따옴표로 감싸져 필터를 빠져나가는 것을 막는다.
+          # --no-renames: guardrail/ 밖으로 옮긴 파일도 변경으로 잡는다.
+          list="$RUNNER_TEMP/changed-files"
+          git -c core.quotepath=false diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA" > "$list"
+          # grep 종료 코드: 0=일치, 1=불일치, 2 이상=오류. 오류를 "변경 없음"으로 보지 않는다.
+          rc=0
+          grep -zqE '^(guardrail/|\.github/workflows/guardrail-ci\.yml$)' "$list" || rc=$?
+          case "$rc" in
+            0) echo "guardrail=true" >> "$GITHUB_OUTPUT" ;;
+            1) echo "guardrail=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::변경 파일 검사 실패 (grep $rc)"; exit 1 ;;
+          esac
+
   test:
     name: guardrail / lint·test
+    needs: changes
+    if: needs.changes.outputs.guardrail == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -37,6 +78,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: guardrail/uv.lock
       - run: uv sync --locked
+      # ruff 규칙에 S(bandit 보안 규칙)가 포함된다. 설정은 pyproject.toml.
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       # 실제 LLM API는 부르지 않는다(키 없음). live 표시 테스트는 로컬에서만 돈다.
@@ -44,6 +86,8 @@ jobs:
 
   secrets:
     name: guardrail / secret scan
+    needs: changes
+    if: needs.changes.outputs.guardrail == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -62,3 +106,34 @@ jobs:
       # 커밋 이력이 아니라 guardrail/ 현재 파일만 본다. 팀원 영역은 검사하지 않고, 찾은 값은 가린다.
       - name: guardrail/ 비밀 키 검사
         run: ./gitleaks dir guardrail --no-banner --redact
+
+  # 필수 검사로 지정하는 유일한 job. 항상 실행되고 같은 이름으로 보고한다.
+  gate:
+    name: guardrail / gate
+    needs: [changes, test, secrets]
+    # always(): 취소돼도 실행해 실패로 보고한다. 건너뛴(skipped) job은 필수 검사에서 통과로 취급되기 때문.
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          GUARDRAIL: ${{ needs.changes.outputs.guardrail }}
+          TEST: ${{ needs.test.result }}
+          SECRETS: ${{ needs.secrets.result }}
+        run: |
+          echo "changes=$CHANGES guardrail=$GUARDRAIL test=$TEST secrets=$SECRETS"
+          if [ "$CHANGES" != "success" ]; then
+            echo "::error::변경 감지 job이 실패했다"; exit 1
+          fi
+          # 값이 정확히 false일 때만 "변경 없음"으로 통과. 비었거나 이상한 값은 실패.
+          if [ "$GUARDRAIL" = "false" ]; then
+            echo "guardrail/ 변경 없음: 통과"; exit 0
+          fi
+          if [ "$GUARDRAIL" != "true" ]; then
+            echo "::error::변경 감지 결과가 비정상이다: '$GUARDRAIL'"; exit 1
+          fi
+          if [ "$TEST" = "success" ] && [ "$SECRETS" = "success" ]; then
+            exit 0
+          fi
+          echo "::error::guardrail 검사 실패 (test=$TEST, secrets=$SECRETS)"; exit 1

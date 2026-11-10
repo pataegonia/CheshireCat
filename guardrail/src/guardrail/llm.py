@@ -554,7 +554,8 @@ class LLM:
                 ]
                 continue
 
-            assert failure is not None
+            if failure is None:  # python -O에서도 남도록 assert 대신 명시
+                raise RuntimeError("LLM 호출 실패 정보가 없다")
             code, retryable = classify(failure)
             if (
                 failure.status == 400

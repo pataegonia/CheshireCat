@@ -324,6 +324,7 @@ uv run python -m guardrail.eval.cv --write                      # 묶음·폴드
 uv run python -m guardrail.eval.run --config configs/default.yaml --name v1 \
     [--set toggles.lr=false ...] [--repeat 3] [--max-calls 5000] [--estimate] [--fake] [--holdout]
 uv run python -m guardrail.eval.run --ablation configs/ablation/ --name abl-1117 --repeat 3
+uv run python -m guardrail.eval.run --ablation configs/ablation/ --only no_literal_rule,no_nano_tier3 --name abl-1118a --repeat 3   # --only: 이름으로 부분 실행. 기준 행(baseline·default)은 --only와 무관하게 늘 포함
 uv run python -m guardrail.eval.load --url http://localhost:8000 --token "$TEAM_TOKEN" --concurrency 64 --n 600
 uv run python -m guardrail.eval.probe --calls 200               # 런박스 실측(PRD §11-2-1)
 ```
@@ -360,8 +361,8 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S1.5** | 런박스 배포·상수 응답 첫 제출 | 01·14 / 0009 | P0 | 2h | 본인 | S1.2(채점 대조는 S1.4) | 터널 주소 200 JSON·리다이렉트 없음, 토큰 없는 `/guard`·`/tutor` 요청 401, 상수 서버를 `score_local.py --tutor-url --guard-url`(공개 400행, 시작용 튜터 nano 약 200회)로 채점해 `score.py`와 가드 점수 차 ≤0.005, `submission.json`에 커밋 해시, 채점 메시지 기록 |
 | **S1.6** | 런박스 실측(nano 지연·파라미터) | 10 / 0011 | P0 | 2h | 본인(코드 초안은 Sonnet) | S1.3·S1.5 | PRD §11-2-1 표: 파라미터별 수용, json_schema 여부, `max_completion_tokens` 800 대 1200–1600의 `finish_reason=length` 비율(실제 길이의 대역 프롬프트: system 문구 + 예시 8줄 + 메시지 6개. 잠정값으로 기록, S2.9가 실제 프롬프트로 다시 확인), 동시 1·16·64 지연 p50·p95, 호출 ≤200 |
 | **S2.1** | 전처리 v6(숨긴 문자 드러내기) | 02 / 0001 | P0 | 3h | Sonnet | S1.1 | 임의 유니코드 예외 0, `strip_tags`(태그 문자만 지움, 조합 없음), p95 ≤10ms, 기존 정규화 회귀 유지(GR-02. KB 코드 블록 오매칭 0은 S2.3) |
-| **S2.2** | KB 색인·검색 | 03 / 0010 | P0 | 4h | Sonnet | S1.4·S2.1 | 튜터 `evidence` recall@1·@3 보고, block이 아닌 가드 후보 67행 정답 섹션 1위 ≥64/67·3위 ≥66/67, 색인 시간·메모리, `KbIndex.rank` 한 번으로 상위 k·점수 차·1위 섹션(역색인이면 `common.py` 점수와 1e-9 안), 검색 p95 ≤20ms(개발 머신, 가드 86 + 튜터 200 질의. 런박스는 S1.6·S2.10에서 다시 재고 더 느리면 ≤40ms) |
-| **S2.3** | 결정적 신호(저신호·거절·숨긴 태그) | 06·08 / 0014 | P0 | 4h | Opus | S2.1 | 저신호 400행 정밀도 100%(표본 안 값: 규칙이 이 400행의 관찰에서 나왔다. 비공개 일반화는 가정), 거절 정규식 튜터 거절 36/36(표본 안 값)·순응 오탐 보고, LLM 없이 같은 값(GR-06), KB 코드 블록 신호 정규식 오매칭 0(GR-02) |
+| **S2.2** | KB 색인·검색 | 03 / 0010 | P0 | 4h | Sonnet | S1.4·S2.1 | 튜터 `evidence` recall@1·@3 보고, block이 아닌 가드 후보 67행 정답 섹션 1위 ≥64/67·3위 ≥66/67, 색인 시간·메모리, `KbIndex.rank` 한 번으로 상위 k·점수 차·1위 섹션(역색인이면 `common.py` 점수와 1e-9 안), 검색 p95 ≤20ms(개발 머신, 가드 86 + 튜터 200 질의. 런박스는 S2.10에서 다시 재고(S1.6 시점에는 `kb.py`가 없음) 더 느리면 ≤40ms) |
+| **S2.3** | 결정적 신호(저신호·거절·숨긴 태그) | 06·08 / 0014 | P0 | 4h | Opus | S1.4·S2.1 | 저신호 400행 정밀도 100%(표본 안 값: 규칙이 이 400행의 관찰에서 나왔다. 비공개 일반화는 가정), 거절 정규식 튜터 거절 36/36(표본 안 값)·순응 오탐 보고, LLM 없이 같은 값(GR-06), KB 코드 블록 신호 정규식 오매칭 0(GR-02) |
 | **S2.4** | 숫자·리터럴 규칙 ② | 06·07 / 0014·0010 | P0 | 5h | Opus | S2.2 | 정확한 이식 검증: `rule_min_margin` 0에서 U 18/35·G 0/32·T 6/119, 3.5에서 16/35·0/32·3/119, 구간은 `q6_rule_fp.py`의 `merged_pm4_spans` 출력과 같은 스팬이고 구간 F1은 ±0.005 안(BM25 1위 0.651 / 정답 섹션 0.638, R13-A §6). 기본 `rule_min_margin`은 3.5. U·G·T 탐지·오탐을 따로 보고(튜터 0건은 요구하지 않음), 구간 100% 원문 부분 문자열 |
 | **S2.5** | kNN·LR 보조 판정기 | 05·14 / 0013 | P0 | 5h | Sonnet | S1.4·S2.1 | 교차 검증 kNN 다수·LR 각각의 block F1·범주 정확도, 기동 학습 ≤10초, 요청당 p95 ≤20ms, 색인 불변 테스트 |
 | **S2.6** | 입력 판정 nano·프롬프트 v1 | 04 / 0012·0013 | P0 | 8h | Opus + santa | S1.3·S2.5 | `FakeLLM`으로 스키마·재시도·기본값 계약, 기본값을 쓰기 전 nano 응답 성공률 ≥98%(재시도 포함), 실패율은 오류 코드별 보고, 호출 p95 ≤5s |
@@ -404,7 +405,7 @@ PRD §11-2 측정 항목: 1 → S1.6, 2 → S2.9, 3·5 → S3.1, 4 → S3.4.
 | 묶음 | 선행 → 후행 |
 |---|---|
 | 기반 | S1.1 → {S1.2, S1.3, S1.4, S2.1} · S1.2 → S1.5(채점 대조 항목은 S1.4 → S1.5) · {S1.3, S1.5} → S1.6 |
-| 입력 | {S1.4, S2.1} → S2.5 → S2.6 ← S1.3 · S2.1 → S2.3 |
+| 입력 | {S1.4, S2.1} → S2.5 → S2.6 ← S1.3 · {S1.4, S2.1} → S2.3 |
 | 출력 | {S1.4, S2.1} → S2.2 → {S2.4, S2.7} · S1.3 → S2.7 |
 | 조립·평가 | {S1.2, S2.3, S2.4, S2.6, S2.7} → S2.8 → {S2.9, S2.10, S2.11} · S1.6 → S2.10 |
 | 조정 | S2.9 → {S3.1, S3.2, S3.3, S3.4} · S3.1 → S3.5 · {S3.1–S3.5} → S3.6 · {S3.1, S3.2} → S3.7(S3.3–S3.5는 11/19 12:00 컷: 그때까지 결정 안 난 것은 꺼진 채 동결) |

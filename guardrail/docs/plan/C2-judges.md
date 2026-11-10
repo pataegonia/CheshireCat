@@ -37,7 +37,7 @@
 - `reveal_hidden(answer)`: 태그 문자 U+E0020–E007E → 대응 ASCII, 나머지 폭 없는 문자 → `<U+200B>` 형식. 이모지 시퀀스 안의 ZWJ·변형 선택자, 깃발 태그(S2.3 정의)와 맨 앞 BOM은 그대로. 원문은 따로 보존한다(구간은 원문 기준).
 - `decode_tags(text) -> tuple[str, str]`: 학습자 발화의 태그 문자를 풀어 `(태그를 지운 정규화본 + " [숨긴 문자: …]", 푼 문자열)`.
 - `strip_tags(text) -> str`: 태그 문자 U+E0000–E007F만 지운다(자모 조합·다른 정규화 없음). S2.3 `is_low_signal`의 입력 뷰다.
-- **테스트 먼저**: 태그·ZWSP 드러내기, 이모지 ZWJ 보존, `hypothesis` 임의 유니코드 예외 0, `strip_tags`가 태그 문자만 지우고 "ㅋㅋㅠㅠ"를 조합하지 않음, 400행 p95 ≤10ms. GR-02의 KB 코드 블록 오매칭 0은 신호 정규식이 생기는 S2.3에서 잰다.
+- **테스트 먼저**: 태그·ZWSP 드러내기, 이모지 ZWJ 보존, `hypothesis` 임의 유니코드 예외 0, `strip_tags`가 태그 문자만 지우고 자모를 조합하지 않음("ㅇㅏ"가 그대로 남음. `normalize`는 "ㅇㅏ"를 "아"로 조합한다), 400행 p95 ≤10ms. GR-02의 KB 코드 블록 오매칭 0은 신호 정규식이 생기는 S2.3에서 잰다.
 - **수용 기준**: GR-02 수용 기준 중 KB 코드 블록 오매칭(S2.3)을 뺀 전부. **스킬**: `ecc:python-testing`.
 
 ### S2.2 KB 색인·검색
@@ -50,14 +50,14 @@
 - **계약**: `KbIndex.load(kb_dir) -> KbIndex`, `rank(query: str) -> Ranking`(BM25 점수를 **한 번만** 계산), `Ranking(hits, margin)`: `hits`는 점수 내림차순 전체 조각(상위 k = `hits[:k]`, 1위 섹션 = `hits[0].section_id`), `margin`은 top_k 안만이 아니라 **전체 순위**를 섹션별 최고 점수로 접은 뒤 1위 섹션 점수 − 그와 **다른** 섹션 중 최고 점수. `search(query: str, k=3) -> list[Hit]`은 `rank(query).hits[:k]`인 편의 함수(튜터·테스트용)이고 `guard.py`는 요청당 `rank()`를 한 번만 부른다. `section_text(section_id) -> str`(그 섹션의 모든 조각 + 붙은 CSV, 규칙 ②의 비교 대상). `Hit(section_id, text, score)`. 점수 계산은 질의 2-gram → 조각 목록 역색인으로 해도 된다(점수가 `common.py`와 1e-9 안에서 같아야 함, 아래 테스트).
 - 조각: `kb/<과목>/<섹션 ID>.md`에 같은 이름의 `-table<n>.csv`를 붙인 섹션 텍스트를 위 `kb_chunks` 규칙대로 자른다. HTML은 읽지 않는다. 조각 id = 섹션 ID(소제목 순번은 내부용).
 - 질의 문자열을 만드는 함수는 `guard.py` 몫이다(창 안의 학습자 발화 + 후보 답변). 측정한 질의는 모든 user 발화 + 답변(`all_user + "\n" + candidate_answer`)이다. 가드 공개 세트는 메시지가 5개 이하라 창(첫 학습자 발화 + 마지막 6개) 안의 학습자 발화와 같다. 튜터 공개 세트는 최대 11메시지(7개 초과 58행)라 창과 다르지만, 창 질의로 q6를 다시 돌려도(`q6_rule_fp.py --window`) U·G·T 수치와 F1이 같았다([R13-A §6](../research/R13-public-set-analysis.md#6-규칙-②-오탐-재측정-santa-4라운드)). 여기서는 문자열만 받는다.
-- **테스트 먼저**: 조각이 `common.kb_chunks`와 같음(PR-02-01 코드 블록 안 `## ` 3곳에서 잘림, `# 제목` 머리말 조각 포함), CSV 붙음, `margin`이 같은 섹션의 두 조각을 1·2위로 세지 않고 top_k 밖 섹션까지 봄, `rank()` 한 번에 점수 계산이 한 번(상위 k·`margin`·1위 섹션이 같은 `Ranking`을 읽음), 역색인을 쓰면 전체 조각 점수가 전수 계산과 1e-9 안에서 같음, 튜터 `evidence`로 recall@1·@3, block이 아닌 가드 후보 67행의 정답 섹션 1위 ≥64/67·3위 ≥66/67(R13 M5의 96%·99%, 질의 = 발화 + 답변. 이 정답 배정은 낙관적이다: 답변 4-gram 포함률로 골랐고 질의에도 그 답변이 들어 있다. 독립 기준인 튜터 `evidence` recall@1·@3을 함께 보고하고 67행 기준은 이식 회귀 확인에 쓴다), BM25 점수가 `common.py`의 `BM25.scores`와 같음(고정 질의 여러 개, 질의에 같은 2-gram이 반복되는 경우 포함, 허용 오차 1e-9), 검색(`rank` 1회) p95 ≤20ms(개발 머신, 가드 후보 86행 + 튜터 200행 질의. 런박스에서는 S1.6·S2.10에서 다시 재고 더 느리면 ≤40ms), 색인 시간·메모리 출력. 67행의 정답 섹션은 `guardrail/scripts/r13/q5_ungrounded.py`의 배정 함수(`gold_sections_grounded`·`sections_with`)를 재사용하거나, 그것으로 만든 픽스처를 커밋해 쓴다.
+- **테스트 먼저**: 조각이 `common.kb_chunks`와 같음(PR-02-01 코드 블록 안 `## ` 3곳에서 잘림, `# 제목` 머리말 조각 포함), CSV 붙음, `margin`이 같은 섹션의 두 조각을 1·2위로 세지 않고 top_k 밖 섹션까지 봄, `rank()` 한 번에 점수 계산이 한 번(상위 k·`margin`·1위 섹션이 같은 `Ranking`을 읽음), 역색인을 쓰면 전체 조각 점수가 전수 계산과 1e-9 안에서 같음, 튜터 `evidence`로 recall@1·@3, block이 아닌 가드 후보 67행의 정답 섹션 1위 ≥64/67·3위 ≥66/67(R13 M5의 96%·99%, 질의 = 발화 + 답변. 이 정답 배정은 낙관적이다: 답변 4-gram 포함률로 골랐고 질의에도 그 답변이 들어 있다. 독립 기준인 튜터 `evidence` recall@1·@3을 함께 보고하고 67행 기준은 이식 회귀 확인에 쓴다), BM25 점수가 `common.py`의 `BM25.scores`와 같음(고정 질의 여러 개, 질의에 같은 2-gram이 반복되는 경우 포함, 허용 오차 1e-9), 검색(`rank` 1회) p95 ≤20ms(개발 머신, 가드 후보 86행 + 튜터 200행 질의. 런박스에서는 S2.10에서 다시 재고(S1.6 시점에는 `kb.py`가 없음) 더 느리면 ≤40ms), 색인 시간·메모리 출력. 67행의 정답 섹션은 `guardrail/scripts/r13/q5_ungrounded.py`의 배정 함수(`gold_sections_grounded`·`sections_with`)를 재사용하거나, 그것으로 만든 픽스처를 커밋해 쓴다.
 - **수용 기준**: GR-03 수용 기준. 결과 수치를 PR에 적는다. **스킬**: `ecc:python-testing`, 에이전트 `ecc:rag-pipeline-reviewer`.
 
 ### S2.3 결정적 신호 (저신호·거절·숨긴 태그)
 
 | GR / ADR | GR-06, GR-08 · [ADR-0014](../adr/0014-output-three-tier-and-safe-rule.md) | 우선·예상·모델 | P0 · 4h · Opus |
 |---|---|---|---|
-| 선행 | S2.1 | 브랜치 | `gr/s2.3-signals` |
+| 선행 | S1.4(`load_public`으로 400행·튜터 거절 답변을 읽음), S2.1 | 브랜치 | `gr/s2.3-signals` |
 
 - **만들 파일**: `src/guardrail/signals.py`(S1.1이 둔 `Signals` dataclass 옆에 함수), `tests/test_signals.py`.
 - `is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool`: 자모·문장부호·이모티콘만(숫자·라틴·완성 음절 없음, 숨긴 텍스트 없음) **그리고** 앞에 대화가 있음. 1턴은 False(LLM으로). 입력 `target_pre`는 **자모 조합 전** 텍스트, 즉 `preprocess.strip_tags(target)`(S2.1, 태그 문자만 지운 것)다. 정규화본을 쓰면 "ㅋㅋㅠㅠ"가 음절로 조합돼 놓친다.
@@ -151,7 +151,7 @@
 | 선행 | S1.4, S2.8(S2.8 전 골격은 S1.4 뒤 `--fake`로 S1.2의 `ConstantGuard`(`Judgement` 반환)를 대상으로 돈다) | 브랜치 | `gr/s2.9-harness` |
 
 - **만들 파일**: `src/guardrail/eval/run.py`, `eval/stats.py`(묶음 부트스트랩 추가), `tests/test_run.py`, `configs/ablation/*.yaml`(토글마다 하나).
-- CLI는 [master-plan §4.6](../master-plan.md#46-평가-cli-eval). 실행 시작 때 LLM 하나를 만들어 `await llm.start()`(probe 1회)하고, 폴드마다 `await Guard.build(cfg, llm=llm, rows=cv.train_rows(fold=k))`로 그 LLM을 주입한 뒤 그 폴드 행의 `judge()`를 동시 16으로 부른다. probe 호출이 폴드 수만큼 늘지 않고, `--estimate`도 probe를 실행당 한 번으로 센다. `--repeat 3`, `--estimate`, `--max-calls`, `--fake`, `--set`, `--ablation`, `--holdout`(열람 기록·4회째 거부).
+- CLI는 [master-plan §4.6](../master-plan.md#46-평가-cli-eval). `--ablation`에는 이름으로 일부 행만 돌리는 `--only a,b`를 둔다(기준 행 baseline·default는 늘 포함, `--estimate`도 선택된 행만 센다). 실행 시작 때 LLM 하나를 만들어 `await llm.start()`(probe 1회)하고, 폴드마다 `await Guard.build(cfg, llm=llm, rows=cv.train_rows(fold=k))`로 그 LLM을 주입한 뒤 그 폴드 행의 `judge()`를 동시 16으로 부른다. probe 호출이 폴드 수만큼 늘지 않고, `--estimate`도 probe를 실행당 한 번으로 센다. `--repeat 3`, `--estimate`, `--max-calls`, `--fake`, `--set`, `--ablation`, `--holdout`(열람 기록·4회째 거부).
 - `report.md`: master-plan §4.6 목록 전부 + 튜터 200행 범주 정확도 따로. 역할별(입력·출력) 오류 코드 비율(`bad_json`·`timeout` 등)과 `finish_reason=length` 비율(`LLMResult.finish_reason`), 요청당 호출 수를 넣어 S1.6의 잠정 `max_completion_tokens`를 실제 프롬프트로 다시 확인한다.
 - **첫 실측**(API): `default.yaml` × 3회, `baseline.yaml`(토글 모두 끔 + `output.mode: baseline`) × 3회, kNN 다수·LR 단독(호출 0). 표를 `results/2026-11-15-v1.md`로 커밋.
 - **테스트 먼저**: 골격 단계는 `ConstantGuard`로 400행(판정기 생성 함수를 주입), S2.8 머지 뒤 `--fake`로 `Guard` 400행 끝까지(호출 0) 테스트를 더한다, 예상 호출 수 = 실제 호출 수(probe는 실행당 한 번), 폴드 5개 실행에서 probe 1회, 상한 초과 시 시작 전 멈춤, 홀드아웃 4회째 거부, 부트스트랩이 묶음 단위로 뽑음.

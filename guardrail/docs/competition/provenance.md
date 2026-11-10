@@ -1,6 +1,6 @@
 # 서버 자산 출처 (provenance)
 
-작성 2026-11-09 · 담당 danielcho02 · 근거: [OT 사실 §10](ot-facts.md#10-규칙실격-25-26) · [PRD GR-13](../PRD.md#gr-13-규칙-준수-p0-신설) · [R12 §8](../research/R12-competition-baseline.md#8-v4-자산-출처-점검-gr-13)
+작성 2026-11-09 · v6 갱신 2026-11-10 · 담당 danielcho02 · 근거: `competition/SPEC.md` §7.1·§8 · [PRD v6 GR-14](../PRD.md#gr-14-규칙-준수-p0) · [R12 §8](../research/R12-competition-baseline.md#8-v4-자산-출처-점검-gr-13)
 
 서버(채점받는 `/guard`)에 들어가는 데이터·사전·예시·프롬프트의 출처를 적는다. 시연에서 코드와 함께 보여 준다. **새 자산을 서버에 넣는 PR은 이 표에 행을 더해야 한다.**
 
@@ -12,10 +12,13 @@
 | 자산 | 출처 | 작성 | 상태 |
 |---|---|---|---|
 | `src/guardrail/preprocess.py` 자모 변환표·정규화 규칙 | 유니코드 한글 조합 규칙(공개 사양) | 팀(R5 조사 단계 참고 코드를 옮겨 고침, ADR-0001) | 있음 |
-| `kb/<과목>/` 색인 | 대회 배포 자료 | 주최측 | 기동 때 색인(C2) |
-| 결정적 신호 어휘·패턴(위기·PII·인젝션·저신호) | — | 팀이 직접 씀 | 작성 예정(GR-06). 다른 LLM이 만든 목록을 붙여 넣지 않는다(팀 방침. OT p.25는 규칙 안의 예시를 팀 작성으로 보지만 보수적으로 간다) |
-| 판정 프롬프트 `input_judge.md`·`output_judge.md`와 그 안의 경계 사례 | 공개 세트 개발 분할을 보고 팀이 씀 | 팀 | 작성 예정(GR-04·GR-07). 공개 세트 원문을 그대로 붙여 넣지 않고 팀이 바꿔 쓴다 |
-| 라이브러리 | PyPI: `openai`, `pydantic`, `pyyaml`, (예정) `fastapi`, `uvicorn`, `rapidfuzz` | 오픈소스, 모델·사전 없음, 외부 호출은 주최측 엔드포인트만 | R12 §6 |
+| `kb/<과목>/` 색인(문자 2-gram BM25) | 대회 배포 자료 | 주최측 | 기동 때 색인(PRD v6 GR-03) |
+| kNN 색인·few-shot 예시 | `public/guard.jsonl`·`public/tutor.jsonl` 400행(배포 자료). SPEC §7.1이 공개 세트 few-shot·유사도 검색을 허용 | 주최측 | 기동 때 색인(GR-05, ADR-0013). 요청 처리 중 바뀌지 않음 |
+| 문자 n-gram LR | 위 400행으로 기동 때 처음부터 학습(SPEC §7.1 허용). 학습된 모델 파일은 저장소에 두지 않음 | 팀(코드) | GR-05 |
+| 결정적 신호: 거절 정규식, 숫자·단위·한글 수사 표, 저신호 판정, 숨긴 태그 문자 | — | 팀이 직접 씀 | GR-06. 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
+| 판정 프롬프트 `input_judge.md`·`output_judge.md`(범주 정의·짝 대조 문구) | 공개 세트를 보고 팀이 씀 | 팀 | GR-04·GR-07 |
+| (쓰면) nano 합성 예시 | 운영진 제공 `gpt-5-nano`(SPEC §7.1 허용). 생성 스크립트와 함께 커밋 | 팀 + nano | 기본 안 씀(ADR-0013) |
+| 라이브러리 | PyPI: `openai`, `pydantic`, `pyyaml`, `fastapi`, `uvicorn`, `scikit-learn`(+`scipy`), `rapidfuzz` | 오픈소스, 모델·사전 파일 없음, 외부 호출은 운영진 엔드포인트만. `tiktoken`·Kiwi는 쓰지 않음 | [R13-B2](../research/R13-B2-libraries.md) |
 
 ## 2. 서버에 넣지 않는 것 (개발·평가 전용)
 
@@ -28,10 +31,11 @@
 | `resources/crisis_resources.yaml` | 공공 상담 번호 + 팀 문구, 기사 인용 | 가드 응답에 문구가 없어 불필요 |
 | 외부 공개 데이터셋(wildguardmix, MultiJail 등) | 인터넷 | 저장소에 없음. 서버 밖 평가 사용도 운영진 확인 전에는 하지 않음 |
 | `configs/*.yaml`의 `typesafe-ai/jev-1.14.0` | 외부 모델 | 코드 재계획에서 삭제 |
+| `guardrail/scripts/r13/` 분석 스크립트 | 공개 세트 로컬 분석(R13-A) | 개발 전용 |
 
 ## 3. 시연 전 확인
 
 - [ ] 위 1절에 없는 데이터·목록 파일이 서버 경로에 없다
-- [ ] 서버 로그에 요청·답변 본문이 없다(PRD GR-11)
+- [ ] 서버 로그에 요청·답변 본문이 없다(PRD GR-12)
 - [ ] `.env`·키가 git에 없다
 - [ ] 제출한 커밋 해시가 `submission.json`의 `commit`과 같다

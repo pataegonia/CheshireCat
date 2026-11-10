@@ -1,9 +1,19 @@
 # ADR-0002: 입력 판정: 규칙 → LLM, 학습 분류기는 P2
 
 **Date**: 2026-10-30
-**Status**: proposed
+**Status**: proposed (v6: 일부 superseded by ADR-0012, ADR-0013)
 **Deciders**: danielcho02
 **PRD**: GR-04, GR-06 (v4: GR-04, 이전 초안의 GR-03 분류기)
+
+## v6 수정 (2026-11-10, R13 council)
+
+이 블록이 아래 v5 블록과 본문보다 우선한다. 입력 판정 구조는 ADR-0012(범주만 출력, decision은 코드)와 ADR-0013(kNN few-shot·보조 판정기)이 대신한다. 여기서 남는 것은 "의도 판단은 LLM이 한다"는 원칙뿐이다. PRD v6 GR-04·GR-05·GR-06 기준.
+- **학습 분류기 허용**: v5의 "대회 규칙상 학습 분류기 불가"는 틀렸다. SPEC §7.1은 배포 자료와 운영진 제공 LLM으로 만든 예시로 처음부터 학습한 분류기를 허용한다. 문자 n-gram TF-IDF + LR을 기동 때 공개 세트 400행으로 학습한다(ADR-0013, [R13-B2 §3-3](../research/R13-B2-libraries.md#3-3-분류기)).
+- **분류기는 보조이고 nano를 건너뛰지 않는다**(council Critic, [R13 §2](../research/R13-design-research.md#2-council-가드-v6-구조)). 공개 세트 비normal의 35%가 normal과 1–5어절만 다른 짝이라([R13-A §1.1](../research/R13-public-set-analysis.md#11-최소쌍-근접-중복)) 문자 n-gram 분류기는 그 짝에서 확신하면서 틀린다([R13 §1 I2](../research/R13-design-research.md#1-근거-정리-research-ops-형식)). 분류기·kNN 다수결은 보조 판정기(GR-05)로 실패 기본값(D8)과 조건부 재호출(D1, ablation)에만 쓴다.
+- **직접 결정**: 저신호 직접 판정만 남긴다(형식으로 정의되는 범주, 400행 정밀도 100%). v5의 PII 직접 결정은 없앤다. 자기소개 + 타인 정보 요청은 `harmful_content`(block)라 규칙 하나로 정하면 block 경계를 틀린다([R13-A §1.2](../research/R13-public-set-analysis.md#12-범주별-단서와-분리력)).
+- **어휘 목록 삭제**: 위기·PII·인젝션 어휘 목록(v5 GR-06)을 두지 않고, 키워드 신호를 프롬프트 힌트로 넣지 않는다(과잉 차단 위험, PRD GR-04). 넣는 실험은 ablation이다.
+- 요청 사이 캐시 금지(v5)는 그대로다(SPEC §8).
+- 본문의 Qwen3Guard·사전학습 임베딩 분류기는 미리 학습된 모델 파일 금지(SPEC §7.1)로 계속 불가다. `text-embedding-3-small` 위 kNN은 허용되지만 요청마다 임베딩 호출이 늘어 ablation이다(ADR-0013).
 
 ## v5 수정 (2026-11-09, council)
 

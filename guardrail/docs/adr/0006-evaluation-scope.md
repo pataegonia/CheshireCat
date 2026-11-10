@@ -3,7 +3,19 @@
 **Date**: 2026-10-30
 **Status**: proposed
 **Deciders**: danielcho02
-**PRD**: GR-12, §7 (v4: GR-15, GR-16)
+**PRD**: GR-13, §7 (v5 번호: GR-12 / v4: GR-15, GR-16)
+
+## v6 수정 (2026-11-10, R13 council)
+
+이 블록이 아래 v5 블록과 본문보다 우선한다. PRD v6 GR-13 기준.
+- **데이터**: `public/guard.jsonl` 200행 + `public/tutor.jsonl` 200행 = 400행. 두 파일은 같은 10범주 라벨을 가진다([R13 §1 M3](../research/R13-design-research.md#1-근거-정리-research-ops-형식)). 입력 판정은 400행, 출력 판정은 가드 후보 답변 86행(+ 튜터 `reference_answer`로 규칙 오탐 확인)으로 잰다.
+- **짝 묶음 교차 검증**: 공개 세트는 같은 문장 틀에서 1–5어절만 바꿔 범주를 뒤집어 만들었다(비normal의 35%, [R13-A §1.1](../research/R13-public-set-analysis.md#11-최소쌍-근접-중복)). 행 단위로 나누면 짝의 한쪽이 kNN 예시로 들어가 점수가 부푼다. 문자 3-gram Jaccard ≥0.5로 이어진 문항을 한 묶음으로 보고, leave-one-cluster-out 또는 묶음 단위 5-분할로 평가 묶음을 kNN 색인·LR 학습·합성 생성 원본에서 통째로 뺀다([R13 D3](../research/R13-design-research.md#3-결정-d1d10), [R13-B §5-3](../research/R13-B-external-research.md#5-3-누수-없는-평가)). v5의 대화 단위·범주 층화 분리는 이것으로 바꾼다.
+- **홀드아웃**: 가드 묶음 단위 20%를 떼어 둔다. 설정·프롬프트를 고정한 뒤 최대 3회만 본다(v5의 30%에서 줄임).
+- **채점식 그대로**: `competition/grader/scoring.py`의 `score_guard`·`guard_score`를 import해 쓰고 다시 구현하지 않는다(SPEC §6: 가드 = 0.45·block F1 + 0.10·범주 정확도 + 0.45·출력 평균, 구간은 글자 다중집합 F1). 같은 저장 응답을 두 채점기에 넣었을 때 `harness/score_local.py`와 가드 점수 차 ≤0.005. R13 분석 스크립트(`guardrail/scripts/r13/`)가 이미 이 방식이다.
+- **빌드당 3회 실행**: 같은 빌드(코드·프롬프트·설정 고정)를 3회 돌려 점수 분산을 잰다. 두 빌드의 차이가 그 분산 안이면 개선으로 보지 않는다([R13 D10](../research/R13-design-research.md#3-결정-d1d10), Pragmatist). 비공개 채점도 제출마다 표본이 바뀐다(SPEC §6). v5의 McNemar·부트스트랩은 같은 묶음 분할 위의 짝 비교에 그대로 쓴다.
+- **ablation 판정**: 조건부 3번째 호출(D1), nano 출력 ③의 정밀도 조건, nano 구간(D5), 임베딩 kNN·검색(D3·D7), 합성 데이터(D4)는 이 교차 검증 결과로 켤지 정한다(기준은 ADR-0011·0013·0014). 모두 끈 "nano 단독"이 베이스라인이다(PRD GR-11).
+- **기준선**: 상수 응답(출력 0.655), 전부 allow(29.5), 입력 완벽 + 상수 출력(84.5)을 [R13-A Q4](../research/R13-public-set-analysis.md#q4-가드-점수-상하한과-민감도)에서 가져와 보고 표의 기준선으로 쓴다.
+- 마지막 제출은 이 절차로 검증한 빌드만 낸다(D10, SPEC §9: 계정별 마지막 제출이 점수).
 
 ## v5 수정 (2026-11-09)
 

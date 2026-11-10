@@ -1,9 +1,29 @@
 # 가드레일 작업 스킬 명세
 
-작성 2026-10-30 · 갱신 2026-11-09 · 담당 danielcho02 · `/ecc:skill-scout` 결과
+작성 2026-10-30 · 갱신 2026-11-10 · 담당 danielcho02 · `/ecc:skill-scout` 결과
+
+## v6 (PRD v6 전환, 2026-11-10)
+
+계획: `.claude/plans/guard-v6-prd-masterplan.plan.md`(로컬). 원격 검색(GitHub `SKILL.md`)에서 nemo-guardrails·rag-observability-evals·llm-as-judge·prompt-injection 탐지 스킬을 찾았으나 설치하지 않고 읽기만 했다([R13-B2](research/R13-B2-libraries.md)). 새 스킬은 만들지 않는다.
+
+| 단계 | 스킬·에이전트(모델) | 쓴 이유 |
+|---|---|---|
+| P1 공개 세트 분석(R13-A) | `ecc:eval-harness`, `ecc:regex-vs-llm-structured-text`, 서브에이전트(Opus) | 채점 코드로 전략 시뮬레이션, 규칙으로 풀릴 부분 찾기 |
+| P2 외부 조사(R13-B·B2) | `ecc:research-ops` → `ecc:deep-research`(Opus) + `ecc:search-first`(Sonnet), 1차 출처 대조(Sonnet) | 근거 종류(출처 사실·추론·권고) 구분, 라이브러리 규칙 준수 |
+| P3 nano 실측(코드 단계 첫 작업) | `ecc:benchmark-optimization-loop`, `ecc:latency-critical-systems` | 런박스 지연·파라미터 |
+| P4 구조 결정 | `ecc:council`(Architect 본 세션, Skeptic·Pragmatist·Critic 독립 서브에이전트, Opus) | D1–D10 |
+| P5 ADR | `ecc:architecture-decision-records`(Opus) | 0012–0014 신규, v6 수정 블록 |
+| P6 PRD v6·계약 | `ecc:product-capability`, `ecc:contract-first` | GR-01–GR-14, `guard.schema.json` |
+| P7 master-plan v23·Phase C1–C4 | `ecc:blueprint`, `ecc:living-docs-governance`(Opus) | 한 PR 크기 슬라이스, 문서 역할 |
+| P8 검증 | `ecc:santa-method`(독립 리뷰어 2명, Opus), `ecc:docs-governance` | 둘 다 통과까지, 링크·ADR 색인 |
+| 코드 단계 | `ecc:tdd-workflow`, `ecc:fastapi-patterns`, `ecc:cost-aware-llm-pipeline`, `ecc:eval-harness`, `ecc:security-review`, 에이전트 `ecc:python-reviewer`·`ecc:silent-failure-hunter` | 서버·nano 호출·채점식 재현·로그 규칙. 슬라이스별 배정은 master-plan v23 §5 |
+
+아래 "v5" 절과 "Phase별 표"(GP0–GP4)는 이전 계획 기록이다.
+
+## v5 기록
 대상: [master-plan.md](master-plan.md)의 슬라이스. 슬라이스마다 쓸 스킬은 각 Phase 문서([plan/](plan/))에도 적혀 있다.
 
-## v5 (대회 기준, 2026-11-09)
+### v5 (대회 기준, 2026-11-09)
 
 PRD v5 전환 작업에 쓴 스킬과, 코드 재계획에서 쓸 후보다. 아래 "Phase별 표"는 v4(GP0–GP4) 기준이라 재계획 때 다시 쓴다.
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "guard.schema.json",
   "title": "POST /guard contract (spec_version 1.0)",
-  "description": "Source: competition OT p.11-12, 15 (docs/competition/ot-facts.md §3, §5). SPEC.md on the runbox is authoritative; re-check on 2026-11-10. Request is parsed leniently (unknown fields allowed); response is strict (only spec fields, exact lowercase enum values). 'output' is required only when the request has a candidate_answer (cross-document rule, enforced in tests, not here). If messages (and candidate_answer) can still be read, the server judges; otherwise a malformed request gets the default 200 response, including a default 'output' when the raw body has a candidate_answer key (PRD GR-08, to be checked against SPEC.md). Not a 4xx; only an auth failure is non-200.",
+  "description": "Source: competition/SPEC.md §3, §5 (authoritative). Request is parsed leniently (unknown fields allowed); response is strict for scored fields (exact lowercase enum values). 'output' is required whenever the request has a candidate_answer key, even an empty string (cross-document rule, enforced in tests, not here). If messages (and candidate_answer) can be read, the server judges; otherwise it returns the default 200 response (PRD v6 GR-09), never FastAPI's 422 (it echoes input). Only an auth failure is non-200. decision is derived from category (ADR-0012).",
   "$defs": {
     "category": {
       "type": "string",
@@ -37,7 +37,7 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/$defs/message" },
-          "description": "Full history. First and last items are role=user (OT p.10)."
+          "description": "Full history. First and last items are role=user (SPEC §3)."
         },
         "candidate_answer": { "type": "string" }
       }
@@ -52,7 +52,7 @@
           "required": ["decision", "category"],
           "additionalProperties": false,
           "properties": {
-            "decision": { "type": "string", "enum": ["allow", "block"] },
+            "decision": { "type": "string", "enum": ["allow", "block"], "description": "block iff category is jailbreak_injection, harmful_content, academic_dishonesty or off_topic (ADR-0012)." },
             "category": { "$ref": "#/$defs/category" }
           }
         },
@@ -65,12 +65,12 @@
             "unsupported": {
               "type": "array",
               "items": { "type": "string", "minLength": 1 },
-              "description": "Verbatim substrings of candidate_answer (grader ignores whitespace/punctuation). Empty when grounded=true (ADR-0011)."
+              "description": "Verbatim substrings of candidate_answer (grader compares a char multiset after NFKC, lowercase, whitespace/punctuation removal). Scored independently of grounded; grounded=false with [] is allowed (ADR-0014)."
             },
             "safe": { "type": "boolean" },
             "category": {
-              "$ref": "#/$defs/category",
-              "description": "Not scored (OT p.15). Copied from input.category (ADR-0009)."
+              "type": "string",
+              "description": "Any string; not scored (SPEC §5). We copy input.category (ADR-0009)."
             }
           }
         }

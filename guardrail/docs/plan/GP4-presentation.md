@@ -1,3 +1,5 @@
+> v4 계획(폐기). v6 기준은 [master-plan v23](../master-plan.md)과 plan/C1–C4.
+
 # GP4 발표 — 세부 플랜
 
 작성 2026-10-30 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)

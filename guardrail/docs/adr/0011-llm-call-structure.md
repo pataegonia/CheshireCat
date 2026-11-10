@@ -3,8 +3,35 @@
 **Date**: 2026-11-09
 **Status**: proposed
 **Deciders**: danielcho02 (council 2026-11-09: Architect·Skeptic·Pragmatist·Critic)
-**PRD**: GR-04, GR-05, GR-07, GR-09
+**PRD**: GR-04, GR-05, GR-07, GR-10 (v5 번호: GR-04, GR-05, GR-07, GR-09)
 **대체**: ADR-0004, ADR-0007(일부), ADR-0008(입력 판정 부분)
+
+## v6 수정 (2026-11-10, R13 council)
+
+이 블록이 본문보다 우선한다(본문이 v5다). PRD v6 GR-04·GR-05·GR-07·GR-10 기준.
+
+**호출 구조 (D1)**
+- 요청당 nano **2회 병렬**: 입력 범주(ADR-0012) / 출력 근거 판정(ADR-0014). `candidate_answer`가 없거나 비었으면 출력 호출을 하지 않고, 저신호 직접 판정에 걸리면 입력 호출을 하지 않는다. v6 모드에서는 후보 답변이 비어 있지 않으면 출력 호출을 늘 한다(③ 사용 여부는 토글 `nano_tier3`, ADR-0014).
+- 입력에만 **조건부 3번째 호출 1회 상한**: nano의 block 여부가 kNN 다수와 LR 둘 다와 엇갈리면 입력 판정을 1회 더 부르고 세 판정(nano 2회 + kNN·LR 합의)의 다수로 block 여부를 정한다. 최종 범주는 nano 2번째 호출의 범주다. 2번째 호출이 실패하거나 시간을 넘기면 1번째 호출의 범주를 그대로 둔다(ADR-0013). ablation 플래그, 기본 꺼짐(P2). 짝 묶음 교차 검증에서 순이득이 3회 분산 밖에서 0보다 클 때만 켠다([R13 D1](../research/R13-design-research.md#3-결정-d1d10)). 짝 문항에서 정답을 뒤집을 위험이 있다([R13 §4](../research/R13-design-research.md#4-남은-위험과-확인할-것)).
+- **출력 2단(D)·자기 일관성(E)은 쓰지 않는다**(Skeptic의 전제 점검, [R13 §2](../research/R13-design-research.md#2-council-가드-v6-구조)). 점수 대부분은 입력 block 경계에서 나온다(입력 완벽 + 상수 출력 84.5 대 출력 오라클 +9.4, [R13-A Q4](../research/R13-public-set-analysis.md#q4-가드-점수-상하한과-민감도)). 투표 이득은 강한 모델에서 작다([R13-B §2-5](../research/R13-B-external-research.md#2-5-자기-일관성투표-비용-대비-효과)). 본문의 "2표 병렬, 엇갈리면 1표" 실험 후보도 닫는다.
+- 요청당 호출 상한: nano 2회 + 조건부 1회 + 호출마다 재시도 1회. 임베딩 0회(임베딩 ablation을 켜지 않는 한).
+
+**모델 파라미터**
+- `reasoning_effort="low"`, `verbosity="low"`. **`minimal`은 쓰지 않는다**(지연 ablation도 안 함). 쉬운 과제에서 정확도가 무너진다(ObviousBench minimal 37.5 대 low 91.0, [R13-B §4-3](../research/R13-B-external-research.md#4-3-정확도-effort별), [R13 §1 S3](../research/R13-design-research.md#1-근거-정리-research-ops-형식)). `medium` + verbosity low는 nano에서 오히려 39% 느렸다([R13-B §4-2](../research/R13-B-external-research.md#4-2-지연처리량)).
+- json_schema strict, `max_completion_tokens` ≥800, `temperature`·`max_tokens`·`logprobs` 미전송.
+- **기동 시험 호출(`probe()`)**: `reasoning_effort`·`verbosity`·`max_completion_tokens`·`response_format` json_schema를 **하나씩 따로** 시험하고 거절된 것만 끈다(json_schema가 거절되면 json_object로 내린다). 모든 파라미터는 설정에서 `null`(보내지 않음)로 둘 수 있다. 결과는 기동 때 오류 코드로만 남긴다. `max_completion_tokens`는 S1.6에서 800과 1200–1600을 `finish_reason=length` 비율로 비교해 정한다. 프롬프트는 고정 부분을 앞에, 요청별 부분(예시·대화·답변)을 뒤에 둔다(프롬프트 캐시 접두 일치).
+
+**시간 제한과 재시도 (D10)**
+- SDK 기본값(시간 제한 600초, 재시도 2회, `Retry-After` 최대 120초를 그대로 따름)은 30초 제한을 깬다([R13 §1 S6](../research/R13-design-research.md#1-근거-정리-research-ops-형식), [R13-B2 §3-6](../research/R13-B2-libraries.md#3-6-llm-호출-asyncopenai--64-동시-요청당-30초)). `AsyncOpenAI`를 lifespan에서 하나 만들고 시간 제한을 직접 준다(연결 3초·읽기 12초 수준). **SDK 재시도는 0**이다.
+- 재시도는 코드가 호출마다 1회만 한다. 대상은 연결 오류·타임아웃·408·409·429·5xx·스키마 불일치(잘못된 JSON 포함)다. 대기는 `retry-after-ms` → `retry-after` → 지터 0.2–0.5초 순이고, 대기 + 읽기 한도가 요청 예산(약 20초, ADR-0009 v6)의 마감을 넘으면 재시도하지 않고 기본값으로 간다. 401·403·400·422는 바로 실패다(master-plan §4.3).
+- 본문의 "호출당 약 12초, 요청 마감 25초"는 이것으로 바뀐다.
+
+**전역 LLM 게이트 (D10)**
+- `/tutor`와 같은 키(팀 키 하나, SPEC §7.1)를 쓰고, 같은 프로세스에 두면(팀 선택, ADR-0009 v6) LLM 게이트(세마포어 + 지터 재시도)는 서버 전체에 **하나**다. 가드는 게이트를 통해서만 부르고, 튜터도 같은 게이트를 쓰게 제안한다(PRD §9 D4). 세마포어 크기는 런박스 실측(동시 64, 가드·튜터 합쳐 약 600요청)으로 정한다(SPEC §3). 본문의 AIMD는 실측에서 429가 잦을 때 다시 본다.
+
+**판정 내용 변경**
+- 입력: 스키마는 `evidence`(≤1문장) → `category`이고 `decision` 필드는 없다(ADR-0012). 결정적 신호 힌트 대신 kNN few-shot 예시를 넣는다(ADR-0013). 첫 학습자 발화 + 마지막 메시지 6개를 주되, 범주는 마지막 학습자 발화로 정하라고 지시한다([R13-A §1.3](../research/R13-public-set-analysis.md#13-멀티턴)).
+- 출력: nano는 `reason` → `grounded`만 낸다. `safe`는 nano에서 빼고 규칙으로 정한다(D6). 본문의 "근거 없는 부분 + safe 두 필드, `grounded`는 코드로 계산"과 문장 번호 선택은 3단 출력으로 바뀐다(ADR-0014). 근거 자료는 ADR-0010 v6.
 
 ## Context
 

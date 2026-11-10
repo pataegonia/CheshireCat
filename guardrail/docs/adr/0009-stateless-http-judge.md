@@ -3,7 +3,23 @@
 **Date**: 2026-11-09
 **Status**: proposed
 **Deciders**: danielcho02 (council 2026-11-09: Architect·Skeptic·Pragmatist·Critic)
-**PRD**: GR-01, GR-05, GR-08, GR-11
+**PRD**: GR-01, GR-09, GR-12 (v5 번호: GR-01, GR-05, GR-08, GR-11)
+
+## v6 수정 (2026-11-10, R13 council)
+
+이 블록이 본문보다 우선한다(이 ADR은 v5에서 새로 썼으므로 본문이 v5다). PRD v6 GR-01·GR-09·GR-12 기준.
+- **인증**: 토큰은 환경변수 `TEAM_TOKEN`에서 읽는다. 코드·커밋에 쓰지 않고 LLM API 키와 다른 값을 쓴다(SPEC §9). `Authorization: Bearer` 값을 `hmac.compare_digest`로 비교하고, 틀리면 401과 짧은 JSON 오류로 거절한다. SPEC은 상태 코드를 정하지 않는다. 401은 시작용 `competition/server.py`가 `HTTPException(401)`을 내는 것을 근거로 한다. 이것만 200이 아니다.
+- **`/tutor`와 같은 서버(선택)**: SPEC은 `/tutor`와 `/guard`를 한 서버에 두라고 요구하지 않는다. 시작용 server.py는 둘을 한 앱에 둔다. 같은 서버(프로세스)로 둘지는 팀 선택(PRD §9 D4, 리더 결정). 가드는 APIRouter로 만들어 어느 쪽이든 붙는다. `redirect_slashes=False`. API 키는 어느 쪽이든 팀 키 하나라(SPEC §7.1), 한 프로세스를 함께 쓰면 전역 LLM 게이트가 중요해진다(ADR-0011 v6). 그때 KB 색인·kNN 색인·LR·게이트를 함께 쓴다.
+- **항상 200**: 인증 실패를 뺀 모든 경우 200 + 규격 JSON 하나(v5와 같음, SPEC §3).
+- **422·예외 본문 제거**: FastAPI 기본 422 응답은 요청 입력값을 되돌려 주고, SDK 예외 메시지에는 요청 본문이 실릴 수 있다([R13 §1 S6](../research/R13-design-research.md#1-근거-정리-research-ops-형식), [R13-B2 §3-5](../research/R13-B2-libraries.md#3-5-서버-fastapi--uvicorn)). 검증 오류 핸들러를 덮어써 읽을 수 있는 만큼 판정하고 200으로 답한다. 오류 로그는 예외 종류·오류 코드만 남긴다(SPEC §8, GR-12). uvicorn 접근 로그도 허용 항목만.
+- **`output.category`**: 문자열이면 무엇이든 된다(SPEC §5, 채점 안 함). `input.category`를 복사한다. `input.category`는 10범주 밖이면 형식 오류이므로 nano 출력이 enum 밖이면 실패로 본다(ADR-0012).
+- **요청 예산 약 20초**(v5 25초): 채점 제한 30초(SPEC §3) 안에서 터널·대기열 여유를 둔다([R13 D10](../research/R13-design-research.md#3-결정-d1d10)). 재시도 규칙은 ADR-0011 v6.
+- **기본값(D8)**: 아래 본문의 기본값을 바꾼다([R13 D8](../research/R13-design-research.md#3-결정-d1d10), PRD GR-09).
+  - 입력 nano 실패(재시도 후): kNN 다수 범주와 LR 범주가 같으면 그 범주, 다르면 LR 범주. LR이나 kNN이 꺼져 있으면 있는 쪽을 쓰고, 둘 다 없으면 `normal`. decision은 범주에서 도출(ADR-0012). v5의 결정적 신호 우선순위 목록은 쓰지 않는다.
+  - 출력 nano 실패: 3단 출력에서 nano만 빼고 계산한다(①·②, 그 밖은 설정 `output.failure_default`, 기본 `grounded` = `true/[]` | `ungrounded` = `false/[]`). `output.failure_default`는 출력 nano가 실패했을 때와 `nano_tier3`가 꺼져 nano 판정을 쓰지 않을 때의 ④에만 적용한다. `nano_tier3`가 켜져 있고 nano가 근거 있음이라고 한 ④는 늘 `true/[]`다. ①·②에 안 걸리고 ③·④까지 오는 행의 공개 세트 grounded 비율이 약 32/(32+17) ≈ 0.65라 `true/[]` 기대값(약 1.3)이 `false/[]`(1)보다 높다. 규칙 ②가 꺼지거나 게이트로 빠지면 block이 아닌 행의 근거 없음 비율이 35/67 ≈ 0.52라 `false/[]`가 조금 낫다(가드 88.31 대 87.79, [R13-A Q4](../research/R13-public-set-analysis.md#q4-가드-점수-상하한과-민감도) 계산값이며 nano로 잰 값이 아님). 최종 설정에서 S3.1이 재고 정한다(ADR-0014).
+  - `safe`: 늘 규칙(ADR-0014). v5의 "숨긴 문자·금지 표현·PII 신호면 false"는 "이모지 밖 태그 문자면 false"만 남는다.
+  - 요청 파싱 실패: 못 읽으면 `allow`·`normal`, 본문에 `candidate_answer` 키가 있으면 `output`은 `true/[]`·`safe=true`.
+- 본문 대안의 "실패 시 기본값 `block`"은 다시 열지 않는다. 입력 nano가 실패해도 보조 판정기가 범주를 낸다.
 
 ## Context
 

@@ -17,10 +17,14 @@
 | [R9](R9-student-safety-and-law.md) | 위기 대응 표준, 실제 사고, 국내 법 조문, 요구사항 REQ-01–36, 응답 템플릿 |
 | [R10](R10-architecture-options.md) | 다른 LLM 가드레일 구조 비교, 병렬 2호출 구조 제안 (10/30) |
 | [R11](R11-role-split-and-output-latency.md) | LLM + Jev 역할 분담, 출력 판정 지연 줄이기, 장애 처리와 부하 (10/30) |
-| [R12](R12-competition-baseline.md) | **대회 기준선(PRD v5)**: gpt-5-nano 판정 설계, 구간 탐지, F1 임계값, 라이브러리, v4 자산 출처, R1–R11 유효 범위 (11/09) |
+| [R12](R12-competition-baseline.md) | 대회 기준선(PRD v5): gpt-5-nano 판정 설계, 구간 탐지, F1 임계값, 라이브러리, v4 자산 출처, R1–R11 유효 범위 (11/09). **v6에서 R13이 대체한 결론: 7(grounded = 구간 없음), 6(문장 번호 기본), §6-1(Kiwi 불가 → 허용이나 안 씀), 학습 분류기 불가** |
+| [R13](R13-design-research.md) | **설계 v6(PRD v6)**: 조사 종합, council, 결정 D1–D10 (11/10) |
+| [R13-public-set-analysis](R13-public-set-analysis.md) | 공개 세트 정밀 분석: 범주 짝 문항, 채점식 시뮬레이션, safe 전략, 점수 범위, 근거 없는 구간 역설계, BM25 recall (11/10, 스크립트 `guardrail/scripts/r13/`) |
+| [R13-B-external-research](R13-B-external-research.md) | 외부 조사: 구간 탐지, kNN few-shot, 한국어 탈옥, gpt-5-nano, 합성 데이터 (11/10, 출처 63개) |
+| [R13-B2-libraries](R13-B2-libraries.md) | 라이브러리 선정과 규칙 준수 판정 (11/10) |
 | `src/guardrail/preprocess.py` | 한국어 정규화 구현 (조사 단계 참고 코드를 옮겨 고침, ADR-0001) |
 
-조사 방법(R1–R11, 10/29–30): firecrawl·exa MCP가 없어 WebSearch·WebFetch로 진행. R12(11/09)는 Exa·WebFetch로 했다. openai.com, Khan Academy 도움말 일부는 접근이 막혀 2차 자료로 대신했다(메모마다 표시).
+조사 방법(R1–R11, 10/29–30): firecrawl·exa MCP가 없어 WebSearch·WebFetch로 진행. R12(11/09)는 Exa·WebFetch로 했다. R13(11/10)은 공개 세트 로컬 분석 + firecrawl·exa(deep-research)로 했고, 핵심 주장 12개를 1차 출처와 대조했다([verification.md](verification.md) §R13). openai.com, Khan Academy 도움말 일부는 접근이 막혀 2차 자료로 대신했다(메모마다 표시).
 
 ---
 

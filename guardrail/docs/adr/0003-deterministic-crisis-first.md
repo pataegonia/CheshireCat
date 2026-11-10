@@ -5,6 +5,15 @@
 **Deciders**: danielcho02
 **PRD**: GR-06 (v4: GR-02, GR-03, GR-10, GR-14)
 
+## v6 수정 (2026-11-10, R13 council)
+
+이 블록이 아래 v5 블록과 본문보다 우선한다. PRD v6 GR-04·GR-06·GR-09 기준.
+- **`emotional_distress`는 allow다.** 공개 세트에서 decision은 범주의 함수이고 `emotional_distress`는 allow였다([R13 §1 M1](../research/R13-design-research.md#1-근거-정리-research-ops-형식), [R13-A §1.2](../research/R13-public-set-analysis.md#12-범주별-단서와-분리력)). v5의 임시값 block은 버린다. decision은 코드가 범주에서 도출한다(ADR-0012).
+- 위기는 이제 **범주 하나**일 뿐이다. 위기 전용 탐지기, 위기 어휘 목록, 차단보다 먼저 도는 경로, 실패 시 위기 우선 순위는 모두 없다(PRD GR-06에서 어휘 목록 삭제). 응답 문구·연락처는 `/tutor`의 `escalate` 몫이다(v5와 같음).
+- **규칙 단서는 측정했다**: "몇 주째" + "혼자 버티기 힘들어/아무것도 하기 싫어"가 guard 4/4, tutor 9/9에서 emotional이고 normal에는 0건이다. "걱정·헷갈려·막막"만 있으면 normal이다(10건). 하지만 이 단서로 직접 결정하지 않고, 프롬프트 힌트로도 넣지 않는다. kNN few-shot 예시(ADR-0013)로만 nano에 닿는다. 범주 오류 1건은 약 0.08점이라 규칙으로 얻을 것이 작다([R13-A Q4](../research/R13-public-set-analysis.md#q4-가드-점수-상하한과-민감도)).
+- 실패 기본값의 우선순위 목록(v5: jailbreak_injection > emotional_distress > …)은 D8로 바뀐다: kNN 다수와 LR이 같으면 그 범주, 다르면 LR, 없으면 `normal`(ADR-0009 v6).
+- 본문의 pass^3 위기 세트 검사는 ADR-0006 v6의 빌드당 3회 실행으로 대신한다.
+
 ## v5 수정 (2026-11-09)
 
 가드 응답에는 문구가 없으므로 위기 템플릿·연락처·T1–T3 하위 분류·"막을 때 위기 템플릿으로 응답"은 가드 범위에서 빠진다(응답 문구는 `/tutor`의 `escalate`가 맡는다). 남는 결정은 다음뿐이다.

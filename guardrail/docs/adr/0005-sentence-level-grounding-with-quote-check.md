@@ -1,9 +1,19 @@
 # ADR-0005: 문장 단위 근거 판정 + 인용 실재 확인
 
 **Date**: 2026-10-30
-**Status**: proposed
+**Status**: superseded by ADR-0014
 **Deciders**: danielcho02
 **PRD**: GR-07, GR-03 (v4: GR-07, GR-08, GR-09)
+
+## v6 수정 (2026-11-10): superseded by ADR-0014
+
+구간 방식은 ADR-0014가 대신한다. 아래 v5 블록(문장 번호 선택 / 구절 정렬)과 본문은 기록으로만 남는다. PRD v6 GR-07 기준.
+- **규칙 구간만 기본으로 낸다**: 숫자·리터럴 규칙이 걸린 토큰을 넓힌 원문 부분 문자열이다. 기본 폭은 `pm4`(토큰 ±4자)이고, 정답 섹션 비교로 잡힌 16행에서 잰 구간 F1이 0.627이었다([R13-A §5.1](../research/R13-public-set-analysis.md#51-35행-전체-참-사실-위치와-변조-유형)). `eojeol`(어절 경계)은 S3.1에서 비교한다(ADR-0014).
+- **문장 번호 선택은 쓰지 않는다.** 문장 하나를 내면 구간 F1이 약 0.55–0.65에 묶이고([R13-A Q2](../research/R13-public-set-analysis.md#q2-span-전략-채점-코드로-시뮬레이션), [R13-B §1-4](../research/R13-B-external-research.md#1-4-글자-묶음-f1에서-구간-길이가-주는-손실)), 그 품질이면 근거 없을 확률 p ≥ 약 0.65에서만 구간을 내는 편이 낫다(손익분기 1/(1+s), [R13-A §2.1](../research/R13-public-set-analysis.md#21-ungrounded를-낼-손익분기-p)). GPT-5 계열 구간 정밀도는 약 30%라([R13 §1 S2](../research/R13-design-research.md#1-근거-정리-research-ops-형식)) nano 판정으로 그 확신을 얻기 어렵다.
+- **nano 구간은 ablation**(P2, 기본 꺼짐): 규칙과 같은 문장을 가리키고 숫자·고유명을 담을 때만 쓰고, 짝 묶음 교차 검증에서 순이득이 날 때 켠다([R13 D5](../research/R13-design-research.md#3-결정-d1d10)). 정렬은 v5 블록 순서(정확히 찾기 → 공백·문장부호 제거본 → rapidfuzz ≥90)를 쓴다.
+- **`grounded`와 구간을 묶지 않는다.** v5의 "`grounded`는 근거 없는 문장이 없을 때만 참"은 버린다. 채점이 두 항목을 따로 보므로 `grounded=false, []`를 낼 수 있어야 한다(ADR-0014).
+- v5 사전 필터(문자 3-gram 포함률)와 본문의 6종 라벨·인용 실재 확인은 v6 구조에 자리가 없다. nano 출력 판정은 `reason` → `grounded`만 낸다.
+- `safe`는 규칙으로 정한다(ADR-0014). 본문 Negative의 "부족하면 형태소 분석(Kiwi)"은 닫는다([R13 D7](../research/R13-design-research.md#3-결정-d1d10)).
 
 ## v5 수정 (2026-11-09, council)
 

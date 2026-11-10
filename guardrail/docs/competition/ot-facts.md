@@ -1,7 +1,12 @@
 # 대회 OT 사실 정리
 
 출처: 「안전벨트를 채운 AI 튜터 경진대회 참가자 오리엔테이션」(Elice, 35쪽, 2026-11-09 수령). 괄호 안은 쪽 번호.
-**기준 문서는 런박스의 `SPEC.md`다(3).** 이 문서는 OT 자료만 옮겼으므로, 대회 시작(11/10) 뒤 `SPEC.md`와 대조해 다른 곳을 고친다.
+**기준 문서는 `SPEC.md`다(3).** 2026-11-10부터 저장소의 [`competition/SPEC.md`](../../../competition/SPEC.md)가 기준이고, 이 문서는 OT 기록으로만 남긴다. SPEC이 OT와 다른 주요 항목(v6 반영, PRD v6 §14):
+> - 계정마다 제출은 그 계정 런박스의 `/tutor`·`/guard`여야 한다(SPEC §7). 시작용 `server.py`는 둘을 한 앱에 두고 서버 토큰을 환경변수 `TEAM_TOKEN`으로 읽는다(`TEAM_TOKEN`은 SPEC이 아니라 `server.py`·`competition/README.md`에서 옴).
+> - `output.category`는 아무 문자열(채점 안 함). `input.category`만 10개 값.
+> - `unsupported` = 자료와 모순되거나 자료에 없는 **과목 고유 사실**을 지어낸 구간. `decision` = 튜터가 정상 진행하면 안 되는 입력이면 block.
+> - 허용 완화(SPEC §7.1): 형태소 분석기·토크나이저와 그 사전, 공개 세트 few-shot·유사도 검색, 배포 자료·nano 예시로 처음부터 학습한 분류기. 금지는 그대로(미리 학습된 모델 파일, 인터넷 데이터, 다른 LLM 예시).
+> - 채점 코드(`competition/grader/scoring.py`): 구간은 글자 묶음 F1, `grounded`와 구간은 따로 채점, 비공개 세트는 후보 답변 변형을 뽑는다.
 
 ## 1. 일정·제출
 

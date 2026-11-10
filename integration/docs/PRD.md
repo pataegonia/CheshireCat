@@ -181,8 +181,8 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마(`tutor.schema.json`), `/tutor/` 3xx 없음.
 
 ### IN-06 통합 하네스 `harness/run_public.py` (P0)
-- 가드 #49의 `guardrail.eval.score`(= `score_local` import)와 `splits/v1.json`을 **그대로 쓴다**. 추가: 튜터 행 채점(action · 인용 F1 · nano facts/faithful 참고치), **총점 합산**, 프리셋 반복 3회, 실패 4분류(오탐 / 미탐 / 하드코딩 의심 / 오류 · 형식), 오탐률 · 미탐률 분모 분리, 범주별 표, 단계별 지연 p50 · p95 · p99, 호출 수, 실행 전 예상 호출 수 · 상한.
-- ablation 프리셋 `config/ablation/`: `baseline_nano_only` · `+bm25` · `+name_index` · `+hybrid` · `+doc2query` · `+kiwi` · `+self_judge` · `+top2` · `full`.
+- 가드 #49의 `guardrail.eval.score`(= `score_local` import)와 `splits/v1.json`을 **그대로 쓴다**. 추가: 튜터 행 채점(action · 인용 F1 · nano facts/faithful 참고치), **총점 합산**, 프리셋 반복 3회, 실패 4분류(오탐 / 미탐 / 하드코딩 의심 / 오류 · 형식), 오탐률 · 미탐률 분모 분리, 범주별 표, 단계별 지연 p50 · p95 · p99, 호출 수, 실행 전 예상 호출 수 · 상한, **recall@1 · @3 · @5 · 놓친 행**(IN-02), **기본값 경로로 떨어진 문항의 정답 action 분포**(튜터 TU-12 기본값 선택 근거).
+- ablation 프리셋 `config/ablation/`: 튜터 TU-14 토글(`name_dict` · `fewshot` · `action_from_category` · `signals` · `verify` · `guard_classify` · `embedding` · `rerank` · `vote`)과 가드 토글을 같은 이름으로 묶은 프리셋 — `baseline` · `+retrieval` · `+signals` · `+fewshot` · `+verify` · `full`.
 - 홀드아웃은 프롬프트 · 설정 고정 뒤 **최대 3회**(가드 ADR-0006과 동일 규율).
 - **수용 기준**: 프리셋별 총점 표 1장, 로컬 채점기와 차 0.
 

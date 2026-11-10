@@ -66,11 +66,11 @@
                       ▼                          ▼
    tutor.router (튜터 B, #69)              guard router (가드)
    ┌──────────────────────────────────────┐
-   │ 1 retrieve(튜터 TU-03) ∥ 범주 판정     │  v1(11/15): 가드 classify(messages) · 동결: 측정으로 결정(§4 I13)
-   │ 2 actions 표(IN-03)                  │  block · abstain · clarify · escalate 범주 → 템플릿(+ 쓴 자료 섹션 인용)
-   │ 3 generate() → list[Sentence]        │  ← 튜터 TU-06(문장 단위 + sid · quote)
-   │ 4 judge_output(category=) (가드)      │  남은 시간 < judge_skip_s면 생략(답 · action 유지)
-   │ 5 결정적 수정(IN-04)                  │  0ms
+   │ 1 retrieve(TU-03) ∥ classify(가드) ∥ 주 호출(TU-06)   │  v1 = ⓒ 병렬(§4 I13), p50 ≈6s
+   │ 2 합치기(TU-10 · TD-13) + actions 표(IN-03)        │  classify가 공격 4범주이고 주 호출 action ≠ 표 action → 표 템플릿
+   │                                                   │  그 밖은 주 호출 결과 · classify 실패/시간 초과 → 주 호출만
+   │ 3 judge_output(category=) (가드, 생성 경로만)       │  남은 시간 < judge_skip_s면 생략(답 · action 유지)
+   │ 4 결정적 수정(IN-04)                               │  0ms
    └──────────────────────────────────────┘
                       │
    ┌────────── integration/ ──────────┐   ┌──── harness/ ────┐
@@ -82,9 +82,10 @@
 ```
 
 - 1단계 병렬: 검색과 범주 판정은 의존이 없다. `out_of_material` 판정은 범주 판정이 하고, 검색 점수는 **힌트로만** 넘긴다(BM25는 항상 top-k를 돌려주므로 "검색 결과 없음"이라는 상태는 없다). normal 정답 문항에서 abstain으로 빠지면 action · 인용 · 사실 세 항목을 모두 잃으므로, 검색 점수가 낮아도 action은 표대로 간다.
-- **범주 판정 주체(I13)**: 두 안이 있다. ⓐ 가드 `Guard.classify(messages) -> Category`(interface.md 46행)를 튜터도 호출 — 가드 공개 세트로 측정된 코드, nano +1회 직렬(p50 ≈9s). ⓑ 튜터 주 호출이 범주 · action · 답을 함께(튜터 TD-04, nano 1회, p50 ≈6s) — 정확도 미측정. **11/15 v1 제출은 ⓐ**(측정된 쪽으로 공격 문항 0점 위험을 막고 시작), 11/18까지 통합 하네스가 공개 세트 + 레드팀 변형으로 두 안의 **공격 4범주 재현율 · 정상 오차단률 · p95 · 호출 수**를 나란히 내고, ⓑ의 공격 재현율이 ⓐ 이상이면 11/20 동결은 ⓑ. 토글은 튜터 `guard_classify` 하나(#83).
-- 4단계는 가드 `Guard.judge_output(messages, candidate_answer, category=…)`(interface.md 47행, 9cce438 ✅). `category=None`이면 가드가 `classify`를 다시 부르므로(nano +1) **범주를 반드시 넘긴다**. 가드 v6는 `unsupported`를 규칙 구간(숫자 · 리터럴, 원문 부분 문자열)으로 내므로 **그 구간이 든 문장을 지운다**. 문장 분리는 튜터 쪽(`list[Sentence]`).
-- 시간 예산: 가드 설정 `budget_s`(≈20s, 같은 키)를 읽는다. 1단계 ≤6s → 3단계 ≤10s → 4단계는 남은 시간이 `judge_skip_s`(설정값 하나, 잠정 4s = 튜터 TU-09) 미만이면 **판정만 건너뛰고 생성된 답과 표의 action을 그대로 낸다**(abstain 전환 금지 — IN-04-3 계산). 생성 자체가 실패한 경우의 기본 action은 튜터 TU-12 설정값 하나를 읽는다(잠정 clarify, IN-06 "기본값 경로 정답 분포"로 11/18까지 확정).
+- **범주 판정 주체(I13)**: 세 안. ⓐ 가드 `Guard.classify`를 주 호출 **앞에** 직렬(측정된 코드, p50 ≈9s) ⓑ 주 호출이 범주까지(nano 1회, p50 ≈6s, 미측정) ⓒ `classify`를 주 호출과 **병렬**로 돌리고 합치기 — classify가 공격 4범주인데 주 호출 action이 표와 다르면 표 템플릿, 그 밖은 주 호출, classify 실패 · 시간 초과면 주 호출만(튜터 제안, TU-10 · TD-13 · #88). ⓒ는 공격 재현율이 ⓐ · ⓑ 중 높은 쪽 이상이고 지연은 ⓑ 수준, 비용은 템플릿 경로에서 주 호출 1회 낭비(채점당 튜터 ≈780회). **11/15 v1 = ⓒ**(통합 수용: ⓐ와 같은 안전 특성에 지연만 낮으므로 ⓐ를 지배). ⓐ는 11/18 비교의 재현율 기준선. 토글 튜터 `guard_classify: off | serial | parallel`(기본 parallel, v1 구현 #88, 비교 #83).
+- **11/18 동결값 결정(튜터 제안 수용)**: ① 관문 — 공격 4범주 응함 0건, 공격 재현율 ≥ ⓐ, 튜터 p50 ≤6s · p95 ≤12s(공개 세트 교차 검증 + 레드팀 변형 + 점검 세트) ② 관문을 넘은 후보 중 **튜터 점수 전체**(오차단 손실 포함)가 가장 높은 것 ③ 동점(3회 범위 겹침)이면 p95 낮고 호출 수 적은 쪽.
+- 3단계는 가드 `Guard.judge_output(messages, candidate_answer, category=…)`(interface.md 47행, 9cce438 ✅). `category=None`이면 가드가 `classify`를 다시 부르므로(nano +1) **범주를 반드시 넘긴다**. 가드 v6는 `unsupported`를 규칙 구간(숫자 · 리터럴, 원문 부분 문자열)으로 내므로 **그 구간이 든 문장을 지운다**. 문장 분리는 튜터 쪽(`list[Sentence]`).
+- 시간 예산: 가드 설정 `budget_s`(≈20s, 같은 키)를 읽는다. 1단계(병렬) ≤8s(주 호출 호출당 제한, 튜터 TU-13) → 3단계는 남은 시간이 `judge_skip_s`(설정값 하나, 잠정 4s = 튜터 TU-09) 미만이면 **판정만 건너뛰고 생성된 답과 표의 action을 그대로 낸다**(abstain 전환 금지 — IN-04-3 계산). 생성 자체가 실패한 경우의 기본 action은 튜터 TU-12 설정값 하나를 읽는다(잠정 clarify, IN-06 "기본값 경로 정답 분포"로 11/18까지 확정).
 
 ### 3-2. 디렉터리 (제안 `[회의]`)
 
@@ -96,14 +97,14 @@ CheshireCat/
   tutor/                 튜터 — judge · prompts · answer · retrieval/(공유 색인 · 이름 사전 · 임베딩) · runtime · eval
   integration/           통합 — contracts.py · actions.py
   harness/               통합 — run_public.py · load_test.py · redteam/ · check_logs.sh
-  config/                통합 — actions.yaml · ablation/*.yaml · 공유 키(budget_s · judge_skip_s · fallback_action) — 튜터 `tutor/configs/`와 형식 통일 `[회의]`
+  config/                통합 — actions.yaml · runtime.yaml(budget_s · judge_skip_s · fallback_action) · tutor.yaml(튜터 토글, 튜터 소유) · ablation/*.yaml ✅ 루트 한 곳(튜터 수용)
   competition/           배포 자료(변경 금지)
   docs/PRD.md            팀 기획서
   integration/docs/PRD.md 이 문서
   .github/workflows/integration-ci.yml, .gitleaks.toml
 ```
 
-- 조립은 **가드 `create_app()`에 튜터 라우터와 경로별 기본값을 주입**한다(IN-05, 리더 리뷰). 가드 C1 S1.2에서 `check_token`은 `create_app`의 lifespan이 `app.state`에 넣는 `TEAM_TOKEN`을 읽으므로, 루트 앱이 `router`만 가져다 붙이면 `/guard`가 전부 401이 된다. 인증 · 로그 · 예외 · lifespan을 한 코드 경로에 두는 쪽이 안전하고, 가드 작업은 인자 2개 추가뿐이다.
+- 조립은 **가드 `create_app()`에 튜터 라우터와 경로별 기본값을 주입**한다(IN-05, 리더 리뷰). 가드 C1 S1.2에서 `check_token`은 `create_app`의 lifespan이 `app.state`에 넣는 `TEAM_TOKEN`을 읽으므로, 루트 앱이 `router`만 가져다 붙이면 `/guard`가 전부 401이 된다. 인증 · 로그 · 예외 · lifespan을 한 코드 경로에 두는 쪽이 안전하고, 가드 작업은 인자 3개(`tutor_router` · `defaults` · `startups`) 추가뿐이다.
 - 파이썬 구성은 **루트 uv workspace + lock 하나**(리더 리뷰). 한 프로세스 = 한 환경이라 lock이 둘이면 런박스에서 버전 불일치가 난다. 루트 `pyproject.toml`은 통합이 만든다(11/11). guardrail-ci의 `guardrail/uv.lock` 캐시 경로는 루트 기준으로 바꾼다(가드 PR 1줄). 튜터 테스트는 integration-ci `test` job에서 돈다(`tests/tutor` 경로 추가).
 
 ---
@@ -126,7 +127,7 @@ CheshireCat/
 | I10 | 투기 실행(생성 ∥ 판정) | 안 함 | block 28%에서 호출 낭비(+90/채점) | — | p95 >15s면 켬 `[측정]` |
 | I11 | T1 질의 이해 | 생성에 합침(별도 호출 없음) ✅ 튜터 v2 동일 | 체인 호출 감소 | −2.6s | — |
 | I12 | 홀드아웃 | 가드 #49 `splits/v1.json` **공유**(가드 20% 묶음 + 튜터 행) | 두 트랙이 같은 분할을 봐야 총점 비교 가능 | — | 리더 #39 리뷰 1번: 묶음을 의도 단위(근거 섹션 + 정답 사실)로 바꿔야 kNN 누수 방지 — 가드 #49와 같이 수정 |
-| I13 | 튜터 범주 판정 주체 | **v1 = 가드 `classify`**(ⓐ), 동결은 측정(§3-1) | ⓐ는 측정된 코드, ⓑ는 싸지만 미측정; 공격 문항은 응하면 0점이라 미측정 상태에선 아는 쪽 | ⓐ nano +1 직렬 ≈+3s | 11/18 하네스: 공격 재현율(ⓑ ≥ ⓐ면 ⓑ) · 오차단 · p95 |
+| I13 | 튜터 범주 판정 주체 | **v1 = ⓒ 가드 `classify` ∥ 주 호출, 공격이면 표 우선**(튜터 제안), 동결은 11/18 측정(§3-1 관문 → 튜터 점수 → 동점 규칙) | ⓒ 재현율 ≥ max(ⓐ, ⓑ), 지연 ⓑ 수준; 공격 문항은 응하면 0점 | 템플릿 경로 주 호출 1회 낭비(≈+120/채점) | 11/18 하네스: 후보 ⓐ · ⓑ · ⓒ 표 |
 
 ---
 
@@ -167,7 +168,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 
 | 범주 | decision(가드) | action | 생성 | 인용(우리가 내는 것) | 공개 세트 정답 근거 |
 |---|---|---|---|---|---|
-| normal | allow | answer / scaffold(튜터 판단) | O | 1 | 98/98 answer |
+| normal | allow | answer | O | 1 | 98/98 answer |
 | answer_seeking | allow | scaffold | O | 1 | 8/8 |
 | academic_dishonesty | block | scaffold | 템플릿(+자료 언급 시 그 섹션) | 쓴 섹션 / 없으면 `[]` | 8/8, 정답 근거 `[]` |
 | out_of_material | allow | abstain(+모순 없는 일반 설명) | 템플릿(+자료 언급 시 그 섹션) | 쓴 섹션 / 없으면 `[]` | 20/20, 정답 근거 `[]` |
@@ -180,7 +181,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 
 - 템플릿 문구는 튜터 소유(대안 한 줄 포함, 교안 「위협 정의」 p10). 표는 **통합 소유 `config/actions.yaml`, 튜터는 import**(튜터 TD-12 ✅). 표를 바꿀 일은 튜터가 통합에 PR 요청.
 - **abstain · academic scaffold의 인용**: `scoring.py` 74행 — 정답 근거가 빈 문항은 인용을 채점하지 않으므로 인용해도 손해 0. 83행 — faithful은 우리가 인용한 섹션만 근거로 보므로, 템플릿이 자료 내용을 한 줄이라도 말하면 **그 섹션을 인용**하고, 과목 사실을 전혀 넣지 않은 고정 문장이면 `[]`(가드 · 리더 리뷰). 과목 사실을 넣지 않은 고정 문장이 점수 · 안전 둘 다 유리하다(리더).
-- **수용 기준**: 공개 세트 action 일치 ≥95%(normal 내부 분기 제외).
+- **수용 기준**: 공개 세트 action 일치 ≥95%.
 
 ### IN-04 결정적 수정 `integration/actions.py` (P0)
 1. `Evidence.quote`가 `sid` 섹션 원문의 부분 문자열인지(`scoring.normalize` 기준) — 아니면 그 문장 evidence 제거.
@@ -193,9 +194,9 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **수용 기준**: quote 검증 100%, citations ⊆ 실존, 인용 F1 `[측정]`.
 
 ### IN-05 튜터 라우터 조립 (P0)
-- **가드 `create_app(guard_factory, *, tutor_router=None, defaults: dict[str, dict] | None)`에 주입**(리더 리뷰 1번, 이슈 #60). 루트 `app.py`는 `app = create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": TUTOR_DEFAULT})` 한 줄. 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
+- **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입**(리더 리뷰 1번, 이슈 #60). 루트 `app.py`는 `app = create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
 - **경로별 기본값**: 예외 · 422 처리기는 FastAPI에서 앱 수준이므로(가드 지적) `create_app` 안의 처리기가 `request.url.path`로 `/guard` → GR-09 기본값, `/tutor` → `defaults["/tutor"]`를 고른다. 튜터 라우터는 그래도 자기 예외를 안에서 잡는다(TU-01 ✅) — 앱 처리기는 이중 안전망.
-- 공유 객체(`Guard` · `KbIndex` · `llm` 게이트)는 `create_app` lifespan이 만들어 `app.state`에 두고, 튜터 라우터는 `request.app.state`로 받는다. 가드에 요청하는 것: `tutor_router` · `defaults` 인자 2개(#47 코멘트).
+- 공유 객체(`Guard` · `KbIndex` · `llm` 게이트)는 `create_app` lifespan이 만들어 `app.state`에 두고, 튜터 라우터는 `request.app.state`로 받는다. 가드에 요청하는 것: `tutor_router` · `defaults` · `startups` 인자 3개(#47 코멘트).
 - 라우터 흐름 = §3-1. 시간 예산 · 판정 생략 · 생성 실패 기본값은 §3-1의 설정 키 셋(`budget_s` · `judge_skip_s` · `fallback_action`).
 - **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 처리 중 전역 쓰기 없음, `session_id` · 헤더는 인증 외 미사용.
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마, `/tutor/` 3xx 없음, 계약 테스트 green.
@@ -242,12 +243,15 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 
 전제: nano `effort=low` 판정 p50 2.6s · p95 3.9s(R12 §4, 가드 #51 실측으로 교체 `[측정]`), 생성 p50 ≈4s(추정), 임베딩 0.1~0.3s(켤 때만). 튜터 라벨 기준 생성 범주(normal · pii · answer_seeking) 119/200 = 59.5%, 템플릿 범주 81/200 = 40.5%.
 
-| 경로 | nano (v1 ⓐ) | nano (ⓑ) | p50 / p95 (추정) |
-|---|---|---|---|
-| `/tutor` 생성 경로(≈60%) | classify ∥ retrieve → 생성 → judge_output = 3 | 주 호출 → judge_output = 2 | 9s / 13s · 6s / 10s |
-| `/tutor` 템플릿 경로(≈40%) | 1 | 1 | 3s / 4s |
-| `/guard` | 가드 PRD v6(2 병렬) | | 3s / 4.5s |
-| 채점 1회 | 튜터 ≈657 + 가드 ≈430 ≈ **1,090** | 튜터 ≈480 + 가드 ≈430 ≈ **910** | 600 ÷ 64 × ~6s ≈ **60~80s** |
+| 경로 | ⓐ 직렬(기준선) | ⓑ 주 호출만 | **ⓒ 병렬(v1)** | p50 / p95 (추정) |
+|---|---|---|---|---|
+| `/tutor` 생성 경로(≈60%) | classify → 주 호출 → judge_output = 3 | 주 호출 → judge_output = 2 | classify ∥ 주 호출 → judge_output = 3 | ⓐ 9s/13s · ⓑ 6s/10s · ⓒ 6s/12s |
+| `/tutor` 템플릿 경로(≈40%) | 1 | 1 | 2(주 호출 낭비) | 3s / 4s |
+| 재시도 | 주 호출만 1회 → 절대 상한 ⓒ 4회 | | | |
+| `/guard` | 가드 PRD v6(2 병렬) | | | 3s / 4.5s |
+| 채점 1회 | 튜터 ≈657 + 가드 ≈430 ≈ 1,090 | 튜터 ≈480 + 가드 ≈430 ≈ 910 | 튜터 ≈780 + 가드 ≈430 ≈ **1,210** | 600 ÷ 64 × ~6s ≈ **60~80s** |
+
+튜터 목표 p50 ≤6s · p95 ≤12s(튜터 §6). ⓒ의 호출 수가 가장 많으므로 11/14 부하 1차에서 게이트 64 · 429를 확인한다(IN-07).
 
 ## 7. 운영 절 (요약)
 
@@ -270,7 +274,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 | 단계 | 기간 | 통합 산출 | 의존 |
 |---|---|---|---|
 | S0 | 11/10 | 공개 세트 분석(완료), 이 PRD · CI PR, 회의(I1 · 디렉터리 · 역할) | 가드 C0 · 튜터 T0 |
-| S1 ([plan](plan/S1.md), 30h) | 11/11–11/15 | 루트 `pyproject.toml`(workspace) · `contracts` · `actions.yaml` · 결정적 수정 · `app.py` 조립 + 계약 테스트 · 하네스 v1(recall 측정 포함) · **부하 1차(600요청 실제 API, 가드 · 튜터와 같은 실행)** · 11/15 제출 당번 → **M1 11/15 v1 제출(I13 = ⓐ)** | 가드 C1(#47 · #48 · #49, 11/11~12) · C2, 튜터 T1 · T2 |
+| S1 ([plan](plan/S1.md), 30h) | 11/11–11/15 | 루트 `pyproject.toml`(workspace) · `contracts` · `actions.yaml` · 결정적 수정 · `app.py` 조립 + 계약 테스트 · 하네스 v1(recall 측정 포함) · **부하 1차(600요청 실제 API, 가드 · 튜터와 같은 실행)** · 11/15 제출 당번 → **M1 11/15 v1 제출(I13 = ⓒ)** | 가드 C1(#47 · #48 · #49, 11/11~12) · C2, 튜터 T1 · T2 |
 | S2 | 11/16–11/20 18:00 | **I13 비교(11/18)** · ablation 프리셋 전부 · 레드팀 · 홀드아웃 ≤3회 실행 · 열린 역할(IN-12: 점검 세트 50개 · 운영진 질의 묶음 · 발표 뼈대) → **M2 동결 11/20 18:00 · 동결본 제출 당번** | 가드 C3, 튜터 T3 |
 | S3 | 11/21–11/24 | provenance · 체크리스트 · 발표 자료 · 최종 회귀 → **M3 최종 제출 11/24 18:00** (검증된 커밋을 11/22~23에 미리 내고 11/24는 비상용) | 가드 C4, 튜터 T4 |
 | S4 | 11/25 오전 | 제출 없음. 서버 상태 확인 · 리허설 | |
@@ -283,7 +287,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 |---|---|
 | 11/16~20 통합 부하가 비는 주 | 열린 역할로 채운다(§5 IN-12): 팀 작성 점검 세트 50개 · 런박스 배포 · 제출 실행 · 운영진 질의 묶음 · 발표 뼈대 |
 | 가드 #47 골격이 11/12 넘어감 | 베이스라인 `competition/server.py` 복사본에 튜터 라우터만 붙인 임시 조립으로 S1 진행 |
-| I13 ⓐ의 지연이 게이트 64에서 429 유발 | 부하 1차(11/14)에서 확인, 넘치면 `judge_output` 생략 임계(`judge_skip_s`) 상향 또는 ⓑ 조기 전환 |
+| I13 ⓒ의 호출 수(≈1,210/채점)가 게이트 64에서 429 유발 | 부하 1차(11/14)에서 확인, 넘치면 템플릿 경로 주 호출 취소(classify 먼저 끝나면 cancel) 또는 `judge_skip_s` 상향 |
 | `judge_output` 시그니처가 가드 v6에서 바뀜(messages 기반) | IN-01에서 가드 interface.md를 기준으로 맞춤, 튜터는 어댑터 1함수 |
 | 프록시 처리량 → 채점 5분 초과 | 부하 64 · 게이트 크기는 가드 #51 실측 후 |
 | 자기 판정 삭제로 abstain 과다 | 비율 측정, 임계 조정 |
@@ -300,7 +304,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - 답이 이미 있는 것(가드 리뷰): 유사 예시 삽입 → SPEC §7.1 허용 / 인용 비교 → `scoring.py` 섹션 ID 정확 일치 / 동시성 → SPEC §3 "최대 64개". 튜터 §11-1 · 가드 §11-1과 합쳐 한 번에 보낸다(IN-12).
 
 ### 10-2. 회의 `[회의]`
-I1 검색 소유 ✅ · 역할 분담(§5-0) ✅ 튜터 수용 · action 표 주인 ✅ 통합 · 조립 = `create_app` 주입(리더 안, 가드 확인 대기) · uv workspace(리더 안, 루트 `pyproject.toml` 주인 = 통합) · 설정 파일 위치 · 형식(`config/` vs `tutor/configs/`) · I13 측정 기준 합의 · 홀드아웃 묶음 기준 변경(I12, 가드 #49)
+I1 검색 소유 ✅ · 역할 분담(§5-0) ✅ 튜터 수용 · action 표 주인 ✅ 통합 · 조립 = `create_app` 주입 인자 3개(가드 확인 대기) · uv workspace(리더 안, 루트 `pyproject.toml` 주인 = 통합) · 설정 파일 위치 · 형식(`config/` vs `tutor/configs/`) · I13 측정 기준 합의 · 홀드아웃 묶음 기준 변경(I12, 가드 #49)
 
 ---
 
@@ -308,7 +312,7 @@ I1 검색 소유 ✅ · 역할 분담(§5-0) ✅ 튜터 수용 · action 표 주
 
 | 가드 이슈 | 받는 것 | 우리 쪽 대응 |
 |---|---|---|
-| #47 서버 골격 | `create_app(guard_factory, tutor_router=, defaults=)` · 인증 · 메타 로그 · 경로별 기본값 | `app.py` 한 줄 호출. 인자 2개 요청(IN-05) |
+| #47 서버 골격 | `create_app(guard_factory, tutor_router=, defaults=, startups=)` · 인증 · 메타 로그 · 경로별 기본값 | `app.py` 한 줄 호출. 인자 3개 요청(IN-05) |
 | #48 LLM 게이트 | `llm.complete()` · `slot()` · `probe()` | 튜터 호출이 같은 게이트 사용 |
 | #49 채점 · 분할 | `eval/score.py` · `splits/v1.json` | IN-06이 import, 분할 공유(I12) |
 | #50 첫 제출 | 런박스 절차 · 재기동 | IN-10 체크리스트와 합침 |

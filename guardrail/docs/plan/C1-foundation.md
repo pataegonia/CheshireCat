@@ -15,7 +15,7 @@
 
 | 날짜 | 본인(Opus 세션) | 병렬(Sonnet 서브에이전트, worktree) | 끝나면 |
 |---|---|---|---|
-| 11/11 수 오전 | C1 에픽·이슈 6개 생성, v4 에픽·이슈 닫기([master-plan §11](../master-plan.md#11-진행-추적-github)) → S1.1 | — | S1.1 PR 머지 |
+| 11/11 수 오전 | S1.1(C1 에픽 #42·이슈 #46–#51은 11/10에 만들었고 v4 에픽 #2–#6·이슈 #15–#21도 11/10에 닫았다, [master-plan §11](../master-plan.md#11-진행-추적-github)) | — | S1.1 PR 머지 |
 | 11/11 수 오후 | S1.2(서버 골격) → 보안 리뷰 | S1.3(LLM 게이트) · S1.4(로더·채점·분할) | S1.2 PR |
 | 11/11 수 밤 | S1.5 런박스 배포·첫 제출 | — | 첫 제출 기록 |
 | 11/12 목 오전 | S1.3·S1.4 리뷰·머지 → S1.6 실측 → Phase 끝 점검 | — | 관문 판정, C2 시작 |
@@ -70,7 +70,7 @@
 **계약**([master-plan §4.1](../master-plan.md#41-타입-schemapy와-모듈별-dataclass))
 - `schema.py`: `Category`, `Decision`, `decision_of(category, block)`(표는 설정 `block_categories`, ADR-0012), `Message`, `GuardRequest`, `parse_request(body: bytes) -> GuardRequest`, `OutputVerdict`, `GuardResponse.to_json()`.
 - `parse_request`는 예외를 내지 않는다. JSON이 아니거나 `messages`가 목록이 아니면 `messages=()`. 메시지 항목 중 `content`가 문자열인 것만 받는다. `candidate_answer` 키가 있으면 `has_candidate=True`(값이 문자열이 아니면 `""`).
-- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `Guard` 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`.
+- `server.py`: `router = APIRouter()`의 `POST /guard`, `create_app(guard_factory) -> FastAPI`(`redirect_slashes=False`, lifespan에서 `Guard` 생성, 같은 런박스 제출을 위해 시작용 `/tutor`도 붙임, S1.5), 모듈 수준 `app = create_app(...)`. 아래 인증은 시작용 server.py처럼 **앱 수준 의존성**으로 걸어 `/guard`와 `/tutor`에 똑같이 적용한다.
   - 본문은 `await request.body()`로 직접 읽는다. pydantic 요청 모델을 라우트 인자로 두지 않는다(422 반사 방지).
   - 인증: `Authorization` 헤더를 `f"Bearer {TEAM_TOKEN}"`와 `hmac.compare_digest`로 비교(바이트). 틀리면 401 + `{"error": "unauthorized"}`(SPEC은 코드를 정하지 않는다. 시작용 `competition/server.py`의 `HTTPException(401)`이 근거). `TEAM_TOKEN`이 없으면 기동 실패.
   - 예외 처리기: 라우트 안의 어떤 예외도 GR-09 기본 응답 200으로. 전역 422 처리기도 같은 기본 응답(본문 반사 없음).
@@ -81,7 +81,7 @@
 **테스트 먼저**(FastAPI `TestClient`, 요구하면 dev `httpx`)
 - 공개 세트 400행 전부 → 200, `contract/guard.schema.json`(jsonschema)로 검증, `candidate_answer` 키 유무에 따라 `output` 유무
 - 퍼징(`hypothesis`): 빈 본문, JSON 아님, `messages` 누락·타입 오류, 깨진 유니코드, 매우 긴 이력(1MB) → 모두 200·스키마 통과
-- 인증: 헤더 없음·틀림·`Bearer ` 접두 없음 → 401, 본문에 토큰 없음
+- 인증: 헤더 없음·틀림·`Bearer ` 접두 없음 → 401, 본문에 토큰 없음. `create_app()`의 `/tutor`도 같은 경우에 401
 - `/guard/`(끝 슬래시) → 3xx가 아님(404 허용)
 - 반사: 요청에 넣은 표지 문자열이 오류·기본값 경로의 응답과 `input` 객체에 없음. `unsupported`는 후보 답변의 원문 구간이라 이 검사에서 뺀다
 - 로그: `caplog`로 퍼징 전체를 돌린 뒤 로그에 요청 표지 문자열 0건
@@ -177,7 +177,7 @@
 - [ ] 런박스의 KB·공개 세트·프롬프트 경로가 저장소 상대 경로와 다르면 `GUARD_KB_DIR`·`GUARD_PUBLIC_DIR`·`GUARD_PROMPTS_DIR`로 `paths.*`를 덮어쓴다([master-plan §4.4](../master-plan.md#44-설정-configsyaml)). 설정 파일은 고치지 않는다
 - [ ] 실행: `cd guardrail && set -a && . /home/elicer/competition/.env && set +a && uv run uvicorn guardrail.server:app --host 0.0.0.0 --port 8000 --no-access-log`
 - [ ] `/tutor`: 각 계정의 제출은 **그 계정 런박스의** `/tutor`·`/guard` 주소여야 한다(SPEC §7). 그래서 상수 응답 제출에도 이 런박스의 `/tutor`가 있어야 한다. `create_app()`은 `/guard` 옆에 시작용 `/tutor`(`competition/server.py`의 것 또는 팀 라우터)를 함께 붙인다. 같은 프로세스로 둘지는 팀 선택(PRD §9 D4, 리더 결정). 가드 담당은 `/tutor`를 고치지 않는다. 터널 주소로 `/tutor`도 200인지 확인한다
-- [ ] 터널 주소로 `curl -i`: 인증 성공 200, 실패 401, `/guard/` 리다이렉트 없음, `http`→`https` 전환 없음
+- [ ] 터널 주소로 `curl -i`: 인증 성공 200, 실패 401(`/guard`·`/tutor` 둘 다), `/guard/` 리다이렉트 없음, `http`→`https` 전환 없음
 - [ ] 로컬 채점기: `python3 harness/score_local.py --guard-url …` 실행 → S1.4 대조
 - [ ] `submission.json`(`token`, `guard_url`, `tutor_url` = 이 런박스의 `…/proxy/8000/tutor`, `commit`) 채우고 제출. 채점이 끝날 때까지 탭 유지
 - [ ] 런박스 재시작 절차(세션 2일 제한)를 §4에 적는다

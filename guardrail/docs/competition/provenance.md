@@ -16,7 +16,8 @@
 | kNN 색인·few-shot 예시 | `public/guard.jsonl`·`public/tutor.jsonl` 400행(배포 자료). SPEC §7.1이 공개 세트 few-shot·유사도 검색을 허용 | 주최측 | 기동 때 색인(GR-05, ADR-0013). 요청 처리 중 바뀌지 않음 |
 | 문자 n-gram LR | 위 400행으로 기동 때 처음부터 학습(SPEC §7.1 허용). 학습된 모델 파일은 저장소에 두지 않음 | 팀(코드) | GR-05 |
 | 결정적 신호: 거절 정규식, 숫자·단위·한글 수사 표, 저신호 판정, 숨긴 태그 문자 | — | 팀이 직접 씀 | GR-06. 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
-| 판정 프롬프트 `input_judge.md`·`output_judge.md`(범주 정의·짝 대조 문구) | 공개 세트를 보고 팀이 씀 | 팀 | GR-04·GR-07 |
+| 판정 프롬프트 `prompts/input_judge.md`·`prompts/output_judge.md`(범주 정의·짝 대조 문구) | 공개 세트를 보고 팀이 씀 | 팀 | GR-04·GR-07 |
+| 베이스라인 프롬프트 `prompts/output_judge_baseline.md`(reason → grounded → safe, `output.mode: baseline`) | 팀이 씀 | 팀 | GR-11 베이스라인. 입력 베이스라인은 `input_judge.md`에서 예시 블록만 비운 것이라 따로 파일이 없다 |
 | (쓰면) nano 합성 예시 | 운영진 제공 `gpt-5-nano`(SPEC §7.1 허용). 생성 스크립트와 함께 커밋 | 팀 + nano | 기본 안 씀(ADR-0013) |
 | 라이브러리 | PyPI: `openai`, `pydantic`, `pyyaml`, `fastapi`, `uvicorn`, `scikit-learn`(+`scipy`), `rapidfuzz` | 오픈소스, 모델·사전 파일 없음, 외부 호출은 운영진 엔드포인트만. `tiktoken`·Kiwi는 쓰지 않음 | [R13-B2](../research/R13-B2-libraries.md) |
 

@@ -62,7 +62,7 @@
 - [ ] 런박스를 다시 시작하고(세션 2일 제한) 그 커밋을 받아 `uv sync --locked`
 - [ ] `.env`: `OPENAI_API_KEY`(키 이름 `kosa_{팀 이름}`), `TEAM_TOKEN`(영문·숫자·기호, 키와 다름)
 - [ ] 서버 기동: 색인·학습이 기동 때 끝남(기동 로그의 소요 시간만 확인, ≤30초)
-- [ ] 터널 주소 `curl`: 인증 성공 200 JSON, 실패 401, `/guard/`·`http` 리다이렉트 없음
+- [ ] 터널 주소 `curl`: 인증 성공 200 JSON, 실패 401(`/guard`·`/tutor` 둘 다), `/guard/`·`http` 리다이렉트 없음
 - [ ] `eval.load` 동시 64·약 600요청: 시간 초과 0, 형식 오류 0, p95 기록
 - [ ] `/tutor`가 **이 계정 런박스에서** 응답한다(SPEC §7: 각 계정의 제출은 그 계정 런박스의 `/tutor`·`/guard`). 팀 서버면 팀 라우터, 아니면 `create_app()`이 붙인 시작용 `/tutor`(리더 확인)
 - [ ] `submission.json`: `tutor_url`·`guard_url`(둘 다 이 런박스의 `…tunnel.elice.io/proxy/8000/…`, 8080은 VSCode가 써서 피함, SPEC §7), `token`, `commit`

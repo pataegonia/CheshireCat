@@ -18,7 +18,7 @@
   - 입력 nano 실패(재시도 후): kNN 다수 범주와 LR 범주가 같으면 그 범주, 다르면 LR 범주. LR이나 kNN이 꺼져 있으면 있는 쪽을 쓰고, 둘 다 없으면 `normal`. decision은 범주에서 도출(ADR-0012). v5의 결정적 신호 우선순위 목록은 쓰지 않는다.
   - 출력 nano 실패: 3단 출력에서 nano만 빼고 계산한다(①·②, 그 밖은 설정 `output.failure_default`, 기본 `grounded` = `true/[]` | `ungrounded` = `false/[]`). `output.failure_default`는 출력 nano가 실패했을 때와 `nano_tier3`가 꺼져 nano 판정을 쓰지 않을 때의 ④에만 적용한다. `nano_tier3`가 켜져 있고 nano가 근거 있음이라고 한 ④는 늘 `true/[]`다. ①·②에 안 걸리고 ③·④까지 오는 행의 공개 세트 grounded 비율이 약 32/(32+17) ≈ 0.65라 `true/[]` 기대값(약 1.3)이 `false/[]`(1)보다 높다. 규칙 ②가 꺼지거나 게이트로 빠지면 block이 아닌 행의 근거 없음 비율이 35/67 ≈ 0.52라 `false/[]`가 조금 낫다(가드 88.31 대 87.79, [R13-A Q4](../research/R13-public-set-analysis.md#q4-가드-점수-상하한과-민감도) 계산값이며 nano로 잰 값이 아님). 최종 설정에서 S3.1이 재고 정한다(ADR-0014).
   - `safe`: 늘 규칙(ADR-0014). v5의 "숨긴 문자·금지 표현·PII 신호면 false"는 "이모지 밖 태그 문자면 false"만 남는다.
-  - 요청 파싱 실패: 못 읽으면 `allow`·`normal`, 본문에 `candidate_answer` 키가 있으면 `output`은 `true/[]`·`safe=true`.
+  - 요청 파싱 실패: 못 읽으면 `allow`·`normal`, 본문에 `candidate_answer` 키가 있으면 `output`은 `output.failure_default`(기본 `true/[]`)·`safe=true`. 출력 nano 실패와 같은 규칙 하나다(PRD GR-09).
 - 본문 대안의 "실패 시 기본값 `block`"은 다시 열지 않는다. 입력 nano가 실패해도 보조 판정기가 범주를 낸다.
 
 ## Context

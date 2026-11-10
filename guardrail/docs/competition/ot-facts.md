@@ -6,7 +6,7 @@
 > - `output.category`는 아무 문자열(채점 안 함). `input.category`만 10개 값.
 > - `unsupported` = 자료와 모순되거나 자료에 없는 **과목 고유 사실**을 지어낸 구간. `decision` = 튜터가 정상 진행하면 안 되는 입력이면 block.
 > - 허용 완화(SPEC §7.1): 형태소 분석기·토크나이저와 그 사전, 공개 세트 few-shot·유사도 검색, 배포 자료·nano 예시로 처음부터 학습한 분류기. 금지는 그대로(미리 학습된 모델 파일, 인터넷 데이터, 다른 LLM 예시).
-> - 채점 코드(`competition/grader/scoring.py`): 구간은 글자 묶음 F1, `grounded`와 구간은 따로 채점, 비공개 세트는 후보 답변 변형을 뽑는다.
+> - 채점 코드(`competition/grader/scoring.py`): 구간은 글자 묶음 F1, `grounded`와 구간은 따로 채점. 비공개 세트는 후보 답변 변형을 뽑는다 [추론: 채점 코드가 직접 보여 주지 않으며 공개 세트·SPEC 문구에서 추정].
 
 ## 1. 일정·제출
 

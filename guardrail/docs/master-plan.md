@@ -88,7 +88,7 @@ guardrail/
 | `llm.py` | 고쳐 씀. 역할 2개, AIMD 삭제(고정 세마포어), 시도 2회(재시도 1), 대기는 요청 마감 안에서만, `Retry-After`가 남은 시간을 넘으면 바로 실패, GR-10 파라미터, 기동 시험 호출, `OPENAI_*` 환경변수, `slot()` 유지, `faults`·`FAKE_OK` 삭제 | S1.3 |
 | `preprocess.py` | 고쳐 씀. `normalize`(정규화본: 보이지 않는 문자 제거 → 전각·반각 접기 → 자모 조합, **NFKC 안 씀**)는 그대로 둔다. `skeleton`은 v6 서버 경로에서 쓰지 않아 지우고 `reveal_hidden`·`decode_tags`를 더한다(붙인 뷰 `joined`는 구현하지 않는다. 필요하면 ablation으로 추가) | S2.1 |
 | `pipeline.py`, `trace.py`, `types.py` | 삭제. 튜터 래퍼(`Session`·`Chunk`·`Verdict`·`StageResult`·`TutorAdapter`)와 원문 trace는 v6에 없다. trace는 로그 규칙(GR-12)과 충돌 | S1.1 |
-| `eval/mock_tutor.py` | 삭제. `kb.py`의 BM25는 이 파일이 아니라 `scripts/r13/common.py`의 측정 변형(토큰화 = `scoring.normalize`식: NFKC·소문자·공백·문장부호 제거 뒤 문자 2-gram)을 옮긴다(ADR-0010 v6). 조각은 `common.kb_chunks`를 그대로 옮긴다. 섹션 텍스트(md + 붙은 CSV)를 `## `로 시작하는 줄 앞에서 자른다(`re.split(r"\n(?=## )")`). 코드 블록 안의 `## ` 줄에서도 자른다(PR-02-01에 3곳). 각 조각은 자기 `## ` 소제목 줄을 포함하고, 첫 `## ` 앞의 `# 제목` 머리말은 따로 한 조각이 된다. 조각마다 문서 제목을 덧붙이지 않는다. CSV는 섹션 끝에 붙어 마지막 조각에 들어간다. 코드 블록을 자르지 않는 변형은 다시 재야 하는 ablation이다. 이 NFKC는 BM25 토큰 안에서만 쓴다 | S2.2 |
+| `eval/mock_tutor.py` | 삭제. `kb.py`의 BM25는 이 파일이 아니라 `scripts/r13/common.py`의 측정 변형(토큰화 = `scoring.normalize`식: NFKC·소문자·공백·문장부호 제거 뒤 문자 2-gram)을 옮긴다(ADR-0010 v6). 조각은 `common.kb_chunks`를 그대로 옮긴다. 섹션 텍스트(md + 붙은 CSV)를 `## `로 시작하는 줄 앞에서 자른다(`re.split(r"\n(?=## )")`). 코드 블록 안의 `## ` 줄에서도 자른다(PR-02-01에 3곳). 각 조각은 자기 `## ` 소제목 줄을 포함하고, 첫 `## ` 앞의 `# 제목` 머리말은 따로 한 조각이 된다. 조각마다 문서 제목을 덧붙이지 않는다. CSV는 섹션 끝에 붙어 마지막 조각에 들어간다. 코드 블록을 자르지 않는 변형은 다시 재야 하는 ablation이다. 이 NFKC는 BM25 토큰 안에서만 쓴다 | S1.1(BM25 이식은 S2.2) |
 | `eval/build_grounding.py`, `metrics.py`, `datasets.py`, `run.py` | 삭제(v4 데이터·지표). `run.py`는 S2.9가 새로 쓴다 | S1.1 |
 | `eval/stats.py` | `wilson`만 남긴다. 묶음 부트스트랩은 S2.9가 더한다 | S1.1 |
 | `tests/` | `test_preprocess.py` 유지·확장(골격 뷰 테스트는 S2.1이 지움), `test_config.py`·`test_llm.py` 다시 씀, `fakes.py`는 `FakeLLM`·`FakeClock`만, 나머지 v4 테스트 삭제 | S1.1·S1.3·S2.1 |
@@ -336,7 +336,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 
 | ID | 슬라이스 | GR / ADR | 우선 | 예상 | 모델 | 선행 | 수용 기준(요지) |
 |---|---|---|---|---|---|---|---|
-| **S1.1** | v4 코드 정리·의존성·설정 v6 | 11·14 | P0 | 3h | Sonnet | — | §3 삭제 목록 반영, `default.yaml`·`baseline.yaml` 로드, 토글 검증 테스트, CI green |
+| **S1.1** | v4 코드 정리·의존성·설정 v6 | 11·14 | P0 | 3h | Sonnet | — | §3 삭제 목록 반영(`mock_tutor.py` 포함), `types.py` 삭제에 맞춰 `llm.py`·`tests/fakes.py`·`test_llm.py`·`test_config.py`는 import만 고침(`Role`은 `llm.py`로, 동작 변경은 S1.3), `default.yaml`·`baseline.yaml` 로드, 토글 검증 테스트, CI green |
 | **S1.2** | 서버 골격·스키마(인증·200 보장·로그 규칙, 상수 판정) | 01·09·12 / 0009 | P0 | 5h | Sonnet + 보안 리뷰 | S1.1 | 퍼징·필드 누락에서 형식 오류 0·422 0·3xx 0·본문 반사 0(오류·기본값 경로와 `input` 객체. `unsupported`는 후보 답변의 원문 구간이라 예외), 인증 실패 401(`/guard`와 `create_app()`의 `/tutor` 둘 다), 스키마 대조, 로그 grep 0건(GR-01·12) |
 | **S1.3** | LLM 게이트 개편 | 10 / 0011 | P0 | 4h | Sonnet | S1.1 | §4.3 규칙 테스트(재시도 1·마감·Retry-After·게이트·파라미터·probe), 예외 메시지 미기록 |
 | **S1.4** | 공개 세트 로더·채점 재현·짝 묶음 분할 | 13 / 0006·0013 | P0 | 4h | Sonnet(분할은 Opus 검토) | S1.1 | 상수 응답 점수가 R13 M7과 같음, 같은 저장 응답에서 `score_local.py`와 차 ≤0.005, `splits/v1.json` 커밋(최대 묶음 크기 보고) |

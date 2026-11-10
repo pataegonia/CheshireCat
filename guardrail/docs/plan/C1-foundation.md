@@ -37,8 +37,9 @@
 **배경**: v4 코드는 튜터 래퍼 구조다. v6는 상태 없는 판정기라 대부분이 필요 없다. 처리 목록은 [master-plan §3 기존 코드 처리](../master-plan.md#3-아키텍처--코드).
 
 **만들거나 바꿀 파일**
-- 삭제: `src/guardrail/{pipeline,trace,types}.py`, `src/guardrail/eval/{build_grounding,metrics,datasets,run}.py`, 해당 테스트(`test_pipeline`·`test_trace`·`test_build_grounding`·`test_metrics`·`test_datasets`·`test_run`), `configs/unguarded.yaml`, `prompts/attack_judge.md`, `resources/`, `data/seed/`, `data/README.md`, `results/`(v4 파일), `tests/fixtures/mini*`
-- 남김: `eval/mock_tutor.py`와 그 테스트(S2.2가 BM25를 옮긴 뒤 지운다), `preprocess.py`(S2.1)
+- 삭제: `src/guardrail/{pipeline,trace,types}.py`, `src/guardrail/eval/{build_grounding,metrics,datasets,run,mock_tutor}.py`, 해당 테스트(`test_pipeline`·`test_trace`·`test_build_grounding`·`test_metrics`·`test_datasets`·`test_run`·`test_mock_tutor`), `configs/unguarded.yaml`, `prompts/attack_judge.md`, `resources/`, `data/seed/`, `data/README.md`, `results/`(v4 파일), `tests/fixtures/mini*`
+- 남김: `preprocess.py`(S2.1). `eval/mock_tutor.py`는 남기지 않는다: S2.2의 BM25 원본은 `scripts/r13/common.py`다(master-plan §3)
+- **S1.1에서 import만 고치는 파일**(동작 변경은 S1.3): `types.py`를 지우므로 `ROLES`·`Role`을 `llm.py` 안으로 옮기고, `llm.py`·`tests/fakes.py`·`tests/test_llm.py`·`tests/test_config.py`의 `guardrail.types`·`GuardConfig`·`Guard` import를 새 설정 모델에 맞춘다. `tests/fakes.py`의 `Chunk`·`Turn`을 쓰는 가짜 튜터 부분과 `test_llm.py`의 "Guard가 llm을 갖는다" 테스트(743–749행), `test_config.py`의 `Guard(cfg)` 테스트(322·332행)는 v4 구조라 지운다. 이렇게 해서 S1.1 머지 때 CI가 green이다. S1.3은 `llm.py`를 §4.3대로 다시 쓰는 슬라이스다
 - `eval/stats.py`: `wilson`만 남기고 `test_stats.py`도 줄인다
 - `config.py`: 로더·`overrides`·`${ENV}` 치환·`config_hash`·`load_prompt`·`resolve_path` 유지. 모델을 [§4.4](../master-plan.md#44-설정-configsyaml)로 바꾼다. `check_toggles` → 토글 조합 검증(`third_call`은 `knn_vote`·`lr` 둘 다 켰을 때만, `nano_span`은 `literal_rule`을 켰을 때만)
 - `configs/default.yaml`(§4.4 그대로), `configs/baseline.yaml`(토글 11개 모두 false + `output.mode: baseline`: 출력은 베이스라인 프롬프트의 nano 값을 grounded·safe에 바로 쓰고 `unsupported=[]`, 입력은 `input_judge.md`를 예시 블록만 비워 쓴다. 정의와 대조 문구는 그대로이고 따로 파일을 두지 않는다. `output.failure_default`는 토글이 아니다), `configs/ablation/`(빈 폴더 + `.gitkeep`)
@@ -49,7 +50,7 @@
 **테스트 먼저**: 설정 로드(default·baseline), 모르는 키 거부, `${ENV}` 치환, `config_hash`가 프롬프트 version을 포함, 금지 토글 조합 2개, ablation 깊은 병합(덮어쓴 키만 달라짐).
 
 **수용 기준**
-- [ ] 삭제 목록이 모두 반영되고 `rg "(from|import) guardrail\.(pipeline|trace|types)" src tests`에 v4 import가 없다
+- [ ] 삭제 목록이 모두 반영되고 `rg "(from|import) guardrail(\.(pipeline|trace|types|eval\.mock_tutor)| import Guard)" src tests`가 0건이다
 - [ ] `uv sync --locked`, `ruff`, `pytest --cov --cov-fail-under=80` green
 - [ ] `uv lock`이 풀린다(numpy·scikit-learn·Python 3.12). 안 풀리면 버전을 낮추고 PR에 적는다
 

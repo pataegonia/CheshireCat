@@ -256,7 +256,7 @@ def test_12_empty_sentences():
 @pytest.mark.parametrize("rule", [NORMAL, SCAFFOLD])
 def test_no_claims_and_empty_retrieved_cites_nothing(rule):
     out = finalize([plain("좋은 질문이에요.")], OK, [], rule, CFG)
-    assert out.answer == f"좋은 질문이에요. {NOTICE}"
+    assert out.answer == "좋은 질문이에요."
     assert out.action == rule.action
     assert out.citations == []
 
@@ -374,9 +374,9 @@ def test_action_outside_the_table_is_not_blocked():
 
 def test_action_in_rule_actions_follows_rule_cite():
     sentences = [plain("힌트부터 볼까요?")]
-    # answer_seeking + scaffold(표 값을 명시) → always: 남은 claim이 없으면 검색 1위 + 안내
+    # answer_seeking + scaffold(표 값을 명시) → always: 남은 claim이 없으면 검색 1위로 채운다
     out = finalize(sentences, OK, RETRIEVED, SCAFFOLD, CFG, action="scaffold")
-    assert out.answer == f"힌트부터 볼까요? {NOTICE}"
+    assert out.answer == "힌트부터 볼까요?"
     assert (out.action, out.citations) == ("scaffold", ["PY-01-02"])
     # normal + scaffold(표에 없는 조합) → if_used
     other = finalize(sentences, OK, RETRIEVED, NORMAL, CFG, action="scaffold")
@@ -440,7 +440,8 @@ def test_if_used_rule_loses_citation_when_its_claim_is_dropped():
 
 def test_notice_that_does_not_fit_is_cut_by_chars():
     tight = FinalizeConfig(unverified_notice="안" * 50, refuse_text=REFUSE, max_answer_chars=20)
-    out = finalize([plain("가" * 10)], OK, RETRIEVED, NORMAL, tight)
+    verdict = OutputVerdict(grounded=False, unsupported=("틀린 말",), safe=True)
+    out = finalize([plain("가" * 10), claim("틀린 말.")], verdict, RETRIEVED, NORMAL, tight)
     assert out.answer == "가" * 10 + " " + "안" * 9
 
 
@@ -455,6 +456,97 @@ def test_empty_answer_is_returned_as_is():
     verdict = OutputVerdict(grounded=False, unsupported=("전부 틀린 말",), safe=True)
     out = finalize([plain("전부 틀린 말.")], verdict, RETRIEVED, ABSTAIN, CFG)
     assert out == TutorResult(answer="", action="abstain", citations=[])
+
+
+# ── 짧은 unsupported 구간 무시(min_span_chars) ────────────────────────────
+
+
+def test_min_span_chars_default_is_two():
+    assert CFG.min_span_chars == 2
+
+
+@pytest.mark.parametrize("span", ["요", " 요. ", "…요"])
+def test_one_char_span_does_not_delete_anything(span):
+    sentences = [claim("3회까지 기록해요.", VALID_CLAIM), plain("더 궁금한 점이 있나요?")]
+    verdict = OutputVerdict(grounded=False, unsupported=(span,), safe=True)
+    out = finalize(sentences, verdict, RETRIEVED, NORMAL, CFG)
+    assert out.answer == "3회까지 기록해요. 더 궁금한 점이 있나요?"
+    assert out.citations == ["PY-01-01"]
+
+
+def test_two_char_span_still_deletes():
+    sentences = [claim("3회까지 기록해요.", VALID_CLAIM), plain("더 궁금한 점이 있나요?")]
+    verdict = OutputVerdict(grounded=False, unsupported=("해요",), safe=True)
+    out = finalize(sentences, verdict, RETRIEVED, ABSTAIN, CFG)
+    assert out.answer == "더 궁금한 점이 있나요?"
+
+
+def test_short_span_is_skipped_but_others_still_apply():
+    sentences = [plain("첫 문장이에요."), plain("둘째 문장이에요.")]
+    verdict = OutputVerdict(grounded=False, unsupported=("요", "둘째 문장"), safe=True)
+    assert finalize(sentences, verdict, RETRIEVED, ABSTAIN, CFG).answer == "첫 문장이에요."
+
+
+def test_min_span_chars_is_configurable():
+    sentences = [plain("첫 문장이에요."), plain("둘째 문장.")]
+    verdict = OutputVerdict(grounded=False, unsupported=("요", "둘째"), safe=True)
+    one = FinalizeConfig(unverified_notice=NOTICE, refuse_text=REFUSE, min_span_chars=1)
+    # 1이면 "요"가 첫 문장을, "둘째"가 둘째 문장을 지운다.
+    assert finalize(sentences, verdict, RETRIEVED, ABSTAIN, one).answer == ""
+    three = FinalizeConfig(unverified_notice=NOTICE, refuse_text=REFUSE, min_span_chars=3)
+    assert (
+        finalize(sentences, verdict, RETRIEVED, ABSTAIN, three).answer
+        == "첫 문장이에요. 둘째 문장."
+    )
+
+
+# ── 안내 문장을 붙이는 조건 ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("verdict", [None, OK], ids=["judge_skipped", "judge_ok"])
+@pytest.mark.parametrize("rule", [NORMAL, SCAFFOLD])
+def test_answer_without_any_claim_gets_no_notice(rule, verdict):
+    sentences = [plain("좋은 질문이에요."), plain("같이 살펴볼까요?")]
+    out = finalize(sentences, verdict, RETRIEVED, rule, CFG)
+    assert out.answer == "좋은 질문이에요. 같이 살펴볼까요?"
+    assert out.action == rule.action
+    assert out.citations == ["PY-01-02"]  # 인용 채우기(검색 1위)는 그대로
+
+
+def test_notice_when_judge_removed_the_last_claim():
+    sentences = [plain("좋은 질문이에요."), claim("우승팀은 항상 홈팀이에요.")]
+    verdict = OutputVerdict(grounded=False, unsupported=("항상 홈팀",), safe=True)
+    out = finalize(sentences, verdict, RETRIEVED, NORMAL, CFG)
+    assert out.answer == f"좋은 질문이에요. {NOTICE}"
+    assert out.citations == ["PY-01-02"]
+
+
+def test_no_notice_when_judge_removed_only_a_non_claim():
+    sentences = [plain("좋은 질문이에요."), plain("우승팀은 항상 홈팀이에요.")]
+    verdict = OutputVerdict(grounded=False, unsupported=("항상 홈팀",), safe=True)
+    out = finalize(sentences, verdict, RETRIEVED, NORMAL, CFG)
+    assert out.answer == "좋은 질문이에요."
+
+
+def test_no_notice_while_a_claim_remains():
+    sentences = [claim("3회까지 기록해요.", VALID_CLAIM), claim("우승팀은 항상 홈팀이에요.")]
+    verdict = OutputVerdict(grounded=False, unsupported=("항상 홈팀",), safe=True)
+    out = finalize(sentences, verdict, RETRIEVED, NORMAL, CFG)
+    assert out.answer == "3회까지 기록해요."
+
+
+def test_notice_only_when_nothing_remains():
+    assert finalize([], None, RETRIEVED, NORMAL, CFG).answer == NOTICE
+    # non_claim 한 문장뿐인 답이 판정으로 지워져도 남은 문장이 없으므로 안내만 낸다.
+    verdict = OutputVerdict(grounded=False, unsupported=("전부 틀린 말",), safe=True)
+    out = finalize([plain("전부 틀린 말.")], verdict, RETRIEVED, NORMAL, CFG)
+    assert out == TutorResult(answer=NOTICE, action="answer", citations=["PY-01-02"])
+
+
+def test_no_notice_when_length_cut_removed_only_non_claims():
+    sentences = [plain("가" * 3000), plain("나" * 2000)]
+    out = finalize(sentences, OK, RETRIEVED, NORMAL, CFG)
+    assert out.answer == "가" * 3000
 
 
 # ── 세부 동작 ─────────────────────────────────────────────────────────────
@@ -588,7 +680,10 @@ def test_same_input_gives_same_output():
     )
 
 
-@pytest.mark.parametrize("bad", [{"max_citations": -1}, {"max_answer_chars": 0}, {"extra": 1}])
+@pytest.mark.parametrize(
+    "bad",
+    [{"max_citations": -1}, {"max_answer_chars": 0}, {"min_span_chars": 0}, {"extra": 1}],
+)
 def test_config_rejects_bad_values(bad):
     with pytest.raises(ValueError):
         FinalizeConfig(unverified_notice=NOTICE, refuse_text=REFUSE, **bad)

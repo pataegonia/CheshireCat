@@ -155,6 +155,8 @@ class FinalizeConfig(BaseModel):
     refuse_text: str  # safe=false일 때 답변 전체를 대신하는 거절 문장
     max_citations: int = Field(default=1, ge=0)
     max_answer_chars: int = Field(default=4000, ge=1)
+    # 정규화한 길이가 이보다 짧은 unsupported 구간은 무시한다(한 글자가 답변 전체를 지우지 않게)
+    min_span_chars: int = Field(default=2, ge=1)
 
 
 def _normalize(text: str) -> str:
@@ -182,8 +184,13 @@ def _verified_sids(sentence: Sentence, retrieved: Sequence[Section]) -> list[str
     return out
 
 
-def _unsupported_indexes(sentences: Sequence[Sentence], spans: Sequence[str]) -> set[int]:
-    """unsupported 구간이 걸친 문장 번호. 구간이 문장 경계를 넘으면 걸친 문장 전부."""
+def _unsupported_indexes(
+    sentences: Sequence[Sentence], spans: Sequence[str], min_chars: int
+) -> set[int]:
+    """unsupported 구간이 걸친 문장 번호. 구간이 문장 경계를 넘으면 걸친 문장 전부.
+
+    정규화한 길이가 `min_chars`보다 짧은 구간은 보지 않는다.
+    """
     parts = [_normalize(s.text) for s in sentences]
     joined = "".join(parts)
     bounds: list[tuple[int, int]] = []
@@ -194,7 +201,7 @@ def _unsupported_indexes(sentences: Sequence[Sentence], spans: Sequence[str]) ->
     hit: set[int] = set()
     for span in spans:
         needle = _normalize(span)
-        if not needle:
+        if len(needle) < min_chars:
             continue
         at = joined.find(needle)
         while at != -1:
@@ -259,6 +266,9 @@ def finalize(
       조합이면 `rule.cite`, 그 밖에는 if_used.
     - 길이 상한을 넘으면 뒤 문장부터 통째로 빼고, 인용은 남은 문장으로 계산한다. 첫 문장 하나로도
       넘을 때만 문자 수로 자른다.
+    - `cfg.unverified_notice`는 인용 규칙이 always일 때, claim 문장이 판정이나 길이 자르기로
+      지워져 남은 claim이 0이거나 남은 문장이 하나도 없을 때만 붙인다. 처음부터 claim이 없던
+      답은 그대로 둔다(인용은 검색 1위로 채운다).
     - 빈 답변은 그대로 돌려준다. action별 고정 문장으로 채우는 것은 튜터 후처리(TU-07) 몫이다.
     """
     limit = cfg.max_answer_chars
@@ -268,12 +278,18 @@ def finalize(
     final: Action = rule.action if action is None else action
     policy = _cite_policy(rule, final)
     fill = policy == "always"
-    dropped = _unsupported_indexes(sentences, verdict.unsupported) if verdict is not None else set()
+    dropped: set[int] = set()
+    if verdict is not None:
+        dropped = _unsupported_indexes(sentences, verdict.unsupported, cfg.min_span_chars)
     kept = [i for i in range(len(sentences)) if i not in dropped]
 
+    had_claim = any(s.kind == "claim" for s in sentences)
     while True:
         texts = [sentences[i].text for i in kept]
-        if fill and not any(sentences[i].kind == "claim" for i in kept):
+        # 안내는 claim이 판정 · 길이 자르기로 지워져 0이 됐거나, 남은 문장이 없을 때만 붙인다.
+        # 처음부터 claim이 없던 답은 그대로 둔다.
+        lost_all_claims = had_claim and not any(sentences[i].kind == "claim" for i in kept)
+        if fill and (lost_all_claims or not kept):
             texts.append(cfg.unverified_notice)
         answer = _join(texts)
         if len(answer) <= limit or len(kept) <= 1:

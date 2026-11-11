@@ -1,7 +1,11 @@
+> v4 계획(폐기). v6 기준은 [master-plan v23](../master-plan.md)과 plan/C1–C4.
+
 # GP3 통합·평가 — 세부 플랜
 
 작성 2026-10-30 · 갱신 2026-10-31 · 담당 danielcho02 · 상태: v16 (적대 검토 11회차까지 반영, master v16 기준)
-상위: [master-plan](../master-plan.md) · 요구사항: [PRD](../PRD.md) · 기간: 11/16(월)–11/20(금, **기능 동결**)
+상위: [master-plan](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md) · 요구사항: [PRD](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md) · 기간: 11/16(월)–11/20(금, **기능 동결**)
+
+> **v4 계획, 재계획 대기 (2026-11-09).** 대회 OT를 받고 PRD를 v5로 바꿨다. 이 문서의 슬라이스·GR 번호·지표는 v4(튜터 래퍼 구조) 기준이라 그대로 따르지 않는다. 현재 기준은 [PRD v5](../PRD.md), [master-plan v22](../master-plan.md) §1–§3·§8·§9·§10의 v22 메모(push·PR은 PRD §9 T6 결정 뒤), [ADR-0009–0011](../adr/README.md)과 ADR-0001·0002·0003·0005·0006의 v5 수정 블록이다. 코드 재계획에서 이 문서를 다시 쓰거나 폐기한다. 이 문서 본문의 PRD·master-plan·interface·skills 링크는 v4 판(커밋 `429e9fb`)으로 연결해 두었다.
 
 본문에서 "(→§5)"는 이 문서 §5(master-plan에 반영할 점)를 가리킨다.
 
@@ -757,7 +761,7 @@ uv run pytest tests/test_llm.py tests/test_repair.py tests/test_pipeline_output.
 
 ## 5. master-plan에 반영할 점
 
-> 2026-10-31: 아래 제안은 [master-plan v2](../master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
+> 2026-10-31: 아래 제안은 [master-plan v2](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#13-변경-기록)에서 정리했다. 채택·변경 결과는 master-plan §4·§5·§13이 기준이다.
 
 > v3(2026-10-31): santa 1차 지적을 반영했다. 남은 항목만 아래에 둔다.
 
@@ -784,42 +788,42 @@ v5 마무리에서 master §8 예산 예상치(약 9.9만 / 11.4만 회)로 맞�
 [adr7]: ../adr/0007-parallel-two-call-structure.md
 [adr8]: ../adr/0008-input-role-split-jev.md
 [adrr]: ../adr/README.md
-[gr02]: ../PRD.md#gr-02-위기-탐지-p0-신설
-[gr04]: ../PRD.md#gr-04-입력-판정-p0
-[gr05]: ../PRD.md#gr-05-세션-위험멀티턴-p1
-[gr06]: ../PRD.md#gr-06-검색-가드-p1
-[gr07]: ../PRD.md#gr-07-출력-코드-검사-p0
-[gr08]: ../PRD.md#gr-08-llm-교환-판정--근거인용안전-p0
-[gr09]: ../PRD.md#gr-09-수리-p0-r2만-p1
-[gr10]: ../PRD.md#gr-10-거절안내위기-응답-p0
-[gr11]: ../PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0
-[gr12]: ../PRD.md#gr-12-설정토글무방비-모드-p0
-[gr13]: ../PRD.md#gr-13-로깅추적-p0
-[gr14]: ../PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2
-[gr15]: ../PRD.md#gr-15-평가-하네스-p0
-[mp10]: ../master-plan.md#10-개발-규칙
-[mp11]: ../master-plan.md#11-진행-추적-github
-[mp13]: ../master-plan.md#13-변경-기록
-[mp2]: ../master-plan.md#2-일정과-phase-관문
-[mp41]: ../master-plan.md#41-타입-typespy
-[mp42]: ../master-plan.md#42-공개-api-pipelinepy
-[mp43]: ../master-plan.md#43-llm-호출-llmpy
-[mp44]: ../master-plan.md#44-설정-configsyaml
-[mp45]: ../master-plan.md#45-trace-tracepy
-[mp46]: ../master-plan.md#46-데이터-evaldatasetspy
-[mp47]: ../master-plan.md#47-실행-evalrunpy
-[mp5]: ../master-plan.md#5-슬라이스-목록
-[mp7]: ../master-plan.md#7-자르는-순서-일정이-밀릴-때
-[mp8]: ../master-plan.md#8-외부-미결-사항과-기본값
-[mp9]: ../master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더
-[prd1]: ../PRD.md#1-문제
-[prd10]: ../PRD.md#10-리스크
-[prd13]: ../PRD.md#13-검토-기록
-[prd4]: ../PRD.md#4-구성-개요
-[prd6]: ../PRD.md#6-비기능-요구사항
-[prd7]: ../PRD.md#7-지표와-합격선
-[prd8]: ../PRD.md#8-데이터
-[prd9]: ../PRD.md#9-튜터팀과-맞닿는-결정-제안-결정은-리더
+[gr02]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-02-위기-탐지-p0-신설
+[gr04]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-04-입력-판정-p0
+[gr05]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-05-세션-위험멀티턴-p1
+[gr06]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-06-검색-가드-p1
+[gr07]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-07-출력-코드-검사-p0
+[gr08]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-08-llm-교환-판정--근거인용안전-p0
+[gr09]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-09-수리-p0-r2만-p1
+[gr10]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-10-거절안내위기-응답-p0
+[gr11]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-11-연결-계약과-튜터-쪽-의무-p0
+[gr12]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-12-설정토글무방비-모드-p0
+[gr13]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-13-로깅추적-p0
+[gr14]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-14-장애-처리-위기기본-차단-p0-차단기-p2
+[gr15]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#gr-15-평가-하네스-p0
+[mp10]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙
+[mp11]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#11-진행-추적-github
+[mp13]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#13-변경-기록
+[mp2]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#2-일정과-phase-관문
+[mp41]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#41-타입-typespy
+[mp42]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#42-공개-api-pipelinepy
+[mp43]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#43-llm-호출-llmpy
+[mp44]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#44-설정-configsyaml
+[mp45]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#45-trace-tracepy
+[mp46]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#46-데이터-evaldatasetspy
+[mp47]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#47-실행-evalrunpy
+[mp5]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#5-슬라이스-목록
+[mp7]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#7-자르는-순서-일정이-밀릴-때
+[mp8]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#8-외부-미결-사항과-기본값
+[mp9]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#9-팀과-맞닿는-부분-정보-결정은-리더
+[prd1]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#1-문제
+[prd10]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#10-리스크
+[prd13]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#13-검토-기록
+[prd4]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#4-구성-개요
+[prd6]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#6-비기능-요구사항
+[prd7]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#7-지표와-합격선
+[prd8]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#8-데이터
+[prd9]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/PRD.md#9-튜터팀과-맞닿는-결정-제안-결정은-리더
 [r8]: ../research/R8-production-ops-and-evaluation.md
 [rr5]: ../research/README.md#5-평가-사양-r8-r7-r5
-[skills]: ../skills.md
+[skills]: https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/skills.md

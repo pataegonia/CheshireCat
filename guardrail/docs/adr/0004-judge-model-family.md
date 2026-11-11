@@ -1,9 +1,11 @@
 # ADR-0004: 판정 모델은 생성과 다른 계열
 
 **Date**: 2026-10-30
-**Status**: proposed
+**Status**: superseded by ADR-0011
 **Deciders**: danielcho02
-**PRD**: GR-04, GR-08, §6
+**PRD**: (v4 번호) GR-04, GR-08, §6
+
+> **2026-11-09 폐기**: 대회 규칙상 채팅 모델은 `gpt-5-nano` 하나뿐이라 "생성과 다른 계열"을 고를 수 없다(OT §9). temperature 0 고정도 쓰지 않는다(gpt-5 계열은 OpenAI 직접 호출에서 기본값 외 temperature를 거부한다는 보고가 있고, 대회 프록시는 기동 시 확인한다, R12 §4). 호출 계층 원칙(예산·재시도·단일 게이트)은 ADR-0011로 옮겼다.
 
 ## Context
 

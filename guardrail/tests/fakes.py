@@ -1,196 +1,133 @@
-"""테스트 전용 가짜 객체. 패키지 코드는 이 파일을 import하지 않는다.
+"""S1.3 테스트 보조: FakeClock·FakeLLM (master-plan §4.3).
 
-S0.2: FakeTutor(정해진 청크·답을 돌려주는 TutorAdapter).
-S0.3: FakeClock, FakeLLM(진짜 LLM에 가짜 send만 끼움)과 결과 타입 6개.
+`LLM(cfg.llm, send=fake.send, clock=clock, sleep=clock.sleep)`로 꽂으면 0ms에 돈다.
+스크립트의 각 단계는 호출 하나에 대응한다: Ok·Malformed(응답), Timeout·ConnectFail·
+RateLimited·ServerError·BadRequest·HttpStatus·Boom(예외), Hang(영영 기다림).
 """
 
 import asyncio
+import copy
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Any
 
-from guardrail.config import ROOT, GuardConfig, load_config
-from guardrail.llm import LLM, Reply, TransportError
-from guardrail.types import ROLES, Chunk, Role, Turn
+import httpx2 as httpx
+import openai
 
-
-class FakeTutor:
-    """정해진 청크와 답을 돌려주고, 받은 인자를 기록한다."""
-
-    def __init__(
-        self,
-        chunks: list[Chunk] | None = None,
-        answer: str = "물은 0°C에서 언다. [S1]",
-        system_prompt: str | None = "기본 지시",
-    ) -> None:
-        self.chunks = (
-            chunks if chunks is not None else [Chunk("S1", "교재 1장", "물은 0°C에서 언다.")]
-        )
-        self.answer = answer
-        self.system_prompt = system_prompt
-        self.retrieve_calls: list[tuple[str, list[Turn]]] = []
-        self.generate_calls: list[dict] = []
-
-    async def retrieve(self, question: str, history: list[Turn]) -> list[Chunk]:
-        self.retrieve_calls.append((question, history))
-        return list(self.chunks)
-
-    async def generate(
-        self,
-        question: str,
-        history: list[Turn],
-        chunks: list[Chunk],
-        *,
-        system_extra: str = "",
-        instruction: str | None = None,
-    ) -> str:
-        self.generate_calls.append(
-            {
-                "question": question,
-                "history": history,
-                "chunks": chunks,
-                "system_extra": system_extra,
-                "instruction": instruction,
-            }
-        )
-        return self.answer
-
-
-# --- S0.3: FakeClock · FakeLLM ---
-
-
-class FakeClock:
-    """가짜 시계. sleep은 시각만 올리고 이벤트 루프에 한 번 양보한다(테스트가 0ms에 돈다)."""
-
-    def __init__(self, start: float = 1000.0) -> None:
-        self.t = start
-        self.slept: list[float] = []
-
-    def now(self) -> float:
-        return self.t
-
-    def advance(self, seconds: float) -> None:
-        self.t += seconds
-
-    async def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-        self.t += seconds
-        await asyncio.sleep(0)
+_REQ = httpx.Request("POST", "http://fake.invalid/v1/chat/completions")
 
 
 @dataclass(frozen=True)
 class Ok:
-    text: str
-    tokens_in: int | None = 10
-    tokens_out: int | None = 5
-    finish_reason: str | None = None
+    content: str = '{"evidence": "e", "category": "normal"}'
+    finish_reason: str | None = "stop"
+    completion_tokens: int | None = 7
+
+
+def Malformed() -> Ok:  # noqa: N802 - 단계 이름은 클래스처럼 쓴다
+    return Ok(content="not json")
 
 
 @dataclass(frozen=True)
-class Malformed:
-    text: str = "JSON 아님"
+class Timeout: ...
 
 
 @dataclass(frozen=True)
-class Timeout:
-    pass
+class ConnectFail: ...
 
 
 @dataclass(frozen=True)
-class RateLimited:
-    retry_after: float | None = None
+class HttpStatus:
+    code: int
+    headers: dict[str, str] = field(default_factory=dict)
+    message: str = "boom"
+
+
+def RateLimited(retry_after: str | None = None, header: str = "retry-after") -> HttpStatus:  # noqa: N802
+    return HttpStatus(429, {header: retry_after} if retry_after is not None else {})
+
+
+def ServerError() -> HttpStatus:  # noqa: N802
+    return HttpStatus(500)
+
+
+def BadRequest(message: str = "bad") -> HttpStatus:  # noqa: N802
+    return HttpStatus(400, message=message)
 
 
 @dataclass(frozen=True)
-class ServerError:
-    status: int = 500
+class Boom:
+    """분류 밖 예외(RuntimeError). 메시지는 로그·오류 문자열에 새면 안 된다."""
+
+    message: str = "boom"
 
 
 @dataclass(frozen=True)
-class BadRequest:
-    """json_schema 미지원 같은 400. 구조화 출력 단계에서는 한 단 내려간다."""
-
-    status: int = 400
+class Hang: ...
 
 
-Outcome = Ok | Malformed | Timeout | RateLimited | ServerError | BadRequest
+Step = Ok | Timeout | ConnectFail | HttpStatus | Boom | Hang
 
 
-def fake_config(**overrides) -> GuardConfig:
-    """역할마다 다른 가짜 모델명을 둔 무방비 설정. FakeLLM은 모델명으로 역할을 안다."""
-    models = {f"models.{r}": f"fake-{r}" for r in ROLES}
-    return load_config(ROOT / "configs" / "unguarded.yaml", overrides=models | overrides)
+class FakeClock:
+    """monotonic 대용. sleep이 시간을 당기고 0ms에 돌아온다."""
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
 
 
-class FakeLLM(LLM):
-    """진짜 LLM에 가짜 send만 끼운다. 게이트·재시도·예산·파싱은 그대로 돈다.
-
-    script: 순서 목록 또는 역할별 목록(dict[Role, list]). responder(req): 반복 호출용.
-    보낸 요청은 self.requests에 남는다(role·model·messages·response_format·max_tokens·timeout).
-    """
+class FakeLLM:
+    """`send` 주입 지점용. 스크립트가 떨어지면 `respond(kwargs)`(없으면 AssertionError)."""
 
     def __init__(
-        self,
-        cfg: GuardConfig | None = None,
-        *,
-        script: list[Outcome] | dict[Role, list[Outcome]] | None = None,
-        responder: Callable[[dict], Outcome] | None = None,
-        max_calls: int | None = None,
-        clock: FakeClock | None = None,
-        **kwargs,
+        self, *steps: Step, respond: Callable[[dict[str, Any]], Step] | None = None
     ) -> None:
-        self.clock = clock or FakeClock()
-        self.requests: list[dict] = []
-        if isinstance(script, dict):
-            self._script: dict[str | None, list[Outcome]] = {r: list(v) for r, v in script.items()}
+        self.steps = deque(steps)
+        self.respond = respond
+        self.requests: list[dict[str, Any]] = []
+
+    async def send(self, kwargs: dict[str, Any]) -> Any:
+        self.requests.append(copy.deepcopy(kwargs))
+        if self.steps:
+            step = self.steps.popleft()
+        elif self.respond is not None:
+            step = self.respond(kwargs)
         else:
-            self._script = {None: list(script or [])}
-        self._responder = responder
-        kwargs.setdefault("rand", lambda: 0.0)
-        super().__init__(
-            cfg or fake_config(),
-            send=self._fake_send,
-            max_calls=max_calls,
-            clock=self.clock.now,
-            sleep=self.clock.sleep,
-            **kwargs,
-        )
+            raise AssertionError("FakeLLM 스크립트가 떨어졌다")
+        return await self._play(step)
 
-    async def _fake_send(
-        self, model, messages, *, response_format, temperature, max_tokens, timeout
-    ):
-        role = model.removeprefix("fake-") if isinstance(model, str) else None
-        req = {
-            "role": role,
-            "model": model,
-            "messages": messages,
-            "response_format": response_format,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "timeout": timeout,
-        }
-        self.requests.append(req)
-        await asyncio.sleep(0)
-        if self._responder is not None:
-            outcome = self._responder(req)
-        else:
-            queue = self._script.get(role) if role in self._script else self._script.get(None)
-            if not queue:
-                raise AssertionError(f"FakeLLM 스크립트가 비었다(role={role})")
-            outcome = queue.pop(0)
-        return _apply(outcome)
-
-
-def _apply(outcome: Outcome) -> Reply:
-    match outcome:
-        case Ok(text, tin, tout, fin):
-            return Reply(text, tin, tout, fin)
-        case Malformed(text):
-            return Reply(text, 10, 5, "stop")
-        case Timeout():
-            raise TransportError("timeout")
-        case RateLimited(after):
-            headers = {} if after is None else {"retry-after": str(after)}
-            raise TransportError("status", 429, headers)
-        case ServerError(status) | BadRequest(status):
-            raise TransportError("status", status, {})
-    raise AssertionError(f"모르는 결과 {outcome!r}")
+    async def _play(self, step: Step) -> Any:
+        match step:
+            case Ok():
+                usage = (
+                    None
+                    if step.completion_tokens is None
+                    else SimpleNamespace(completion_tokens=step.completion_tokens)
+                )
+                choice = SimpleNamespace(
+                    message=SimpleNamespace(content=step.content),
+                    finish_reason=step.finish_reason,
+                )
+                return SimpleNamespace(choices=[choice], usage=usage)
+            case Timeout():
+                raise openai.APITimeoutError(request=_REQ)
+            case ConnectFail():
+                raise openai.APIConnectionError(request=_REQ)
+            case HttpStatus():
+                resp = httpx.Response(step.code, headers=step.headers, request=_REQ)
+                raise openai.APIStatusError(step.message, response=resp, body=None)
+            case Boom():
+                raise RuntimeError(step.message)
+            case Hang():
+                await asyncio.Event().wait()
+        raise AssertionError(f"알 수 없는 단계: {step!r}")

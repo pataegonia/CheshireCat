@@ -1,18 +1,24 @@
 [project]
 name = "guardrail"
 version = "0.1.0"
-description = "CheshireCat AI 튜터용 가드레일 모듈"
+description = "대회 POST /guard 판정기"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi==0.162.2",
     "openai>=3,<4",
     "pydantic>=2.14.2",
     "pyyaml>=6.0.3",
+    "rapidfuzz==3.14.6",
+    "scikit-learn==1.9.1",
+    "uvicorn==0.54.0",  # [standard] 아님(master-plan §4.7)
 ]
 
 [dependency-groups]
 dev = [
     "anyio>=4.16.0",
+    "httpx>=0.28.1",
     "hypothesis>=6.170.14",
+    "jsonschema==4.26.0",
     "pytest>=8",
     "pytest-cov>=7",
     "ruff>=0.6",
@@ -26,13 +32,16 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["docs"]  # 조사 메모 안의 코드 블록은 기록이라 손대지 않는다
+extend-exclude = ["docs", "scripts"]  # 조사 메모의 코드 블록과 R13 측정 스크립트는 기록이라 손대지 않는다(수치 재현 대상)
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "S"]  # S: bandit 보안 규칙
+select = ["E", "F", "I", "B", "UP", "S", "T20"]  # S: bandit 보안 규칙, T20: print 금지(GR-12)
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S311"]  # 테스트의 assert와 시드 고정 random은 정상
+
+[tool.coverage.run]
+source = ["guardrail"]  # 맨 --cov도 src만 잰다(tests/로 부풀지 않게)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

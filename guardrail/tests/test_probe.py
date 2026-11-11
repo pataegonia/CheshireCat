@@ -55,6 +55,7 @@ def test_summarize_counts_codes_length_tokens():
     assert s["errors"] == {"timeout": 1, "rate_limit": 1}
     assert s["length_rate"] == 0.25
     assert s["p50_ms"] == pytest.approx(250.0)
+    assert s["unsent"] == 0
     assert s["tokens_p50"] == pytest.approx(405.0)
     assert s["tokens_max"] == 800
 
@@ -150,6 +151,35 @@ async def test_run_never_exceeds_cap_with_retries():
     assert rep["calls_total"] == len(fake.requests)
     codes = rep["latency"][-1]["errors"]
     assert codes.get("budget", 0) > 0
+    assert rep["cap_exhausted"] is True
+    assert rep["latency"][-1]["unsent"] > 0
+    assert BODY_MARK not in json.dumps(rep, ensure_ascii=False)
+
+
+async def test_run_truncated_json_retries_stay_under_cap():
+    # 800에서 잘린 본문 → bad_json 재시도(2회). 그래도 총합은 cap 이하, 소진은 보고에 드러난다
+    def truncated(kwargs):
+        if kwargs.get("max_completion_tokens") == 800 and "response_format" in kwargs:
+            return Ok(content='{"evid', finish_reason="length", completion_tokens=800)
+        return _respond(kwargs)
+
+    fake = FakeLLM(respond=truncated)
+    rep = await _run(fake)
+    assert len(fake.requests) <= 200
+    assert rep["calls_total"] == len(fake.requests)
+    assert rep["length"]["800"]["InputOut"]["errors"] == {"bad_json": 12}
+    assert rep["length"]["800"]["InputOut"]["length_rate"] == 1.0
+    assert rep["cap_exhausted"] is True
+
+
+async def test_run_skips_output_cell_without_answers():
+    fake = FakeLLM(respond=_respond)
+    clock = FakeClock()
+    llm = LLM(CFG.llm, send=fake.send, clock=clock, sleep=clock.sleep)
+    rows = [_row(i, answer=None) for i in range(3)]
+    rep = await probe.run(llm, rows, budget_s=CFG.budget_s, cap=200, clock=clock)
+    assert set(rep["length"]["800"]) == {"InputOut"}
+    assert rep["cap_exhausted"] is False
 
 
 async def test_run_records_error_codes():
@@ -157,3 +187,4 @@ async def test_run_records_error_codes():
     rep = await _run(fake)
     assert set(rep["latency"][0]["errors"]) <= {"timeout", "budget"}
     assert rep["latency"][0]["ok"] == 0
+    assert BODY_MARK not in json.dumps(rep, ensure_ascii=False)

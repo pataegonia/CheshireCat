@@ -55,14 +55,15 @@ def _r(x: float | None) -> float | None:
 
 
 def summarize(results: Sequence[LLMResult]) -> dict[str, Any]:
-    """숫자·코드만. 지연은 실패를 포함한 전체 호출 기준."""
-    lat = [r.latency_ms for r in results]
+    """숫자·코드만. 지연은 실제로 보낸 호출(실패 포함) 기준, 상한에 막혀 안 보낸 건 unsent."""
+    lat = [r.latency_ms for r in results if r.attempts]
     tok = [r.completion_tokens for r in results if r.completion_tokens is not None]
     n = len(results)
     return {
         "n": n,
         "ok": sum(r.error is None for r in results),
         "attempts": sum(r.attempts for r in results),
+        "unsent": sum(not r.attempts for r in results),
         "errors": dict(Counter(r.error for r in results if r.error)),
         "length_rate": round(sum(r.finish_reason == "length" for r in results) / n, 3)
         if n
@@ -75,6 +76,10 @@ def summarize(results: Sequence[LLMResult]) -> dict[str, Any]:
 
 
 def estimate(cfg: Llm) -> dict[str, int]:
+    """재시도 없는 하한. length 잘림은 bad_json 재시도로 2회가 된다.
+
+    넘치면 max_calls가 budget으로 막고 보고의 cap_exhausted가 true가 된다.
+    """
     params = 1 + sum(getattr(cfg, k) is not None for k in OPTIONAL_PARAMS)
     params += cfg.structured_output == "json_schema"
     length = len(LIMITS) * 2 * LENGTH_ROWS if cfg.max_completion_tokens is not None else 0
@@ -141,6 +146,7 @@ async def run(
             (InputOut, "input_judge", guard),
             (OutputOut, "output_judge", answered),
         ]
+        cells = [c for c in cells if c[2]]  # 답변 있는 행이 없으면 OutputOut 칸은 건너뜀
         try:
             for limit in LIMITS:
                 llm.params["max_completion_tokens"] = limit
@@ -182,6 +188,13 @@ async def run(
         "length": length,
         "latency": latency,
         "calls_total": probe_calls + sum(llm.calls.values()),
+        "cap_exhausted": any(
+            "budget" in c["errors"]
+            for c in [
+                *latency,
+                *(s for v in length.values() if isinstance(v, dict) for s in v.values()),
+            ]
+        ),
         "unexpected": dict(llm.unexpected),
     }
 

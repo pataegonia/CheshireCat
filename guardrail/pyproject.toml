@@ -16,6 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "anyio>=4.16.0",
+    "httpx>=0.28.1",
     "hypothesis>=6.170.14",
     "jsonschema==4.26.0",
     "pytest>=8",
@@ -34,7 +35,7 @@ target-version = "py312"
 extend-exclude = ["docs", "scripts"]  # 조사 메모의 코드 블록과 R13 측정 스크립트는 기록이라 손대지 않는다(수치 재현 대상)
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "S"]  # S: bandit 보안 규칙
+select = ["E", "F", "I", "B", "UP", "S", "T20"]  # S: bandit 보안 규칙, T20: print 금지(GR-12)
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S311"]  # 테스트의 assert와 시드 고정 random은 정상

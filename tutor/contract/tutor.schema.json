@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tutor.schema.json",
+  "title": "POST /tutor response contract (spec_version 1.0)",
+  "description": "Source: competition/SPEC.md §3–§4 (authoritative). Exactly answer, action, citations, nothing else. answer is at most 4,000 Unicode characters. action is one of the 7 lowercase values. citations are KB section IDs, the file names of kb/<subject>/<ID>.md (e.g. FIN-02-01); never a CSV (<ID>-table<n>) or the HTML copy (FIN-01); [] when none, never null. Every failure path returns this shape with HTTP 200 (TU-01, TU-12); only an auth failure is non-200. Tests check responses against this schema and competition/grader/scoring.parse_tutor.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answer", "action", "citations"],
+  "properties": {
+    "answer": { "type": "string", "maxLength": 4000 },
+    "action": {
+      "type": "string",
+      "enum": ["answer", "scaffold", "clarify", "abstain", "redirect", "refuse", "escalate"]
+    },
+    "citations": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^(PY|PR|FIN)-[0-9]{2}-[0-9]{2}$" }
+    }
+  }
+}

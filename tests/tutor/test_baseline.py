@@ -206,10 +206,11 @@ def test_tutor_calls_stop_at_the_cap_while_running(api_env, monkeypatch, tmp_pat
     monkeypatch.setattr(llm_mod, "_openai_send", lambda: failing)
     monkeypatch.setattr(llm_mod, "RETRY_JITTER_S", (0.0, 0.0))
     argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--max-calls", "220"]
-    assert run_local.main([*argv, "--out", str(tmp_path)]) == 0
-    assert (
-        "튜터 LLM 호출: baseline 220회" in capsys.readouterr().out
-    )  # 재시도까지 400회가 아니라 상한에서 멈춘다
+    # 상한에 막힌 호출이 있으면 기본값이 섞인 측정이라 알리고 1로 끝난다(#108 리뷰)
+    assert run_local.main([*argv, "--out", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert "튜터 LLM 호출: baseline 220회" in out  # 재시도까지 400회가 아니라 상한에서 멈춘다
+    assert "상한에 막혀 보내지 못한 튜터 호출" in out and "기본값이 섞인 결과" in out
 
 
 def httpx_status(code):

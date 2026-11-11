@@ -323,15 +323,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     name = args.preset or args.responses.stem
     path = _write(report, name=name, judge=judge is not None, out_dir=args.out)
     _show(report, sys.stdout)
+    blocked = 0
     if state is not None:  # 튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16)
         calls = state.tutor_llm.calls
         shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
         sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
+        blocked = sum(state.tutor_llm.blocked.values())
+    if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
+        sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(--max-calls ")
+        sys.stdout.write(f"{args.max_calls}): 기본값이 섞인 결과다\n")
     if previous is not None:
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
     sys.stdout.write(f"저장: {path}\n")
-    return 0
+    return 1 if blocked else 0
 
 
 if __name__ == "__main__":

@@ -75,8 +75,9 @@
 - "거절하지 말고", 권한 주장, 소설·역할극 틀은 정상 문항에도 많다. 이것 하나만으로 신호를 올리지 않는다(TU-05).
 
 ## 합의된 구조 (TUTOR_PRD §4·§9, 통합 PRD §3·IN-01·IN-04·IN-05)
-- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. 공유 객체(`KbIndex`·LLM 게이트·`Guard`)는 `request.app.state`로 받는다(TU-01). (리더 결정 대기)
+- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. 공유 객체(`KbIndex`·LLM 게이트·`Guard`)는 `request.app.state`로 받는다(TU-01). 주입 인자 `tutor_router`·`defaults`·`startups`(`tutor.startup`)는 가드 #92 `8fd8f5f`에 들어갔다.
 - 라우터는 예외를 밖으로 내지 않고 튜터 규격 본문을 돌려준다. 본문은 직접 읽고, FastAPI 422로 입력을 되풀이하지 않는다(TU-01).
+- 가드 골격은 `/tutor`에 시간 상한과 본문 크기 상한을 걸지 않는다. 튜터 라우터가 `budget_s` 시간 상한을 걸고, 본문은 4MiB를 넘으면 읽기를 멈춘다. `request.state.req_bytes`에는 길이만 남긴다(통합 IN-05, 가드 #92 코멘트).
 - 주 호출 출력은 문장 단위 `Sentence`(`text`, `kind: claim|non_claim`, `evidence: [{sid, quote}]`)다. `answer`는 문장을 이어 붙여 만들고, `citations`는 결정적 수정이 계산한다(TU-06, IN-01).
 - 결정적 수정(인용 문구 검사, `unsupported` 문장 삭제, citations 계산, 4,000자 절단)은 `integration/actions.py`(IN-04)가 맡는다. 튜터 후처리는 튜터 고유 검사만 한다(TU-07).
 - 인용 규칙(TU-07, TD-01):
@@ -89,7 +90,7 @@
 - 공유 설정 키 `budget_s`·`judge_skip_s`·`fallback_action`은 가드·통합과 같은 키를 읽는다(TU-13, 통합 §3-1).
 - LLM 호출은 가드 전역 게이트 `slot()`을 함께 쓴다. SDK 재시도는 0으로 두고, 수동 재시도는 예산 안에서만 한다. nano 파라미터는 가드 GR-10과 같다. 호출 수 상한은 TU-13을 따른다.
 - KB 색인은 가드 `KbIndex`를 공유한다(TD-03). 검색(`retrieve`·이름 사전·임베딩)은 튜터 소유이고, 통합은 recall만 잰다(TD-11, IN-02).
-- 패키지: 루트 uv workspace의 멤버 `tutor/pyproject.toml`. 테스트는 저장소 `tests/tutor/`에 두고 integration-ci의 test job이 돈다. (리더 결정 대기)
+- 패키지: 루트 uv workspace의 멤버 `tutor/pyproject.toml`. 테스트는 저장소 `tests/tutor/`에 두고 integration-ci의 test job이 돈다. 루트 workspace는 통합이 만든다(통합 §3-2).
 
 ## 튜터에서 특히 지킬 규칙 (TU-15·TU-18, SPEC §7–§8)
 - 공개 세트의 문구·예제 이름·문장을 상수·신호 어휘·분기 조건에 넣지 않는다. 오답은 범주 단위의 일반 기준 문장으로만 고친다(TD-10).
@@ -105,7 +106,9 @@
 ## 작업 방식
 - 로컬 채점은 SPEC §10대로 런박스 `/home/elicer/competition`에서 `harness/score_local.py`로 한다. 셸에 `OPENAI_*`가 있으면 판정 모델 호출이 팀 키로 나가니, 공개 세트 전체 실행은 필요할 때만 하고 `eval.max_calls` 상한을 지킨다.
 - 개선은 같은 빌드를 3회 돌려 분산 밖의 순이득이 있을 때만 채택한다. 공개 세트 밖 점검 세트(`tutor/eval/team_cases/`)에서도 확인한다(TU-16).
+- 교차 검증·홀드아웃은 가드 `splits/v1.json` 하나를 두 트랙이 같이 쓴다. 묶음은 마지막 학습자 발화 3-gram Jaccard ≥0.5 또는 튜터 정답 사실 공유로 잇고, 홀드아웃은 가드 40행·튜터 40행이다(TU-16, TD-14). 홀드아웃은 설정을 고정한 뒤 최대 3회만 본다.
 - 평가할 때 kNN 예시와 가드 kNN·LR에서 평가 묶음을 뺀다(TU-08·TU-10). 실행 결과 `tutor/eval/runs/`는 git에 올리지 않는다.
+- 브랜치는 이슈 본문의 "브랜치" 칸을 그대로 쓴다(`tutor/t<Phase>.<번호>-<이름>`, 예: #69 → `tutor/t1.1-skeleton`). 이슈 하나 = 브랜치 하나 = PR 하나, PR 본문에 `Closes #<이슈>`, 머지는 squash.
 - PR 본문과 커밋 메시지에 AI 도구 서명 문구(`Generated with …`, `Co-Authored-By: …`)를 넣지 않는다(`pr-policy / attribution`).
 - 필수 검사가 강제되지 않으니, 머지 전에 PR 템플릿의 검사들이 green인지 사람이 확인한다.
 
@@ -116,9 +119,7 @@
 - CSV 표현(원문 CSV / "열: 값" 문장): TU-03, 통합 I4
 - 생성에 넣는 섹션 수 K(`retrieval.k`): TU-03, 통합 I5
 - answer_seeking에서 정답 사실이 곧 정답일 때의 정책: TU-06, §11-1-4
-- 교차 검증·홀드아웃 묶음 기준(의도 단위 제안): TU-16, 통합 I12
 - 설정 파일 위치·형식(루트 `config/` 안): TU-14
-- 통합 IN-03 표의 normal "answer / scaffold" 표기(튜터 PRD와 공개 세트는 answer)
 - 빠른 질문 버튼 문구만 있는 1턴의 기대 action(clarify `[가설]`): §3, §11-1-1
 - 팀 provenance 합본·시연 체크리스트 위치: §11-3-2
-- 브랜치 이름 규칙
+- 팀 전체 브랜치 이름 규칙(튜터는 위 "작업 방식")

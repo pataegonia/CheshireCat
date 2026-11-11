@@ -1,378 +1,283 @@
-"""S0.2 설정: 로드·검증·overrides·${ENV} 치환·config_hash·check_toggles·load_prompt."""
+"""S1.1 설정: §4.4 모델 로드·GUARD_* 환경변수·토글 조합·ablation 병합·config_hash·load_prompt."""
 
 import pytest
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from guardrail import config as config_mod
-from guardrail.config import (
-    ROOT,
-    GuardConfig,
-    check_toggles,
-    config_hash,
-    load_config,
-    load_prompt,
-)
-from guardrail.pipeline import Guard
-from guardrail.types import ROLES
+from guardrail.config import ROOT, GuardConfig, config_hash, load_config, load_prompt
 
 DEFAULT = ROOT / "configs" / "default.yaml"
-UNGUARDED = ROOT / "configs" / "unguarded.yaml"
+BASELINE = ROOT / "configs" / "baseline.yaml"
+FIXTURE_PROMPTS = ROOT / "tests" / "fixtures" / "prompts"
+ENV_DIRS = {"GUARD_KB_DIR": "kb", "GUARD_PUBLIC_DIR": "public", "GUARD_PROMPTS_DIR": "prompts"}
 
-ALL_TOGGLES = (
-    "crisis",
-    "input.rules",
-    "input.pii",
-    "input.judge",
-    "input.jev",
-    "session.enabled",
-    "retrieval.enabled",
-    "output.code",
-    "output.prefilter",
-    "output.judge",
-    "output.repair",
-    "output.r2",
-)
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    for name in ("GUARD_CONFIG", *ENV_DIRS):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _raw() -> dict:
     return yaml.safe_load(DEFAULT.read_text(encoding="utf-8"))
 
 
-def _write(tmp_path, raw: dict):
-    path = tmp_path / "c.yaml"
+def _write(tmp_path, raw: dict, name: str = "c.yaml"):
+    path = tmp_path / name
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path
 
 
-def _service(raw: dict) -> dict:
-    """서비스 모드 검증을 통과하는 최소 모양(위기·PII 켬, faults 없음)."""
-    raw["mode"] = "service"
-    raw["stages"]["crisis"] = True
-    raw["stages"]["input"]["pii"] = True
-    raw["faults"] = {}
-    return raw
+def _leaves(d: dict, prefix: str = "") -> dict:
+    """중첩 매핑을 {"a.b": 값}으로 편다. 빈 매핑은 잎으로 본다."""
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}"
+        if isinstance(v, dict) and v:
+            out |= _leaves(v, key + ".")
+        else:
+            out[key] = v
+    return out
 
 
-@pytest.fixture
-def hmac_env(monkeypatch):
-    # 값은 런타임에 만든다(소스에 비밀 모양 문자열을 두지 않는다)
-    monkeypatch.setenv("GUARD_LOG_HMAC_KEY", "t" * 4 + "-hmac")
+def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
+    la, lb = _leaves(a.model_dump(mode="json")), _leaves(b.model_dump(mode="json"))
+    return {k for k in la.keys() | lb.keys() if la.get(k) != lb.get(k)}
 
 
-# --- 로드: default·unguarded는 같은 코드로, 단계 상태는 YAML에서만 ---
+# --- 로드 ---
 
 
-@pytest.mark.parametrize("path", [DEFAULT, UNGUARDED])
-def test_shipped_configs_load_and_pass_toggles(path):
-    cfg = load_config(path)
-    check_toggles(cfg)
-    assert cfg.mode == "eval"
-    assert cfg.deadlines_s.attack_judge == 10.0
-    assert cfg.faults == {}
+def test_default_loads_section_4_4_model():
+    cfg = load_config("configs/default.yaml")
+    assert isinstance(cfg, GuardConfig)
+    assert cfg.version == "6.0.0"
+    assert cfg.budget_s == 20
+    assert cfg.block_categories == [
+        "jailbreak_injection",
+        "harmful_content",
+        "academic_dishonesty",
+        "off_topic",
+    ]
+    assert cfg.prompts == {}
+    assert cfg.toggles.knn_vote and not cfg.toggles.third_call
+    assert cfg.output.mode == "v6" and cfg.output.rule_min_margin == 3.5
 
 
-@pytest.mark.parametrize("path", [DEFAULT, UNGUARDED])
-def test_gp0_configs_have_every_stage_off(path):
-    # GP0에는 머지된 가드 단계가 없다(GP0 §4 점검 항목)
-    cfg = load_config(path)
-    assert config_mod.enabled_toggles(cfg) == []
+def test_model_keys_equal_yaml_keys():
+    # 모델에 기본값이 없으므로 키 하나라도 빠지거나 더해지면 여기서 드러난다(§4.4 완전성)
+    assert _leaves(load_config(DEFAULT).model_dump(mode="json")).keys() == _leaves(_raw()).keys()
 
 
-def test_default_matches_contract_values():
-    cfg = load_config(DEFAULT)
-    assert cfg.pipeline.mode == "parallel"
-    assert cfg.policy.d1 == "s2"
-    assert cfg.gate.initial == 4 and cfg.gate.min == 1 and cfg.gate.max == 16
-    assert cfg.gate.increase_after == 10 and cfg.gate.max_wait_s == 30
-    assert cfg.gate.structured_output == "json_schema"
-    assert cfg.thresholds.lambda_ == 0.9
-    assert cfg.thresholds.tau_J is None
-    assert cfg.context_turns.base == 4 and cfg.context_turns.expanded == 8
-    assert cfg.tutor.adapter == "mock"
-    assert all(cfg.tutor.obligations.model_dump().values())
-    assert cfg.service_log.keep_raw_for == ["block", "escalation", "appeal", "sample"]
-    assert cfg.models.jev == "typesafe-ai/jev-1.14.0"
-
-
-def test_relative_path_resolves_from_package_root(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    assert load_config("configs/default.yaml").policy_version == load_config(DEFAULT).policy_version
-
-
-# --- 검증 실패 ---
-
-
-def test_unknown_top_level_key_rejected(tmp_path):
+@pytest.mark.parametrize("dotted", sorted(_leaves(_raw())))
+def test_every_key_is_required(tmp_path, dotted):
+    # 기본값을 하나라도 두면 그 키를 지운 설정이 통과해 여기서 걸린다
     raw = _raw()
-    raw["unknown_key"] = 1
-    with pytest.raises(ValidationError, match="unknown_key"):
-        load_config(_write(tmp_path, raw))
-
-
-def test_unknown_nested_key_rejected(tmp_path):
-    raw = _raw()
-    raw["stages"]["output"]["codee"] = True
-    with pytest.raises(ValidationError, match="codee"):
-        load_config(_write(tmp_path, raw))
-
-
-@pytest.mark.parametrize(
-    ("dotted", "value"),
-    [
-        ("mode", "prod"),
-        ("pipeline.mode", "fast"),
-        ("policy.d1", "s3"),
-        ("gate.structured_output", "xml"),
-        ("tutor.adapter", "other"),
-        ("service_log.keep_raw_for", ["forever"]),
-        ("service_log.sample_rate", 1.5),
-        ("thresholds.G", 1.2),
-        ("thresholds.theta", -0.1),
-        ("faults.input_judge", "explode"),
-        ("faults.nobody", "timeout"),
-        ("gate.initial", 20),
-    ],
-)
-def test_bad_values_rejected(dotted, value):
+    *parents, last = dotted.split(".")
+    node = raw
+    for key in parents:
+        node = node[key]
+    del node[last]
     with pytest.raises(ValidationError):
-        load_config(DEFAULT, overrides={dotted: value})
-
-
-def test_stage_toggles_are_required(tmp_path):
-    # 단계 상태는 YAML에서만 정해진다: 토글을 빼면 기본값으로 메우지 않고 실패한다
-    raw = _raw()
-    del raw["stages"]["output"]["code"]
-    with pytest.raises(ValidationError, match="code"):
         load_config(_write(tmp_path, raw))
 
 
-def test_threshold_upper_bound_is_1_01():
-    cfg = load_config(DEFAULT, overrides={"thresholds.input_block": 1.01})
-    assert cfg.thresholds.input_block == 1.01
+@pytest.mark.parametrize(
+    ("dotted", "bad"),
+    [
+        ("output.mode", "v5"),
+        ("output.failure_default", "maybe"),
+        ("output.rule_span", "word"),
+        ("output.rule_extra_tokens", ["nope"]),
+        ("llm.structured_output", "prompt"),
+        ("input.knn.analyzer", "bytes"),
+        ("embedding.targets", ["web"]),
+        ("llm.gate", 0),
+        ("budget_s", 0),
+        ("input.lr.ngram", [3, 1]),
+    ],
+)
+def test_bad_value_rejected(dotted, bad):
+    with pytest.raises(ValidationError):
+        load_config(DEFAULT, overrides={dotted: bad})
 
 
-def test_service_mode_valid_with_hmac(tmp_path, hmac_env):
-    cfg = load_config(_write(tmp_path, _service(_raw())))
-    assert cfg.mode == "service"
+def test_load_order_overrides_beat_env_beat_ablation(tmp_path, monkeypatch):
+    abl = _write(tmp_path, {"paths": {"kb": "from_ablation", "public": "from_ablation"}}, "a.yaml")
+    monkeypatch.setenv("GUARD_KB_DIR", "from_env")
+    monkeypatch.setenv("GUARD_PUBLIC_DIR", "from_env")
+    cfg = load_config(DEFAULT, ablation=abl, overrides={"paths.public": "from_override"})
+    assert cfg.paths.kb == "from_env"
+    assert cfg.paths.public == "from_override"
+
+
+def test_baseline_differs_only_in_toggles_and_mode():
+    base = load_config(BASELINE)
+    assert not any(base.toggles.model_dump().values())
+    assert len(base.toggles.model_dump()) == 11
+    assert base.output.mode == "baseline"
+    expected = {f"toggles.{t}" for t, on in load_config(DEFAULT).toggles if on} | {"output.mode"}
+    assert _diff(base, load_config(DEFAULT)) == expected
 
 
 @pytest.mark.parametrize(
-    ("dotted", "value", "needle"),
+    "mutate",
     [
-        ("stages.crisis", False, "crisis"),
-        ("stages.input.pii", False, "pii"),
-        ("faults", {"input_judge": "timeout"}, "faults"),
+        lambda r: r.update(typo=1),
+        lambda r: r["toggles"].update(typo=True),
+        lambda r: r["llm"]["timeout_s"].update(typo=1),
+        lambda r: r.update(block_categories=["not_a_category"]),
     ],
 )
-def test_service_mode_rejects_unsafe(tmp_path, hmac_env, dotted, value, needle):
-    path = _write(tmp_path, _service(_raw()))
-    with pytest.raises(ValidationError, match=needle):
-        load_config(path, overrides={dotted: value})
+def test_unknown_key_or_value_rejected(tmp_path, mutate):
+    raw = _raw()
+    mutate(raw)
+    with pytest.raises(ValidationError):
+        load_config(_write(tmp_path, raw))
 
 
-def test_service_mode_requires_hmac_env_and_names_only(tmp_path, monkeypatch):
-    monkeypatch.delenv("GUARD_LOG_HMAC_KEY", raising=False)
-    with pytest.raises(ValidationError, match="GUARD_LOG_HMAC_KEY"):
-        load_config(_write(tmp_path, _service(_raw())))
+def test_unknown_override_rejected():
+    with pytest.raises(ValidationError):
+        load_config(DEFAULT, overrides={"llm.nope": 1})
 
 
-def test_eval_mode_allows_crisis_off_and_faults():
-    cfg = load_config(DEFAULT, overrides={"faults": {"generator": "fake_ok"}})
-    assert cfg.faults == {"generator": "fake_ok"}
+def test_override_into_scalar_rejected():
+    with pytest.raises(ValueError, match="overrides"):
+        load_config(DEFAULT, overrides={"budget_s.x": 1})
 
 
-# --- overrides ---
+def test_top_level_must_be_mapping(tmp_path):
+    path = tmp_path / "list.yaml"
+    path.write_text("- 1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="매핑"):
+        load_config(path)
 
 
-def test_override_applies_before_validation_and_changes_hash():
+# --- 환경변수 ---
+
+
+def test_guard_config_env_selects_file(tmp_path, monkeypatch):
+    raw = _raw()
+    raw["version"] = "6.0.0-env"
+    monkeypatch.setenv("GUARD_CONFIG", str(_write(tmp_path, raw)))
+    assert load_config().version == "6.0.0-env"
+
+
+def test_guard_config_default_when_unset():
+    assert load_config() == load_config(DEFAULT)
+
+
+@pytest.mark.parametrize(("env", "field"), ENV_DIRS.items())
+def test_guard_dir_env_overrides_paths(monkeypatch, tmp_path, env, field):
     base = load_config(DEFAULT)
-    changed = load_config(DEFAULT, overrides={"thresholds.G": 0.6})
-    assert changed.thresholds.G == 0.6
-    assert config_hash(changed) != config_hash(base)
-
-
-def test_override_lambda_by_alias():
-    assert load_config(DEFAULT, overrides={"thresholds.lambda": 0.5}).thresholds.lambda_ == 0.5
-
-
-def test_override_unknown_path_fails():
-    with pytest.raises(ValidationError, match="nope"):
-        load_config(DEFAULT, overrides={"nope.x": 1})
-
-
-def test_override_through_scalar_fails():
-    with pytest.raises(ValueError, match="mode"):
-        load_config(DEFAULT, overrides={"mode.x": 1})
-
-
-# --- ${ENV} 치환 (models만) ---
-
-
-def test_env_substitution_in_models(monkeypatch):
-    monkeypatch.setenv("GEN_MODEL", "gen-a")
-    monkeypatch.setenv("JUDGE_MODEL", "judge-b")
+    monkeypatch.setenv(env, str(tmp_path))
     cfg = load_config(DEFAULT)
-    assert cfg.models.generator == "gen-a"
-    assert cfg.models.input_judge == cfg.models.exchange_judge == "judge-b"
-    assert cfg.models.attack_judge == "judge-b"
+    assert getattr(cfg.paths, field) == str(tmp_path)
+    assert _diff(cfg, base) == {f"paths.{field}"}
 
 
-def test_env_missing_gives_none(monkeypatch):
-    monkeypatch.delenv("GEN_MODEL", raising=False)
-    assert load_config(DEFAULT).models.generator is None
+def test_paths_from_file_when_env_unset():
+    assert load_config(DEFAULT).paths.model_dump() == _raw()["paths"]
 
 
-def test_env_substitution_only_in_models(tmp_path, monkeypatch):
-    monkeypatch.setenv("X_VERSION", "9.9.9")
-    raw = _raw()
-    raw["policy_version"] = "${X_VERSION}"
-    assert load_config(_write(tmp_path, raw)).policy_version == "${X_VERSION}"
+# --- 토글 조합 ---
 
 
-def test_env_embedded_in_model_name(tmp_path, monkeypatch):
-    monkeypatch.setenv("GEN_MODEL", "mini")
-    raw = _raw()
-    raw["models"]["generator"] = "vendor/${GEN_MODEL}-v1"
-    assert load_config(_write(tmp_path, raw)).models.generator == "vendor/mini-v1"
-
-
-# --- config_hash ---
-
-
-def test_config_hash_stable_and_short(monkeypatch):
-    monkeypatch.setenv("GEN_MODEL", "gen-a")
-    a, b = load_config(DEFAULT), load_config(DEFAULT)
-    assert config_hash(a) == config_hash(b)
-    assert len(config_hash(a)) == 12
-
-
-def test_config_hash_ignores_yaml_key_order(tmp_path):
-    raw = _raw()
-    shuffled = dict(reversed(list(raw.items())))
-    shuffled["gate"] = dict(reversed(list(raw["gate"].items())))
-    assert config_hash(load_config(_write(tmp_path, shuffled))) == config_hash(load_config(DEFAULT))
-
-
-def test_every_config_model_forbids_extra():
-    models = [GuardConfig]
-    seen = set()
-    while models:
-        m = models.pop()
-        if m in seen:
-            continue
-        seen.add(m)
-        assert m.model_config.get("extra") == "forbid", m.__name__
-        for f in m.model_fields.values():
-            for t in (f.annotation, *getattr(f.annotation, "__args__", ())):
-                if isinstance(t, type) and issubclass(t, BaseModel):
-                    models.append(t)
-    assert len(seen) >= 15
-
-
-@pytest.mark.parametrize("role", ROLES)
-def test_faults_accept_every_role(role):
-    assert load_config(DEFAULT, overrides={f"faults.{role}": "timeout"}).faults == {role: "timeout"}
-
-
-def test_lambda_python_name_is_not_a_yaml_key():
+@pytest.mark.parametrize(
+    "toggles",
+    [
+        {"third_call": True, "knn_vote": False},
+        {"third_call": True, "lr": False},
+        {"nano_span": True, "literal_rule": False},
+    ],
+)
+def test_forbidden_toggle_combinations(toggles):
     with pytest.raises(ValidationError):
-        load_config(DEFAULT, overrides={"thresholds.lambda_": 0.5})
+        load_config(DEFAULT, overrides={f"toggles.{k}": v for k, v in toggles.items()})
 
 
-def test_config_hash_includes_substituted_model(monkeypatch):
-    monkeypatch.setenv("GEN_MODEL", "gen-a")
-    h1 = config_hash(load_config(DEFAULT))
-    monkeypatch.setenv("GEN_MODEL", "gen-b")
-    assert config_hash(load_config(DEFAULT)) != h1
+def test_allowed_toggle_combinations():
+    cfg = load_config(
+        DEFAULT,
+        overrides={"toggles.third_call": True, "toggles.nano_span": True},
+    )
+    assert cfg.toggles.third_call and cfg.toggles.nano_span
 
 
-# --- check_toggles ---
+# --- ablation ---
 
 
-def test_unimplemented_toggle_raises_with_name():
-    cfg = load_config(DEFAULT, overrides={"stages.input.judge": True})
-    with pytest.raises(NotImplementedError, match=r"input\.judge"):
-        check_toggles(cfg)
+def test_ablation_deep_merge_changes_only_overridden_key(tmp_path):
+    abl = _write(tmp_path, {"toggles": {"lr": False}}, "no_lr.yaml")
+    assert _diff(load_config(DEFAULT, ablation=abl), load_config(DEFAULT)) == {"toggles.lr"}
 
 
-def test_two_unimplemented_toggles_both_named():
-    cfg = load_config(DEFAULT, overrides={"stages.input.judge": True, "stages.output.code": True})
-    with pytest.raises(NotImplementedError) as err:
-        check_toggles(cfg)
-    assert "input.judge" in str(err.value) and "output.code" in str(err.value)
+def test_ablation_nested_merge(tmp_path):
+    abl = _write(tmp_path, {"input": {"knn": {"max_examples": 4}}}, "knn4.yaml")
+    assert _diff(load_config(DEFAULT, ablation=abl), load_config(DEFAULT)) == {
+        "input.knn.max_examples"
+    }
 
 
-@pytest.mark.parametrize("toggle", ALL_TOGGLES)
-def test_every_toggle_is_guarded(toggle):
-    # 자기 단계 이름이 없는 session.enabled·output.r2도 막는다
-    cfg = load_config(DEFAULT, overrides={f"stages.{toggle}": True})
-    with pytest.raises(NotImplementedError, match=toggle.replace(".", r"\.")):
-        check_toggles(cfg)
+def test_ablation_unknown_key_rejected(tmp_path):
+    abl = _write(tmp_path, {"toggles": {"typo": True}}, "bad.yaml")
+    with pytest.raises(ValidationError):
+        load_config(DEFAULT, ablation=abl)
 
 
-def test_implemented_toggle_passes(monkeypatch):
-    monkeypatch.setattr(config_mod, "_IMPLEMENTED", frozenset({"input.judge"}))
-    check_toggles(load_config(DEFAULT, overrides={"stages.input.judge": True}))
+# --- 프롬프트·해시 ---
 
 
-def test_guard_construction_uses_check_toggles():
-    cfg = load_config(DEFAULT, overrides={"stages.input.judge": True})
-    with pytest.raises(NotImplementedError, match=r"input\.judge"):
-        Guard(cfg)
+def _with_prompt(monkeypatch, prompts_dir) -> GuardConfig:
+    monkeypatch.setenv("GUARD_PROMPTS_DIR", str(prompts_dir))
+    return load_config(DEFAULT, overrides={"prompts": {"fx": "fx.md"}})
 
 
-def test_jev_requires_pii(monkeypatch):
-    monkeypatch.setattr(config_mod, "_IMPLEMENTED", frozenset({"input.jev"}))
-    cfg = load_config(DEFAULT, overrides={"stages.input.jev": True})
-    with pytest.raises(ValueError, match=r"input\.pii") as err:
-        check_toggles(cfg)
-    assert "input.jev" in str(err.value)
-    with pytest.raises(ValueError, match=r"input\.pii"):
-        Guard(cfg)
+def test_config_hash_without_prompts_is_stable():
+    assert config_hash(load_config(DEFAULT)) == config_hash(load_config(DEFAULT))
+    assert len(config_hash(load_config(DEFAULT))) == 12
 
 
-def test_jev_with_pii_passes(monkeypatch):
-    monkeypatch.setattr(config_mod, "_IMPLEMENTED", frozenset({"input.jev", "input.pii"}))
-    check_toggles(
-        load_config(DEFAULT, overrides={"stages.input.jev": True, "stages.input.pii": True})
+def test_config_hash_includes_prompt_version(monkeypatch, tmp_path):
+    # 같은 폴더에서 version만 바꾼다(paths.prompts가 해시에 들어가므로 폴더를 고정)
+    v1 = (FIXTURE_PROMPTS / "fx.md").read_text("utf-8")
+    (tmp_path / "fx.md").write_text(v1, "utf-8")
+    h1 = config_hash(_with_prompt(monkeypatch, tmp_path))
+    v2 = v1.replace('version: "1"', 'version: "2"')
+    (tmp_path / "fx.md").write_text(v2, "utf-8")
+    h2 = config_hash(_with_prompt(monkeypatch, tmp_path))
+    assert h1 != h2
+    # 해시는 본문이 아니라 머리말 version을 본다(같은 폴더에서 본문만 바꾸면 그대로)
+    (tmp_path / "fx.md").write_text(v2.replace("본문", "다른 본문"), "utf-8")
+    assert config_hash(_with_prompt(monkeypatch, tmp_path)) == h2
+
+
+def test_config_hash_changes_with_config_value():
+    assert config_hash(load_config(DEFAULT)) != config_hash(
+        load_config(DEFAULT, overrides={"budget_s": 19})
     )
 
 
-def test_check_toggles_reads_no_env(monkeypatch):
-    # 순수 함수: 환경변수가 하나도 없어도 같은 결과
-    for name in ("GEN_MODEL", "JUDGE_MODEL", "GUARD_LLM_API_KEY", "GUARD_LLM_BASE_URL"):
-        monkeypatch.delenv(name, raising=False)
-    check_toggles(load_config(UNGUARDED))
-
-
-# --- load_prompt ---
-
-
-def test_load_prompt_reads_front_matter(tmp_path):
-    (tmp_path / "demo.md").write_text(
-        "---\nid: demo\nversion: 1.2.3\n---\n본문 첫 줄\n", encoding="utf-8"
-    )
-    cfg = load_config(DEFAULT, overrides={"paths.prompts": str(tmp_path)})
-    assert load_prompt(cfg, "demo") == ("1.2.3", "본문 첫 줄\n")
+def test_load_prompt_returns_version_and_body(monkeypatch):
+    version, body = load_prompt(_with_prompt(monkeypatch, FIXTURE_PROMPTS), "fx")
+    assert version == "1"
+    assert body.strip() == "픽스처 프롬프트 본문."
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        "본문만\n",
-        "---\nid: demo\n---\n본문\n",
-        "---\nid: other\nversion: 1.0.0\n---\n본문\n",
-        "---\nid: demo\nversion: 1.0.0\n본문(닫는 줄 없음)\n",
-        "---\n- id\n- version\n---\n본문\n",
+        "본문만 있고 머리말이 없다\n",
+        '---\nid: other\nversion: "1"\n---\n본문\n',
+        "---\nid: fx\n---\n",
     ],
 )
-def test_load_prompt_rejects_bad_header(tmp_path, text):
-    (tmp_path / "demo.md").write_text(text, encoding="utf-8")
-    cfg = load_config(DEFAULT, overrides={"paths.prompts": str(tmp_path)})
-    with pytest.raises(ValueError, match="demo"):
-        load_prompt(cfg, "demo")
+def test_load_prompt_rejects_bad_front_matter(monkeypatch, tmp_path, text):
+    (tmp_path / "fx.md").write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match="프롬프트 fx"):
+        load_prompt(_with_prompt(monkeypatch, tmp_path), "fx")
 
 
-def test_guard_config_type_exported():
-    assert isinstance(load_config(DEFAULT), GuardConfig)
+def test_load_prompt_rejects_unmapped_name():
+    with pytest.raises(ValueError, match="prompts"):
+        load_prompt(load_config(DEFAULT), "input_judge")

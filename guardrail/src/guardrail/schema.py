@@ -22,6 +22,9 @@ Category = Literal[
 ]
 Decision = Literal["allow", "block"]
 
+MAX_RESPONSE_BYTES = 256 * 1024  # 응답 상한(미만이어야 함). 넘으면 unsupported를 비운다
+_CANDIDATE_KEY = b'"candidate_answer"'
+
 
 def decision_of(category: Category, block: frozenset[Category]) -> Decision:
     return "block" if category in block else "allow"
@@ -57,7 +60,8 @@ def parse_request(body: bytes) -> GuardRequest:
     except (ValueError, RecursionError):  # UnicodeDecodeError·JSONDecodeError는 ValueError
         obj = None
     if not isinstance(obj, dict):
-        return GuardRequest(messages=(), candidate_answer=None, has_candidate=False)
+        # 못 읽어도 키가 보이면 output을 낸다(GR-09). 남는 output은 채점기가 무시한다
+        return GuardRequest((), None, has_candidate=_CANDIDATE_KEY in body)
     answer = obj.get("candidate_answer")
     return GuardRequest(
         messages=_messages(obj.get("messages")),
@@ -66,14 +70,19 @@ def parse_request(body: bytes) -> GuardRequest:
     )
 
 
-MAX_RESPONSE_BYTES = 256 * 1024  # 응답 상한(미만이어야 함). 넘으면 unsupported를 비운다
-
-
 @dataclass(frozen=True)
 class OutputVerdict:
     grounded: bool
     unsupported: tuple[str, ...]
     safe: bool
+
+
+def _is_span(s: str) -> bool:
+    """계약: 빈 문자열 금지(minLength 1), UTF-8로 쓸 수 있어야 함(짝 없는 surrogate 제외)."""
+    try:
+        return bool(s) and bool(s.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -88,7 +97,7 @@ class GuardResponse:
         if self.output is not None:
             body["output"] = {
                 "grounded": self.output.grounded,
-                "unsupported": list(self.output.unsupported),
+                "unsupported": [s for s in self.output.unsupported if _is_span(s)],
                 "safe": self.output.safe,
                 "category": self.category,
             }

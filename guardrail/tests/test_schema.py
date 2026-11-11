@@ -4,13 +4,24 @@ import dataclasses
 import json
 from typing import get_args
 
+import hypothesis.strategies as st
 import jsonschema
 import pytest
+from hypothesis import given, settings
+from strategies import json_values
 
 import guardrail
 from guardrail.config import ROOT, load_config
 from guardrail.guard import Judgement
-from guardrail.schema import Category, GuardResponse, OutputVerdict, decision_of
+from guardrail.schema import (
+    MAX_RESPONSE_BYTES,
+    Category,
+    GuardResponse,
+    Message,
+    OutputVerdict,
+    decision_of,
+    parse_request,
+)
 from guardrail.signals import Signals
 
 CATEGORIES: tuple[str, ...] = get_args(Category)
@@ -82,11 +93,6 @@ def test_package_reexports():
 
 # --- S1.2 parse_request·to_json 상한 (GR-01, GR-09) ---
 
-import hypothesis.strategies as st  # noqa: E402
-from hypothesis import given, settings  # noqa: E402
-
-from guardrail.schema import MAX_RESPONSE_BYTES, Message, parse_request  # noqa: E402
-
 
 @pytest.mark.parametrize(
     "body",
@@ -149,15 +155,8 @@ def test_parse_request_never_raises_on_bytes(body):
     parse_request(body)
 
 
-_json = st.recursive(
-    st.none() | st.booleans() | st.integers() | st.text(),
-    lambda c: st.lists(c, max_size=4) | st.dictionaries(st.text(max_size=8), c, max_size=4),
-    max_leaves=20,
-)
-
-
 @settings(max_examples=300, deadline=None)
-@given(st.dictionaries(st.sampled_from(["messages", "candidate_answer", "x"]), _json))
+@given(st.dictionaries(st.sampled_from(["messages", "candidate_answer", "x"]), json_values))
 def test_parse_request_never_raises_on_json(obj):
     parse_request(json.dumps(obj).encode())
 
@@ -173,3 +172,17 @@ def test_to_json_drops_unsupported_over_size_cap():
 def test_to_json_keeps_unsupported_under_cap():
     body = GuardResponse("normal", OutputVerdict(False, ("a",) * 10, True)).to_json(BLOCK)
     assert body["output"]["unsupported"] == ["a"] * 10
+
+
+@pytest.mark.parametrize("body", [b'{"candidate_answer": "x"', b'\xff"candidate_answer"'])
+def test_parse_request_broken_json_with_candidate_key_keeps_output(body):
+    req = parse_request(body)
+    assert req.messages == () and req.has_candidate and req.candidate_answer is None
+
+
+def test_to_json_drops_empty_and_unencodable_spans():
+    lone = chr(0xD800)  # 짝 없는 surrogate: json.loads는 받지만 UTF-8로 못 씀
+    out = OutputVerdict(False, ("", lone, "ok", f"a{lone}b"), True)
+    body = GuardResponse("normal", out).to_json(BLOCK)
+    assert body["output"]["unsupported"] == ["ok"]
+    json.dumps(body, ensure_ascii=False).encode()

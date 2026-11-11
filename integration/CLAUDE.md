@@ -12,7 +12,7 @@
 ## 소유 범위
 - **만든다**: `integration/` · `harness/` · `config/` · `tests/integration/` · 루트 `app.py` · 루트 `pyproject.toml`(uv workspace) · `.github/workflows/integration-ci.yml` · `docs/PRD.md`
 - **건드리지 않는다**: `guardrail/**`(가드), `tutor/**`(튜터), `competition/**`(배포 원본). 필요한 변경은 해당 PR · 이슈에 사실 + 요청으로 남긴다.
-- **import만 한다**: 가드 `guardrail.server.create_app` · `guardrail.schema.Category` · `decision_of` · `guardrail.clusters.build_clusters` · `guardrail.eval.score`, 튜터 `tutor.router` · `tutor.TUTOR_DEFAULT` · `tutor.startup` · `retrieve()`.
+- **import만 한다**: 가드 `guardrail.server.create_app` · `guardrail.schema.Category` · `decision_of` · `guardrail.eval.cv.load_splits` · `train_rows` · `guardrail.eval.score`, 튜터 `tutor.router` · `tutor.TUTOR_DEFAULT` · `tutor.startup` · `retrieve()`.
 
 ## 합의된 구조 (PRD §3 · IN-05, 가드 #92)
 - 루트 `app.py`는 한 줄: `create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])`. 인증 · 메타 로그 · 예외→200 · lifespan은 가드 골격.
@@ -32,7 +32,7 @@
 - 인용 F1은 정답 근거가 있는 문항만 채점(74행). 근거 충실은 **우리가 인용한 섹션 원문만** 근거로 본다(83행) → 과목 사실을 말하면서 인용을 비우면 전부 근거 없음.
 - `span_f1`은 문자 다중집합 F1. 판정 실패가 튜터 문항의 5%를 넘으면 실패 문항 전부 0점.
 - 가드 `eval/score.score_responses`는 **가드 200행만** 채점한다. 튜터 채점은 하네스가 `scoring.score_tutor` + `score_local.as_scoring_input`을 직접 부른다.
-- 가드 `splits/v1.json` 홀드아웃은 가드 40행 · 튜터 0행. 튜터 홀드아웃은 같은 규칙(`build_clusters`, 3-gram Jaccard 0.5, seed 13)으로 `harness/splits/tutor-v1.json`을 만든다. 홀드아웃 실행은 동결 전 최대 3회.
+- 분할은 가드 `guardrail/src/guardrail/eval/splits/v1.json` **하나**를 두 트랙이 같이 쓴다(홀드아웃 가드 40 + 튜터 40, 폴드마다 32 + 32, `load_splits` · `train_rows(split, holdout=True)`). 따로 분할 파일을 만들지 않는다 — 가드 kNN · LR이 튜터 행도 학습해서 분할이 둘이면 홀드아웃이 샌다. 홀드아웃 실행은 동결 전 최대 3회.
 
 ## 명령 (저장소 루트에서)
 - `uv sync --locked` · `uv run pytest tests/integration` · `uv run ruff check .` · `uv run ruff format .`

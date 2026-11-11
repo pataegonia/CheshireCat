@@ -126,7 +126,7 @@ CheshireCat/
 | I9 | 응답 전 자기 판정 | 생성 직후 `judge_output` → 구간 든 문장 삭제, safe=false면 폐기, 재생성 없음 | SPEC §4; `/guard`는 튜터를 못 막음 | nano +1회 +2.6s | 삭제 후 빈 답변 비율 `[측정]` |
 | I10 | 투기 실행(생성 ∥ 판정) | 안 함 | block 28%에서 호출 낭비(+90/채점) | — | p95 >15s면 켬 `[측정]` |
 | I11 | T1 질의 이해 | 생성에 합침(별도 호출 없음) ✅ 튜터 v2 동일 | 체인 호출 감소 | −2.6s | — |
-| I12 | 홀드아웃 | 가드 `splits/v1.json`(가드 40행, 튜터 0행) + 통합 `splits/tutor-v1.json`(같은 규칙) | 두 트랙이 같은 규칙의 분할을 봐야 총점 비교 가능 | — | 리더 #39 리뷰 1번: 묶음을 의도 단위(근거 섹션 + 정답 사실)로 바꿔야 kNN 누수 방지 — 가드 #49와 같이 수정 |
+| I12 | 홀드아웃 | 가드 `splits/v1.json` **공유**(홀드아웃 가드 40 + 튜터 40, 폴드마다 가드 32 + 튜터 32, 묶음 329개, #90 `ff159f5`) | 파일이 하나여야 `train_rows(split, holdout=True)`로 두 트랙이 같은 행을 뺀다 — 가드 kNN · LR이 튜터 행까지 학습하므로 분할이 둘이면 튜터 홀드아웃이 가드 학습 · 튜닝에 샌다 | — | 리더 결정 ✅: Jaccard ≥0.5 또는 튜터 정답 사실 공유면 같은 묶음, 튜터 홀드아웃 20%(10개 범주 모두) |
 | I13 | 튜터 범주 판정 주체 | **v1 = ⓒ 가드 `classify` ∥ 주 호출, 공격이면 표 우선**(튜터 제안), 동결은 11/18 측정(§3-1 관문 → 튜터 점수 → 동점 규칙) | ⓒ 재현율 ≥ max(ⓐ, ⓑ), 지연 ⓑ 수준; 공격 문항은 응하면 0점 | 템플릿 경로 주 호출 1회 낭비(≈+120/채점) | 11/18 하네스: 후보 ⓐ · ⓑ · ⓒ 표 |
 
 ---
@@ -203,9 +203,9 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마, `/tutor/` 3xx 없음, 계약 테스트 green.
 
 ### IN-06 통합 하네스 `harness/run_public.py` (P0)
-- 가드 #49(#90) `guardrail.eval.score.score_responses`는 **가드 200행만** 채점하고, `splits/v1.json` 홀드아웃은 **가드 40행 · 튜터 0행**이다. 튜터 채점은 통합이 `competition/grader/scoring.score_tutor` + `score_local.as_scoring_input`을 직접 부르고(판정 LLM 포함), 튜터 홀드아웃은 같은 규칙(3-gram Jaccard 0.5 · seed 13 · 버튼 접두 제외, 가드 `clusters.build_clusters` import)으로 `harness/splits/tutor-v1.json`을 만든다. 호출 상한은 가드 `LLM.calls` + 튜터 카운터 합. 추가: 튜터 행 채점(action · 인용 F1 · nano facts/faithful 참고치), **총점 합산**, 프리셋 반복 3회, 실패 4분류(오탐 / 미탐 / 하드코딩 의심 / 오류 · 형식), 오탐률 · 미탐률 분모 분리, 범주별 표, 단계별 지연 p50 · p95 · p99, 호출 수, 실행 전 예상 호출 수 · 상한, **recall@1 · @3 · @5 · 놓친 행**(IN-02), **기본값 경로로 떨어진 문항의 정답 action 분포**(튜터 TU-12 기본값 선택 근거).
+- 가드 #90(main `ff159f5`) `guardrail.eval.score.score_responses`는 **가드 200행만** 채점하므로 튜터 채점은 통합이 `competition/grader/scoring.score_tutor` + `score_local.as_scoring_input`을 직접 부른다(판정 LLM 포함). 분할은 가드 `splits/v1.json` **하나**를 튜터 교차 검증 · 홀드아웃에도 그대로 쓴다(`load_splits` · `train_rows(split, holdout=True)`). 호출 상한은 가드 `LLM.calls` + 튜터 카운터 합. 추가: 튜터 행 채점(action · 인용 F1 · nano facts/faithful 참고치), **총점 합산**, 프리셋 반복 3회, 실패 4분류(오탐 / 미탐 / 하드코딩 의심 / 오류 · 형식), 오탐률 · 미탐률 분모 분리, 범주별 표, 단계별 지연 p50 · p95 · p99, 호출 수, 실행 전 예상 호출 수 · 상한, **recall@1 · @3 · @5 · 놓친 행**(IN-02), **기본값 경로로 떨어진 문항의 정답 action 분포**(튜터 TU-12 기본값 선택 근거).
 - ablation 프리셋 `config/ablation/`: 튜터 TU-14 토글(`name_dict` · `fewshot` · `action_from_category` · `signals` · `verify` · `guard_classify` · `embedding` · `rerank` · `vote`)과 가드 토글을 같은 이름으로 묶은 프리셋 — `baseline` · `+retrieval` · `+signals` · `+fewshot` · `+verify` · `full`.
-- 홀드아웃은 프롬프트 · 설정 고정 뒤 **최대 3회**(가드 ADR-0006과 동일 규율). 묶음 기준은 의도 단위(근거 섹션 + 정답 사실)로 — 지금 기준은 정답 사실이 같은 40행 중 36행이 갈려 kNN few-shot이 정답을 누설(리더 #39 리뷰 1번). 가드 #49 `splits/v1.json`과 함께 바꾼다.
+- 홀드아웃은 프롬프트 · 설정 고정 뒤 **최대 3회**(가드 ADR-0006과 동일 규율). 묶음 기준은 #90에서 바뀌었다 — 마지막 발화 3-gram Jaccard ≥0.5 **또는** 튜터 정답 사실 공유면 같은 묶음(정답 사실이 서로 다른 칸으로 갈린 행 0, kNN few-shot 누수 해소).
 - **I13 비교(11/18까지)**: `guard_classify` on/off로 공격 4범주 재현율 · 정상 오차단률 · p95 · 호출 수를 한 표에. 레드팀 변형(IN-08) 포함.
 - **수용 기준**: 프리셋별 총점 표 1장, 로컬 채점기와 차 0.
 
@@ -305,7 +305,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - 답이 이미 있는 것(가드 리뷰): 유사 예시 삽입 → SPEC §7.1 허용 / 인용 비교 → `scoring.py` 섹션 ID 정확 일치 / 동시성 → SPEC §3 "최대 64개". 튜터 §11-1 · 가드 §11-1과 합쳐 한 번에 보낸다(IN-12).
 
 ### 10-2. 회의 `[회의]`
-I1 검색 소유 ✅ · 역할 분담(§5-0) ✅ 튜터 수용 · action 표 주인 ✅ 통합 · 조립 = `create_app` 주입 인자 3개(가드 확인 대기) · uv workspace(리더 안, 루트 `pyproject.toml` 주인 = 통합) · 설정 파일 위치 · 형식(`config/` vs `tutor/configs/`) · I13 측정 기준 합의 · 홀드아웃 묶음 기준 변경(I12, 가드 #49)
+I1 검색 소유 ✅ · 역할 분담(§5-0) ✅ 튜터 수용 · action 표 주인 ✅ 통합 · 조립 = `create_app` 주입 인자 3개 ✅ #92 `fd079e7` · uv workspace(리더 안, 루트 `pyproject.toml` 주인 = 통합) · 설정 파일 위치 · 형식(`config/` vs `tutor/configs/`) · I13 측정 기준 합의 · 홀드아웃 묶음 기준 ✅ #90 `ff159f5`
 
 ---
 
@@ -315,7 +315,7 @@ I1 검색 소유 ✅ · 역할 분담(§5-0) ✅ 튜터 수용 · action 표 주
 |---|---|---|
 | #47 서버 골격 | `create_app(guard_factory, tutor_router=, defaults=, startups=)` · 인증 · 메타 로그 · 경로별 기본값 | `app.py` 한 줄 호출. 인자 3개 요청(IN-05) |
 | #48 LLM 게이트 | `llm.complete()` · `slot()` · `probe()` | 튜터 호출이 같은 게이트 사용 |
-| #49 채점 · 분할(#90) | `eval/score.py`(가드만) · `clusters.py` · `splits/v1.json`(튜터 홀드아웃 0) | IN-06이 `build_clusters` import, 튜터 분할 · 채점은 통합 |
+| #49 채점 · 분할(#90 ✅ main) | `eval/score.py`(가드만) · `eval/cv.py` · `splits/v1.json`(홀드아웃 가드 40 · 튜터 40) | IN-06이 `load_splits` · `train_rows` import, 튜터 채점은 통합 |
 | #50 첫 제출 | 런박스 절차 · 재기동 | IN-10 체크리스트와 합침 |
 | #51 nano 실측 | 지연 p50 · p95, 파라미터 수용 | §6 예산표 교체 |
 | interface.md 46~47행 | `classify` · `decision_of` · `judge_output(category=)` | IN-01 · IN-04. `format_material`은 우선순위 낮음 |

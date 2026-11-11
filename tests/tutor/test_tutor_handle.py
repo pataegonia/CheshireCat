@@ -80,6 +80,19 @@ def test_serve_passes_the_given_state(monkeypatch):  # 로컬 측정이 설정�
     assert seen == [custom]
 
 
+def test_handle_gives_the_default_when_startup_fails(monkeypatch, tmp_path):
+    # 설정이 깨져 기동(prepare)이 실패해도 예외 없이 기본값(TU-01, #107 리뷰). @cache는 예외를
+    # 남기지 않으니 부를 때마다 다시 시도하고, 그때마다 기본값이다
+    pipeline.default_state.cache_clear()
+    monkeypatch.setenv("TUTOR_CONFIG", str(tmp_path / "missing.yaml"))
+    try:
+        for _ in range(2):
+            body = {"messages": [{"role": "user", "content": "q"}]}
+            assert run(tutor.handle(body)) == TUTOR_DEFAULT
+    finally:
+        pipeline.default_state.cache_clear()  # 다음 테스트는 제대로 된 설정으로 다시 만든다
+
+
 def test_handle_gives_the_default_when_respond_hangs(monkeypatch):  # 하네스가 매달리지 않는다
     monkeypatch.setattr(budget, "DEFAULT_BUDGET_S", 0.05)
     monkeypatch.setattr(budget, "BACKSTOP_MARGIN_S", 0.0)

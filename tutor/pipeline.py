@@ -61,7 +61,12 @@ async def serve(body: Any, *, state: Any) -> dict[str, Any]:
 async def handle(body: dict[str, Any]) -> dict[str, Any]:
     """TU-01 계약: 어떤 입력에도 예외 없이 튜터 규격 응답. 헤더는 받지 않는다(TU-18).
 
-    프로세스 안에서 부르는 쪽(하네스 등)을 위한 계약이고 기본 state로 serve를 부른다. HTTP
-    라우터는 오류 클래스 이름을 로그에 남기려고 respond를 직접 부른다.
+    프로세스 안에서 부르는 쪽(하네스 등)을 위한 계약이고 기본 state로 serve를 부른다. 기본 state를
+    만들지 못하면(설정·색인 실패) 기본값이다. HTTP 라우터는 오류 클래스 이름을 로그에 남기려고
+    respond를 직접 부른다.
     """
-    return await serve(body, state=default_state())
+    try:
+        state = default_state()
+    except Exception:  # 기동 실패도 기본값. 메시지는 남기지 않는다(TU-15)
+        return default_response()
+    return await serve(body, state=state)

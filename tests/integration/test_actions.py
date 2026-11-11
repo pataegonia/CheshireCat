@@ -1,6 +1,6 @@
 """I1.2 범주→action 표(PRD IN-03): 공개 세트 200/200, YAML 10범주, 모르는 범주 → fallback."""
 
-import importlib
+import importlib.util
 import json
 from collections import Counter
 from pathlib import Path
@@ -150,17 +150,19 @@ def test_load_fails_when_not_a_mapping(tmp_path):
 
 
 def test_import_fails_when_a_category_is_missing(monkeypatch):
-    """표가 깨져 있으면 서버가 뜨지 않는다(import 시점 실패)."""
+    """표가 깨져 있으면 서버가 뜨지 않는다(import 시점 실패).
+
+    실제 모듈을 reload하면 `ActionRule` 같은 클래스가 새로 만들어져 다른 테스트의 isinstance가
+    순서에 따라 깨진다. 그래서 같은 파일을 다른 이름의 모듈로 한 번 더 실행해 본다.
+    """
     raw = _raw_table()
     del raw["rules"]["low_signal_input"]
-    try:
-        with monkeypatch.context() as m:
-            m.setattr(yaml, "safe_load", lambda *_a, **_k: raw)
-            with pytest.raises(ValueError, match="low_signal_input"):
-                importlib.reload(actions)
-    finally:
-        importlib.reload(actions)
-    assert set(actions.load_actions()) == set(CATEGORIES)
+    spec = importlib.util.spec_from_file_location("integration_actions_probe", actions.__file__)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    monkeypatch.setattr(yaml, "safe_load", lambda *_a, **_k: raw)
+    with pytest.raises(ValueError, match="low_signal_input"):
+        spec.loader.exec_module(probe)
 
 
 # ── 모르는 범주 → fallback_action ─────────────────────────────────────────

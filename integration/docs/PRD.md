@@ -126,7 +126,7 @@ CheshireCat/
 | I9 | 응답 전 자기 판정 | 생성 직후 `judge_output` → 구간 든 문장 삭제, safe=false면 폐기, 재생성 없음 | SPEC §4; `/guard`는 튜터를 못 막음 | nano +1회 +2.6s | 삭제 후 빈 답변 비율 `[측정]` |
 | I10 | 투기 실행(생성 ∥ 판정) | 안 함 | block 28%에서 호출 낭비(+90/채점) | — | p95 >15s면 켬 `[측정]` |
 | I11 | T1 질의 이해 | 생성에 합침(별도 호출 없음) ✅ 튜터 v2 동일 | 체인 호출 감소 | −2.6s | — |
-| I12 | 홀드아웃 | 가드 #49 `splits/v1.json` **공유**(가드 20% 묶음 + 튜터 행) | 두 트랙이 같은 분할을 봐야 총점 비교 가능 | — | 리더 #39 리뷰 1번: 묶음을 의도 단위(근거 섹션 + 정답 사실)로 바꿔야 kNN 누수 방지 — 가드 #49와 같이 수정 |
+| I12 | 홀드아웃 | 가드 `splits/v1.json`(가드 40행, 튜터 0행) + 통합 `splits/tutor-v1.json`(같은 규칙) | 두 트랙이 같은 규칙의 분할을 봐야 총점 비교 가능 | — | 리더 #39 리뷰 1번: 묶음을 의도 단위(근거 섹션 + 정답 사실)로 바꿔야 kNN 누수 방지 — 가드 #49와 같이 수정 |
 | I13 | 튜터 범주 판정 주체 | **v1 = ⓒ 가드 `classify` ∥ 주 호출, 공격이면 표 우선**(튜터 제안), 동결은 11/18 측정(§3-1 관문 → 튜터 점수 → 동점 규칙) | ⓒ 재현율 ≥ max(ⓐ, ⓑ), 지연 ⓑ 수준; 공격 문항은 응하면 0점 | 템플릿 경로 주 호출 1회 낭비(≈+120/채점) | 11/18 하네스: 후보 ⓐ · ⓑ · ⓒ 표 |
 
 ---
@@ -194,15 +194,16 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **수용 기준**: quote 검증 100%, citations ⊆ 실존, 인용 F1 `[측정]`.
 
 ### IN-05 튜터 라우터 조립 (P0)
-- **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입**(리더 리뷰 1번, 이슈 #60). 루트 `app.py`는 `app = create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
+- **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입** ✅ 가드 #92 `8fd8f5f`(리더 #92 리뷰로 요청, 테스트 5개 포함). 루트 `app.py`는 `app = create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
 - **경로별 기본값**: 예외 · 422 처리기는 FastAPI에서 앱 수준이므로(가드 지적) `create_app` 안의 처리기가 `request.url.path`로 `/guard` → GR-09 기본값, `/tutor` → `defaults["/tutor"]`를 고른다. 튜터 라우터는 그래도 자기 예외를 안에서 잡는다(TU-01 ✅) — 앱 처리기는 이중 안전망.
 - 공유 객체(`Guard` · `KbIndex` · `llm` 게이트)는 `create_app` lifespan이 만들어 `app.state`에 두고, 튜터 라우터는 `request.app.state`로 받는다. 가드에 요청하는 것: `tutor_router` · `defaults` · `startups` 인자 3개(#47 코멘트).
 - 라우터 흐름 = §3-1. 시간 예산 · 판정 생략 · 생성 실패 기본값은 §3-1의 설정 키 셋(`budget_s` · `judge_skip_s` · `fallback_action`).
-- **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 처리 중 전역 쓰기 없음, `session_id` · 헤더는 인증 외 미사용.
+- 가드 골격이 `/tutor`에는 해 주지 않는 것 — 튜터 라우터가 안에서 건다: `asyncio.timeout(budget_s)`(가드 `/guard`는 `budget_s + 5` 안전망), 본문 상한(가드 `_read_body` 4MiB는 비공개), `request.body()` 직접 파싱(pydantic 본문 모델은 `Content-Type` 없으면 422 → 기본값, 가드 #92 코멘트).
+- **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, Content-Type 없는 요청 200, 매달린 생성 → `budget_s` 안에 200 기본값, 5MiB 본문 → 200 기본값, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 처리 중 전역 쓰기 없음, `session_id` · 헤더는 인증 외 미사용.
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마, `/tutor/` 3xx 없음, 계약 테스트 green.
 
 ### IN-06 통합 하네스 `harness/run_public.py` (P0)
-- 가드 #49의 `guardrail.eval.score`(= `score_local` import)와 `splits/v1.json`을 **그대로 쓴다**. 추가: 튜터 행 채점(action · 인용 F1 · nano facts/faithful 참고치), **총점 합산**, 프리셋 반복 3회, 실패 4분류(오탐 / 미탐 / 하드코딩 의심 / 오류 · 형식), 오탐률 · 미탐률 분모 분리, 범주별 표, 단계별 지연 p50 · p95 · p99, 호출 수, 실행 전 예상 호출 수 · 상한, **recall@1 · @3 · @5 · 놓친 행**(IN-02), **기본값 경로로 떨어진 문항의 정답 action 분포**(튜터 TU-12 기본값 선택 근거).
+- 가드 #49(#90) `guardrail.eval.score.score_responses`는 **가드 200행만** 채점하고, `splits/v1.json` 홀드아웃은 **가드 40행 · 튜터 0행**이다. 튜터 채점은 통합이 `competition/grader/scoring.score_tutor` + `score_local.as_scoring_input`을 직접 부르고(판정 LLM 포함), 튜터 홀드아웃은 같은 규칙(3-gram Jaccard 0.5 · seed 13 · 버튼 접두 제외, 가드 `clusters.build_clusters` import)으로 `harness/splits/tutor-v1.json`을 만든다. 호출 상한은 가드 `LLM.calls` + 튜터 카운터 합. 추가 지표는 아래.
 - ablation 프리셋 `config/ablation/`: 튜터 TU-14 토글(`name_dict` · `fewshot` · `action_from_category` · `signals` · `verify` · `guard_classify` · `embedding` · `rerank` · `vote`)과 가드 토글을 같은 이름으로 묶은 프리셋 — `baseline` · `+retrieval` · `+signals` · `+fewshot` · `+verify` · `full`.
 - 홀드아웃은 프롬프트 · 설정 고정 뒤 **최대 3회**(가드 ADR-0006과 동일 규율). 묶음 기준은 의도 단위(근거 섹션 + 정답 사실)로 — 지금 기준은 정답 사실이 같은 40행 중 36행이 갈려 kNN few-shot이 정답을 누설(리더 #39 리뷰 1번). 가드 #49 `splits/v1.json`과 함께 바꾼다.
 - **I13 비교(11/18까지)**: `guard_classify` on/off로 공격 4범주 재현율 · 정상 오차단률 · p95 · 호출 수를 한 표에. 레드팀 변형(IN-08) 포함.
@@ -314,7 +315,7 @@ I1 검색 소유 ✅ · 역할 분담(§5-0) ✅ 튜터 수용 · action 표 주
 |---|---|---|
 | #47 서버 골격 | `create_app(guard_factory, tutor_router=, defaults=, startups=)` · 인증 · 메타 로그 · 경로별 기본값 | `app.py` 한 줄 호출. 인자 3개 요청(IN-05) |
 | #48 LLM 게이트 | `llm.complete()` · `slot()` · `probe()` | 튜터 호출이 같은 게이트 사용 |
-| #49 채점 · 분할 | `eval/score.py` · `splits/v1.json` | IN-06이 import, 분할 공유(I12) |
+| #49 채점 · 분할(#90) | `eval/score.py`(가드만) · `clusters.py` · `splits/v1.json`(튜터 홀드아웃 0) | IN-06이 `build_clusters` import, 튜터 분할 · 채점은 통합 |
 | #50 첫 제출 | 런박스 절차 · 재기동 | IN-10 체크리스트와 합침 |
 | #51 nano 실측 | 지연 p50 · p95, 파라미터 수용 | §6 예산표 교체 |
 | interface.md 46~47행 | `classify` · `decision_of` · `judge_output(category=)` | IN-01 · IN-04. `format_material`은 우선순위 낮음 |

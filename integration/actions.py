@@ -1,17 +1,32 @@
-"""범주 → action 표 로더 (통합 PRD IN-03).
+"""범주 → action 표 로더(통합 PRD IN-03)와 결정적 수정 `finalize`(IN-04).
 
-원본은 `config/actions.yaml` 하나다. 이 모듈은 import 시점에 표를 읽어 검증하므로, 범주가 빠졌거나
-값이 틀리면 서버가 뜨지 않는다. 표는 설정이지 요청 사이 상태가 아니다(읽은 뒤 바뀌지 않는다).
+표의 원본은 `config/actions.yaml` 하나다. 이 모듈은 import 시점에 표를 읽어 검증하므로, 범주가
+빠졌거나 값이 틀리면 서버가 뜨지 않는다. 표는 설정이지 요청 사이 상태가 아니다.
+
+`finalize`는 LLM을 부르지 않는 마지막 단계다. 고정 문장 문구는 튜터 소유라 여기 적지 않고
+`FinalizeConfig`로 받는다. 요청 사이에 아무것도 저장하지 않는다.
 """
 
+import unicodedata
+from collections.abc import Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, get_args
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from guardrail.schema import OutputVerdict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from integration.contracts import ACTIONS, Action, Category
+from integration.contracts import (
+    ACTIONS,
+    SECTION_IDS,
+    SID_PATTERN,
+    Action,
+    Category,
+    Section,
+    Sentence,
+    TutorResult,
+)
 
 __all__ = [
     "ACTIONS_PATH",
@@ -20,7 +35,9 @@ __all__ = [
     "RUNTIME_PATH",
     "ActionRule",
     "ActionVariant",
+    "FinalizeConfig",
     "action_for",
+    "finalize",
     "load_actions",
     "load_fallback_action",
 ]
@@ -117,3 +134,156 @@ def action_for(category: object) -> ActionRule:
     if isinstance(category, str):
         return _TABLE.get(category, _FALLBACK_RULE)
     return _FALLBACK_RULE
+
+
+# ── 결정적 수정 (IN-04) ────────────────────────────────────────────────────
+
+# competition/grader/scoring.py의 PUNCT · normalize와 같은 값이다. 서버가 채점 폴더에 기대지 않도록
+# 옮겨 적었고, 같은지는 테스트가 교재 48개 섹션으로 확인한다.
+_PUNCT_TABLE = str.maketrans("", "", ".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
+# 최종 action이 이 넷이면 범주와 상관없이 인용하지 않는다.
+_NO_CITE_ACTIONS: frozenset[str] = frozenset({"clarify", "redirect", "refuse", "escalate"})
+_KEPT_CONTROLS = frozenset("\n\t")
+
+
+class FinalizeConfig(BaseModel):
+    """`finalize` 설정. 고정 문장 두 개는 튜터가 넘긴다(기본값 없음)."""
+
+    model_config = _FROZEN
+
+    unverified_notice: str  # 남은 claim이 0일 때 덧붙이는 안내
+    refuse_text: str  # safe=false일 때 답변 전체를 대신하는 거절 문장
+    max_citations: int = Field(default=1, ge=0)
+    max_answer_chars: int = Field(default=4000, ge=1)
+
+
+def _normalize(text: str) -> str:
+    text = unicodedata.normalize("NFKC", str(text)).lower()
+    # split()은 str.isspace()와 같은 공백 정의로 자른다. 글자마다 도는 것보다 빠르다.
+    return "".join(text.split()).translate(_PUNCT_TABLE)
+
+
+def _is_real_sid(sid: str) -> bool:
+    return SID_PATTERN.fullmatch(sid) is not None and sid in SECTION_IDS
+
+
+def _verified_sids(sentence: Sentence, retrieved: Sequence[Section]) -> list[str]:
+    """인용 문구가 그 섹션 원문(본문 + 표)에 실제로 있는 evidence의 sid."""
+    out: list[str] = []
+    for ev in sentence.evidence:
+        if not _is_real_sid(ev.sid):
+            continue
+        section = next((s for s in retrieved if s.id == ev.sid), None)
+        quote = _normalize(ev.quote)
+        if section is None or not quote:
+            continue
+        if quote in _normalize("\n".join([section.text, *section.tables])):
+            out.append(ev.sid)
+    return out
+
+
+def _unsupported_indexes(sentences: Sequence[Sentence], spans: Sequence[str]) -> set[int]:
+    """unsupported 구간이 걸친 문장 번호. 구간이 문장 경계를 넘으면 걸친 문장 전부."""
+    parts = [_normalize(s.text) for s in sentences]
+    joined = "".join(parts)
+    bounds: list[tuple[int, int]] = []
+    start = 0
+    for part in parts:
+        bounds.append((start, start + len(part)))
+        start += len(part)
+    hit: set[int] = set()
+    for span in spans:
+        needle = _normalize(span)
+        if not needle:
+            continue
+        at = joined.find(needle)
+        while at != -1:
+            end = at + len(needle)
+            hit.update(i for i, (lo, hi) in enumerate(bounds) if lo < end and at < hi)
+            at = joined.find(needle, at + 1)
+    return hit
+
+
+def _rank_citations(
+    sid_lists: Sequence[Sequence[str]], retrieved: Sequence[Section], *, fill: bool, limit: int
+) -> list[str]:
+    """많이 인용된 섹션 먼저, 같으면 검색 순위. `fill`이면 비었을 때 검색 1위로 채운다."""
+    rank = {s.id: i for i, s in reversed(list(enumerate(retrieved)))}
+    counts: dict[str, int] = {}
+    for sids in sid_lists:
+        for sid in dict.fromkeys(sids):
+            counts[sid] = counts.get(sid, 0) + 1
+    ordered = sorted(counts, key=lambda sid: (-counts[sid], rank[sid]))
+    if not ordered and fill:
+        ordered = [s.id for s in retrieved if _is_real_sid(s.id)][:1]
+    return ordered[:limit]
+
+
+def _clean(text: str) -> str:
+    """제어 문자(줄바꿈 · 탭 제외)와 짝 없는 surrogate를 지운다."""
+    return "".join(
+        ch for ch in text if ch in _KEPT_CONTROLS or unicodedata.category(ch) not in ("Cc", "Cs")
+    )
+
+
+def _join(texts: Sequence[str]) -> str:
+    return _clean(" ".join(t for t in texts if t))
+
+
+def _cite_policy(rule: ActionRule, action: str) -> str:
+    """최종 action 기준의 인용 규칙: always | if_used | never."""
+    if action in _NO_CITE_ACTIONS:
+        return "never"
+    if action in rule.actions:
+        return rule.cite
+    return "if_used"  # 표에 없는 조합: claim이 실제로 쓴 섹션만
+
+
+def finalize(
+    sentences: Sequence[Sentence],
+    verdict: OutputVerdict | None,
+    retrieved: Sequence[Section],
+    rule: ActionRule,
+    cfg: FinalizeConfig,
+    *,
+    action: Action | None = None,
+) -> TutorResult:
+    """주 호출 문장 목록을 규격 응답으로 만든다(PRD IN-04). 입력을 바꾸지 않는다.
+
+    - `verdict`가 None(판정 생략 · 실패)이면 판정 단계만 건너뛴다.
+    - `retrieved`는 검색 순위 순서이고 비어 있을 수 있다.
+    - `action`은 주 호출 · 합치기 단계가 고른 값이다(harmful_content의 redirect 등). None이면
+      `rule.action`. 표와 다른 값이 와도 막지 않는다(표 강제는 튜터 설정).
+    - `safe=false`면 답변을 버리고 `cfg.refuse_text` + refuse를 낸다.
+    - 인용은 최종 action으로 정한다: clarify · redirect · refuse · escalate는 `[]`, 표에 있는
+      조합이면 `rule.cite`, 그 밖에는 if_used.
+    - 길이 상한을 넘으면 뒤 문장부터 통째로 빼고, 인용은 남은 문장으로 계산한다. 첫 문장 하나로도
+      넘을 때만 문자 수로 자른다.
+    - 빈 답변은 그대로 돌려준다. action별 고정 문장으로 채우는 것은 튜터 후처리(TU-07) 몫이다.
+    """
+    limit = cfg.max_answer_chars
+    if verdict is not None and not verdict.safe:
+        return TutorResult(answer=_clean(cfg.refuse_text)[:limit], action="refuse", citations=[])
+
+    final: Action = rule.action if action is None else action
+    policy = _cite_policy(rule, final)
+    fill = policy == "always"
+    dropped = _unsupported_indexes(sentences, verdict.unsupported) if verdict is not None else set()
+    kept = [i for i in range(len(sentences)) if i not in dropped]
+
+    while True:
+        texts = [sentences[i].text for i in kept]
+        if fill and not any(sentences[i].kind == "claim" for i in kept):
+            texts.append(cfg.unverified_notice)
+        answer = _join(texts)
+        if len(answer) <= limit or len(kept) <= 1:
+            break
+        kept.pop()
+
+    citations: list[str] = []
+    if policy != "never":
+        sids = [
+            _verified_sids(sentences[i], retrieved) for i in kept if sentences[i].kind == "claim"
+        ]
+        citations = _rank_citations(sids, retrieved, fill=fill, limit=cfg.max_citations)
+    return TutorResult(answer=answer[:limit], action=final, citations=citations)

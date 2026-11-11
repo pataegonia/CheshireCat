@@ -15,6 +15,8 @@ _CITATION_RE: Final = re.compile(CITATION_PATTERN)
 
 # TU-12 잠정 기본값: 요청을 못 읽었거나 답을 못 만들었을 때. 문항과 무관한 일반 문장이고
 # 전화번호·기관명은 넣지 않는다. 실패 때의 기본 action은 측정 뒤 fallback_action으로 정한다.
+# TODO(#97 머지 뒤): 고정 문장 출처를 #97 tutor/answer/templates.py 하나로 모은다
+#   → TUTOR_DEFAULT = fixed_body(Fixed.CLARIFY) (TU-12, 템플릿 문구는 튜터 A 소유)
 CLARIFY_TEXT: Final = (
     "어떤 부분이 궁금한지 조금 더 자세히 알려 줄래요? "
     "질문을 구체적으로 적어 주면 수업 자료에서 찾아 도와줄게요."
@@ -37,14 +39,17 @@ def _encodable(text: str) -> str:
     return text.encode("utf-8", "replace").decode("utf-8")
 
 
-def finalize(resp: Any) -> dict[str, Any]:
-    """어떤 값이 와도 규격 응답 하나로 만든다. 모양이 틀리면 기본값이다.
+def ensure_contract(resp: Any) -> dict[str, Any]:
+    """마지막 형식 안전망: 어떤 값이 와도 규격 응답 하나로 만든다. 모양이 틀리면 기본값이다.
 
-    answer는 4,000자로 자르고, citations는 KB 섹션 ID 모양만 남기며, 규격에 없는 필드는 버린다.
+    튜터 후처리(#99, TU-07) 뒤에 돈다. action은 앞뒤 공백·대소문자를 정리해 보고, answer는
+    4,000자로 자르고, citations는 KB 섹션 ID 모양만 남기며, 규격에 없는 필드는 버린다.
     """
     if not isinstance(resp, dict):
         return default_response()
     answer, action, citations = resp.get("answer"), resp.get("action"), resp.get("citations")
+    if isinstance(action, str):
+        action = action.strip().lower()
     if not isinstance(answer, str) or action not in ACTIONS or not isinstance(citations, list):
         return default_response()
     return {

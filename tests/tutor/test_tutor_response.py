@@ -11,7 +11,7 @@ from tutor.runtime.response import (
     CLARIFY_TEXT,
     TUTOR_DEFAULT,
     default_response,
-    finalize,
+    ensure_contract,
 )
 
 
@@ -43,32 +43,38 @@ def test_default_response_is_a_fresh_copy():
         {},
         {"answer": "a", "action": "answer"},
         {"answer": 1, "action": "answer", "citations": []},
-        {"answer": "a", "action": "ANSWER", "citations": []},
         {"answer": "a", "action": ["answer"], "citations": []},
+        {"answer": "a", "action": "answers", "citations": []},
         {"answer": "a", "action": "answer", "citations": None},
         {"answer": "a", "action": "answer", "citations": "PY-01-01"},
     ],
 )
-def test_finalize_turns_bad_shapes_into_default(bad):
-    assert finalize(bad) == TUTOR_DEFAULT
+def test_ensure_contract_turns_bad_shapes_into_default(bad):
+    assert ensure_contract(bad) == TUTOR_DEFAULT
 
 
-def test_finalize_cuts_answer_at_4000_unicode_chars():
-    out = finalize({"answer": "가" * 5000, "action": "answer", "citations": []})
+@pytest.mark.parametrize("action", ["ANSWER", " answer", "Answer\n"])
+def test_action_spacing_and_case_are_normalized(action):  # 공백 하나로 좋은 답을 버리지 않는다
+    out = ensure_contract({"answer": "a", "action": action, "citations": []})
+    assert out == {"answer": "a", "action": "answer", "citations": []}
+
+
+def test_ensure_contract_cuts_answer_at_4000_unicode_chars():
+    out = ensure_contract({"answer": "가" * 5000, "action": "answer", "citations": []})
     assert ANSWER_MAX_CHARS == 4000
     assert len(out["answer"]) == 4000
     assert_contract(out)
 
 
-def test_finalize_keeps_only_spec_fields_and_string_citations():
-    out = finalize(
+def test_ensure_contract_keeps_only_spec_fields_and_string_citations():
+    out = ensure_contract(
         {"answer": "a", "action": "scaffold", "citations": ["PY-01-01", 3, None], "extra": 1}
     )
     assert out == {"answer": "a", "action": "scaffold", "citations": ["PY-01-01"]}
 
 
-def test_finalize_makes_lone_surrogates_encodable():
-    out = finalize({"answer": "a\ud800b", "action": "answer", "citations": ["\udc00"]})
+def test_ensure_contract_makes_lone_surrogates_encodable():
+    out = ensure_contract({"answer": "a\ud800b", "action": "answer", "citations": ["\udc00"]})
     out["answer"].encode("utf-8")
     assert out["citations"] == []
     assert_contract(out)
@@ -78,9 +84,9 @@ def test_citation_pattern_is_the_schema_pattern():
     assert CITATION_PATTERN == SCHEMA["properties"]["citations"]["items"]["pattern"]
 
 
-def test_finalize_drops_citations_that_are_not_kb_section_ids():
+def test_ensure_contract_drops_citations_that_are_not_kb_section_ids():
     wrong = ["FIN-01", "PY-01-01-table1", "PY-01-01.md", "py-01-01", "PY-01-01\n", "질문 내용"]
-    out = finalize({"answer": "a", "action": "answer", "citations": ["PY-01-01", *wrong]})
+    out = ensure_contract({"answer": "a", "action": "answer", "citations": ["PY-01-01", *wrong]})
     assert out["citations"] == ["PY-01-01"]
 
 

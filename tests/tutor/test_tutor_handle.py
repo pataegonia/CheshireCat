@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import time
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -9,6 +10,7 @@ from hypothesis import strategies as st
 import tutor
 from tests.tutor.tutor_testlib import assert_contract
 from tutor import pipeline
+from tutor.runtime import budget
 from tutor.runtime.response import TUTOR_DEFAULT
 
 json_values = st.recursive(
@@ -43,11 +45,37 @@ def test_handle_answers_a_normal_request_in_contract():
 
 
 def test_handle_never_raises_when_respond_fails(monkeypatch):
-    async def boom(body):
+    async def boom(body, **_):
         raise RuntimeError("요청 내용이 섞인 메시지")
 
     monkeypatch.setattr(pipeline, "respond", boom)
     assert run(tutor.handle({"messages": [{"role": "user", "content": "q"}]})) == TUTOR_DEFAULT
+
+
+def test_handle_passes_a_request_deadline(monkeypatch):
+    seen = []
+
+    async def capture(body, *, deadline):
+        seen.append(deadline - asyncio.get_running_loop().time())
+        return {"answer": "a", "action": " Answer ", "citations": []}
+
+    monkeypatch.setattr(pipeline, "respond", capture)
+    out = run(tutor.handle({"messages": []}))
+    assert out == {"answer": "a", "action": "answer", "citations": []}
+    assert 0 < seen[0] <= budget.DEFAULT_BUDGET_S
+
+
+def test_handle_gives_the_default_when_respond_hangs(monkeypatch):  # 하네스가 매달리지 않는다
+    monkeypatch.setattr(budget, "DEFAULT_BUDGET_S", 0.05)
+    monkeypatch.setattr(budget, "BACKSTOP_MARGIN_S", 0.0)
+
+    async def hang(body, **_):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(pipeline, "respond", hang)
+    started = time.perf_counter()
+    assert run(tutor.handle({"messages": [{"role": "user", "content": "q"}]})) == TUTOR_DEFAULT
+    assert time.perf_counter() - started < 2
 
 
 @settings(max_examples=150, deadline=None)

@@ -13,6 +13,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from tests.tutor.tutor_testlib import AUTH, COMPETITION, REPO, assert_contract, make_app
+from tutor.runtime import budget
 from tutor.runtime.response import CLARIFY_TEXT, TUTOR_DEFAULT
 
 # tutor.router는 APIRouter(통합이 쓰는 이름)라서 모듈은 import_module로 가져온다
@@ -124,7 +125,7 @@ def test_body_over_4mib_gets_default_and_logs_class_only(client, caplog):
 
 
 def test_handler_exception_gets_default_and_logs_class_only(client, caplog, monkeypatch):
-    async def boom(body):
+    async def boom(body, **_):
         raise ValueError(MARKER)
 
     monkeypatch.setattr(router_mod, "respond", boom)
@@ -142,9 +143,9 @@ def test_slow_handler_hits_the_deadline(monkeypatch, tmp_path, caplog):
     cfg = tmp_path / "guard.yaml"
     cfg.write_text(default_cfg.replace("budget_s: 20", "budget_s: 0.05"), "utf-8")
     monkeypatch.setenv("GUARD_CONFIG", str(cfg))
-    monkeypatch.setattr(router_mod, "BACKSTOP_MARGIN_S", 0.0)
+    monkeypatch.setattr(budget, "BACKSTOP_MARGIN_S", 0.0)
 
-    async def slow(body):
+    async def slow(body, **_):
         await asyncio.sleep(5)
 
     monkeypatch.setattr(router_mod, "respond", slow)
@@ -160,12 +161,12 @@ def test_slow_handler_hits_the_deadline(monkeypatch, tmp_path, caplog):
 
 
 class _State:
-    def __init__(self, budget):
-        self.cfg = types.SimpleNamespace(budget_s=budget)
+    def __init__(self, value):
+        self.cfg = types.SimpleNamespace(budget_s=value)
 
 
 @pytest.mark.parametrize(
-    ("budget", "expected"),
+    ("value", "expected"),
     [
         (20, "budget"),
         (100, "cap"),
@@ -178,19 +179,46 @@ class _State:
         (None, "default"),
     ],
 )
-def test_deadline_is_budget_plus_margin_capped_under_30s(budget, expected):
+def test_backstop_is_budget_plus_margin_capped_under_30s(value, expected):
     want = {
-        "budget": 20 + router_mod.BACKSTOP_MARGIN_S,
-        "cap": router_mod.DEADLINE_CAP_S,
-        "default": router_mod.DEFAULT_BUDGET_S + router_mod.BACKSTOP_MARGIN_S,
+        "budget": 20 + budget.BACKSTOP_MARGIN_S,
+        "cap": budget.DEADLINE_CAP_S,
+        "default": budget.DEFAULT_BUDGET_S + budget.BACKSTOP_MARGIN_S,
     }[expected]
-    assert router_mod.deadline_s(_State(budget)) == want
-    assert router_mod.DEADLINE_CAP_S < 30
+    assert budget.backstop_s(budget.budget_s(_State(value))) == want
+    assert budget.DEADLINE_CAP_S < 30
 
 
-def test_deadline_without_cfg_uses_default_budget():
-    want = router_mod.DEFAULT_BUDGET_S + router_mod.BACKSTOP_MARGIN_S
-    assert router_mod.deadline_s(object()) == want
+def test_budget_without_cfg_uses_the_default():
+    assert budget.budget_s(object()) == budget.budget_s(None) == budget.DEFAULT_BUDGET_S
+
+
+def test_router_passes_the_request_deadline(client, monkeypatch):
+    seen = []
+
+    async def capture(body, *, deadline):
+        seen.append(deadline - asyncio.get_running_loop().time())
+        return {"answer": "a", "action": "answer", "citations": []}
+
+    monkeypatch.setattr(router_mod, "respond", capture)
+    r = post(client, as_bytes({"messages": [{"role": "user", "content": "q"}]}))
+    assert r.json() == {"answer": "a", "action": "answer", "citations": []}
+    assert 0 < seen[0] <= budget.DEFAULT_BUDGET_S  # 기본 설정 budget_s = 20
+
+
+def test_only_large_bodies_are_parsed_in_a_thread(monkeypatch):
+    sizes = []
+
+    async def fake_to_thread(fn, raw):
+        sizes.append(len(raw))
+        return fn(raw)
+
+    monkeypatch.setattr(router_mod.asyncio, "to_thread", fake_to_thread)
+    small = as_bytes({"messages": []})
+    big = as_bytes({"messages": [{"role": "user", "content": "x" * (2 * MIB)}]})
+    assert asyncio.run(router_mod.parse_body(small)) == {"messages": []}
+    assert asyncio.run(router_mod.parse_body(big))["messages"][0]["content"] == "x" * (2 * MIB)
+    assert sizes == [len(big)]
 
 
 class _StreamingRequest:

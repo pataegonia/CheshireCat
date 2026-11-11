@@ -11,7 +11,8 @@
 판정(사실·충실·응함)은 `--judge`를 줄 때만 켠다. 운영진 API를 부르므로 OPENAI_BASE_URL·
 OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 action·인용만 채점한다.
 실행 전에 운영진 API 예상 호출 수(재시도 여유 1.1배, 가드 하네스와 같은 방식)를 출력하고
-`--max-calls`(기본 5,000, TU-14)를 넘으면 아무것도 부르지 않고 멈춘다.
+`--max-calls`(기본은 config/tutor.yaml의 eval.max_calls, TU-14)를 넘으면
+아무것도 부르지 않고 멈춘다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 """
 
@@ -31,10 +32,10 @@ from tutor.eval import metrics
 from tutor.eval.grader import KB_DIR, PUBLIC_DIR, judge_from_env, score_local, scoring
 from tutor.eval.recall import query_parts
 from tutor.retrieval import retrieve
+from tutor.runtime.config import load_config
 
 PRESETS = ("tutor", "reference", "reference_top1")
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
-MAX_CALLS = 5000  # 개발 실행 API 호출 상한(TU-14 eval.max_calls 기본값)
 TUTOR_CALLS = 3  # 튜터 요청당 nano 정상 호출 수(TU-14)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
 
@@ -191,7 +192,8 @@ def _parser() -> argparse.ArgumentParser:
     source.add_argument("--responses", type=Path, help="JSONL: 줄마다 {id, response}")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--judge", action="store_true", help="운영진 API로 사실·충실·응함 판정")
-    ap.add_argument("--max-calls", type=int, default=MAX_CALLS, help="운영진 API 호출 상한")
+    cap = load_config().eval.max_calls
+    ap.add_argument("--max-calls", type=int, default=cap, help="운영진 API 호출 상한")
     ap.add_argument("--out", type=Path, default=RUNS_DIR)
     ap.add_argument("--compare", type=Path, help="이전 결과 JSON. 새로 틀린 문항을 낸다")
     return ap

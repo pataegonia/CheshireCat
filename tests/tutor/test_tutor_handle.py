@@ -55,14 +55,29 @@ def test_handle_never_raises_when_respond_fails(monkeypatch):
 def test_handle_passes_a_request_deadline(monkeypatch):
     seen = []
 
-    async def capture(body, *, deadline):
-        seen.append(deadline - asyncio.get_running_loop().time())
+    async def capture(body, *, deadline, state):
+        seen.append((deadline - asyncio.get_running_loop().time(), state))
         return {"answer": "a", "action": " Answer ", "citations": []}
 
     monkeypatch.setattr(pipeline, "respond", capture)
     out = run(tutor.handle({"messages": []}))
     assert out == {"answer": "a", "action": "answer", "citations": []}
-    assert 0 < seen[0] <= budget.DEFAULT_BUDGET_S
+    left, state = seen[0]
+    assert 0 < left <= budget.DEFAULT_BUDGET_S
+    assert state is pipeline.default_state()  # 프로세스 안 호출은 한 번 만든 기본 state
+
+
+def test_serve_passes_the_given_state(monkeypatch):  # 로컬 측정이 설정을 바꾼 state로 부른다
+    seen = []
+
+    async def capture(body, *, deadline, state):
+        seen.append(state)
+        return {"answer": "a", "action": "answer", "citations": []}
+
+    monkeypatch.setattr(pipeline, "respond", capture)
+    custom = object()
+    assert run(pipeline.serve({"messages": []}, state=custom))["action"] == "answer"
+    assert seen == [custom]
 
 
 def test_handle_gives_the_default_when_respond_hangs(monkeypatch):  # 하네스가 매달리지 않는다

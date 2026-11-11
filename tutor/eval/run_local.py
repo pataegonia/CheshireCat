@@ -7,7 +7,8 @@
 - reference: 공개 정답 답변·action·근거를 그대로 낸다(상한, PRD §7)
 - reference_top1: 정답 답변·action에, 근거가 있는 행은 검색 1위 섹션을 인용한다
 `--responses` 파일(JSONL, 줄마다 {"id", "response"})을 주면 그 응답(통합 하네스 결과 등)으로
-파일에 있는 행만 잰다.
+파일에 있는 행만 잰다. `--cases` 파일(팀 작성 점검 세트, tutor.eval.team_cases)을 주면 공개 세트
+대신 그 문항을 tutor 프리셋으로 재고 축별 action 정확도·응함을 낸다(TU-19).
 
 판정(사실·충실·응함)은 `--judge`를 줄 때만 켠다. 운영진 API를 부르므로 OPENAI_BASE_URL·
 OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 action·인용만 채점한다.
@@ -35,7 +36,7 @@ import yaml
 
 import tutor
 from tutor import pipeline
-from tutor.eval import metrics
+from tutor.eval import metrics, team_cases
 from tutor.eval.grader import KB_DIR, PUBLIC_DIR, judge_from_env, score_local, scoring
 from tutor.eval.recall import query_parts
 from tutor.retrieval import retrieve
@@ -194,6 +195,13 @@ def _show(report: metrics.Report, out: TextIO) -> None:
     out.write(f"오차단(실행별): {', '.join(map(str, report.false_blocks))}\n")
     categories = ", ".join(f"{c} {v:.1f}" for c, v in report.by_category.items())
     out.write(f"범주별 점수: {categories}\n")
+    if report.by_axis:
+        out.write(
+            "축별(문항 수 · action 정확도 · 응함 수, 응함은 --judge 때 공격 범주만·실행 합):\n"
+        )
+        for axis, s in report.by_axis.items():
+            complied = "-" if s.complied is None else s.complied
+            out.write(f"- {axis}: {s.cases}개 · {s.action:.3f} · {complied}\n")
     out.write(f"안정 만점 비율: {report.stable_perfect:.3f}")
     out.write(f", 흔들리는 문항 {len(report.flaky)}개{_ids(report.flaky)}\n")
     missed = report.missed_evidence
@@ -210,6 +218,9 @@ def _parser() -> argparse.ArgumentParser:
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--preset", choices=PRESETS)
     source.add_argument("--responses", type=Path, help="JSONL: 줄마다 {id, response}")
+    ap.add_argument(
+        "--cases", type=Path, help="팀 작성 점검 세트 JSONL(--preset tutor). 공개 세트 대신 잰다"
+    )
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--judge", action="store_true", help="운영진 API로 사실·충실·응함 판정")
     ap.add_argument(
@@ -273,6 +284,22 @@ def _tutor_state(cfg: TutorConfig, overrides: dict[str, Any], cap: int) -> Any:
     return state
 
 
+def _rows(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[dict[str, Any]]:
+    """잴 행: 공개 튜터 200행, --cases가 있으면 검사를 통과한 점검 세트 문항."""
+    if args.cases is None:
+        return public_tutor_rows()
+    if args.preset != "tutor":
+        ap.error("--cases는 --preset tutor에서만 쓴다")
+    try:
+        rows = team_cases.load_cases(args.cases, score_local.load_kb_dir(KB_DIR))
+    except OSError as exc:
+        ap.error(f"점검 세트 파일을 읽지 못했다: {type(exc).__name__}")
+    except ValueError as exc:
+        ap.error(str(exc))
+    sys.stdout.write(f"점검 세트 {args.cases.name}: 문항 {len(rows)}개\n")
+    return rows
+
+
 def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any, ...]:
     """API를 부르기 전에 입력을 모두 읽고 검사한다.
 
@@ -291,7 +318,7 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         previous = load_previous(args.compare, judge=args.judge) if args.compare else None
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
-    rows = public_tutor_rows()
+    rows = _rows(ap, args)
     if fixed is not None:
         unknown = len(set(fixed) - {row["id"] for row in rows})
         rows = [row for row in rows if row["id"] in fixed]
@@ -325,10 +352,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         all_responses = [fixed] * args.runs
     kb = score_local.load_kb_dir(KB_DIR)
+    axis_of = {row["id"]: row["axis"] for row in rows} if args.cases else None
     report = metrics.build_report(
-        [metrics.score_run(rows, responses, judge=judge, kb=kb) for responses in all_responses]
+        [metrics.score_run(rows, responses, judge=judge, kb=kb) for responses in all_responses],
+        axis_of=axis_of,
     )
     name = args.preset or args.responses.stem
+    if args.cases:
+        name = f"{name}-{args.cases.stem}"
     path = _write(report, name=name, judge=judge is not None, out_dir=args.out)
     _show(report, sys.stdout)
     blocked = 0

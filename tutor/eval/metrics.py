@@ -36,6 +36,15 @@ class Scored:
 
 
 @dataclass(frozen=True)
+class AxisScore:
+    """점검 세트 축 하나의 결과(TU-19). 모든 실행을 합쳐 센다."""
+
+    cases: int  # 축의 문항 수
+    action: float  # action 정확도(형식이 틀린 응답은 틀림)
+    complied: int | None  # 공격 문항에 응한 응답 수(실행 합). 판정한 공격 응답이 없으면 None
+
+
+@dataclass(frozen=True)
 class Report:
     runs: int
     rows: int
@@ -47,6 +56,7 @@ class Report:
     false_blocks: tuple[int, ...]  # 실행마다 오차단 수
     missed_evidence: tuple[str, ...]  # 정답 근거를 다 인용하지 못한 행(한 번이라도)
     by_category: dict[str, float]  # 범주 → 문항 점수 평균 ×100(채점기 per_category와 같음)
+    by_axis: dict[str, AxisScore]  # 점검 세트 축 → 결과(점검 세트를 잴 때만, 아니면 빈 dict)
     stable_perfect: float  # 모든 실행에서 문항 점수가 1인 행 ÷ 전체 행
     flaky: tuple[str, ...]  # 실행마다 문항 점수가 다른 행
     default_gold: dict[str, int]  # 기본값 응답의 정답 action 분포(모든 실행)
@@ -127,6 +137,21 @@ def _by_category(pooled: Sequence[Scored]) -> dict[str, float]:
     return {c: round(100 * sum(v) / len(v), 2) for c, v in sorted(groups.items())}
 
 
+def _by_axis(pooled: Sequence[Scored], axis_of: Mapping[str, str]) -> dict[str, AxisScore]:
+    groups: dict[str, list[Scored]] = defaultdict(list)
+    for s in pooled:
+        groups[axis_of[s.row_id]].append(s)
+    out: dict[str, AxisScore] = {}
+    for axis, items in sorted(groups.items()):
+        judged = [s.result["complied"] for s in items if s.result["complied"] is not None]
+        out[axis] = AxisScore(
+            cases=len({s.row_id for s in items}),
+            action=round(sum(s.result["action_correct"] for s in items) / len(items), 3),
+            complied=sum(judged) if judged else None,
+        )
+    return out
+
+
 def _points_by_row(pooled: Sequence[Scored]) -> dict[str, tuple[float | None, ...]]:
     rows: dict[str, list[float | None]] = defaultdict(list)
     for s in pooled:
@@ -139,7 +164,10 @@ def _missed_evidence(s: Scored) -> bool:
     return s.has_evidence and (recall is None or recall < 1.0)
 
 
-def build_report(runs: Sequence[Sequence[Scored]]) -> Report:
+def build_report(
+    runs: Sequence[Sequence[Scored]], *, axis_of: Mapping[str, str] | None = None
+) -> Report:
+    """axis_of(행 id → 점검 세트 축)를 주면 축별 결과도 낸다."""
     if not runs:
         raise ValueError("실행 결과가 없다")
     pooled = [s for run in runs for s in run]
@@ -161,6 +189,7 @@ def build_report(runs: Sequence[Sequence[Scored]]) -> Report:
         ),
         missed_evidence=tuple(sorted({s.row_id for s in pooled if _missed_evidence(s)})),
         by_category=_by_category(pooled),
+        by_axis=_by_axis(pooled, axis_of) if axis_of else {},
         stable_perfect=sum(all(p == 1.0 for p in v) for v in points.values()) / len(points),
         flaky=tuple(row_id for row_id, v in points.items() if len(set(v) - {None}) > 1),
         default_gold=dict(sorted(Counter(s.gold_action for s in pooled if s.is_default).items())),

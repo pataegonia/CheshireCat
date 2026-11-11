@@ -8,6 +8,7 @@ from functools import cache
 from types import SimpleNamespace
 from typing import Any
 
+from tutor import baseline
 from tutor.request import TutorRequest, parse_request
 from tutor.runtime.budget import backstop_s, budget_s
 from tutor.runtime.response import default_response, ensure_contract
@@ -33,6 +34,8 @@ async def _answer(req: TutorRequest, *, deadline: float, state: Any) -> dict[str
     삼키지 않는다: asyncio.shield, except BaseException, gather(return_exceptions=True)로 막으면
     라우터의 시간 상한이 깨진다.
     """
+    if state.tutor_cfg.mode == "baseline":  # TU-14 베이스라인(#73). v2 흐름은 주 호출(#72)이 채운다
+        return await baseline.answer(req, state, deadline=deadline)
     return default_response()
 
 

@@ -8,6 +8,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+WINDOW = 6  # 첫 학습자 발화 + 마지막 메시지 6개(TU-02, 가드 GR-04와 같은 창)
+
 
 @dataclass(frozen=True)
 class Turn:
@@ -23,6 +25,20 @@ class TutorRequest:
     def last_user(self) -> str | None:
         """판단 대상인 마지막 학습자 발화(TU-02). 역할 순서가 어긋나도 마지막 user를 고른다."""
         return next((t.content for t in reversed(self.turns) if t.role == "user"), None)
+
+    def window(self) -> tuple[Turn, ...]:
+        """첫 학습자 발화 + 마지막 메시지 WINDOW개. 버튼 문구 빼기는 #97 tidy(TU-02)가 맡는다."""
+        users = [i for i, t in enumerate(self.turns) if t.role == "user"]
+        keep = set(range(max(len(self.turns) - WINDOW, 0), len(self.turns))) | set(users[:1])
+        return tuple(t for i, t in enumerate(self.turns) if i in keep)
+
+    def search_query(self) -> tuple[str, list[str]]:
+        """검색 질의: (창 안의 마지막 학습자 발화, 그 앞 학습자 발화들).
+
+        학습자 발화가 없으면 빈 질의다.
+        """
+        texts = [t.content for t in self.window() if t.role == "user"]
+        return (texts[-1], texts[:-1]) if texts else ("", [])
 
 
 def load_json(raw: bytes) -> Any:

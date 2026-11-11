@@ -80,3 +80,35 @@ def test_load_json_reads_objects():
 )
 def test_load_json_never_raises(raw):
     assert load_json(raw) is None
+
+
+def _req(*pairs):
+    return parse_request({"messages": [{"role": r, "content": c} for r, c in pairs]})
+
+
+def test_window_keeps_the_first_learner_turn_and_the_last_six():
+    pairs = [("user", "q1"), ("assistant", "a1"), ("user", "q2"), ("assistant", "a2")]
+    pairs += [
+        ("user", "q3"),
+        ("assistant", "a3"),
+        ("user", "q4"),
+        ("assistant", "a4"),
+        ("user", "q5"),
+    ]
+    req = _req(*pairs)
+    # 창 = 첫 학습자 발화 + 마지막 메시지 6개(TU-02, 가드 GR-04와 같음) → a1·q2는 창 밖
+    assert [t.content for t in req.window()] == ["q1", "a2", "q3", "a3", "q4", "a4", "q5"]
+    assert req.search_query() == ("q5", ["q1", "q3", "q4"])  # 검색 질의(recall 측정과 같은 규칙)
+
+
+def test_search_query_without_a_learner_turn_is_empty():
+    assert _req(("assistant", "a")).search_query() == ("", [])
+    assert _req(("user", "only")).search_query() == ("only", [])
+
+
+def test_window_keeps_the_first_question_when_the_last_one_is_far_back():
+    pairs = [("user", "q")] + [("assistant", f"a{i}") for i in range(7)]
+    req = _req(*pairs)
+    # 마지막 학습자 발화가 마지막 6개 밖이면 첫 학습자 발화로 찾는다(가드 GR-04와 같은 창)
+    assert req.search_query() == ("q", []) and req.last_user == "q"
+    assert [t.content for t in req.window()][-1] == "a6"

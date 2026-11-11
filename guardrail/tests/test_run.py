@@ -22,8 +22,9 @@ DEFAULT = str(ROOT / "configs/default.yaml")
 
 
 @pytest.fixture(autouse=True)
-def _model_env(monkeypatch):
+def _model_env(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setattr(run, "HOLDOUT_VIEWS", tmp_path / "holdout_views.json")
 
 
 @pytest.fixture
@@ -38,12 +39,14 @@ async def constant_factory(cfg, llm, train):
 def _args(tmp_path, *extra, config=BASELINE):
     return [
         "--config", config, "--name", "t", "--out", str(tmp_path / "runs"),
-        "--holdout-log", str(tmp_path / "holdout.jsonl"), *extra,
+        *extra,
     ]  # fmt: skip
 
 
 async def test_constant_guard_runs_all_400_rows_with_holdout(tmp_path):
-    code = await run.amain(_args(tmp_path, "--fake", "--holdout"), judge_factory=constant_factory)
+    code = await run.amain(
+        _args(tmp_path, "--holdout"), make_llm=_counting_llm, judge_factory=constant_factory
+    )
     assert code == 0
     out = tmp_path / "runs" / "t"
     lines = (out / "responses.jsonl").read_text(encoding="utf-8").splitlines()
@@ -53,7 +56,12 @@ async def test_constant_guard_runs_all_400_rows_with_holdout(tmp_path):
     assert summary["configs"]["t"]["scores"][0]["cv"]["guard_score"] == pytest.approx(
         29.48, abs=8
     )  # 상수 응답: 전부 allow 29.48은 가드 200행 값, CV 부분집합은 근처
-    assert (out / "report.md").read_text(encoding="utf-8").startswith("# ")
+    report = (out / "report.md").read_text(encoding="utf-8")
+    assert report.startswith("# FAKE/상수 판정기 — 점수 무효")
+    assert summary["judge_kind"] == "ConstantGuard" and summary["fake"] is False
+    assert (
+        "분산 미측정" in report and "n/a" not in report.split("## baseline")[0].split("재현율")[0]
+    )
 
 
 async def test_without_holdout_flag_only_cv_rows_are_judged(tmp_path):
@@ -63,7 +71,7 @@ async def test_without_holdout_flag_only_cv_rows_are_judged(tmp_path):
     split = cv.load_splits()
     assert 0 < len(lines) < 400
     assert all(split.cluster[json.loads(x)["id"]] not in held for x in lines)
-    assert not (tmp_path / "holdout.jsonl").exists()
+    assert not run.HOLDOUT_VIEWS.exists()
 
 
 def _counting_llm(cfg_llm):
@@ -153,19 +161,27 @@ async def test_over_max_calls_stops_before_start(tmp_path):
 async def test_holdout_is_refused_on_fourth_open(tmp_path):
     for _ in range(3):
         code = await run.amain(
-            _args(tmp_path, "--fake", "--holdout"), judge_factory=constant_factory
+            _args(tmp_path, "--holdout"), make_llm=_counting_llm, judge_factory=constant_factory
         )
         assert code == 0
-    log = (tmp_path / "holdout.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(log) == 3 and json.loads(log[0])["name"] == "t"
-    code = await run.amain(_args(tmp_path, "--fake", "--holdout"), judge_factory=constant_factory)
-    assert code == 4
-    assert len((tmp_path / "holdout.jsonl").read_text(encoding="utf-8").splitlines()) == 3
+    views = run.holdout_views()
+    assert len(views) == 3 and views[0]["name"] == "t" and views[0]["commit"]
+    made = []
+
+    def make_llm(cfg_llm):
+        made.append(1)
+        return _counting_llm(cfg_llm)
+
+    code = await run.amain(
+        _args(tmp_path, "--holdout"), make_llm=make_llm, judge_factory=constant_factory
+    )
+    assert code == 4 and len(run.holdout_views()) == 3
+    assert not made  # start()(probe) 전에 거부한다: LLM도 만들지 않는다
 
 
 async def test_estimate_does_not_log_holdout_open(tmp_path):
     await run.amain(_args(tmp_path, "--estimate", "--holdout"))
-    assert not (tmp_path / "holdout.jsonl").exists()
+    assert not run.HOLDOUT_VIEWS.exists()
 
 
 def test_ablation_files_each_toggle_one_switch():
@@ -210,10 +226,11 @@ def test_set_override_parses_yaml_values():
 
 async def test_rejects_holdout_with_ablation_and_unsafe_name(tmp_path):
     abl = str(ROOT / "configs/ablation")
-    assert await run.amain(_args(tmp_path, "--fake", "--holdout", "--ablation", abl)) == 2
+    assert await run.amain(_args(tmp_path, "--holdout", "--ablation", abl)) == 2
+    assert await run.amain(_args(tmp_path, "--fake", "--holdout")) == 2  # 열람 횟수를 쓰지 않는다
     bad = ["--config", BASELINE, "--name", "a/b", "--fake"]
     assert await run.amain(bad) == 2
-    assert not (tmp_path / "holdout.jsonl").exists()
+    assert not run.HOLDOUT_VIEWS.exists()
 
 
 async def test_budget_errors_make_the_run_invalid(tmp_path):
@@ -229,3 +246,47 @@ async def test_budget_errors_make_the_run_invalid(tmp_path):
         judge_factory=_double_calling_factory,
     )  # fmt: skip
     assert code == 5
+
+
+def test_variance_flags_overlap_with_default():
+    summary = {
+        "repeat": 3,
+        "configs": {
+            "default": {"scores": [{"cv": {"guard_score": g}} for g in (80, 82)]},
+            "near": {"scores": [{"cv": {"guard_score": g}} for g in (81, 83)]},
+            "far": {"scores": [{"cv": {"guard_score": g}} for g in (90, 91)]},
+        },
+    }
+    run.add_variance(summary)
+    assert summary["variance"] == {
+        "measured": True,
+        "overlaps_default": {"near": True, "far": False},
+    }
+
+
+def test_empty_denominators_are_none_and_na():
+    assert run._prf({}) == (None, None)
+    assert run._range([None, None]) == "n/a"
+
+
+async def test_fake_run_is_marked_invalid_in_summary_and_report(tmp_path):
+    await run.amain(_args(tmp_path, "--fake"))
+    out = tmp_path / "runs" / "t"
+    assert json.loads((out / "summary.json").read_text(encoding="utf-8"))["fake"] is True
+    assert (out / "report.md").read_text(encoding="utf-8").startswith("# FAKE/상수")
+
+
+async def test_budget_invalid_banner_is_in_report(tmp_path):
+    est = run.estimate_calls(
+        {"t": load_config(BASELINE)},
+        load_public(load_config(BASELINE).paths.public),
+        1,
+        load_config(BASELINE).llm,
+    )
+    await run.amain(
+        _args(tmp_path, "--max-calls", str(est)),
+        make_llm=_counting_llm,
+        judge_factory=_double_calling_factory,
+    )
+    report = (tmp_path / "runs" / "t" / "report.md").read_text(encoding="utf-8")
+    assert "# 무효 실행" in report.split("# 평가 보고서")[0]

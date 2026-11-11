@@ -1,4 +1,3 @@
-# ruff: noqa: E501  (보고서 서식 문자열은 한 줄이 읽기 쉽다)
 """S2.9 평가 하네스 (GR-13·GR-11, master-plan §4.6). 골격: 판정기 생성 함수를 주입받는다.
 
 서버를 띄우지 않는다. LLM 하나를 만들어 start()(probe 1회)하고, 폴드마다
@@ -11,6 +10,7 @@ import argparse
 import asyncio
 import json
 import re
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -35,7 +35,6 @@ from guardrail.schema import GuardRequest
 
 CONCURRENCY = 16
 HOLDOUT_OPEN_LIMIT = 3  # 4회째 거부(ADR-0013: 홀드아웃은 거의 보지 않는다)
-HOLDOUT_LOG = ROOT / "results" / "holdout-log.jsonl"
 RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
@@ -140,24 +139,54 @@ def estimate_calls(
 
 # --- 홀드아웃 열람 기록 -----------------------------------------------------
 
+# master-plan §4.6 파일 구성의 splits/holdout_views.json(git 추적). 테스트는 monkeypatch로 바꾼다
+HOLDOUT_VIEWS = cv.SPLIT_PATH.parent / "holdout_views.json"
+
 
 class HoldoutRefused(Exception):
     pass
 
 
-def open_holdout(log: Path, name: str, cfg_hash: str, limit: int = HOLDOUT_OPEN_LIMIT) -> None:
-    """열람 횟수를 확인하고 한 줄 남긴다. limit회 열었으면 거부한다."""
-    opened = log.read_text(encoding="utf-8").count("\n") if log.exists() else 0
+def holdout_views() -> list[dict]:
+    if not HOLDOUT_VIEWS.exists():
+        return []
+    return json.loads(HOLDOUT_VIEWS.read_text(encoding="utf-8"))
+
+
+def check_holdout_open(limit: int = HOLDOUT_OPEN_LIMIT) -> None:
+    """limit회 열었으면 거부한다. 기록은 하지 않는다(start() 성공 뒤 record_holdout_open)."""
+    opened = len(holdout_views())
     if opened >= limit:
-        raise HoldoutRefused(f"홀드아웃은 {limit}회까지만 연다(기록 {opened}회: {log})")
-    log.parent.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "name": name,
-        "config": cfg_hash,
-    }
-    with log.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        raise HoldoutRefused(f"홀드아웃은 {limit}회까지만 연다(기록 {opened}회)")
+
+
+def _commit() -> str:
+    try:
+        r = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", "HEAD"],  # noqa: S607
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return r.stdout.strip()
+
+
+def record_holdout_open(name: str, cfg_hash: str) -> None:
+    views = holdout_views()
+    views.append(
+        {
+            "at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "name": name,
+            "commit": _commit(),
+            "config_hash": cfg_hash,
+        }
+    )
+    HOLDOUT_VIEWS.parent.mkdir(parents=True, exist_ok=True)
+    HOLDOUT_VIEWS.write_text(json.dumps(views, ensure_ascii=False, indent=2) + "\n", "utf-8")
 
 
 # --- 실행 -----------------------------------------------------------------
@@ -188,6 +217,7 @@ def to_request(row: PublicRow) -> GuardRequest:
 class Outcome:
     judgements: dict[str, Judgement]
     latency_ms: dict[str, float]
+    judge_kind: str = ""
 
 
 async def _judge_rows(judge: Judge, rows: Sequence[PublicRow], out: Outcome) -> None:
@@ -221,6 +251,7 @@ async def run_once(
         train = cv.train_rows(split, labeled, fold=k)
         fold_ids = [i for i, c in split.cluster.items() if split.fold.get(c) == k]
         judge = await factory(cfg, llm, train)
+        out.judge_kind = type(judge).__name__
         await _judge_rows(judge, [by_id[i] for i in fold_ids if i in by_id], out)
     if holdout:
         held = set(split.holdout)
@@ -241,118 +272,7 @@ def _pct(xs: Sequence[float], q: float) -> float:
     return s[min(len(s) - 1, int(q * len(s)))] if s else 0.0
 
 
-def row_points(rows: Sequence[PublicRow], responses: Mapping[str, dict]) -> dict[str, float]:
-    """가드 행별 점수(guard_points). 설정 비교 부트스트랩의 값이다."""
-    out = {}
-    for r in rows:
-        if r.endpoint != "guard":
-            continue
-        d = {
-            "id": r.id,
-            "endpoint": r.endpoint,
-            "messages": [{"role": m.role, "content": m.content} for m in r.messages],
-            "labels": dict(r.labels),
-        }
-        if r.candidate_answer is not None:
-            d["candidate_answer"] = r.candidate_answer
-        item, variant = as_scoring_input(d)
-        out[r.id] = scoring.guard_points(scoring.score_guard(item, variant, responses.get(r.id)))
-    return out
-
-
-def _alone(rows: Sequence[PublicRow], preds: Mapping[str, str | None], block: frozenset) -> dict:
-    """kNN·LR 단독: 예측 범주를 decision으로 바꿔 block F1·범주 정확도를 낸다(없으면 오답)."""
-    results, cats = [], []
-    for r in rows:
-        if r.endpoint != "guard":
-            continue
-        gold = r.labels["category"]
-        pred = preds.get(r.id)
-        gold_block = gold in block
-        results.append(
-            {
-                "gold_block": gold_block,
-                "input_correct": pred is not None and (pred in block) == gold_block,
-            }
-        )
-        if gold != "normal":
-            cats.append(float(pred == gold))
-    return {
-        "n": len(results),
-        "answered": sum(preds.get(r.id) is not None for r in rows if r.endpoint == "guard"),
-        "block_f1": scoring.block_f1(results),
-        "category_accuracy": sum(cats) / len(cats) if cats else 0.0,
-    }
-
-
-def summarize(
-    rows: Sequence[PublicRow], out: Outcome, tap: Sequence[tuple[str, str | None, str | None]],
-    cfg: GuardConfig, split: cv.Split,
-) -> dict:  # fmt: skip
-    block = frozenset(cfg.block_categories)
-    held = set(split.holdout)
-    cv_rows = [r for r in rows if split.cluster[r.id] not in held and r.id in out.judgements]
-    ho_rows = [r for r in rows if split.cluster[r.id] in held and r.id in out.judgements]
-    resp = _responses(out, block)
-    sizes = Counter(split.cluster[r.id] for r in rows if r.endpoint == "guard")
-    results = {
-        r.id: scoring.score_guard(*as_scoring_input_for(r), resp.get(r.id))
-        for r in cv_rows
-        if r.endpoint == "guard"
-    }
-    tp = sum(x["gold_block"] and x["input_correct"] for x in results.values())
-    fp = sum(not x["gold_block"] and not x["input_correct"] for x in results.values())
-    fn = sum(x["gold_block"] and not x["input_correct"] for x in results.values())
-    pairs = [x["input_correct"] for i, x in results.items() if sizes[split.cluster[i]] > 1]
-    confusion: Counter[str] = Counter()
-    for r in cv_rows:
-        if r.endpoint == "guard":
-            pred = (resp[r.id].get("input") or {}).get("category")
-            confusion[f"{r.labels['category']}>{pred}"] += 1
-    tiers: dict[str, list[float]] = {}
-    for r in cv_rows:
-        j = out.judgements[r.id]
-        if r.endpoint == "guard" and j.output_tier is not None and results[r.id]["has_output"]:
-            tiers.setdefault(str(j.output_tier), []).append(
-                float(bool(results[r.id]["output_correct"]))
-            )
-    n_req = len(out.judgements)
-    errors = Counter(e for j in out.judgements.values() for e in j.errors)
-    by_role: dict[str, dict[str, Any]] = {}
-    for role, error, finish in tap:
-        d = by_role.setdefault(role, {"calls": 0, "errors": Counter(), "length": 0})
-        d["calls"] += 1
-        d["errors"][error or "ok"] += 1
-        d["length"] += finish == "length"
-    lat = list(out.latency_ms.values())
-    return {
-        "cv": score_responses(cv_rows, resp, block),
-        "holdout": score_responses(ho_rows, resp, block) if ho_rows else None,
-        "precision": tp / (tp + fp) if tp + fp else 1.0,
-        "recall": tp / (tp + fn) if tp + fn else 1.0,
-        "pair_block_accuracy": {
-            "n": len(pairs),
-            "value": sum(pairs) / len(pairs) if pairs else 0.0,
-        },
-        "confusion": dict(confusion),
-        "tier_hit": {t: {"n": len(v), "hit": sum(v) / len(v)} for t, v in sorted(tiers.items())},
-        "knn_alone": _alone(cv_rows, {i: j.knn_major for i, j in out.judgements.items()}, block),
-        "lr_alone": _alone(cv_rows, {i: j.lr_pred for i, j in out.judgements.items()}, block),
-        "calls": {"total": sum(j.calls for j in out.judgements.values()), "requests": n_req},
-        "errors": dict(errors),
-        "llm_by_role": {
-            k: {
-                "calls": v["calls"],
-                "error_rate": {c: n / v["calls"] for c, n in v["errors"].items() if c != "ok"},
-                "finish_length_rate": v["length"] / v["calls"],
-            }
-            for k, v in by_role.items()
-        },
-        "latency_ms": {"p50": _pct(lat, 0.5), "p95": _pct(lat, 0.95)},
-    }
-
-
-def as_scoring_input_for(r: PublicRow) -> tuple[dict, dict]:
+def _item(r: PublicRow) -> tuple[dict, dict]:
     d = {
         "id": r.id,
         "endpoint": r.endpoint,
@@ -364,85 +284,257 @@ def as_scoring_input_for(r: PublicRow) -> tuple[dict, dict]:
     return as_scoring_input(d)
 
 
-def _range(xs: Sequence[float]) -> str:
-    return f"{min(xs):.2f}" if min(xs) == max(xs) else f"{min(xs):.2f}–{max(xs):.2f}"
+def row_points(rows: Sequence[PublicRow], responses: Mapping[str, dict]) -> dict[str, float]:
+    """가드 행별 점수(guard_points). 설정 비교 부트스트랩의 값이다."""
+    return {
+        r.id: scoring.guard_points(scoring.score_guard(*_item(r), responses.get(r.id)))
+        for r in rows
+        if r.endpoint == "guard"
+    }
+
+
+def _alone(rows: Sequence[PublicRow], preds: Mapping[str, str | None], block: frozenset) -> dict:
+    """kNN·LR 단독: 예측 범주를 decision으로 바꿔 block F1·범주 정확도를 낸다(없으면 오답)."""
+    results, cats = [], []
+    for r in rows:
+        if r.endpoint != "guard":
+            continue
+        gold = r.labels["category"]
+        pred = preds.get(r.id)
+        correct = pred is not None and (pred in block) == (gold in block)
+        results.append({"gold_block": gold in block, "input_correct": correct})
+        if gold != "normal":
+            cats.append(float(pred == gold))
+    return {
+        "n": len(results),
+        "answered": sum(preds.get(r.id) is not None for r in rows if r.endpoint == "guard"),
+        "block_f1": scoring.block_f1(results),
+        "category_accuracy": sum(cats) / len(cats) if cats else 0.0,
+    }
+
+
+def _ratio(num: int, den: int) -> float | None:
+    return num / den if den else None  # 빈 분모는 1.0이 아니라 정의 안 됨
+
+
+def _prf(results: Mapping[str, dict]) -> tuple[float | None, float | None]:
+    tp = sum(x["gold_block"] and x["input_correct"] for x in results.values())
+    fp = sum(not x["gold_block"] and not x["input_correct"] for x in results.values())
+    fn = sum(x["gold_block"] and not x["input_correct"] for x in results.values())
+    return _ratio(tp, tp + fp), _ratio(tp, tp + fn)
+
+
+def _tier_hit(cv_rows, out: Outcome, results: Mapping[str, dict]) -> dict:
+    tiers: dict[str, list[float]] = {}
+    for r in cv_rows:
+        j = out.judgements[r.id]
+        if r.endpoint == "guard" and j.output_tier is not None and results[r.id]["has_output"]:
+            hit = float(bool(results[r.id]["output_correct"]))
+            tiers.setdefault(str(j.output_tier), []).append(hit)
+    return {t: {"n": len(v), "hit": sum(v) / len(v)} for t, v in sorted(tiers.items())}
+
+
+def _llm_by_role(tap: Sequence[tuple[str, str | None, str | None]]) -> dict:
+    by_role: dict[str, dict[str, Any]] = {}
+    for role, error, finish in tap:
+        d = by_role.setdefault(role, {"calls": 0, "errors": Counter(), "length": 0})
+        d["calls"] += 1
+        d["errors"][error or "ok"] += 1
+        d["length"] += finish == "length"
+    return {
+        k: {
+            "calls": v["calls"],
+            "error_rate": {c: n / v["calls"] for c, n in v["errors"].items() if c != "ok"},
+            "finish_length_rate": v["length"] / v["calls"],
+        }
+        for k, v in by_role.items()
+    }
+
+
+def summarize(
+    rows: Sequence[PublicRow],
+    out: Outcome,
+    tap: Sequence[tuple[str, str | None, str | None]],
+    cfg: GuardConfig,
+    split: cv.Split,
+) -> dict:
+    block = frozenset(cfg.block_categories)
+    held = set(split.holdout)
+    cv_rows = [r for r in rows if split.cluster[r.id] not in held and r.id in out.judgements]
+    ho_rows = [r for r in rows if split.cluster[r.id] in held and r.id in out.judgements]
+    resp = _responses(out, block)
+    sizes = Counter(split.cluster[r.id] for r in rows if r.endpoint == "guard")
+    results = {
+        r.id: scoring.score_guard(*_item(r), resp.get(r.id))
+        for r in cv_rows
+        if r.endpoint == "guard"
+    }
+    pairs = [x["input_correct"] for i, x in results.items() if sizes[split.cluster[i]] > 1]
+    confusion = Counter(
+        f"{r.labels['category']}>{(resp[r.id].get('input') or {}).get('category')}"
+        for r in cv_rows
+        if r.endpoint == "guard"
+    )
+    precision, recall = _prf(results)
+    lat = list(out.latency_ms.values())
+    return {
+        "cv": score_responses(cv_rows, resp, block),
+        "holdout": score_responses(ho_rows, resp, block) if ho_rows else None,
+        "precision": precision,
+        "recall": recall,
+        "pair_block_accuracy": {"n": len(pairs), "value": _ratio(sum(pairs), len(pairs))},
+        "confusion": dict(confusion),
+        "tier_hit": _tier_hit(cv_rows, out, results),
+        "knn_alone": _alone(cv_rows, {i: j.knn_major for i, j in out.judgements.items()}, block),
+        "lr_alone": _alone(cv_rows, {i: j.lr_pred for i, j in out.judgements.items()}, block),
+        "calls": {
+            "total": sum(j.calls for j in out.judgements.values()),
+            "requests": len(out.judgements),
+        },
+        "errors": dict(Counter(e for j in out.judgements.values() for e in j.errors)),
+        "llm_by_role": _llm_by_role(tap),
+        "latency_ms": {"p50": _pct(lat, 0.5), "p95": _pct(lat, 0.95)},
+    }
+
+
+# --- 보고서 ---------------------------------------------------------------
+
+NA = "n/a"
+
+
+def _range(xs: Sequence[float | None]) -> str:
+    vals = [x for x in xs if x is not None]
+    if not vals:
+        return NA
+    lo, hi = min(vals), max(vals)
+    return f"{lo:.2f}" if lo == hi else f"{lo:.2f}–{hi:.2f}"
+
+
+def _f(x: float | None, spec: str = ".3f") -> str:
+    return NA if x is None else format(x, spec)
+
+
+def _overlaps(a: Sequence[float], b: Sequence[float]) -> bool:
+    return max(a) >= min(b) and max(b) >= min(a)
+
+
+def add_variance(summary: dict) -> None:
+    """채택 기준은 default의 반복 범위 밖(PRD §7): 행마다 default 범위와 겹치는지 적는다."""
+    cfgs = summary["configs"]
+    rng = {c: [s["cv"]["guard_score"] for s in v["scores"]] for c, v in cfgs.items()}
+    summary["variance"] = {
+        "measured": summary["repeat"] >= 3,
+        "overlaps_default": {
+            c: _overlaps(r, rng[DEFAULT]) for c, r in rng.items() if DEFAULT in rng and c != DEFAULT
+        },
+    }
+
+
+def _banner(summary: dict) -> list[str]:
+    lines = []
+    if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
+        lines.append("# FAKE/상수 판정기 — 점수 무효 (results/로 옮기지 않는다)")
+    if summary.get("invalid"):
+        lines.append(f"# 무효 실행 — {summary['invalid']}")
+    return lines
+
+
+def _table(summary: dict) -> list[str]:
+    var = summary.get("variance", {})
+    head = [
+        "| 설정 | 가드 점수 | block F1 | 정밀도 | 재현율 | 범주 정확도 | 짝 block 정확도 "
+        "| default 범위와 |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    rows = []
+    for name, c in summary["configs"].items():
+        s = c["scores"]
+        pair = s[0]["pair_block_accuracy"]
+        ov = var.get("overlaps_default", {}).get(name)
+        rel = "—" if ov is None else ("겹침(개선 아님)" if ov else "밖")
+        rows.append(
+            f"| {name} | {_range([x['cv']['guard_score'] for x in s])}"
+            f" | {_range([x['cv']['block_f1'] for x in s])}"
+            f" | {_range([x['precision'] for x in s])}"
+            f" | {_range([x['recall'] for x in s])}"
+            f" | {_range([x['cv']['category_accuracy'] for x in s])}"
+            f" | {_range([x['pair_block_accuracy']['value'] for x in s])} (n={pair['n']})"
+            f" | {rel} |"
+        )
+    return head + rows
+
+
+def _section(name: str, s: dict) -> list[str]:
+    o = s["cv"]["output"]
+    t = s["cv"]["tutor"]
+    k = s["calls"]
+    tiers = ", ".join(f"{n}단 {v['hit']:.2f} (n={v['n']})" for n, v in s["tier_hit"].items())
+    errors = ", ".join(f"{e} {n}" for e, n in sorted(s["errors"].items())) or "없음"
+    out = ["", f"## {name}", ""]
+    out.append(
+        f"- 출력 평균 {o['mean']:.3f} (grounded {o['grounded']:.3f}, 구간 F1 "
+        f"{o['span_f1']:.3f}, safe {o['safe']:.3f}, n={o['n']})"
+    )
+    out.append(f"- 단별(①–④) 적중: {tiers or '없음'}")
+    for label, key in (("kNN", "knn_alone"), ("LR", "lr_alone")):
+        a = s[key]
+        out.append(
+            f"- {label} 단독: block F1 {a['block_f1']:.3f}, 범주 {a['category_accuracy']:.3f} "
+            f"(응답 {a['answered']}/{a['n']})"
+        )
+    out.append(
+        f"- 튜터 {t['n']}행(따로): 범주 정확도 {t['category_accuracy']:.3f}, "
+        f"block F1 {t['block_f1']:.3f}"
+    )
+    out.append(f"- 호출 {k['total']}회, 요청당 {k['total'] / max(1, k['requests']):.2f}회")
+    out.append(f"- 지연 p50 {s['latency_ms']['p50']:.0f}ms, p95 {s['latency_ms']['p95']:.0f}ms")
+    out.append(f"- 판정기 오류 코드: {errors}")
+    for role, d in s["llm_by_role"].items():
+        errs = ", ".join(f"{e} {r:.1%}" for e, r in d["error_rate"].items()) or "없음"
+        out.append(
+            f"- {role}: 호출 {d['calls']}, 오류 {errs}, "
+            f"finish_reason=length {d['finish_length_rate']:.1%}"
+        )
+    out.append(
+        "- 혼동행렬(정답>예측: 수): "
+        + ", ".join(f"{k}:{n}" for k, n in sorted(s["confusion"].items()))
+    )
+    if s["holdout"]:
+        out.append(f"- 홀드아웃 가드 점수 {s['holdout']['guard_score']:.2f} (열람 기록 있음)")
+    return out
+
+
+def _compare_table(compare: Mapping[str, dict]) -> list[str]:
+    lines = [
+        "",
+        "## default 대비 행별 점수 평균 차이",
+        "",
+        "guard_points 평균의 차이(가드 점수의 대용치). 묶음 단위 부트스트랩 95%, "
+        "다중 비교 보정 없음, 채택 기준 아님.",
+        "",
+        "| 설정 | 평균 차이 | 95% 구간 |",
+        "|---|---|---|",
+    ]
+    for name, d in compare.items():
+        lines.append(f"| {name} | {d['mean']:+.4f} | [{d['low']:+.4f}, {d['high']:+.4f}] |")
+    return lines
 
 
 def render_report(name: str, summary: dict) -> str:
-    L = [
-        f"# 평가 보고서: {name}",
-        "",
-        f"- 반복 {summary['repeat']}회, 설정 {len(summary['configs'])}행",
-        "",
-    ]
-    L += [
-        "## 가드 점수(교차 검증, 반복 범위)",
-        "",
-        "| 설정 | 가드 점수 | block F1 | 정밀도 | 재현율 | 범주 정확도 | 짝 block 정확도 |",
-        "|---|---|---|---|---|---|---|",
-    ]
+    lines = _banner(summary)
+    lines += [f"# 평가 보고서: {name}", ""]
+    lines.append(
+        f"- 반복 {summary['repeat']}회, 설정 {len(summary['configs'])}행, "
+        f"판정기 {summary.get('judge_kind')}, fake={summary.get('fake')}"
+    )
+    if not summary.get("variance", {}).get("measured"):
+        lines.append("- **분산 미측정**(--repeat < 3): 설정 간 차이를 개선으로 읽지 않는다")
+    lines += ["", "## 가드 점수(교차 검증, 반복 범위)", "", *_table(summary)]
     for cname, c in summary["configs"].items():
-        s = c["scores"]
-        L.append(
-            f"| {cname} | {_range([x['cv']['guard_score'] for x in s])} | {_range([x['cv']['block_f1'] for x in s])}"
-            f" | {_range([x['precision'] for x in s])} | {_range([x['recall'] for x in s])}"
-            f" | {_range([x['cv']['category_accuracy'] for x in s])}"
-            f" | {_range([x['pair_block_accuracy']['value'] for x in s])} (n={s[0]['pair_block_accuracy']['n']}) |"
-        )
-    for cname, c in summary["configs"].items():
-        s = c["scores"][0]
-        L += ["", f"## {cname}", ""]
-        o = s["cv"]["output"]
-        L.append(
-            f"- 출력 평균 {o['mean']:.3f} (grounded {o['grounded']:.3f}, 구간 F1 {o['span_f1']:.3f}, safe {o['safe']:.3f}, n={o['n']})"
-        )
-        L.append(
-            "- 단별(①–④) 적중: "
-            + (
-                ", ".join(f"{t}단 {v['hit']:.2f} (n={v['n']})" for t, v in s["tier_hit"].items())
-                or "없음"
-            )
-        )
-        L.append(
-            f"- kNN 단독: block F1 {s['knn_alone']['block_f1']:.3f}, 범주 {s['knn_alone']['category_accuracy']:.3f} (응답 {s['knn_alone']['answered']}/{s['knn_alone']['n']})"
-        )
-        L.append(
-            f"- LR 단독: block F1 {s['lr_alone']['block_f1']:.3f}, 범주 {s['lr_alone']['category_accuracy']:.3f} (응답 {s['lr_alone']['answered']}/{s['lr_alone']['n']})"
-        )
-        t = s["cv"]["tutor"]
-        L.append(
-            f"- 튜터 {t['n']}행(따로): 범주 정확도 {t['category_accuracy']:.3f}, block F1 {t['block_f1']:.3f}"
-        )
-        k = s["calls"]
-        L.append(f"- 호출 {k['total']}회, 요청당 {k['total'] / max(1, k['requests']):.2f}회")
-        L.append(f"- 지연 p50 {s['latency_ms']['p50']:.0f}ms, p95 {s['latency_ms']['p95']:.0f}ms")
-        L.append(
-            "- 판정기 오류 코드: "
-            + (", ".join(f"{e} {n}" for e, n in sorted(s["errors"].items())) or "없음")
-        )
-        for role, d in s["llm_by_role"].items():
-            errs = ", ".join(f"{e} {r:.1%}" for e, r in d["error_rate"].items()) or "없음"
-            L.append(
-                f"- {role}: 호출 {d['calls']}, 오류 {errs}, finish_reason=length {d['finish_length_rate']:.1%}"
-            )
-        L.append(
-            "- 혼동행렬(정답>예측: 수): "
-            + ", ".join(f"{k}:{n}" for k, n in sorted(s["confusion"].items()))
-        )
-        if s["holdout"]:
-            L.append(f"- 홀드아웃 가드 점수 {s['holdout']['guard_score']:.2f} (열람 기록 있음)")
-    cmp_ = summary.get("compare")
-    if cmp_:
-        L += [
-            "",
-            "## default 대비 행별 점수 평균 차이(guard_points 평균, 가드 점수의 대용치. 묶음 단위 부트스트랩 95%, 다중 비교 보정 없음, 채택 기준 아님)",
-            "",
-            "| 설정 | 평균 차이 | 95% 구간 |",
-            "|---|---|---|",
-        ]
-        for cname, d in cmp_.items():
-            L.append(f"| {cname} | {d['mean']:+.4f} | [{d['low']:+.4f}, {d['high']:+.4f}] |")
-    return "\n".join(L) + "\n"
+        lines += _section(cname, c["scores"][0])
+    if summary.get("compare"):
+        lines += _compare_table(summary["compare"])
+    return "\n".join(lines) + "\n"
 
 
 # --- CLI ------------------------------------------------------------------
@@ -457,12 +549,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--max-calls", type=int, default=None)
     ap.add_argument("--estimate", action="store_true", help="예상 호출 수만 찍고 끝낸다(호출 0)")
-    ap.add_argument("--fake", action="store_true", help="고정 응답 LLM(API 0회)")
+    ap.add_argument("--fake", action="store_true", help="고정 응답 LLM(API 0회, 점수 무효)")
     ap.add_argument("--ablation", metavar="DIR", help="토글별 yaml 폴더")
     ap.add_argument("--only", help="--ablation 중 이 이름만(쉼표). baseline·default는 늘 포함")
     ap.add_argument("--holdout", action="store_true", help="홀드아웃도 잰다(열람 기록, 4회째 거부)")
     ap.add_argument("--out", default=str(RUNS_DIR))
-    ap.add_argument("--holdout-log", default=str(HOLDOUT_LOG))
     return ap
 
 
@@ -481,6 +572,95 @@ def _say(text: str) -> None:
     sys.stdout.write(text + "\n")  # CLI 출력(T20은 print만 막는다)
 
 
+def _err(text: str) -> None:
+    sys.stderr.write(f"error: {text}\n")
+
+
+@dataclass
+class Plan:
+    base: GuardConfig
+    configs: dict[str, GuardConfig]
+    public: list[PublicRow]
+    labeled: list[LabeledRow]
+    split: cv.Split
+    estimate: int
+    limit: int
+
+
+def _usage_error(args: argparse.Namespace) -> str | None:
+    if args.repeat < 1:
+        return "--repeat은 1 이상"
+    if args.holdout and args.fake:
+        return (
+            "--fake와 --holdout은 함께 쓰지 않는다(가짜 응답으로 홀드아웃 열람 횟수를 쓰지 않는다)"
+        )
+    if args.holdout and (args.ablation or args.repeat > 1):
+        return "--holdout은 단일 설정·--repeat 1에서만 쓴다(설정 비교에 홀드아웃을 쓰지 않는다)"
+    if not re.fullmatch(r"[\w.-]+", args.name) or args.name in {".", ".."}:
+        return "--name은 영문·숫자·_.-만 쓴다"
+    return None
+
+
+def _make_plan(args: argparse.Namespace) -> Plan:
+    overrides = parse_sets(args.sets)
+    base = load_config(args.config, overrides)
+    configs = select_rows(base, args, overrides)
+    public = load_public(base.paths.public)
+    split = cv.load_splits()
+    if missing := {r.id for r in public} - split.cluster.keys():
+        raise ValueError(f"분할 파일에 없는 행 {len(missing)}개")
+    held = set(split.holdout)
+    judged = [r for r in public if args.holdout or split.cluster[r.id] not in held]
+    limit = args.max_calls if args.max_calls is not None else base.eval.max_calls
+    est = estimate_calls(configs, judged, args.repeat, base.llm)
+    _say(
+        f"estimate_calls={est} probe={probe_calls(base.llm)} max_calls={limit} "
+        f"rows={','.join(configs)} judged_rows={len(judged)} repeat={args.repeat}"
+    )
+    return Plan(base, configs, public, labeled_rows(public), split, est, limit)
+
+
+async def _measure(
+    plan: Plan, args: argparse.Namespace, llm: LLM, tap: Tap, factory: JudgeFactory
+) -> tuple[dict, list[dict]]:
+    held = set(plan.split.holdout)
+    summary: dict[str, Any] = {"name": args.name, "repeat": args.repeat, "configs": {}}
+    records: list[dict] = []
+    points: dict[str, dict[str, list[float]]] = {}
+    for cname, cfg in plan.configs.items():
+        block = frozenset(cfg.block_categories)
+        scores = []
+        for rep in range(args.repeat):
+            mark = len(tap.records)
+            out = await run_once(
+                cfg, llm, factory, plan.public, plan.labeled, plan.split, holdout=args.holdout
+            )
+            summary["judge_kind"] = out.judge_kind
+            scores.append(summarize(plan.public, out, tap.records[mark:], cfg, plan.split))
+            resp = _responses(out, block)
+            for rid, p in row_points([r for r in plan.public if r.id in resp], resp).items():
+                if plan.split.cluster[rid] not in held:
+                    points.setdefault(cname, {}).setdefault(rid, []).append(p)
+            records += [
+                {
+                    "config": cname,
+                    "repeat": rep,
+                    "id": rid,
+                    "response": resp[rid],
+                    "source": j.input_source,
+                    "tier": j.output_tier,
+                    "calls": j.calls,
+                    "errors": list(j.errors),
+                }
+                for rid, j in out.judgements.items()
+            ]
+        summary["configs"][cname] = {"config_hash": config_hash(cfg), "scores": scores}
+    add_variance(summary)
+    if len(points) > 1 and DEFAULT in points:
+        summary["compare"] = _compare(points, plan.split)
+    return summary, records
+
+
 async def amain(
     argv: Sequence[str] | None = None,
     *,
@@ -488,98 +668,49 @@ async def amain(
     judge_factory: JudgeFactory | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
+    if msg := _usage_error(args):
+        _err(msg)
+        return EXIT_USAGE
     try:
-        overrides = parse_sets(args.sets)
-        base = load_config(args.config, overrides)
-        configs = select_rows(base, args, overrides)
+        plan = _make_plan(args)
     except (ValueError, OSError) as e:
-        sys.stderr.write(f"error: {type(e).__name__}: {e}\n")
+        _err(f"{type(e).__name__}: {e}")
         return EXIT_USAGE
-    if args.holdout and (args.ablation or args.repeat > 1):
-        sys.stderr.write(
-            "error: --holdout은 단일 설정·--repeat 1에서만 쓴다(여러 설정 비교에 홀드아웃을 쓰지 않는다)\n"
-        )
-        return EXIT_USAGE
-    if args.repeat < 1:
-        sys.stderr.write("error: --repeat은 1 이상\n")
-        return EXIT_USAGE
-
-    if not re.fullmatch(r"[\w.-]+", args.name) or args.name in {".", ".."}:
-        sys.stderr.write("error: --name은 영문·숫자·_.-만 쓴다\n")
-        return EXIT_USAGE
-    public = load_public(base.paths.public)
-    labeled = labeled_rows(public)
-    split = cv.load_splits()
-    if missing := {r.id for r in public} - split.cluster.keys():
-        sys.stderr.write(
-            f"error: 분할 파일에 없는 행 {len(missing)}개. cv --write를 다시 확인한다\n"
-        )
-        return EXIT_USAGE
-    held = set(split.holdout)
-    judged = [r for r in public if args.holdout or split.cluster[r.id] not in held]
-
-    est = estimate_calls(configs, judged, args.repeat, base.llm)
-    limit = args.max_calls if args.max_calls is not None else base.eval.max_calls
-    _say(
-        f"estimate_calls={est} probe={probe_calls(base.llm)} max_calls={limit} "
-        f"rows={','.join(configs)} judged_rows={len(judged)} repeat={args.repeat}"
-    )
     if args.estimate:
         return 0
-    if est > limit:
-        sys.stderr.write(f"error: 예상 호출 {est}회가 상한 {limit}회를 넘는다. 시작하지 않는다\n")
+    if plan.estimate > plan.limit:
+        _err(f"예상 호출 {plan.estimate}회가 상한 {plan.limit}회를 넘는다. 시작하지 않는다")
         return EXIT_OVER_BUDGET
+    try:
+        if args.holdout:
+            check_holdout_open()  # start() 전에 거부한다
+    except HoldoutRefused as e:
+        _err(str(e))
+        return EXIT_HOLDOUT
     if judge_factory is None and not hasattr(guard_module, "Guard"):
         sys.stderr.write("note: guardrail.guard.Guard가 아직 없어 ConstantGuard로 돈다\n")
-    if args.fake:
-        llm = make_fake_llm(base.llm)
-    else:
-        llm = (make_llm or LLM)(base.llm)
+    llm = make_fake_llm(plan.base.llm) if args.fake else (make_llm or LLM)(plan.base.llm)
     tap = Tap()
     tap.attach(llm)
-    llm.max_calls = limit - probe_calls(base.llm)  # probe는 complete()를 거치지 않는다
+    llm.max_calls = plan.limit - probe_calls(plan.base.llm)  # probe는 complete()를 거치지 않는다
     try:
         await llm.start()  # probe는 실행당 한 번
     except ValueError as e:  # 환경변수 없음·인증 거절
-        sys.stderr.write(f"error: {e}\n")
+        _err(str(e))
         return EXIT_USAGE
     if args.holdout:  # 열람은 start()가 성공한 뒤에만 센다
-        try:
-            open_holdout(Path(args.holdout_log), args.name, config_hash(base))
-        except HoldoutRefused as e:
-            sys.stderr.write(f"error: {e}\n")
-            return EXIT_HOLDOUT
+        record_holdout_open(args.name, config_hash(plan.base))
 
-    factory = judge_factory or default_factory
-    summary: dict[str, Any] = {"name": args.name, "repeat": args.repeat, "configs": {}}
-    records: list[dict] = []
-    points: dict[str, dict[str, list[float]]] = {}
-    for cname, cfg in configs.items():
-        block = frozenset(cfg.block_categories)
-        scores = []
-        for rep in range(args.repeat):
-            mark = len(tap.records)
-            out = await run_once(cfg, llm, factory, public, labeled, split, holdout=args.holdout)
-            scores.append(summarize(public, out, tap.records[mark:], cfg, split))
-            resp = _responses(out, block)
-            for rid, p in row_points([r for r in public if r.id in resp], resp).items():
-                if split.cluster[rid] not in held:
-                    points.setdefault(cname, {}).setdefault(rid, []).append(p)
-            records += [
-                {"config": cname, "repeat": rep, "id": rid, "response": resp[rid],
-                 "source": j.input_source, "tier": j.output_tier, "calls": j.calls, "errors": list(j.errors)}
-                for rid, j in out.judgements.items()
-            ]  # fmt: skip
-        summary["configs"][cname] = {"config_hash": config_hash(cfg), "scores": scores}
-    if len(points) > 1 and DEFAULT in points:
-        summary["compare"] = _compare(points, split)
+    summary, records = await _measure(plan, args, llm, tap, judge_factory or default_factory)
+    summary["fake"] = args.fake
     spent = sum(e == "budget" for _, e, _ in tap.records)
     if spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
-    _write(Path(args.out) / args.name, records, summary, render_report(args.name, summary))
-    _say(f"wrote {Path(args.out) / args.name}")
+    out_dir = Path(args.out) / args.name
+    _write(out_dir, records, summary, render_report(args.name, summary))
+    _say(f"wrote {out_dir}")
     if spent:
-        sys.stderr.write(f"error: 호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다\n")
+        _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT
     return 0
 
@@ -591,6 +722,8 @@ def _compare(points: Mapping[str, Mapping[str, list[float]]], split: cv.Split) -
         if cname == DEFAULT:
             continue
         diff = {i: rows[i] - mean[DEFAULT][i] for i in rows if i in mean[DEFAULT]}
+        if not diff:
+            continue
         lo, hi = cluster_bootstrap_ci(diff, split.cluster)
         out[cname] = {"mean": sum(diff.values()) / len(diff), "low": lo, "high": hi}
     return out

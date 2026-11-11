@@ -1,11 +1,12 @@
 """요청·응답 타입과 범주 → decision 표 (master-plan §4.1, ADR-0012).
 
 응답 형식의 기준은 docs/contract/guard.schema.json이다. decision은 저장하지 않고
-decision_of()가 설정의 block_categories로 정한다. 요청 파싱(parse_request)은 S1.2.
+decision_of()가 설정의 block_categories로 정한다. parse_request는 예외를 내지 않는다(GR-01, GR-09).
 """
 
+import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 Category = Literal[
     "normal",
@@ -39,6 +40,35 @@ class GuardRequest:
     has_candidate: bool  # 키가 있었는가(값을 못 읽어도 True) → output 필수
 
 
+def _messages(raw: Any) -> tuple[Message, ...]:
+    if not isinstance(raw, list):
+        return ()
+    return tuple(
+        Message(m["role"] if isinstance(m.get("role"), str) else "", m["content"])
+        for m in raw
+        if isinstance(m, dict) and isinstance(m.get("content"), str)
+    )
+
+
+def parse_request(body: bytes) -> GuardRequest:
+    """읽을 수 있는 만큼 읽는다. JSON이 아니거나 너무 깊으면 빈 요청이다."""
+    try:
+        obj = json.loads(body)
+    except (ValueError, RecursionError):  # UnicodeDecodeError·JSONDecodeError는 ValueError
+        obj = None
+    if not isinstance(obj, dict):
+        return GuardRequest(messages=(), candidate_answer=None, has_candidate=False)
+    answer = obj.get("candidate_answer")
+    return GuardRequest(
+        messages=_messages(obj.get("messages")),
+        candidate_answer=answer if isinstance(answer, str) else None,
+        has_candidate="candidate_answer" in obj,
+    )
+
+
+MAX_RESPONSE_BYTES = 256 * 1024  # 응답 상한(미만이어야 함). 넘으면 unsupported를 비운다
+
+
 @dataclass(frozen=True)
 class OutputVerdict:
     grounded: bool
@@ -62,4 +92,6 @@ class GuardResponse:
                 "safe": self.output.safe,
                 "category": self.category,
             }
+            if len(json.dumps(body, ensure_ascii=False).encode()) >= MAX_RESPONSE_BYTES:
+                body["output"]["unsupported"] = []
         return body

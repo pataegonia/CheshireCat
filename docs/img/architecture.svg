@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1075" font-family="Pretendard, 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif" font-size="14">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#333"/></marker></defs>
+<style>
+ .box{fill:#fff;stroke:#555;stroke-width:1.2}
+ .t{fill:#e8f1ff;stroke:#3b6fd6}.g{fill:#e9f7ec;stroke:#2e8b57}.i{fill:#fff3e0;stroke:#d9822b}.s{fill:#f3f3f3;stroke:#888}
+ .lane{fill:none;stroke-width:1.5;stroke-dasharray:6 4}
+ .h{font-weight:700;font-size:15px}.sm{font-size:12px;fill:#444}
+ .ar{stroke:#333;stroke-width:1.4;fill:none;marker-end:url(#a)}
+ .dot{stroke:#333;stroke-width:1.2;fill:none;stroke-dasharray:4 3;marker-end:url(#a)}
+</style>
+<rect width="1500" height="1075" fill="#fff"/>
+
+<!-- 채점기 -->
+<rect x="420" y="20" width="660" height="54" rx="6" class="box"/>
+<text x="750" y="42" text-anchor="middle" class="h">채점기 (엘리스)</text>
+<text x="750" y="62" text-anchor="middle" class="sm">제출당 ≈600요청 (튜터 ≈300 · 가드 ≈300) · 64동시 · 요청당 30s · 총점 = 0.5 튜터 + 0.5 가드</text>
+<path d="M650 74 L650 130" class="ar"/><text x="565" y="110" class="sm">POST /tutor</text>
+<path d="M850 74 L850 130" class="ar"/><text x="862" y="110" class="sm">POST /guard</text>
+
+<!-- 런박스 -->
+<rect x="30" y="130" width="1440" height="700" rx="10" fill="#fafafa" stroke="#333" stroke-width="1.5"/>
+<text x="50" y="153" class="h">런박스 1개 · 포트 8000 · app.py (통합, 한 줄) = create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": TUTOR_DEFAULT}, startups=[tutor.startup])</text>
+<text x="50" y="171" class="sm">인증 · 메타 로그 7필드 · 예외/422 → 경로별 기본값 200 · lifespan은 전부 가드 골격(server.py). 통합은 조립과 계약 테스트 · E2E 검사를 맡는다.</text>
+
+<!-- /tutor lane -->
+<rect x="50" y="185" width="880" height="470" rx="8" class="lane" stroke="#3b6fd6"/>
+<text x="65" y="208" class="h" fill="#3b6fd6">POST /tutor — tutor/ (튜터 A · B) + integration/ (통합) · nano 3회(생성 경로) · 2회(고정 문장 경로)</text>
+
+<text x="80" y="232" class="sm">① 검색(ms) → 주 호출, 그와 동시에 가드 classify (v1 = 병렬안 ⓒ, 동결값은 11/18 측정)</text>
+<rect x="70" y="240" width="250" height="78" rx="6" class="box t"/>
+<text x="195" y="262" text-anchor="middle" class="h">retrieve (튜터 B)</text>
+<text x="195" y="282" text-anchor="middle" class="sm">KbIndex 공유 + 이름 사전 + 임베딩</text>
+<text x="195" y="300" text-anchor="middle" class="sm">→ 섹션 top-k (Section)</text>
+
+<rect x="350" y="240" width="300" height="78" rx="6" class="box t"/>
+<text x="500" y="262" text-anchor="middle" class="h">주 호출 (튜터 A)</text>
+<text x="500" y="282" text-anchor="middle" class="sm">근거 묶음 + kNN few-shot → 범주 · action · 답</text>
+<text x="500" y="300" text-anchor="middle" class="sm">→ list[Sentence] (문장 + sid · quote) · nano 1</text>
+
+<rect x="670" y="240" width="240" height="78" rx="6" class="box g"/>
+<text x="790" y="262" text-anchor="middle" class="h">classify (가드 함수)</text>
+<text x="790" y="282" text-anchor="middle" class="sm">Guard.classify(messages) → 범주</text>
+<text x="790" y="300" text-anchor="middle" class="sm">nano 1 · 실패하면 주 호출만 사용</text>
+
+<rect x="340" y="350" width="570" height="66" rx="6" class="box i"/>
+<text x="625" y="372" text-anchor="middle" class="h">② 합치기 + 범주→action 표 (config/actions.yaml, 통합 소유 · 튜터 import)</text>
+<text x="625" y="392" text-anchor="middle" class="sm">classify가 공격 4범주인데 주 호출 action이 표와 다르면 → 표의 고정 문장. 그 밖에는 주 호출 결과.</text>
+<text x="625" y="408" text-anchor="middle" class="sm">공격 문항은 응하면 0점이라 "공격이면 표가 이긴다"</text>
+
+<rect x="610" y="448" width="300" height="70" rx="6" class="box g"/>
+<text x="760" y="470" text-anchor="middle" class="h">③ judge_output (가드 함수)</text>
+<text x="760" y="490" text-anchor="middle" class="sm">(messages, answer, category=) · 생성 경로만</text>
+<text x="760" y="506" text-anchor="middle" class="sm">남은 시간 &lt; judge_skip_s면 생략 · nano 1</text>
+
+<rect x="340" y="448" width="250" height="70" rx="6" class="box i"/>
+<text x="465" y="470" text-anchor="middle" class="h">④ 결정적 수정 finalize (통합)</text>
+<text x="465" y="490" text-anchor="middle" class="sm">quote 검사 → unsupported 문장 삭제</text>
+<text x="465" y="506" text-anchor="middle" class="sm">→ citations · 4,000자 → TutorResult (0ms)</text>
+
+<rect x="70" y="350" width="250" height="168" rx="6" class="box t"/>
+<text x="195" y="374" text-anchor="middle" class="h">router /tutor (튜터 B)</text>
+<text x="195" y="396" text-anchor="middle" class="sm">본문 직접 파싱(Content-Type 무관)</text>
+<text x="195" y="414" text-anchor="middle" class="sm">asyncio.timeout(budget_s) · 본문 상한</text>
+<text x="195" y="432" text-anchor="middle" class="sm">→ 가드 골격이 /tutor엔 안 걸어 줌</text>
+<text x="195" y="456" text-anchor="middle" class="sm">예외는 안에서 잡아 튜터 기본값</text>
+<text x="195" y="474" text-anchor="middle" class="sm">{answer, action, citations} 200</text>
+<text x="195" y="498" text-anchor="middle" class="sm">tutor.startup: kNN 예시 · 이름 사전 색인</text>
+
+<path d="M320 279 L350 279" class="ar"/>
+<path d="M500 318 L500 350" class="ar"/>
+<path d="M790 318 L790 350" class="ar"/>
+<text x="655" y="336" text-anchor="middle" class="sm">∥ 병렬</text>
+<path d="M760 416 L760 448" class="ar"/>
+<path d="M610 483 L590 483" class="ar"/>
+<path d="M340 483 L320 483" class="ar"/>
+<path d="M465 416 L465 448" class="dot"/><text x="473" y="436" class="sm">고정 문장 경로</text>
+
+<rect x="70" y="538" width="840" height="102" rx="6" fill="#fff" stroke="#999"/>
+<text x="85" y="559" class="h">시간 · 계약</text>
+<text x="85" y="579" class="sm">예산 = request.app.state.cfg.budget_s (가드 설정 20s) · 주 호출 ≤8s · 목표 p50 ≤6s · p95 ≤12s · 판정 생략/실패 → 답과 action 그대로(abstain 전환 금지)</text>
+<text x="85" y="599" class="sm">integration/contracts.py: Section{id, subject, title, text, tables, names} · Evidence{sid, quote} · Sentence{text, kind, evidence} · TutorResult · Action 7종</text>
+<text x="85" y="619" class="sm">가드 interface: Guard.classify · decision_of · judge_output(category=) · KbIndex · llm.slot() / probe 결과 · Category (가드 schema에서 import)</text>
+<text x="85" y="634" class="sm">생성 실패 기본 action = fallback_action (튜터 TU-12 주인, 잠정 clarify)</text>
+
+<!-- /guard lane -->
+<rect x="960" y="185" width="490" height="470" rx="8" class="lane" stroke="#2e8b57"/>
+<text x="975" y="208" class="h" fill="#2e8b57">POST /guard — guardrail/ (가드) · nano 2회 병렬</text>
+
+<rect x="990" y="225" width="430" height="70" rx="6" class="box g"/>
+<text x="1205" y="248" text-anchor="middle" class="h">router /guard · check_token (모든 라우트 공통)</text>
+<text x="1205" y="268" text-anchor="middle" class="sm">parse_request 예외 없음 · 본문 4MiB 상한 · 안전망 budget_s + 5s</text>
+<text x="1205" y="286" text-anchor="middle" class="sm">어떤 예외도 200 기본값 · 로그 7필드(본문 · 예외 메시지 없음)</text>
+
+<rect x="990" y="320" width="200" height="110" rx="6" class="box g"/>
+<text x="1090" y="343" text-anchor="middle" class="h">judge_input</text>
+<text x="1090" y="363" text-anchor="middle" class="sm">정규화 → 신호(AND 정규식)</text>
+<text x="1090" y="379" text-anchor="middle" class="sm">→ kNN few-shot(공개 세트)</text>
+<text x="1090" y="395" text-anchor="middle" class="sm">→ nano 샌드위치 → 범주</text>
+<text x="1090" y="413" text-anchor="middle" class="sm">block = 범주 4개</text>
+
+<rect x="1220" y="320" width="200" height="110" rx="6" class="box g"/>
+<text x="1320" y="343" text-anchor="middle" class="h">judge_output</text>
+<text x="1320" y="363" text-anchor="middle" class="sm">candidate_answer 있을 때만</text>
+<text x="1320" y="379" text-anchor="middle" class="sm">KbIndex BM25 top-3 근거</text>
+<text x="1320" y="395" text-anchor="middle" class="sm">규칙 구간(숫자·리터럴) + nano</text>
+<text x="1320" y="413" text-anchor="middle" class="sm">→ grounded · unsupported · safe</text>
+
+<rect x="990" y="460" width="430" height="60" rx="6" class="box g"/>
+<text x="1205" y="483" text-anchor="middle" class="h">응답 {input{decision, category}, output{…}}</text>
+<text x="1205" y="503" text-anchor="middle" class="sm">점수 = 0.45 block F1 + 0.10 범주 정확도 + 0.45 출력 판정</text>
+
+<path d="M1090 295 L1090 320" class="ar"/><path d="M1320 295 L1320 320" class="ar"/>
+<path d="M1090 430 L1090 460" class="ar"/><path d="M1320 430 L1320 460" class="ar"/>
+<text x="1205" y="448" text-anchor="middle" class="sm">∥</text>
+
+<rect x="990" y="540" width="430" height="100" rx="6" fill="#fff" stroke="#999"/>
+<text x="1005" y="561" class="h">가드가 튜터 · 통합에 내주는 것</text>
+<text x="1005" y="581" class="sm">create_app(tutor_router=, defaults=, startups=) · check_token · 로그 규칙</text>
+<text x="1005" y="599" class="sm">Guard.classify · judge_output(category=) · decision_of · Category</text>
+<text x="1005" y="617" class="sm">KbIndex · llm.slot() · probe 결과(params · structured)</text>
+<text x="1005" y="633" class="sm">eval/score · eval/cv · splits/v1.json (채점 재현 · 분할)</text>
+
+<!-- 공유 -->
+<rect x="50" y="672" width="1400" height="142" rx="8" class="lane" stroke="#888"/>
+<text x="65" y="695" class="h" fill="#555">create_app lifespan (가드 골격) — setup_guard → startups 순으로 한 번 만들어 app.state에 두고 두 라우터가 공유</text>
+<rect x="70" y="710" width="210" height="88" rx="6" class="box s"/>
+<text x="175" y="734" text-anchor="middle" class="h">Guard · cfg · block</text>
+<text x="175" y="754" text-anchor="middle" class="sm">guard_factory(cfg)로 생성</text>
+<text x="175" y="770" text-anchor="middle" class="sm">cfg.budget_s 20 · block 범주 4개</text>
+<text x="175" y="786" text-anchor="middle" class="sm">team_token (없으면 기동 실패)</text>
+<rect x="300" y="710" width="230" height="88" rx="6" class="box s"/>
+<text x="415" y="734" text-anchor="middle" class="h">KbIndex</text>
+<text x="415" y="754" text-anchor="middle" class="sm">competition/kb 48섹션(md + CSV)</text>
+<text x="415" y="770" text-anchor="middle" class="sm">BM25 문자 2-gram</text>
+<text x="415" y="786" text-anchor="middle" class="sm">튜터 retrieval이 그 위에 얹음</text>
+<rect x="550" y="710" width="250" height="88" rx="6" class="box s"/>
+<text x="675" y="734" text-anchor="middle" class="h">LLM 게이트 (guard.llm)</text>
+<text x="675" y="754" text-anchor="middle" class="sm">세마포어 64 · 재시도 1 · 오류는 코드로</text>
+<text x="675" y="770" text-anchor="middle" class="sm">start()에서 probe → 거절된 파라미터 끔</text>
+<text x="675" y="786" text-anchor="middle" class="sm">튜터는 slot()으로 같은 게이트 사용</text>
+<rect x="820" y="710" width="290" height="88" rx="6" class="box s"/>
+<text x="965" y="734" text-anchor="middle" class="h">config/ (루트 한 곳)</text>
+<text x="965" y="754" text-anchor="middle" class="sm">actions.yaml (통합) · runtime.yaml (통합)</text>
+<text x="965" y="770" text-anchor="middle" class="sm">tutor.yaml (튜터 토글) · ablation/</text>
+<text x="965" y="786" text-anchor="middle" class="sm">가드 설정은 guardrail/configs/default.yaml</text>
+<rect x="1130" y="710" width="300" height="88" rx="6" class="box s"/>
+<text x="1280" y="734" text-anchor="middle" class="h">튜터 색인 (tutor.startup)</text>
+<text x="1280" y="754" text-anchor="middle" class="sm">kNN 예시 · 이름 사전 · (켜면) 임베딩</text>
+<text x="1280" y="770" text-anchor="middle" class="sm">첫 요청 전에 만든다 (SPEC §3)</text>
+<text x="1280" y="786" text-anchor="middle" class="sm">KB · 공개 세트 파생물만 (SPEC §7.1)</text>
+
+<!-- 외부 API -->
+<rect x="400" y="868" width="700" height="50" rx="6" class="box"/>
+<text x="750" y="890" text-anchor="middle" class="h">운영진 API (팀 키 1개)</text>
+<text x="750" y="908" text-anchor="middle" class="sm">gpt-5-nano · text-embedding-3-small — 채점 1회 ≈ nano 1,210회(튜터 ≈780 + 가드 ≈430), 60~80s</text>
+<path d="M670 814 L670 868" class="ar"/><text x="560" y="846" class="sm">게이트 통해서만</text>
+<path d="M830 868 L830 814" class="ar"/>
+
+<!-- 서버 밖 -->
+<rect x="30" y="940" width="1440" height="120" rx="10" fill="#fff" stroke="#d9822b" stroke-width="1.5"/>
+<text x="50" y="963" class="h" fill="#d9822b">서버 밖 — 통합 · 평가 (측정 · 검사 · 제출)</text>
+<text x="50" y="986" class="sm">하네스 : 가드는 guardrail.eval.score, 튜터는 scoring.score_tutor 직접 호출 → 가드 + 튜터 총점 · ablation 프리셋 · recall@k · 지연 · 호출 수. 분할은 가드 splits/v1.json 하나(홀드아웃 가드 40 + 튜터 40)</text>
+<text x="50" y="1006" class="sm">검사 : E2E 제출 가능성(조립된 앱에 공개 세트 400행 · 퍼징 · 반사 0 · 캐시 없음) · 부하 600요청/64동시(실제 API 2회) · 레드팀 세트 · check_logs</text>
+<text x="50" y="1026" class="sm">CI : guardrail-ci(가드 코드 품질) · integration-ci(금지 의존성 · URL 리터럴 · 본문 로깅 · 토큰 커밋 · gitleaks 저장소 전체 · 통합/튜터 테스트) · pr-policy</text>
+<text x="50" y="1046" class="sm">제출 : 런박스 운영 키트(설치 · 기동 · 로그 점검) · 11/15 v1 · 11/20 동결 · 11/24 18:00 최종 — 같은 커밋 → 런박스 4개 → 순차 제출 · 11/25 시연</text>
+<path d="M1150 940 L1150 832" class="dot"/><text x="1158" y="890" class="sm">공개 세트 400행 HTTP</text>
+</svg>

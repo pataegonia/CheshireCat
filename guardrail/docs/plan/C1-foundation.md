@@ -219,11 +219,11 @@
 
 | 항목 | 결과(실측 후 채움) |
 |---|---|
-| 런박스 Python·설치 방법 | |
-| 첫 제출: 가드 점수·시간 초과·형식 오류 | |
+| 런박스 Python·설치 방법 | 11/11: 기본 Python 3.10.14(Ubuntu 22.04, C-8, 16GiB). `pip3 install --user uv` → `uv python install 3.12`(3.12.16, `~/.local` 아래, 시스템 Python 그대로. 운영진에게 허용 여부 문의 중). PyPI·GitHub 접근 됨. clone은 gh 기기 코드 로그인 → `gh repo clone` → `gh auth logout`(토큰 안 남김). `uv sync --locked --no-dev --python 3.12` |
+| 첫 제출: 가드 점수·시간 초과·형식 오류 | 11/11 상수 응답(커밋 `8fd8f5f`, S1.2 브랜치): 총점 29.43(튜터 29.0 시작용, 가드 29.85), 요청 600개 중 시간 초과 0·형식 오류 0·판정 오류 0, 68초. 튜터 LLM 타임아웃 1건은 안내 문구 200. 런박스 `OPENAI_MODEL`은 `openai/gpt-5-nano`(접두 있음, 그대로 호출됨) |
 | `score.py` vs `score_local.py` 가드 점수 차 | |
 | 파라미터 수용(effort low·verbosity·json_schema strict·max_completion_tokens, 각각 따로) | |
 | `max_completion_tokens` 800 대 1200–1600 `finish_reason=length` 비율(대역 프롬프트, 잠정) | |
 | KB 검색 p95(런박스, 가드 86 + 튜터 200 질의. 개발 머신 ≤20ms, 런박스가 더 느리면 ≤40ms. S1.6 때 `kb.py`(S2.2)가 아직 없으면 S2.10에서 잰다) | |
 | nano 지연 p50/p95 (동시 1·16·64) | |
-| 재시작 절차 | |
+| 재시작 절차 | `cd ~/CheshireCat/guardrail && export PATH="$HOME/.local/bin:$PATH" && set -a && . ~/competition/.env && set +a && setsid nohup uv run --no-sync uvicorn guardrail.server:app --host 0.0.0.0 --port 8000 --no-access-log > ~/guard.log 2>&1 < /dev/null &`. 확인: 터널 `/proxy/8000/guard`에 토큰 없이 401, 토큰 넣고 200. 코드 갱신은 gh 로그인 → `git pull` → 로그아웃 → `uv sync` → 위 명령(먼저 `pkill -f 'uvicorn guardrail.server:app'`) |

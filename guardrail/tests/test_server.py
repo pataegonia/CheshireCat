@@ -453,3 +453,76 @@ def test_fuzz_no_reflection_with_echoing_guard(caplog, text):
         )
     assert r.status_code == 200 and MARK not in r.text
     _assert_logs_clean(caplog)
+
+
+# --- 팀 조립: create_app 주입 인자 (PR #92 리뷰, TU-01·IN-05) ---
+
+TUTOR_DEFAULT = {"answer": "팀 기본 문구", "action": "answer", "citations": []}
+
+
+def _team_tutor_router(fail: bool = False):
+    from fastapi import APIRouter
+    from pydantic import BaseModel
+
+    class Body(BaseModel):
+        messages: list[dict]
+
+    r = APIRouter()
+
+    @r.post("/tutor")
+    async def team_tutor(body: Body) -> dict:
+        if fail:
+            raise RuntimeError(MARK)
+        return {"answer": "팀 튜터", "action": "answer", "citations": []}
+
+    return r
+
+
+def _post_json(client, body, headers=AUTH):
+    return client.post("/tutor", json=body, headers=headers)  # 팀 라우트는 content-type을 본다
+
+
+def _team_app(**kw):
+    return create_app(_constant, defaults={"/tutor": TUTOR_DEFAULT}, **kw)
+
+
+@pytest.mark.parametrize(("headers", "status"), [({}, 401), (AUTH, 200)])
+def test_injected_tutor_router_is_behind_guard_auth(headers, status):
+    with TestClient(_team_app(tutor_router=_team_tutor_router())) as c:
+        r = _post_json(c, {"messages": []}, headers=headers)
+    assert r.status_code == status
+    if status == 200:
+        assert r.json()["answer"] == "팀 튜터"
+
+
+def test_injected_tutor_exception_gives_team_default(caplog):
+    with TestClient(_team_app(tutor_router=_team_tutor_router(fail=True))) as c:
+        r = _post_json(c, {"messages": []})
+    assert (r.status_code, r.json()) == (200, TUTOR_DEFAULT)
+    _assert_logs_clean(caplog)
+
+
+def test_injected_tutor_validation_error_is_not_422(caplog):
+    with TestClient(_team_app(tutor_router=_team_tutor_router())) as c:
+        r = _post_json(c, {"messages": MARK})
+    assert (r.status_code, r.json()) == (200, TUTOR_DEFAULT)
+    assert MARK not in r.text
+    _assert_logs_clean(caplog)
+
+
+def test_startups_run_once_after_setup():
+    calls = []
+
+    async def build_index(state):
+        calls.append(state.guard is not None and state.team_token == TOKEN)
+
+    with TestClient(_team_app(startups=(build_index,))) as c:
+        _post(c, {"messages": []})
+        _post(c, {"messages": []})
+    assert calls == [True]
+
+
+def test_no_injection_keeps_starter_tutor(client, monkeypatch):
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    r = _post(client, {"messages": []}, path="/tutor")
+    assert r.json()["answer"] == server.TUTOR_FALLBACK

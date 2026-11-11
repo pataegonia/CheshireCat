@@ -17,7 +17,7 @@ import hmac
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -228,7 +228,8 @@ async def _access_log(request: Request, call_next: Callable[[Request], Awaitable
 
 async def _fallback_response(request: Request) -> JSONResponse:
     if request.url.path == "/tutor":
-        return JSONResponse(_tutor_body(TUTOR_FALLBACK))
+        team = getattr(request.app.state, "defaults", {}).get("/tutor")
+        return JSONResponse(team if team is not None else _tutor_body(TUTOR_FALLBACK))
     return JSONResponse(_safe_default(request.app.state, None))  # 본문은 다시 읽지 않는다
 
 
@@ -297,18 +298,42 @@ async def _validation_error(request: Request, exc: RequestValidationError) -> JS
     return await _fallback_response(request)
 
 
-def create_app(guard_factory: GuardFactory = constant_factory) -> FastAPI:
+Startup = Callable[[Any], Awaitable[None]]
+
+
+def create_app(
+    guard_factory: GuardFactory = constant_factory,
+    *,
+    tutor_router: APIRouter | None = None,
+    defaults: Mapping[str, dict[str, Any]] | None = None,
+    startups: Sequence[Startup] = (),
+) -> FastAPI:
+    """팀 조립 진입점(TU-01·IN-05). 인자를 주지 않으면 단독 제출용 시작 /tutor를 붙인다.
+
+    - tutor_router: 시작용 /tutor 대신 붙인다. 인증(check_token)은 여기서 건다.
+    - defaults: 경로별 실패 응답. 지금은 "/tutor"만 쓴다(예외·검증 실패 때 200으로 낸다).
+    - startups: setup_guard 다음에 lifespan에서 한 번씩 `await fn(app.state)`.
+    """
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _install_log_filters()  # load_config 실패 트레이스백보다 먼저
         await setup_guard(app, load_config(), guard_factory)
+        for fn in startups:
+            await fn(app.state)
         yield
 
     app = FastAPI(
         lifespan=lifespan, redirect_slashes=False, docs_url=None, redoc_url=None, openapi_url=None
     )
+    app.state.defaults = dict(defaults or {})
     app.include_router(router)
-    app.add_api_route("/tutor", tutor_route, methods=["POST"], dependencies=[Depends(check_token)])
+    if tutor_router is not None:
+        app.include_router(tutor_router, dependencies=[Depends(check_token)])
+    else:
+        app.add_api_route(
+            "/tutor", tutor_route, methods=["POST"], dependencies=[Depends(check_token)]
+        )
     app.add_exception_handler(StarletteHTTPException, _http_error)
     app.add_exception_handler(RequestValidationError, _validation_error)
     app.middleware("http")(_access_log)

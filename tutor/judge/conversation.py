@@ -143,8 +143,11 @@ class Conversation:
 
     @property
     def is_empty(self) -> bool:
-        """판단 대상이 없거나 공백뿐인가(1턴이어도 고정 clarify, TU-05)."""
-        return not self.target_raw.strip() and not self.target_hidden
+        """판단 대상이 없거나 공백·보이지 않는 문자뿐인가(1턴이어도 고정 clarify, TU-05).
+
+        정규화본으로 본다. `str.strip()`은 U+200B·U+FEFF·U+202E 같은 문자를 지우지 않아서
+        원문 뷰로 보면 빈 판단 대상이 주 호출로 넘어간다. 숨긴 문자 표기가 붙으면 비지 않았다."""
+        return not self.target
 
     def search_turns(self) -> tuple[str, ...]:
         """검색 질의용 학습자 발화(창 안, 버튼 문구 제외, 판단 대상이 마지막). TU-03."""

@@ -80,6 +80,18 @@ _EMPTY: dict[str, str] = {
 }
 EMPTY_ANSWER = MappingProxyType(_EMPTY)
 
+# action만으로 문장이 갈리는 범주. harmful_content의 redirect는 비하·혐오 발언이다(PRD §3)
+_EMPTY_BY_CATEGORY: dict[tuple[str, str], str] = {
+    ("redirect", "harmful_content"): TEXT[Fixed.REDIRECT_HARMFUL],
+}
+
+
+def empty_answer(action: str, category: str | None = None) -> str:
+    """답변 문장이 하나도 남지 않았을 때의 고정 문장. 범주를 알면 범주에 맞는 문장을 고른다."""
+    if category is not None and (action, category) in _EMPTY_BY_CATEGORY:
+        return _EMPTY_BY_CATEGORY[(action, category)]
+    return EMPTY_ANSWER[action]
+
 
 def fixed_body(kind: Fixed) -> dict[str, object]:
     """고정 문장 응답 본문. 과목 사실이 없으므로 citations는 언제나 []."""

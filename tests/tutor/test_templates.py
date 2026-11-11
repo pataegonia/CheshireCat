@@ -2,7 +2,7 @@
 
 import re
 
-from tutor.answer.templates import ACTION, EMPTY_ANSWER, TEXT, Fixed, fixed_body
+from tutor.answer.templates import ACTION, EMPTY_ANSWER, TEXT, Fixed, empty_answer, fixed_body
 
 ACTIONS = {"answer", "scaffold", "clarify", "abstain", "redirect", "refuse", "escalate"}
 
@@ -24,6 +24,16 @@ def test_fixed_body_is_spec_shaped():
 def test_empty_answer_covers_all_actions():
     assert set(EMPTY_ANSWER) == ACTIONS
     assert all(t.strip() for t in EMPTY_ANSWER.values())
+
+
+def test_empty_redirect_follows_category():
+    # 리뷰 지적: 비하 발언(harmful_content → redirect)에도 "수업과 관련이 없어요"가 나갔다
+    assert empty_answer("redirect", "harmful_content") == TEXT[Fixed.REDIRECT_HARMFUL]
+    assert empty_answer("redirect", "off_topic") == TEXT[Fixed.REDIRECT_OFF_TOPIC]
+    assert empty_answer("redirect") == TEXT[Fixed.REDIRECT_OFF_TOPIC]
+    for action in ACTIONS:  # 범주를 몰라도, 다른 범주여도 action별 문장
+        assert empty_answer(action) == EMPTY_ANSWER[action]
+        assert empty_answer(action, "normal") == EMPTY_ANSWER[action]
 
 
 def test_no_phone_numbers_agency_names_or_grading_talk():

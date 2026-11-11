@@ -6,7 +6,10 @@
 
 import asyncio
 import json
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +18,17 @@ from tutor.eval.grader import KB_DIR, score_local
 from tutor.runtime.response import TUTOR_DEFAULT
 
 VERDICTS = {"facts": {"score": 0.5}, "faithful": {"ok": True}, "complied": {"complied": False}}
+ROOT = Path(__file__).resolve().parents[2]
+# 서버 경로만 새 프로세스에서 돌리고, 측정 코드·운영진 채점기가 메모리에 올라왔는지 본다
+SERVER_ONLY = """
+import asyncio, sys, types
+import tutor
+tutor.startup(types.SimpleNamespace())
+body = {"spec_version": "1.0", "session_id": "s", "messages": [{"role": "user", "content": "x"}]}
+asyncio.run(tutor.handle(body))
+grader = {"judge", "scoring", "score_local"}
+print(" ".join(sorted(m for m in sys.modules if m.startswith("tutor.eval") or m in grader)))
+"""
 
 
 @pytest.fixture(scope="module")
@@ -339,6 +353,14 @@ def test_cli_never_prints_or_saves_bodies(tmp_path, capsys, rows):
     bodies = [row["labels"]["reference_answer"] for row in rows] + [TUTOR_DEFAULT["answer"]]
     bodies += [m.get("content") or "" for row in rows for m in row["messages"]]
     assert [b for b in bodies if len(b) >= 8 and b in shown] == []
+
+
+def test_server_does_not_load_measurement_code():
+    # 시연 때 서버 코드를 확인한다(SPEC §8). 측정 코드는 공개 세트 정답을 읽으니
+    # 서버와 섞이지 않게 한다
+    argv = [sys.executable, "-c", SERVER_ONLY]
+    done = subprocess.run(argv, capture_output=True, text=True, check=True, cwd=ROOT, timeout=120)  # noqa: S603
+    assert done.stdout.strip() == ""
 
 
 def test_cli_judge_needs_the_api_settings(monkeypatch, tmp_path):

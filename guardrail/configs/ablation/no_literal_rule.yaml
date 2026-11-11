@@ -1,0 +1,2 @@
+# ablation: 기본 설정에서 toggles.literal_rule만 끈다(GR-11)
+toggles: {literal_rule: false}

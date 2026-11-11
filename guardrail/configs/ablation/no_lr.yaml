@@ -1,0 +1,2 @@
+# ablation: 기본 설정에서 toggles.lr만 끈다(GR-11)
+toggles: {lr: false}

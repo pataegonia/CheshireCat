@@ -1,0 +1,2 @@
+# ablation: 기본 설정에서 toggles.knn_fewshot만 끈다(GR-11)
+toggles: {knn_fewshot: false}

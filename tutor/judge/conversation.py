@@ -66,13 +66,18 @@ def cut_middle(text: str, limit: int) -> str:
 # --- 버튼 문구 ---
 
 MAX_BUTTON_CHARS = 40
-# 수업 화면의 일반 대상(특정 예제·과목 내용이 아닌 말)
-_GENERIC_OBJECTS = (
+# 수업 화면의 일반 대상(특정 예제·과목 내용이 아닌 말). 버튼 문구에는 이 중 하나가 있거나
+# 행위 자체가 대상이 필요 없는 요청(요약·힌트·도움)이어야 한다
+_CORE_OBJECTS = (
     "학습자료", "학습 자료", "수업자료", "수업 자료", "자료", "영상", "강의", "수업", "내용",
-    "코드", "문제", "퀴즈", "실습", "과제", "풀이", "의도", "방법", "부분", "개념",
+    "코드", "문제", "퀴즈", "실습", "과제",
 )  # fmt: skip
+# 대상을 꾸미는 넓은 말. 단독으로는 버튼으로 보지 않는다("방법 알려줘"는 학습자 질문일 수 있다)
+_BROAD_OBJECTS = ("풀이", "의도", "방법", "부분", "개념")
+_GENERIC_OBJECTS = (*_CORE_OBJECTS, *_BROAD_OBJECTS)
 # 정형 요청의 행위(요약·설명·힌트·도움)
 _REQUEST_ACTS = re.compile(r"요약|설명|힌트|도움|도와|알려|가르쳐|알고\s*싶")
+_SELF_CONTAINED_ACTS = re.compile(r"요약|힌트|도움|도와")
 # 남아도 되는 말: 지시어·조사·요청 어미·정도 부사(낱말 단위)
 _FILLERS = frozenset(
     (
@@ -98,10 +103,13 @@ def is_button_phrase(text: str) -> bool:
     """짧은 정형 요청(요약·설명·힌트·도움 요청)만으로 된 발화인가.
 
     일반 대상 말과 요청 행위, 조사·어미를 지우고 남는 말이 없으면 버튼 문구로 본다.
-    예제 이름·과목 용어·숫자가 하나라도 남으면 학습자가 직접 쓴 질문이다.
+    예제 이름·과목 용어·숫자가 하나라도 남으면 학습자가 직접 쓴 질문이다. 또 화면 대상(자료·코드·
+    문제…)이 없으면 요약·힌트·도움 요청일 때만 버튼이다("방법 알려줘", "설명해 줘"는 아니다).
     """
     s = " ".join(text.split())
     if not s or len(s) > MAX_BUTTON_CHARS or not _REQUEST_ACTS.search(s):
+        return False
+    if not (any(w in s for w in _CORE_OBJECTS) or _SELF_CONTAINED_ACTS.search(s)):
         return False
     leftover = [w for w in _WORD.findall(_strip_vocab(s)) if w not in _FILLERS]
     return not leftover
@@ -142,6 +150,15 @@ class Conversation:
         """검색 질의용 학습자 발화(창 안, 버튼 문구 제외, 판단 대상이 마지막). TU-03."""
         return tuple(t.text for t in self.window if t.role == "user" and not t.is_button)
 
+    def search_query(self) -> tuple[str, tuple[str, ...]]:
+        """`retrieve(query, history)` 인자: (판단 대상, 창 안의 다른 학습자 발화).
+
+        버튼 문구는 뺀다."""
+        history = tuple(
+            t.text for t in self.window if t.role == "user" and not t.is_button and not t.is_target
+        )
+        return self.target, history
+
 
 def _role(raw: Any) -> Role:
     return raw if raw in ("user", "assistant") else "other"
@@ -177,12 +194,15 @@ def _view(raw: str) -> tuple[str, str]:
     return text, hidden
 
 
-def _window_indices(messages: Sequence[tuple[Role, str]], first_user: int | None) -> list[int]:
+def _window_indices(
+    messages: Sequence[tuple[Role, str]], first_user: int | None, target: int | None
+) -> list[int]:
+    """첫 학습자 발화 + 마지막 6개. 판단 대상이 그 밖에 있으면(뒤에 튜터 발화가 6개 넘게 붙은
+    역할 순서 어긋남) 판단 대상도 넣는다. 원래 순서를 지킨다."""
     n = len(messages)
-    idx = list(range(max(n - WINDOW_LAST, 0), n))
-    if first_user is not None and first_user not in idx:
-        idx.insert(0, first_user)
-    return idx
+    idx = set(range(max(n - WINDOW_LAST, 0), n))
+    idx.update(i for i in (first_user, target) if i is not None)
+    return sorted(idx)
 
 
 def _fit_texts(texts: list[str], keep: int | None) -> list[str]:
@@ -211,8 +231,8 @@ def tidy(raw_messages: Any) -> Conversation:
     first_user = user_idx[0] if user_idx else None
     target = user_idx[-1] if user_idx else None
 
-    idx = _window_indices(messages, first_user)
-    keep = idx.index(target) if target is not None else None
+    idx = _window_indices(messages, first_user, target)
+    keep = idx.index(target) if target is not None else None  # target은 언제나 idx 안에 있다
     # 정규화 전에 원문 기준으로 창 상한을 맞춘다(정규화는 글을 늘리지 않으므로 뒤에서 한 번 더 확인)
     raws = _fit_texts([messages[i][1] for i in idx], keep)
 

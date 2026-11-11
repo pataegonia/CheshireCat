@@ -69,7 +69,13 @@ _TAGS = (
     "근거 묶음", "섹션", "대화", "학습자 발화", "튜터 발화", "다른 발화", "신호",
     "다시 확인할 규칙",
 )  # fmt: skip
-_TAG_RX = re.compile(r"<(/?)\s*(" + "|".join(map(re.escape, _TAGS)) + r")")
+# 태그 이름 안의 공백은 몇 칸이든(없어도) 같은 태그로 본다: `<학습자  발화>`, `< /대화>` 등
+_TAG_RX = re.compile(
+    r"<(?=\s*/?\s*(?:"
+    + "|".join(r"\s*".join(re.escape(ch) for ch in tag if not ch.isspace()) for tag in _TAGS)
+    + r"))"
+)
+TAG_GUARD = "‹"  # ‹ : 무력화한 태그의 여는 꺾쇠(모델이 우리 구분 태그로 읽지 않게)
 
 SANDWICH = (
     "<다시 확인할 규칙>\n"
@@ -121,12 +127,15 @@ class SectionLike(Protocol):
 
     id: str
     text: str
-    tables: list[str]
+    tables: Sequence[str]  # 튜터 검색(#70) `Section.tables`는 tuple
 
 
 def defuse(text: str) -> str:
-    """학습자·튜터 발화 안의 구분 태그를 무력화한다(`<대화>` → `< 대화>`). 다른 글자는 그대로."""
-    return _TAG_RX.sub(lambda m: f"< {m.group(1)}{m.group(2)}", text)
+    """발화·자료 안에서 구분 태그처럼 보이는 `<`만 `‹`로 바꾼다(`<대화>` → `‹대화>`).
+
+    태그 이름 안 공백 변형도 잡는다. 코드의 비교 연산자(`a < b`) 같은 다른 `<`는 그대로 둔다.
+    """
+    return _TAG_RX.sub(TAG_GUARD, text)
 
 
 def _section_block(section: SectionLike) -> str:
@@ -192,7 +201,13 @@ class CompleteResult(Protocol):
 
 
 class Complete(Protocol):
-    """튜터 런타임(#78)이 주는 nano 호출. 게이트·시간 제한·재시도는 런타임 몫."""
+    """튜터 런타임(#78)이 주는 nano 호출. 게이트·시간 제한·재시도는 런타임 몫.
+
+    오류 약속: 호출 실패(시간 초과·429·5xx·형식 오류·예산 초과)는 예외가 아니라
+    `result.error`(가드·튜터 `ErrorCode`)로 돌려준다. #107 `TutorLLM.complete`가 이 약속을 지킨다.
+    밖으로 나가도 되는 것은 `CancelledError`(라우터 시간 상한)와 프로그래밍 오류뿐이고,
+    이 모듈은 그것을 잡지 않는다: 라우터가 클래스 이름만 기록하고 TU-12 기본값을 낸다.
+    """
 
     async def __call__(
         self, messages: list[dict[str, str]], schema: type[BaseModel], *, deadline: float

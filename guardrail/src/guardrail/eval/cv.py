@@ -7,6 +7,7 @@
 import argparse
 import json
 import random
+import sys
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -165,7 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     rows = labeled_rows(load_public(load_config().paths.public))
     split = write_splits(seed=args.seed) if args.write else make_splits(rows, seed=args.seed)
-    print(summary(split, rows))
+    sys.stdout.write(summary(split, rows) + "
+")  # CLI 출력(T20은 print만 막는다)
     return 0
 
 

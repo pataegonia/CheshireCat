@@ -23,8 +23,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVER_ONLY = """
 import asyncio, sys, types
 import tutor
-tutor.startup(types.SimpleNamespace())
-body = {"spec_version": "1.0", "session_id": "s", "messages": [{"role": "user", "content": "x"}]}
+state = types.SimpleNamespace()
+asyncio.run(tutor.startup(state))
+assert state.tutor_kb is not None  # 기동 훅이 실제로 돌았다
+body ={"spec_version": "1.0", "session_id": "s", "messages": [{"role": "user", "content": "x"}]}
 asyncio.run(tutor.handle(body))
 grader = {"judge", "scoring", "score_local"}
 print(" ".join(sorted(m for m in sys.modules if m.startswith("tutor.eval") or m in grader)))

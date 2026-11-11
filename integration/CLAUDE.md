@@ -42,7 +42,7 @@
 
 ## 작업 방식
 - 슬라이스 단위로 한다: plan 문서의 **테스트 먼저** 목록을 실패하는 테스트로 쓰고 → 구현 → 수용 기준 체크. 한 슬라이스 = 한 PR.
-- 브랜치 `feat/integration-<슬라이스>`(예: `feat/integration-contracts`), base `main`. PR 본문에 `Closes #<이슈>`, 라벨 `integration` + `integration:P0|P1` + `sprint:S1`, 마일스톤 M1–M5.
+- **슬라이스 = 브랜치 = PR = 이슈**(가드 · 튜터와 같은 규칙). 브랜치 `int/i<스프린트>.<번호>-<이름>`(예: I1.2 → `int/i1.2-contracts`, I1.3 → `int/i1.3-finalize`) — 가드 `gr/s1.2-…`, 튜터 `tutor/t1.1-…`, 문서 `docs/…`와 같은 모양. base `main`(앞 슬라이스가 머지 전이면 그 브랜치 위에 쌓고, 머지되면 base를 `main`으로 바꾼다). PR 본문에 `Closes #<이슈>`, 라벨 `integration` + `integration:P0|P1` + `sprint:S1`, 마일스톤 M1–M5.
 - 머지 전 네 검사 green: `guardrail / gate` · `integration / gate` · `pr-policy` · `integration / secret scan (repo)`.
 - 수치를 문서 · PR에 적을 때는 공개 세트나 코드로 다시 계산한 값만 쓴다. 추정은 `[측정]`으로 표시한다.
 

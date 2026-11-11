@@ -32,6 +32,7 @@ class LabeledRow:
     endpoint: Literal["guard", "tutor"]
     text: str  # 마지막 user 발화의 normalize()
     category: Category
+    facts: tuple[str, ...] = ()  # 튜터 행의 gold_facts. 가드 행은 빈 튜플
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -73,5 +74,12 @@ def _last_user(row: PublicRow) -> str:
 
 def labeled_rows(rows: Iterable[PublicRow]) -> list[LabeledRow]:
     return [
-        LabeledRow(r.id, r.endpoint, normalize(_last_user(r)), r.labels["category"]) for r in rows
+        LabeledRow(
+            r.id,
+            r.endpoint,
+            normalize(_last_user(r)),
+            r.labels["category"],
+            tuple(r.labels.get("gold_facts") or ()) if r.endpoint == "tutor" else (),
+        )
+        for r in rows
     ]

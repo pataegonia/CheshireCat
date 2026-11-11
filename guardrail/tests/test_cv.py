@@ -99,12 +99,10 @@ def test_folds_are_balanced_on_guard_rows(rows, split):
     assert max(per_fold.values()) - min(per_fold.values()) <= 1
 
 
-def test_holdout_is_about_20_percent_of_guard_rows_with_no_tutor_only_cluster(rows, split):
+def test_holdout_is_about_20_percent_of_guard_rows(rows, split):
     guard = [r for r in rows if r.endpoint == "guard"]
     held = [r for r in guard if split.cluster[r.id] in split.holdout]
     assert abs(len(held) - 0.2 * len(guard)) <= 1
-    for cid in split.holdout:
-        assert any(r.endpoint == "guard" for r in rows if split.cluster[r.id] == cid)
 
 
 def test_same_seed_same_bytes_and_other_seed_differs(rows):
@@ -181,3 +179,29 @@ def test_fold_bounds():
     for bad in (-1, 2):
         with pytest.raises(ValueError):
             cv.train_rows(split, [_row("a", "하나")], fold=bad)
+
+
+def test_same_gold_fact_tutor_rows_share_cluster():
+    a = LabeledRow("a", "tutor", "전혀 다른 질문 하나", "normal", ("사실 1",))
+    b = LabeledRow("b", "tutor", "완전히 별개의 문장 둘", "normal", ("사실 0", "사실 1"))
+    c = LabeledRow("c", "tutor", "또 다른 말 셋 입니다", "normal", ("사실 9",))
+    out = build_clusters([a, b, c])
+    assert out["a"] == out["b"] != out["c"]
+
+
+def test_real_tutor_facts_never_span_splits(rows, split):
+    where: dict[str, set[str]] = {}
+    for r in rows:
+        for f in r.facts:
+            where.setdefault(f, set()).add(split.cluster[r.id])
+    assert where and all(len(v) == 1 for v in where.values())
+
+
+def test_holdout_has_tutor_rows_up_to_20_percent(rows, split):
+    tutor = [r for r in rows if r.endpoint == "tutor"]
+    held = sum(split.cluster[r.id] in split.holdout for r in tutor)
+    assert 0 < held <= 0.2 * len(tutor)
+    folded = Counter(
+        split.fold[split.cluster[r.id]] for r in tutor if split.cluster[r.id] in split.fold
+    )
+    assert max(folded.values()) - min(folded.values()) <= 2

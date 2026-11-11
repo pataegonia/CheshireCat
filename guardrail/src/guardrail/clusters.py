@@ -1,6 +1,7 @@
 """S1.4 짝 묶음 (GR-13, ADR-0013, master-plan §4.5).
 
-마지막 학습자 발화(정규화본)의 문자 3-gram Jaccard ≥ 기준인 행끼리 union-find로 잇는다.
+마지막 학습자 발화(정규화본)의 문자 3-gram Jaccard ≥ 기준이거나 튜터 정답 사실이 같은 행끼리
+union-find로 잇는다.
 서버(S2.5 KnnIndex)도 기동 때 이 함수를 쓰므로 eval 패키지를 import하지 않는다.
 """
 
@@ -54,6 +55,12 @@ def build_clusters(rows: Iterable[LabeledRow], jaccard: float = 0.5) -> dict[str
             gj = grams[j]
             if gj and len(gi & gj) / len(gi | gj) >= jaccard:
                 parent[find(j)] = find(i)
+
+    # 튜터 정답 사실(gold_facts)이 같으면 잇는다. 근거 섹션은 안 본다(섹션 공유는 누수 아님)
+    first_with_fact: dict[str, int] = {}
+    for i, r in enumerate(rows):
+        for fact in r.facts:
+            parent[find(i)] = find(first_with_fact.setdefault(fact, i))
 
     members: dict[int, list[str]] = {}
     for i, r in enumerate(rows):

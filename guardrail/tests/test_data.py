@@ -42,6 +42,7 @@ def test_labeled_rows_use_normalized_last_user_utterance(rows):
             endpoint=src.endpoint,
             text=normalize(last_user.content),
             category=src.labels["category"],
+            facts=tuple(src.labels.get("gold_facts") or ()) if src.endpoint == "tutor" else (),
         )
 
 

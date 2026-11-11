@@ -43,16 +43,18 @@ def make_splits(
     rows = list(rows)
     cluster = build_clusters(rows, jaccard)
     guard_n: Counter[str] = Counter()
+    tutor_n: Counter[str] = Counter()
     total_n: Counter[str] = Counter()
     for r in rows:
         total_n[cluster[r.id]] += 1
         guard_n[cluster[r.id]] += r.endpoint == "guard"
+        tutor_n[cluster[r.id]] += r.endpoint == "tutor"
 
     rng = random.Random(seed)  # noqa: S311  재현용 시드
     cids = sorted(total_n)
     rng.shuffle(cids)
 
-    # 홀드아웃: 가드 행 기준 holdout 비율. 튜터 행만 있는 묶음은 넣지 않는다.
+    # 홀드아웃: 가드 행 기준 holdout 비율(튜터 행만 있는 묶음은 이 단계에서 제외).
     target = round(holdout * sum(guard_n.values()))
     held: list[str] = []
     count = 0
@@ -60,6 +62,13 @@ def make_splits(
         if guard_n[cid] and count + guard_n[cid] <= target:
             held.append(cid)
             count += guard_n[cid]
+    # 튜터 홀드아웃: 튜터 행만 있는 묶음을 같은 순서로 튜터 행의 holdout 비율까지 넣는다.
+    t_target = round(holdout * sum(tutor_n.values()))
+    t_count = sum(tutor_n[c] for c in held)
+    for cid in cids:
+        if not guard_n[cid] and t_count + tutor_n[cid] <= t_target:
+            held.append(cid)
+            t_count += tutor_n[cid]
     held_set = set(held)
 
     # 나머지: 큰 묶음부터 가드 행(다음 총 행) 수가 가장 적은 폴드에 넣는다.

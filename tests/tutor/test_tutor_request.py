@@ -106,6 +106,14 @@ def test_search_query_without_a_learner_turn_is_empty():
     assert _req(("user", "only")).search_query() == ("only", [])
 
 
+def test_window_always_keeps_the_last_learner_turn():  # #108 리뷰(규격 밖 입력)
+    pairs = [("user", "q1"), ("user", "q2")] + [("assistant", f"a{i}") for i in range(6)]
+    req = _req(*pairs)
+    # 뒤에 튜터 발화가 6개 붙어도 판단 대상(q2)은 창 안에 있다(#97 tidy와 같은 규칙)
+    assert req.search_query() == ("q2", ["q1"]) and req.last_user == "q2"
+    assert [t.content for t in req.window()] == ["q1", "q2", "a0", "a1", "a2", "a3", "a4", "a5"]
+
+
 def test_window_keeps_the_first_question_when_the_last_one_is_far_back():
     pairs = [("user", "q")] + [("assistant", f"a{i}") for i in range(7)]
     req = _req(*pairs)

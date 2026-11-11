@@ -141,5 +141,10 @@ def test_startup_reads_the_config_once():
     assert state.tutor_cfg == config.load_config()
 
 
-def test_local_run_cap_comes_from_the_config():
-    assert run_local._parser().get_default("max_calls") == config.load_config().eval.max_calls
+def test_local_run_cap_comes_from_the_config(capsys):
+    ap = run_local._parser()
+    args = ap.parse_args(["--preset", "reference"])
+    assert args.max_calls is None  # 인자 정의 때는 설정을 읽지 않는다(#107 리뷰: --help가 깨짐)
+    run_local._inputs(ap, args)
+    assert args.max_calls == config.load_config().eval.max_calls
+    assert f"상한 {args.max_calls}회" in capsys.readouterr().out

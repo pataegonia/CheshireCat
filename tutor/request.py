@@ -27,9 +27,14 @@ class TutorRequest:
         return next((t.content for t in reversed(self.turns) if t.role == "user"), None)
 
     def window(self) -> tuple[Turn, ...]:
-        """첫 학습자 발화 + 마지막 메시지 WINDOW개. 버튼 문구 빼기는 #97 tidy(TU-02)가 맡는다."""
+        """첫 학습자 발화 + 마지막 메시지 WINDOW개 + 판단 대상(마지막 학습자 발화).
+
+        판단 대상은 뒤에 튜터 발화가 WINDOW개 넘게 붙어도(규격 밖 입력) 넣는다(#97 tidy와 같은
+        규칙). 버튼 문구 빼기는 #97 tidy(TU-02)가 맡는다.
+        """
         users = [i for i, t in enumerate(self.turns) if t.role == "user"]
-        keep = set(range(max(len(self.turns) - WINDOW, 0), len(self.turns))) | set(users[:1])
+        keep = set(range(max(len(self.turns) - WINDOW, 0), len(self.turns)))
+        keep |= set(users[:1]) | set(users[-1:])
         return tuple(t for i, t in enumerate(self.turns) if i in keep)
 
     def search_query(self) -> tuple[str, list[str]]:

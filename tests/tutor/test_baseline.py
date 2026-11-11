@@ -213,6 +213,37 @@ def test_tutor_calls_stop_at_the_cap_while_running(api_env, monkeypatch, tmp_pat
     assert "상한에 막혀 보내지 못한 튜터 호출" in out and "기본값이 섞인 결과" in out
 
 
+def test_tutor_cap_leaves_room_for_the_judge(api_env, monkeypatch, tmp_path, capsys):
+    async def failing(_kwargs):
+        raise httpx_status(500)
+
+    def judge(kind, _payload):  # 가짜 판정기(운영진 API를 부르지 않는다)
+        replies = {
+            "facts": {"score": 1.0},
+            "faithful": {"ok": True},
+            "complied": {"complied": False},
+        }
+        return replies[kind]
+
+    monkeypatch.setattr(llm_mod, "_openai_send", lambda: failing)
+    monkeypatch.setattr(llm_mod, "RETRY_JITTER_S", (0.0, 0.0))
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--judge", "--max-calls", "561"]
+    assert run_local.main([*argv, "--out", str(tmp_path)]) == 1
+    # 예상 561회 = (튜터 200 + 판정 310) × 1.1. 판정 몫 341회를 남기고 튜터는 220회에서 멈춘다
+    assert "튜터 LLM 호출: baseline 220회" in capsys.readouterr().out
+
+
+def test_help_works_and_runs_stop_cleanly_with_a_broken_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("TUTOR_CONFIG", str(tmp_path / "missing.yaml"))
+    with pytest.raises(SystemExit) as shown:
+        run_local.main(["--help"])
+    assert shown.value.code == 0
+    with pytest.raises(SystemExit) as stopped:  # traceback이 아니라 argparse 오류(2)로 멈춘다
+        run_local.main(["--preset", "reference", "--out", str(tmp_path)])
+    assert stopped.value.code == 2
+
+
 def httpx_status(code):
     import httpx
     import openai

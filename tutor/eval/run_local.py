@@ -13,7 +13,8 @@
 OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 action·인용만 채점한다.
 실행 전에 운영진 API 예상 호출 수(재시도 여유 1.1배, 가드 하네스와 같은 방식)를 출력하고
 `--max-calls`(기본은 config/tutor.yaml의 eval.max_calls, TU-14)를 넘으면
-아무것도 부르지 않고 멈춘다.
+아무것도 부르지 않고 멈춘다. 실행 중에는 판정 몫(예상 판정 호출)을 뺀 나머지를 튜터 LLM 호출
+상한으로 건다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 """
 
@@ -211,8 +212,9 @@ def _parser() -> argparse.ArgumentParser:
     source.add_argument("--responses", type=Path, help="JSONL: 줄마다 {id, response}")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--judge", action="store_true", help="운영진 API로 사실·충실·응함 판정")
-    cap = load_config().eval.max_calls
-    ap.add_argument("--max-calls", type=int, default=cap, help="운영진 API 호출 상한")
+    ap.add_argument(
+        "--max-calls", type=int, help="운영진 API 호출 상한(기본: config/tutor.yaml eval.max_calls)"
+    )
     ap.add_argument("--out", type=Path, default=RUNS_DIR)
     ap.add_argument("--compare", type=Path, help="이전 결과 JSON. 새로 틀린 문항을 낸다")
     ap.add_argument(
@@ -245,6 +247,8 @@ def _tutor_config(
             ap.error(f"--tutor-set 값을 읽지 못했다: {key}")
     try:
         cfg = load_config(overrides=overrides)
+    except OSError as exc:  # 설정 파일이 없거나 못 읽음
+        ap.error(f"튜터 설정 파일을 읽지 못했다: {type(exc).__name__}")
     except ValueError as exc:  # pydantic ValidationError도 ValueError
         ap.error(f"--tutor-set 설정이 맞지 않다: {type(exc).__name__}")
     if args.preset == "tutor" and cfg.mode != "v2":
@@ -277,6 +281,8 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     if args.runs < 1:
         ap.error("--runs는 1 이상이어야 한다")
     cfg, overrides = _tutor_config(ap, args)
+    if args.max_calls is None:
+        args.max_calls = cfg.eval.max_calls
     judge = judge_from_env() if args.judge else None
     if args.judge and judge is None:
         ap.error("--judge에는 OPENAI_BASE_URL·OPENAI_MODEL·OPENAI_API_KEY가 모두 필요하다")
@@ -311,7 +317,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
     rows, fixed, judge, previous, cfg, overrides = _inputs(ap, args)
-    state = _tutor_state(cfg, overrides, args.max_calls) if args.preset == "tutor" else None
+    reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
+    tutor_cap = args.max_calls - reserve
+    state = _tutor_state(cfg, overrides, tutor_cap) if args.preset == "tutor" else None
     if fixed is None:  # 덮은 설정이 없으면 tutor.handle(기본 state)로 부른다
         all_responses = collect_runs(args.preset, rows, args.runs, state if overrides else None)
     else:
@@ -330,8 +338,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
         blocked = sum(state.tutor_llm.blocked.values())
     if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
-        sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(--max-calls ")
-        sys.stdout.write(f"{args.max_calls}): 기본값이 섞인 결과다\n")
+        sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")
+        sys.stdout.write(
+            f" = --max-calls {args.max_calls} - 판정 몫 {reserve}): 기본값이 섞인 결과다\n"
+        )
     if previous is not None:
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")

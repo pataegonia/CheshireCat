@@ -23,13 +23,10 @@ _INVISIBLE_RANGES = (
     (0xE0100, 0xE01EF),
 )
 _JAMO_RUN = re.compile("[ㄱ-ㅣ]+")
-_TAG_CHARS = re.compile("[\U000e0000-\U000e007f]")
-# 깃발 이모지: 검은 깃발 + 영국 세 지역 코드 태그 + 취소 태그. 다른 태그열은 숨긴 문장.
-_FLAG = re.compile(
-    "\U0001f3f4(?:"
-    + "|".join("".join(chr(0xE0000 + ord(c)) for c in code) for code in ("gbeng", "gbsct", "gbwls"))
-    + ")\U000e007f"
-)
+TAG_CHARS = re.compile("[\U000e0000-\U000e007f]")
+# 깃발 이모지: 검은 깃발 바로 뒤에 소문자·숫자 태그 1–7개와 종료 태그(C2-judges S2.3).
+# S2.3 has_hidden_tags가 같은 패턴을 쓴다. 이 밖의 태그 문자는 숨긴 것이다.
+FLAG_SEQUENCE = re.compile("\U0001f3f4[\U000e0030-\U000e0039\U000e0061-\U000e007a]{1,7}\U000e007f")
 _VS = "\ufe0e\ufe0f"
 _KEYCAP = "\u20e3"
 
@@ -117,7 +114,7 @@ def normalize(text: str) -> str:
 
 def strip_tags(text: str) -> str:
     """태그 문자 U+E0000–E007F만 지운다. 자모 조합 등 다른 정규화는 하지 않는다."""
-    return _TAG_CHARS.sub("", text)
+    return TAG_CHARS.sub("", text)
 
 
 def decode_tags(text: str) -> tuple[str, str]:
@@ -126,35 +123,40 @@ def decode_tags(text: str) -> tuple[str, str]:
     깃발 이모지의 태그는 풀지 않는다. 태그가 없으면 푼 문자열은 빈 문자열이다.
     """
     decoded = "".join(
-        chr(ord(c) - 0xE0000) for c in _FLAG.sub("", text) if 0xE0020 <= ord(c) <= 0xE007E
+        chr(ord(c) - 0xE0000) for c in FLAG_SEQUENCE.sub("", text) if 0xE0020 <= ord(c) <= 0xE007E
     )
     view = normalize(strip_tags(text))
     return (f"{view} [숨긴 문자: {decoded}]" if decoded else view), decoded
 
 
 def _is_emoji(ch: str) -> bool:
-    # 라틴-1 기호·화살표(©, →)는 제외: 이모지 그림 문자(1F000대)와 기타 기호·딩뱃(2600–27BF)만
-    if "☀" <= ch <= "➿" or "🀀" <= ch <= "🫿":
-        return True
-    return ch in _VS
+    """이모지 그림 문자(U+1F000대, 피부색 수정자 포함)와 기타 기호·딩뱃(U+2600–27BF).
+    라틴-1 기호·화살표(°, ©, →)는 이모지로 보지 않는다."""
+    return "☀" <= ch <= "➿" or "\U0001f000" <= ch <= "\U0001faff"
 
 
 def _in_emoji_sequence(text: str, i: int) -> bool:
-    """ZWJ는 이모지 사이에서, 변형 선택자는 이모지·키캡 밑글자 뒤에서만 정상으로 본다."""
-    prev, nxt = text[i - 1 : i] if i else "", text[i + 1 : i + 2]
-    if text[i] == "\u200d":
-        return bool(prev and nxt) and _is_emoji(prev) and _is_emoji(nxt)
-    if text[i] in _VS:
-        return unicodedata.category(prev or " ") == "So" or (
-            bool(prev) and prev in "#*0123456789" and nxt == _KEYCAP
-        )
+    """변형 선택자는 이모지·키캡 밑글자 뒤에서만, ZWJ는 (변형 선택자를 건너뛴) 앞 글자와
+    뒤 글자가 둘 다 이모지일 때만 정상으로 본다."""
+    ch, prev, nxt = text[i], text[i - 1 : i], text[i + 1 : i + 2]
+    if ch in _VS:
+        keycap = bool(prev) and prev in "#*0123456789" and nxt == _KEYCAP
+        return keycap or (bool(prev) and _is_emoji(prev))
+    if ch == "‍":
+        # 변형 선택자 하나는 건너뛴다. 그 선택자가 이모지 뒤에 있지 않으면 그 선택자도 드러난다.
+        base = text[i - 2 : i - 1] if prev and prev in _VS else prev
+        return bool(base) and bool(nxt) and _is_emoji(base) and _is_emoji(nxt)
     return False
 
 
 def reveal_hidden(answer: str) -> str:
-    """답변의 숨긴 문자를 드러낸다. 태그 문자(U+E0020–E007E)는 ASCII로, 나머지 폭 없는 문자는
-    `<U+200B>` 형식으로 바꾼다. 이모지 시퀀스의 ZWJ·변형 선택자, 깃발 태그, 맨 앞 BOM은 둔다."""
-    flags = {m.start(): m.end() for m in _FLAG.finditer(answer)}
+    """답변의 숨긴 문자를 드러낸다. 태그 문자(U+E0020–E007E)는 ASCII로, 나머지 폭 없는 문자와
+    태그 블록(U+E0000–E00FF)의 남은 문자는 `<U+200B>` 형식으로 바꾼다. 이모지 시퀀스의
+    ZWJ·변형 선택자, 깃발 이모지, 맨 앞 BOM은 둔다.
+
+    파이썬 루프라 긴 입력은 느리다(140만 자에 약 1초). `max_answer_chars`로 자른 뒤 호출한다.
+    """
+    flags = {m.start(): m.end() for m in FLAG_SEQUENCE.finditer(answer)}
     out: list[str] = []
     i, n = 0, len(answer)
     while i < n:
@@ -166,6 +168,8 @@ def reveal_hidden(answer: str) -> str:
         cp = ord(ch)
         if 0xE0020 <= cp <= 0xE007E:
             out.append(chr(cp - 0xE0000))
+        elif cp <= 0xE00FF and cp >= 0xE0000:
+            out.append(f"<U+{cp:04X}>")
         elif _visible(ch) or (i == 0 and cp == 0xFEFF) or _in_emoji_sequence(answer, i):
             out.append(ch)
         else:

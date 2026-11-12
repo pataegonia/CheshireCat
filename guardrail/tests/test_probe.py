@@ -58,6 +58,7 @@ def test_summarize_counts_codes_length_tokens():
     assert s["unsent"] == 0
     assert s["tokens_p50"] == pytest.approx(405.0)
     assert s["tokens_max"] == 800
+    assert s["max_ms"] == pytest.approx(400.0)  # p95가 가리는 가장 느린 호출
 
 
 def test_estimate_default_is_189_and_under_cap():
@@ -170,6 +171,27 @@ async def test_run_truncated_json_retries_stay_under_cap():
     assert rep["length"]["800"]["InputOut"]["errors"] == {"bad_json": 12}
     assert rep["length"]["800"]["InputOut"]["length_rate"] == 1.0
     assert rep["cap_exhausted"] is True
+
+
+async def test_run_length_counts_truncation_even_if_retry_would_succeed():
+    # 처음엔 잘리고 재시도면 정상으로 끝나는 응답. 재시도가 잘림을 가리면 length_rate가 0이 된다
+    seen: set[str] = set()
+
+    def first_truncated(kwargs):
+        if kwargs.get("max_completion_tokens") == 1200 and "response_format" in kwargs:
+            key = json.dumps(kwargs["messages"], ensure_ascii=False)
+            if key not in seen:
+                seen.add(key)
+                return Ok(content='{"evid', finish_reason="length", completion_tokens=1200)
+        return _respond(kwargs)
+
+    fake = FakeLLM(respond=first_truncated)
+    rep = await _run(fake)
+    cell = rep["length"]["1200"]["InputOut"]
+    truncated = cell["errors"].get("bad_json", 0)
+    assert truncated > 0  # 재시도가 잘림을 가리면 0
+    assert cell["length_rate"] == round(truncated / 12, 3)
+    assert cell["attempts"] == 12  # 길이 칸은 재시도하지 않는다
 
 
 async def test_run_skips_output_cell_without_answers():

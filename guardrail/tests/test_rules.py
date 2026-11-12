@@ -162,6 +162,41 @@ def test_value_norm_man_cheon_eok():
     assert len(unsupported_literals("5만 원", "50,000원")) == 1
 
 
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("만 원", "10000원"),
+        ("천 원", "1000원"),
+        ("1억 원", "100000000원"),
+        ("1,500만 원", "15000000원"),
+        ("1.2.3만 원", "1.2.3만원"),  # 잘못된 숫자는 바꾸지 않는다(예외 없음)
+        ("3,5만 원", "3,5만원"),
+        ("수천 원", "수천원"),
+    ],
+)
+def test_value_norm_money_edge_cases(text, want):
+    ref = f"참조 {text}"
+    assert unsupported_literals(f"값 {want}", ref, ("value_norm",)) == []
+    assert unsupported_literals(text, ref, ("value_norm",)) == []
+
+
+def test_token_across_citation_covers_citation():
+    a = "답 12(PY-01-01)34 끝"
+    (tok,) = extract_literals(a)
+    assert (tok.kind, tok.value, a[tok.start : tok.end]) == (
+        "multi_digit",
+        "1234",
+        "12(PY-01-01)34",
+    )
+
+
+def test_fullwidth_digits_and_empty_text():
+    a = "모두 ５개"
+    (tok,) = extract_literals(a)
+    assert (tok.value, a[tok.start : tok.end]) == ("5개", "５개")
+    assert extract_literals("") == []
+
+
 def test_units_extra_only_when_enabled():
     assert extract_literals("3주 동안") == []
     toks = extract_literals("3주 동안 7일 2년 10글자", ("units_extra",))

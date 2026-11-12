@@ -39,7 +39,9 @@ _TOKEN_RX_UNITS_EXTRA = re.compile(
     rf"(?P<unit_number>\d+(?:[.,]\d+)*\s?(?:{_UNITS}{_UNITS_EXTRA}))" + _REST
 )
 _CODE_RX = re.compile(r"```.*?```|`[^`]*`", re.S)
-_MONEY_RX = re.compile(r"(?<![가-힣])(\d+(?:[.,]\d+)*)?\s?([억만천])\s?원")
+# 콤마는 세 자리 구분만, 소수점은 하나만.
+# "1.2.3만 원"·"3,5만 원"은 바꾸지 않는다(Decimal 오류·오변환 방지)
+_MONEY_RX = re.compile(r"(?<![가-힣\d.,])(\d+(?:,\d{3})*(?:\.\d+)?)?\s?([억만천])\s?원")
 _MULT = {"천": 1000, "만": 10_000, "억": 100_000_000}
 
 EXTRA_TOKENS = frozenset({"value_norm", "units_extra", "bare_numeral", "backtick_latin"})
@@ -88,7 +90,13 @@ def _strip_cites(text: str) -> tuple[str, list[int]]:
 
 
 def extract_literals(text_raw: str, extra: Iterable[str] = ()) -> list[LiteralToken]:
-    """원문에서 V2 토큰을 순서대로 뽑는다. extra = output.rule_extra_tokens."""
+    """원문에서 V2 토큰을 순서대로 뽑는다. extra = output.rule_extra_tokens.
+
+    인용을 사이에 둔 토큰("12(PY-01-01)34" → value "1234")의 start·end는 인용까지 덮는다.
+    원본 스크립트는 이 토큰을 ans.find로 못 찾아 구간에서 빠뜨린다.
+    여기서는 인용을 포함한 구간을 낸다
+    (공개 세트에는 이런 토큰이 없어 수치는 같다).
+    """
     ex = _check_extra(extra)
     stripped, pos = _strip_cites(text_raw)
     rx = _TOKEN_RX_UNITS_EXTRA if "units_extra" in ex else _TOKEN_RX
@@ -134,7 +142,8 @@ def rule_spans(
     for text in dict.fromkeys(answer_raw[t.start : t.end] for t in tokens):
         if not text:
             continue
-        i = answer_raw.find(text)  # 첫 위치(같은 토큰이 여러 번 나와도 창 하나)
+        # 첫 위치(같은 토큰이 여러 번 나와도 창 하나). 원본처럼 "13개" 안의 "3개"도 첫 위치로 친다
+        i = answer_raw.find(text)
         j = i + len(text)
         wins.add((max(0, i - k), j + k) if mode == "pm4" else _eojeol(answer_raw, i, j))
     merged: list[tuple[int, int]] = []

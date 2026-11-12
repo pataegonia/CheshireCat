@@ -11,7 +11,7 @@ from tutor.judge.flow import prepare_judge
 from tutor.retrieval import default_index
 from tutor.retrieval.embedding import BUILD_TIMEOUT_S, Embed, EmbeddingSearch, openai_embed
 from tutor.runtime.config import TutorConfig, load_config
-from tutor.runtime.llm import build_llm
+from tutor.runtime.llm import build_llm, missing_api_env
 
 log = logging.getLogger("tutor.startup")
 
@@ -55,7 +55,11 @@ async def startup(app_state: Any) -> None:
     """설정·KB 색인·LLM 호출기(와 켜졌으면 임베딩 검색)를 기동 때 만든다(첫 요청이 아니라, SPEC §3).
 
     설정·KB를 못 읽으면 예외가 나서 서버가 뜨지 않는다. LLM 호출기는 가드 게이트를 같이 쓴다.
-    예시 kNN·이름 사전도 뒤 이슈에서 여기서 만든다.
+    운영진 API 환경변수가 비면 서버는 뜨지만(언제나 200) 모든 답이 기본값이 되므로, 빈 이름만
+    오류로 남긴다(값은 남기지 않는다, TU-15). 예시 kNN·이름 사전도 뒤 이슈에서 여기서 만든다.
     """
+    missing = missing_api_env()
+    if missing:
+        log.error("튜터 LLM 환경변수가 비어 모든 답이 기본값이 된다: %s", "·".join(missing))
     prepare(app_state)
     await build_embedding(app_state)

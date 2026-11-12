@@ -48,6 +48,21 @@ class LLMResult:
     completion_tokens: int | None  # 마지막 시도의 usage.completion_tokens. 없으면 None
 
 
+API_ENV = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")
+
+
+def openai_env() -> dict[str, str]:
+    """운영진 API 설정(앞뒤 공백 제거). 하나라도 비면 ValueError, 문구에는 이름만.
+
+    주소가 비면 SDK가 공개 OpenAI 주소로 팀 키를 보내므로 클라이언트를 만들기 전에 막는다.
+    """
+    env = {k: os.environ.get(k, "").strip() for k in API_ENV}
+    missing = [k for k, v in env.items() if not v]
+    if missing:
+        raise ValueError(f"환경변수 {'·'.join(missing)}이 필요하다")
+    return env
+
+
 @dataclass
 class _Attempt:
     parsed: BaseModel | None = None
@@ -124,13 +139,12 @@ class LLM:
             if self._started:
                 return
             if self._send is None:
-                key = os.environ.get("OPENAI_API_KEY")
-                if not key or not self.model:
-                    raise ValueError("환경변수 OPENAI_API_KEY·OPENAI_MODEL이 필요하다")
+                env = openai_env()
+                self.model = env["OPENAI_MODEL"]
                 t = self.cfg.timeout_s
                 client = openai.AsyncOpenAI(
-                    base_url=os.environ.get("OPENAI_BASE_URL") or None,
-                    api_key=key,
+                    base_url=env["OPENAI_BASE_URL"],
+                    api_key=env["OPENAI_API_KEY"],
                     timeout=openai.Timeout(
                         connect=t.connect, read=t.read, write=t.write, pool=t.pool
                     ),

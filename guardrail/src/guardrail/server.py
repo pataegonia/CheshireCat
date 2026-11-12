@@ -28,6 +28,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from guardrail.config import GuardConfig, load_config
 from guardrail.guard import ConstantGuard, Judgement
+from guardrail.llm import openai_env
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict, parse_request
 
 access_log = logging.getLogger("guardrail.access")
@@ -250,11 +251,17 @@ def _tutor_body(answer: str) -> dict[str, Any]:
 
 
 async def _tutor_answer(state: Any, req: GuardRequest) -> str:
-    model = os.environ["OPENAI_MODEL"]
+    model = os.environ["OPENAI_MODEL"].strip()
     if getattr(state, "tutor_client", None) is None:
         from openai import AsyncOpenAI  # 첫 호출 때만 환경변수를 읽는다
 
-        state.tutor_client = AsyncOpenAI(timeout=TUTOR_TIMEOUT_S, max_retries=0)
+        env = openai_env()  # 주소가 비면 공개 OpenAI로 나가므로 만들지 않는다
+        state.tutor_client = AsyncOpenAI(
+            base_url=env["OPENAI_BASE_URL"],
+            api_key=env["OPENAI_API_KEY"],
+            timeout=TUTOR_TIMEOUT_S,
+            max_retries=0,
+        )
     llm = getattr(state.guard, "llm", None)
     gate = llm.slot() if llm is not None else contextlib.nullcontext()
     messages = [{"role": "system", "content": TUTOR_SYSTEM}]

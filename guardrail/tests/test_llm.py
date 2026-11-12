@@ -179,7 +179,11 @@ async def test_start_without_env_is_a_config_error(monkeypatch):
         await LLM(BASE).start()
 
 
-ENV = {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "gpt-5-nano", "OPENAI_BASE_URL": "http://proxy.test/v1"}
+ENV = {
+    "OPENAI_API_KEY": "k",
+    "OPENAI_MODEL": "gpt-5-nano",
+    "OPENAI_BASE_URL": "http://proxy.test/v1",
+}
 
 
 class _Built(Exception):
@@ -403,8 +407,8 @@ async def test_errors_carry_codes_not_messages():
 
 @pytest.mark.live
 async def test_live_probe_and_input_call():
-    if not (os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_MODEL")):
-        pytest.skip("OPENAI_API_KEY·OPENAI_MODEL 없음")
+    if not all(os.environ.get(k, "").strip() for k in ENV):
+        pytest.skip("OPENAI_API_KEY·OPENAI_MODEL·OPENAI_BASE_URL 없음")
     llm = LLM(BASE)
     await llm.start()
     msgs = [

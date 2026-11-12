@@ -3,7 +3,10 @@
 메시지 배치: system = `prompts/input_judge.md` 본문(요청마다 같은 접두라 프롬프트 캐시가 맞는다),
 user = `<examples>` → `<conversation>` → `<target>` → (`oom_kb_snippet`) `<kb>`.
 태그에 넣는 데이터는 원문을 `input.max_chars`로 자르고 → 정규화(숨긴 태그 문자는 드러냄) →
-`html.escape` 순서로 만든다(council D3). 길이 상한은 escape 전 문자열에 건다.
+`html.escape` 순서로 만든다(council D3). 길이 상한은 원문에 건다: 숨긴 태그 문자가 있으면
+드러낸 표식(" [숨긴 문자: …]")만큼 상한을 넘을 수 있다.
+알려진 한계: few-shot 예시(`LabeledRow.text` = `normalize`)는 태그 문자를 지운 본이라 표식이
+없다(공개 400행에 태그 문자가 든 발화는 0건).
 """
 
 import html
@@ -17,6 +20,16 @@ from guardrail.preprocess import decode_tags
 from guardrail.schema import Category, Message
 
 _ROLES = frozenset({"user", "assistant"})
+# 프로세스당 한 번 읽는다(요청마다 디스크 읽기·YAML 파싱을 하지 않고, 평가 중 파일이 바뀌어도
+# 같은 system 메시지). 키 = (프롬프트 폴더, 파일 이름)
+_SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
+
+
+def _system_prompt(cfg: GuardConfig) -> str:
+    key = (cfg.paths.prompts, cfg.prompts.get("input_judge", ""))
+    if key not in _SYSTEM_PROMPTS:
+        _SYSTEM_PROMPTS[key] = load_prompt(cfg, "input_judge")[1]
+    return _SYSTEM_PROMPTS[key]
 
 
 def build_window(messages: Sequence[Message], last: int) -> list[Message]:
@@ -60,7 +73,12 @@ def build_messages(
     examples: Sequence[LabeledRow],
     cfg: GuardConfig,
     kb_snippet: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, str]]:
+    """[system(고정 프롬프트), user(요청별 블록)]. window는 대화 전체를 넘겨도 된다.
+
+    `<conversation>`에는 대상 발화도 들어 있다(창의 마지막 메시지). `<target>`은 판정 대상을
+    따로 가리킨다.
+    """
     parts = []
     if cfg.toggles.knn_fewshot and examples:
         parts.append(_examples(examples, cfg))
@@ -70,7 +88,7 @@ def build_messages(
         snippet = html.escape(kb_snippet[: cfg.input.oom_snippet_chars], quote=False)
         parts.append(f"<kb>{snippet}</kb>")
     return [
-        {"role": "system", "content": load_prompt(cfg, "input_judge")[1]},
+        {"role": "system", "content": _system_prompt(cfg)},
         {"role": "user", "content": "\n\n".join(parts)},
     ]
 

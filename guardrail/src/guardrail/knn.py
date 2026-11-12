@@ -54,7 +54,9 @@ def select_fewshot(
     top = decision_of(ranked[0].category, block)
     opposite = next((r for r in ranked if decision_of(r.category, block) != top), None)
     if opposite is not None:
-        add(opposite)  # ① 자리를 먼저 잡고, 짝은 순위에서 만날 때 더한다(1위를 밀어내지 않게)
+        # ① 상한(②·③)보다 앞선다. 자리를 먼저 잡고, 짝은 순위에서 만날 때 더한다
+        # (1위를 밀어내지 않게)
+        add(opposite)
     for r in ranked:
         if r is not opposite:
             if not fits(r):
@@ -76,7 +78,8 @@ class KnnIndex:
         vec = TfidfVectorizer(analyzer=k.analyzer, ngram_range=tuple(k.ngram))
         # 행마다 L2 정규화 → 내적 = 코사인
         matrix = vec.fit_transform([r.text for r in rows]).tocsr()
-        for arr in (matrix.data, matrix.indices, matrix.indptr):
+        # 배열은 쓰기 금지. vocabulary_(dict)는 요청 경로가 transform만 해서 바뀌지 않는다
+        for arr in (matrix.data, matrix.indices, matrix.indptr, vec.idf_):
             arr.flags.writeable = False
         init = object.__setattr__
         init(self, "_rows", tuple(rows))
@@ -89,6 +92,9 @@ class KnnIndex:
         init(self, "_per_cat", k.per_category)
 
     def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("KnnIndex는 생성 뒤 바뀌지 않는다")
+
+    def __delattr__(self, name: str) -> None:
         raise AttributeError("KnnIndex는 생성 뒤 바뀌지 않는다")
 
     @property
@@ -105,6 +111,9 @@ class KnnIndex:
         return [self._rows[i] for i in order]
 
     def neighbors(self, text: str, k: int) -> list[LabeledRow]:
+        """코사인 가까운 순 k개(k가 행 수보다 크면 전부)."""
+        if k < 0:
+            raise ValueError("k는 0 이상")
         return self._ranked(text)[:k]
 
     def majority(self, text: str) -> Category:

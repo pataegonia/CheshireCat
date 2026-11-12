@@ -5,6 +5,7 @@
 """
 
 from collections.abc import Sequence
+from typing import cast
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -26,7 +27,7 @@ class LrClassifier:
         vec = TfidfVectorizer(analyzer=c.analyzer, ngram_range=tuple(c.ngram))
         model = LogisticRegression(C=c.C, max_iter=MAX_ITER)
         model.fit(vec.fit_transform([r.text for r in rows]), [r.category for r in rows])
-        for arr in (model.coef_, model.intercept_):
+        for arr in (model.coef_, model.intercept_, vec.idf_):
             arr.flags.writeable = False
         object.__setattr__(self, "_vec", vec)
         object.__setattr__(self, "_model", model)
@@ -34,5 +35,8 @@ class LrClassifier:
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("LrClassifier는 생성 뒤 바뀌지 않는다")
 
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("LrClassifier는 생성 뒤 바뀌지 않는다")
+
     def predict(self, text: str) -> Category:
-        return str(self._model.predict(self._vec.transform([text]))[0])  # type: ignore[return-value]
+        return cast(Category, str(self._model.predict(self._vec.transform([text]))[0]))

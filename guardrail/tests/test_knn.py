@@ -147,6 +147,20 @@ def test_pair_of_top1_does_not_push_out_top1():
     assert out[-1].id == "t"
 
 
+def test_pair_of_opposite_added_when_reached():
+    ranked = [_row("t"), _row("x", "answer_seeking"), _row("b", "off_topic")]
+    ranked += [_row("bm", "emotional_distress")]
+    cluster = {"t": "t", "x": "x", "b": "B", "bm": "B"}
+    ids = [r.id for r in _select(ranked, cluster)]
+    assert ids == ["bm", "b", "x", "t"]
+
+
+def test_rule1_precedes_total_cap():
+    # ①이 ③보다 앞선다: max_examples=1이면 반대쪽 최근접만 남는다(우선순위 그대로)
+    ranked = [_row("t"), _row("b", "off_topic")]
+    assert [r.id for r in _select(ranked, max_examples=1)] == ["b"]
+
+
 def test_empty_ranked_gives_empty():
     assert _select([]) == []
 
@@ -160,7 +174,7 @@ def test_fewshot_invariants_on_public_rows(index, rows, cfg, block):
         out = index.fewshot(r.text)
         ranked = index.neighbors(r.text, len(rows))
         pos = {x.id: i for i, x in enumerate(ranked)}
-        assert 4 <= len(out) <= k.max_examples
+        assert 4 <= len(out) <= k.max_examples  # GR-05: 4–8개
         cats = [x.category for x in out]
         assert max(cats.count(c) for c in cats) <= k.per_category
         assert out[-1].id == ranked[0].id  # 가장 비슷한 것 마지막
@@ -215,6 +229,15 @@ def test_majority_uses_knn_vote_k_neighbors():
     assert KnnIndex(rs, five).majority("사과 사과 사과") == "normal"
 
 
+def test_neighbors_k_bounds(cfg):
+    rs = [_row("a", text="가나다"), _row("b", text="라마바")]
+    idx = KnnIndex(rs, cfg)
+    assert len(idx.neighbors("가나다", 10)) == 2
+    assert idx.neighbors("가나다", 0) == []
+    with pytest.raises(ValueError):
+        idx.neighbors("가나다", -1)
+
+
 def test_index_computes_clusters_with_shared_function(index, rows):
     assert index.clusters == build_clusters(rows)
 
@@ -242,21 +265,31 @@ def test_read_only_after_construction(index):
         index._matrix = None
     with pytest.raises(AttributeError):
         index.anything_new = 1
+    with pytest.raises(AttributeError):
+        del index._rows
     assert isinstance(index.rows, tuple)
+    assert not index._vec.idf_.flags.writeable
 
 
 def test_requests_do_not_change_index(rows, cfg):
     idx = KnnIndex(rows, cfg)
-    snap = (idx._matrix.data.copy(), idx._matrix.indices.copy(), dict(idx._vec.vocabulary_))
-    idf = idx._vec.idf_.copy()
+
+    def fingerprint():
+        m = idx._matrix
+        arrays = (m.data, m.indices, m.indptr, idx._vec.idf_)
+        return (
+            [a.tobytes() for a in arrays],
+            sorted(idx._vec.vocabulary_.items()),
+            idx.rows,
+            dict(idx.clusters),
+        )
+
+    before = fingerprint()
     for r in rows[::3]:
         idx.fewshot(r.text + " 새로운 요청 문장")
+        idx.neighbors(r.text, 3)
         idx.majority("완전히 처음 보는 질문 xyz")
-    assert np.array_equal(idx._matrix.data, snap[0])
-    assert np.array_equal(idx._matrix.indices, snap[1])
-    assert idx._vec.vocabulary_ == snap[2]
-    assert np.array_equal(idx._vec.idf_, idf)
-    assert len(idx.rows) == len(rows)
+    assert fingerprint() == before
     assert not idx._matrix.data.flags.writeable
 
 

@@ -60,10 +60,24 @@ def test_same_input_same_output(rows, cfg):
     assert [a.predict(r.text) for r in rows[::7]] == [b.predict(r.text) for r in rows[::7]]
 
 
-def test_trains_without_convergence_warning(rows, cfg):
+@pytest.mark.parametrize("c", [1.0, 100.0])
+def test_trains_without_convergence_warning(rows, c):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        LrClassifier(rows, cfg)
+        LrClassifier(rows, load_config(overrides={"input.lr.C": c}))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="미정: input.lr.C=1.0이면 LR이 모든 행을 normal로 낸다(5-분할 block F1 0)",
+)
+def test_fold_predictions_are_not_constant(rows, cfg):
+    split = cv.load_splits()
+    preds = set()
+    for fold in range(split.folds):
+        clf = LrClassifier(cv.train_rows(split, rows, fold=fold), cfg)
+        preds |= {clf.predict(r.text) for r in rows if split.fold.get(split.cluster[r.id]) == fold}
+    assert len(preds) >= 2
 
 
 def test_trains_on_fold_rows(rows, cfg):
@@ -78,17 +92,24 @@ def test_read_only_after_construction(clf):
         clf._model = None
     with pytest.raises(AttributeError):
         clf.anything_new = 1
+    with pytest.raises(AttributeError):
+        del clf._model
+    assert not clf._vec.idf_.flags.writeable
     assert not clf._model.coef_.flags.writeable
     assert not clf._model.intercept_.flags.writeable
 
 
 def test_requests_do_not_change_model(rows, cfg):
     clf = LrClassifier(rows, cfg)
-    coef, vocab = clf._model.coef_.copy(), dict(clf._vec.vocabulary_)
+
+    def fingerprint():
+        arrays = (clf._model.coef_, clf._model.intercept_, clf._vec.idf_)
+        return [a.tobytes() for a in arrays], sorted(clf._vec.vocabulary_.items())
+
+    before = fingerprint()
     for r in rows[::3]:
         clf.predict(r.text + " 처음 보는 요청 문장")
-    assert np.array_equal(clf._model.coef_, coef)
-    assert clf._vec.vocabulary_ == vocab
+    assert fingerprint() == before
 
 
 def test_train_400_rows_under_10s(rows, cfg):

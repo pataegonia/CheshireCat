@@ -1,0 +1,45 @@
+# 저장소 루트 = uv workspace 루트 + 통합 프로젝트(integration/, 루트 app.py, tests/).
+# lock은 이 폴더의 uv.lock 하나다(가드·튜터 공통, docs/PRD.md D5). 설치: `uv sync --all-packages`.
+[project]
+name = "cheshirecat"
+version = "0.1.0"
+description = "대회 제출물: /guard · /tutor 한 앱"
+requires-python = ">=3.12"
+dependencies = ["guardrail"]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.16.0",
+    "httpx>=0.28.1",
+    "hypothesis>=6.170.14",
+    "jsonschema==4.26.0",
+    "pytest>=8",
+    "pytest-cov>=7",
+    "ruff>=0.6",
+]
+
+# integration/ · tutor/ 는 폴더가 곧 패키지라 설치하지 않고 루트에서 import한다.
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["guardrail", "tutor"]
+
+[tool.uv.sources]
+guardrail = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "T20"]  # S: bandit 보안 규칙, T20: print 금지
+
+[tool.ruff.lint.isort]
+known-first-party = ["integration", "tests", "tutor"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S311"]
+
+[tool.coverage.run]
+source = ["integration"]

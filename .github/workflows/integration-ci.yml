@@ -18,7 +18,6 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "guardrail/pyproject.toml"
-      - "guardrail/uv.lock"
       - ".github/workflows/integration-ci.yml"
   workflow_dispatch:
 
@@ -86,7 +85,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - if: steps.proj.outputs.present == 'true'
-        run: uv sync --locked
+        run: uv sync --locked --all-packages  # 멤버(가드·튜터)와 각자의 dev 그룹까지
       # 존재하는 경로만 검사한다(tutor/ 등이 아직 없을 수 있다)
       - if: steps.proj.outputs.present == 'true'
         run: |

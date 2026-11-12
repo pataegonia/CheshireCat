@@ -175,6 +175,7 @@ def test_tutor_set_is_checked_before_running(api_env, argv, tmp_path):
     [
         ("OPENAI_API_KEY", None),
         ("OPENAI_MODEL", None),
+        ("OPENAI_MODEL", "  "),
         ("OPENAI_BASE_URL", None),
         ("OPENAI_BASE_URL", "  "),  # 공백뿐인 값도 없는 것으로 본다
     ],

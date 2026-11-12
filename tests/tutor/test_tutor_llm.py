@@ -3,6 +3,8 @@
 import asyncio
 import contextlib
 import json
+import logging
+import os
 import types
 
 import httpx
@@ -393,6 +395,43 @@ def test_startup_builds_the_llm_on_the_guard_gate():
     asyncio.run(tutor.startup(state))
     assert isinstance(state.tutor_llm, tutor_llm.TutorLLM)
     assert state.tutor_llm.gate is guard.slot
+
+
+def test_startup_names_the_missing_api_env_without_values(monkeypatch, caplog):
+    """서버가 OPENAI_* 없이 뜨면 모든 답이 기본값이 된다. 기동 때 빈 이름만 오류로 남긴다."""
+    import tutor
+
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key-value")
+    monkeypatch.setenv("OPENAI_MODEL", "  ")  # 공백뿐인 값도 없는 것으로 본다
+    # OPENAI_BASE_URL은 conftest가 지운 상태다
+    with caplog.at_level(logging.ERROR, logger="tutor.startup"):
+        asyncio.run(tutor.startup(types.SimpleNamespace()))
+    text = "\n".join(r.getMessage() for r in caplog.records if r.name == "tutor.startup")
+    assert "OPENAI_MODEL" in text and "OPENAI_BASE_URL" in text
+    assert "OPENAI_API_KEY" not in text and "secret-key-value" not in text  # 값은 남기지 않는다
+
+
+def test_startup_is_quiet_when_the_api_env_is_set(monkeypatch, caplog):
+    import tutor
+
+    for name, value in (("OPENAI_API_KEY", "k"), ("OPENAI_MODEL", "m")):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
+    with caplog.at_level(logging.ERROR, logger="tutor.startup"):
+        asyncio.run(tutor.startup(types.SimpleNamespace()))
+    assert [r for r in caplog.records if r.name == "tutor.startup"] == []
+
+
+def test_build_strips_the_model_name(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL", "  openai/gpt-5-nano\n")  # .env 줄 끝 공백
+    assert tutor_llm.build_llm(types.SimpleNamespace(), CFG).model == "openai/gpt-5-nano"
+
+
+def test_shell_api_keys_never_reach_tests():
+    """런박스 셸에 진짜 키가 있어도 테스트는 보지 못한다(conftest가 지운다, 운영진 API를 부르지 않게)."""
+    names = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")
+    names += ("EMBEDDING_API_KEY", "EMBEDDING_MODEL", "EMBEDDING_BASE_URL")
+    assert [name for name in names if name in os.environ] == []
 
 
 class FakeClient:

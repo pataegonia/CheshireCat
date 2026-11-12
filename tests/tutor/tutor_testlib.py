@@ -46,8 +46,8 @@ FAKE_OPENAI_ENV = {
 }
 
 
-def fake_openai(monkeypatch) -> list[dict]:
-    """운영진 API 환경변수 자리에 가짜 값을 넣고, 튜터 LLM 전송은 보내지 않고 auth 오류로 끝낸다.
+def block_openai(monkeypatch) -> list[dict]:
+    """운영진 API 환경변수 자리에 가짜 값을 넣고, 튜터 LLM 전송은 막는다(보내지 않고 auth 오류).
 
     run_local의 tutor 프리셋은 두 모드 모두 이 환경변수를 요구한다(#125). 셸에 진짜 키가 있어도
     테스트가 운영진 API를 부르지 않는다. 보내려던 요청(kwargs)을 차례로 돌려준다.
@@ -60,12 +60,12 @@ def fake_openai(monkeypatch) -> list[dict]:
         monkeypatch.setenv(name, value)
     sent: list[dict] = []
 
-    def fake_openai_send():
+    def blocked_send():
         async def send(kwargs):
             sent.append(kwargs)
-            raise openai.OpenAIError("가짜 전송")  # auth 오류: 다시 보내지 않는다
+            raise openai.OpenAIError("막은 전송")  # auth 오류: 다시 보내지 않는다
 
         return send
 
-    monkeypatch.setattr(llm_mod, "_openai_send", fake_openai_send)
+    monkeypatch.setattr(llm_mod, "_openai_send", blocked_send)
     return sent

@@ -304,5 +304,13 @@ def build_llm(app_state: Any, cfg: TutorConfig) -> TutorLLM:
         "reasoning_effort": cfg.llm.reasoning_effort,
         "max_completion_tokens": cfg.llm.max_completion_tokens,
     }
-    model = os.environ.get("OPENAI_MODEL", "")
+    model = (os.environ.get("OPENAI_MODEL") or "").strip()  # .env 줄 끝 공백
     return TutorLLM(_openai_send(), gate, model=model, base=base, overrides=overrides)
+
+
+API_ENV = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")  # 튜터 LLM이 부를 때 필요한 것
+
+
+def missing_api_env() -> list[str]:
+    """비었거나 공백뿐인 운영진 API 환경변수 이름. 하나라도 있으면 튜터 LLM은 보내지 못한다."""
+    return [name for name in API_ENV if not (os.environ.get(name) or "").strip()]

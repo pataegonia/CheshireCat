@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from tests.tutor.tutor_testlib import fake_openai
+from tests.tutor.tutor_testlib import block_openai
 from tutor.retrieval import default_index, retrieve
 from tutor.retrieval import embedding as emb
 from tutor.retrieval.index import KbIndex
@@ -452,7 +452,7 @@ def _run_local(
     """
     from tutor.eval import run_local
 
-    fake_openai(monkeypatch)  # tutor 프리셋이 요구하는 OPENAI_*(가짜, 보내지 않는다)
+    block_openai(monkeypatch)  # tutor 프리셋이 요구하는 OPENAI_*(가짜, 보내지 않는다)
     for name in EMBEDDING_ENV:
         if name in env:
             monkeypatch.setenv(name, env[name])
@@ -517,7 +517,7 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
         searched.append((emb.is_english(query) and bool(bigrams(query)), kw.get("embedding")))
         return await real_retrieve(query, history, **kw)
 
-    sent = fake_openai(monkeypatch)  # 주 호출은 보내지 않고 auth 오류(다시 보내지 않는다)
+    sent = block_openai(monkeypatch)  # 주 호출은 보내지 않고 auth 오류(다시 보내지 않는다)
     monkeypatch.setattr(draft_mod, "retrieve", watched_retrieve)
     monkeypatch.delenv("TUTOR_CONFIG", raising=False)  # 개발자 셸의 설정 경로가 새지 않게
     assert load_config().mode == "v2"

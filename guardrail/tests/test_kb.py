@@ -152,9 +152,26 @@ def test_normalize_matches_grader_any_text(s):
 
 
 def _three_way_kb() -> KbIndex:
+    # A의 조각 12개가 모두 B보다 높다: 다른 섹션은 top_k뿐 아니라 상위 10조각 밖에 있다
+    fruits = [
+        "포도",
+        "키위",
+        "자몽",
+        "망고",
+        "레몬",
+        "라임",
+        "앵두",
+        "살구",
+        "모과",
+        "대추",
+        "석류",
+    ]
+    a = "## a0\n사과 사과 바나나" + "".join(
+        f"\n## a{i}\n사과 바나나 {f}" for i, f in enumerate(fruits, 1)
+    )
     return KbIndex(
         {
-            "A-01-01": "## a1\n사과 사과 바나나\n## a2\n사과 바나나 포도\n## a3\n사과 바나나 키위",
+            "A-01-01": a,
             "B-01-01": "## b1\n사과 수박 참외 멜론 자두",
             "C-01-01": "## c1\n고양이 강아지",
         }
@@ -164,7 +181,7 @@ def _three_way_kb() -> KbIndex:
 def test_margin_folds_same_section_and_sees_beyond_top_k():
     idx = _three_way_kb()
     r = idx.rank("사과 바나나")
-    assert [h.section_id for h in r.hits[:3]] == ["A-01-01"] * 3  # 다른 섹션은 top_k 밖
+    assert [h.section_id for h in r.hits[:12]] == ["A-01-01"] * 12  # 다른 섹션은 상위 12조각 밖
     best = {}
     for h in r.hits:
         best[h.section_id] = max(best.get(h.section_id, 0.0), h.score)
@@ -179,6 +196,45 @@ def test_hits_are_all_chunks_sorted_desc(index):
     assert len(r.hits) == len(index.chunks)
     scores = [h.score for h in r.hits]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_hit_text_is_the_scored_chunk(index, ref_bm25):
+    """Hit의 본문·섹션이 그 점수를 받은 조각과 맞다(출력 판정에 넣을 조각 본문)."""
+    chunks = common.kb_chunks(common.load_kb())
+    q = "체크카드 하루 이체 한도"
+    s = ref_bm25.scores(q)
+    order = sorted(range(len(s)), key=lambda i: -s[i])
+    r = index.rank(q)
+    assert [(h.section_id, h.text) for h in r.hits] == [(chunks[i][0], chunks[i][2]) for i in order]
+    assert [h.score for h in r.hits] == pytest.approx([s[i] for i in order], abs=1e-9)
+
+
+def _attr_shape(index: KbIndex) -> dict:
+    return {k: (type(v), len(v) if hasattr(v, "__len__") else v) for k, v in vars(index).items()}
+
+
+def test_rank_keeps_no_state_between_queries(index, public):
+    """요청 사이 상태 없음: 색인 속성이 rank 뒤에도 같고, 같은 질의는 같은 결과."""
+    before = _attr_shape(index)
+    first = index.rank("이자 계산")
+    for r in public[:50]:
+        index.rank(_all_user(r))
+    assert _attr_shape(index) == before
+    assert index.rank("이자 계산") == first
+
+
+def test_index_is_read_only(index):
+    with pytest.raises(AttributeError):
+        index.chunks = ()
+    with pytest.raises(TypeError):
+        index._sections["PY-01-01"] = ""
+    with pytest.raises(TypeError):
+        index._postings["새로"] = ()
+
+
+def test_rank_rejects_non_str_query(index):
+    with pytest.raises(TypeError):
+        index.rank(None)
 
 
 def test_rank_computes_scores_once(index, monkeypatch):
@@ -248,6 +304,33 @@ def test_load_rejects_duplicate_section_id(tmp_path):
         (tmp_path / subject / "X-01-01.md").write_text("## x\n사과", encoding="utf-8")
     with pytest.raises(ValueError, match="X-01-01"):
         KbIndex.load(tmp_path)
+
+
+def test_load_rejects_non_section_md(tmp_path):
+    (tmp_path / "python").mkdir()
+    (tmp_path / "python" / "PY-01-01.md").write_text("## x\n사과", encoding="utf-8")
+    (tmp_path / "python" / "README.md").write_text("## 안내\n사과", encoding="utf-8")
+    with pytest.raises(ValueError, match="README"):
+        KbIndex.load(tmp_path)
+
+
+def test_load_rejects_empty_section_md(tmp_path):
+    (tmp_path / "python").mkdir()
+    (tmp_path / "python" / "PY-01-01.md").write_text("## x\n사과", encoding="utf-8")
+    (tmp_path / "python" / "PY-01-02.md").write_text(" \n", encoding="utf-8")
+    with pytest.raises(ValueError, match="PY-01-02"):
+        KbIndex.load(tmp_path)
+
+
+def test_load_passes_bm25_params(ref_bm25):
+    """load가 kb.{ngram,k1,b}를 넘긴다(기본값과 다른 값으로 원본과 대조)."""
+    docs = [c[2] for c in common.kb_chunks(common.load_kb())]
+    q = "파이썬 리스트 인덱스"
+    got = KbIndex.load(KB_DIR, k1=2.0, b=0.3).scores(q)
+    exp = common.BM25(docs, k1=2.0, b=0.3).scores(q)
+    assert max(abs(x - y) for x, y in zip(got, exp, strict=True)) <= 1e-9
+    assert got != pytest.approx(ref_bm25.scores(q))
+    assert KbIndex.load(KB_DIR, ngram=3).scores(q) != pytest.approx(ref_bm25.scores(q))
 
 
 def test_search_rejects_k_below_one():

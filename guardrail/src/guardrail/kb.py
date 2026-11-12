@@ -16,10 +16,12 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from guardrail.config import resolve_path
 
 # competition/grader/scoring.py의 PUNCT·normalize 복사(런타임에 grader를 import하지 않음)
+SECTION_ID = re.compile(r"[A-Z]+-\d{2}-\d{2}")  # SPEC §1 형식(PY-01-02). 과목은 가정하지 않음
 PUNCT = frozenset(".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
 
 
@@ -49,8 +51,14 @@ class Ranking:
 def _load_sections(kb_dir: Path) -> dict[str, str]:
     sections = {}
     for md in sorted(kb_dir.glob("*/*.md")):
+        if not SECTION_ID.fullmatch(
+            md.stem
+        ):  # README.md 같은 다른 md가 섞이면 순위·margin이 바뀐다
+            raise ValueError(f"KB에 섹션 ID 형식이 아닌 md가 있다: {md.parent.name}/{md.name}")
         tables = sorted(md.parent.glob(f"{md.stem}-table*.csv"))
         parts = [md.read_text(encoding="utf-8"), *(t.read_text(encoding="utf-8") for t in tables)]
+        if not parts[0].strip():
+            raise ValueError(f"KB 섹션 md가 비었다: {md.stem}")
         if md.stem in sections:  # 다른 과목 폴더에 같은 섹션 ID가 있으면 한쪽이 사라진다
             raise ValueError(f"KB 섹션 ID가 겹친다: {md.stem}")
         sections[md.stem] = "\n\n".join(parts)
@@ -66,14 +74,14 @@ class KbIndex:
         valid_n = isinstance(ngram, int) and not isinstance(ngram, bool) and ngram >= 1
         if not (valid_n and math.isfinite(k1) and k1 >= 0 and 0 <= b <= 1):
             raise ValueError("kb 설정 값이 범위를 벗어났다(ngram ≥ 1, k1 ≥ 0, 0 ≤ b ≤ 1)")
-        self._sections = dict(sections)
-        self.chunks: tuple[tuple[str, str], ...] = tuple(
+        self._sections = MappingProxyType(dict(sections))
+        self._chunks: tuple[tuple[str, str], ...] = tuple(
             (sid, part)
             for sid, text in self._sections.items()
             for part in re.split(r"\n(?=## )", text)
         )
         self._n = ngram
-        tfs = [Counter(_grams(text, ngram)) for _, text in self.chunks]
+        tfs = [Counter(_grams(text, ngram)) for _, text in self._chunks]
         lens = [sum(tf.values()) for tf in tfs]
         total = sum(lens)
         if not total:
@@ -87,7 +95,7 @@ class KbIndex:
                 idf = math.log(1 + (n - df[g] + 0.5) / (df[g] + 0.5))
                 w = idf * f * (k1 + 1) / (f + k1 * (1 - b + b * ln / avg))
                 postings.setdefault(g, []).append((i, w))
-        self._postings = {g: tuple(p) for g, p in postings.items()}
+        self._postings = MappingProxyType({g: tuple(p) for g, p in postings.items()})
 
     @classmethod
     def load(
@@ -101,11 +109,21 @@ class KbIndex:
             raise ValueError("KB 폴더에 <과목>/<섹션 ID>.md가 없다")
         return cls(sections, ngram=ngram, k1=k1, b=b)
 
+    @property
+    def chunks(self) -> tuple[tuple[str, str], ...]:
+        """(섹션 ID, 조각 텍스트). 섹션 순서·섹션 안 순서 그대로."""
+        return self._chunks
+
     def scores(self, query: str) -> list[float]:
         """조각 순서대로의 BM25 점수. 질의의 서로 다른 n-gram을 처음 나온 순서로 더한다.
 
         질의 길이는 호출자가 retrieval.max_query_chars로 자른다(guard.py).
+        숨은 문자(ZWSP 등)는 여기서 지우지 않는다.
+        호출자가 preprocess.normalize를 거친 텍스트를 넘긴다
+        (그대로 넘기면 2-gram이 끊겨 모든 조각이 0점일 수 있다).
         """
+        if not isinstance(query, str):
+            raise TypeError("질의는 str이어야 한다")
         s = [0.0] * len(self.chunks)
         for g in dict.fromkeys(_grams(query, self._n)):
             for i, w in self._postings.get(g, ()):

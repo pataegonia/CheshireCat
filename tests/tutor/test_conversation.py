@@ -306,3 +306,16 @@ def test_worst_case_work_is_capped_by_window():
     tidy(worst * 10)
     big = time.perf_counter() - t0
     assert big < max(small * 5, 0.5)
+
+
+def test_window_indices_is_the_single_window_rule():
+    from tutor.judge.conversation import window_indices
+
+    roles = ["user", "user", *["assistant"] * 6]
+    assert window_indices(roles) == [0, 1, 2, 3, 4, 5, 6, 7]
+    msgs = [
+        {"role": r, "content": str(i)}
+        for i, r in enumerate(["assistant", "user", *["assistant", "user"] * 5])
+    ]
+    assert window_indices([m["role"] for m in msgs]) == [t.index for t in tidy(msgs).window]
+    assert window_indices([]) == []

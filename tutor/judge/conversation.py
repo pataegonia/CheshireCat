@@ -205,12 +205,22 @@ def _view(raw: str) -> tuple[str, str]:
     return text, hidden
 
 
-def _window_indices(
-    messages: Sequence[tuple[Role, str]], first_user: int | None, target: int | None
-) -> list[int]:
+def window_indices(roles: Sequence[str]) -> list[int]:
+    """창 규칙(TU-02, 가드 GR-04) 하나: 메시지 역할 목록 → 창에 넣을 위치(원래 순서).
+
+    첫 학습자 발화 + 마지막 6개, 그리고 판단 대상(마지막 학습자 발화). 판단 대상은 뒤에 튜터
+    발화가 6개 넘게 붙어도 넣는다.
+    `tidy`와 베이스라인(`tutor.request`)이 같은 규칙을 쓰도록 공개한다.
+    """
+    users = [i for i, role in enumerate(roles) if role == "user"]
+    first = users[0] if users else None
+    last = users[-1] if users else None
+    return _window_indices(len(roles), first, last)
+
+
+def _window_indices(n: int, first_user: int | None, target: int | None) -> list[int]:
     """첫 학습자 발화 + 마지막 6개. 판단 대상이 그 밖에 있으면(뒤에 튜터 발화가 6개 넘게 붙은
     역할 순서 어긋남) 판단 대상도 넣는다. 원래 순서를 지킨다."""
-    n = len(messages)
     idx = set(range(max(n - WINDOW_LAST, 0), n))
     idx.update(i for i in (first_user, target) if i is not None)
     return sorted(idx)
@@ -242,7 +252,7 @@ def tidy(raw_messages: Any) -> Conversation:
     first_user = user_idx[0] if user_idx else None
     target = user_idx[-1] if user_idx else None
 
-    idx = _window_indices(messages, first_user, target)
+    idx = _window_indices(len(messages), first_user, target)
     keep = idx.index(target) if target is not None else None  # target은 언제나 idx 안에 있다
     # 정규화 전에 원문 기준으로 창 상한을 맞춘다(정규화는 글을 늘리지 않으므로 뒤에서 한 번 더 확인)
     raws = _fit_texts([messages[i][1] for i in idx], keep)

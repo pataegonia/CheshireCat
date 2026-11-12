@@ -47,6 +47,7 @@ RUNS_DIR = Path(__file__).resolve().parent / "runs"
 TUTOR_CALLS = 3  # 튜터 요청당 nano 정상 호출 수(v2, TU-14)
 CALLS_PER_REQUEST = {"v2": TUTOR_CALLS, "baseline": 1}  # 모드별 요청당 nano 호출(재시도 제외)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
+API_ENV = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")  # 튜터 LLM이 부를 때 필요한 것
 
 
 def public_tutor_rows() -> list[dict[str, Any]]:
@@ -252,10 +253,9 @@ def _tutor_config(
     except ValueError as exc:  # pydantic ValidationError도 ValueError
         ap.error(f"--tutor-set 설정이 맞지 않다: {type(exc).__name__}")
     if args.preset == "tutor" and cfg.mode != "v2":
-        if not (os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_MODEL")):
-            ap.error(
-                f"mode {cfg.mode}는 운영진 API를 부른다: OPENAI_API_KEY·OPENAI_MODEL이 필요하다"
-            )
+        missing = [name for name in API_ENV if not (os.environ.get(name) or "").strip()]
+        if missing:
+            ap.error(f"mode {cfg.mode}는 운영진 API를 부른다: {'·'.join(missing)}이 필요하다")
     return cfg, overrides
 
 

@@ -61,6 +61,9 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("toggles.guard_classify", "both"),
         ("toggles.max_citations", 3),
         ("llm.reasoning_effort", "minimal"),  # TU-13: minimal 금지
+        ("llm.max_completion_tokens", 2001),  # 운영진 프록시 상한 2000(넘기면 400)
+        ("llm.max_completion_tokens", 0),
+        ("llm.max_completion_tokens", True),
         ("retrieval.k", 0),
         ("llm.timeout_s.main", 0),
         # 느슨한 값도 받지 않는다(strict)
@@ -76,6 +79,11 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
 def test_invalid_values_fail_at_load(dotted, value):
     with pytest.raises(ValidationError):
         config.load_config(overrides={dotted: value})
+
+
+def test_output_cap_up_to_the_proxy_ceiling_loads():
+    cfg = config.load_config(overrides={"llm.max_completion_tokens": 2000})
+    assert cfg.llm.max_completion_tokens == 2000 == config.PROXY_MAX_COMPLETION_TOKENS
 
 
 def test_unquoted_off_is_rejected(tmp_path):

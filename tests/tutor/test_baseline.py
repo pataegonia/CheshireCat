@@ -138,6 +138,7 @@ def fake_send():
 def api_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "k")
     monkeypatch.setenv("OPENAI_MODEL", "m")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setattr(llm_mod, "_openai_send", fake_send)  # 운영진 API를 부르지 않는다
 
 
@@ -164,12 +165,26 @@ def test_tutor_set_is_checked_before_running(api_env, argv, tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_baseline_needs_the_api_settings(monkeypatch, tmp_path):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+@pytest.mark.parametrize(
+    "missing, value",
+    [
+        ("OPENAI_API_KEY", None),
+        ("OPENAI_MODEL", None),
+        ("OPENAI_BASE_URL", None),
+        ("OPENAI_BASE_URL", "  "),  # 공백뿐인 값도 없는 것으로 본다
+    ],
+)
+def test_baseline_needs_the_api_settings(api_env, monkeypatch, tmp_path, capsys, missing, value):
+    if value is None:
+        monkeypatch.delenv(missing)
+    else:
+        monkeypatch.setenv(missing, value)
     with pytest.raises(SystemExit):  # 모든 응답이 기본값으로 떨어지는 실수를 막는다
         run_local.main(
             ["--preset", "tutor", "--tutor-set", "mode=baseline", "--out", str(tmp_path)]
         )
+    assert missing in capsys.readouterr().err  # 무엇이 빠졌는지 알린다
+    assert not list(tmp_path.iterdir())
 
 
 def test_call_counts_add_up_over_runs(api_env, tmp_path, capsys):

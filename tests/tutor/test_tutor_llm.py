@@ -412,7 +412,7 @@ def fake_openai(monkeypatch):
     FakeClient.made = []
     monkeypatch.setattr(tutor_llm.openai, "AsyncOpenAI", FakeClient)
     monkeypatch.setenv("OPENAI_API_KEY", "k")
-    monkeypatch.setenv("OPENAI_BASE_URL", "")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
     return FakeClient.made
 
 
@@ -424,23 +424,46 @@ def test_openai_client_is_made_per_event_loop_without_sdk_retries(fake_openai):
         return [await send({"model": "m"}), await send({"model": "m"})]
 
     asyncio.run(twice())
-    assert fake_openai == [{"api_key": "k", "base_url": None, "max_retries": 0}]  # 빈 주소는 기본
+    assert fake_openai == [{"api_key": "k", "base_url": "http://127.0.0.1:9", "max_retries": 0}]
     asyncio.run(twice())  # 다른 이벤트 루프(다른 asyncio.run)에서는 새로 만든다
     assert len(fake_openai) == 2
 
 
-def test_missing_api_key_is_an_auth_error(fake_openai, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY")
-    llm = tutor_llm.TutorLLM(
-        tutor_llm._openai_send(), contextlib.nullcontext, model="m", base=base()
-    )
-
+def _complete_once(llm):
     async def go():
         loop = asyncio.get_running_loop()
         return await llm.complete("main", [], Out, deadline=loop.time() + 5, timeout_s=1, retries=1)
 
-    result = asyncio.run(go())
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_missing_api_key_is_an_auth_error(fake_openai, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("OPENAI_API_KEY")
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", value)
+    llm = tutor_llm.TutorLLM(
+        tutor_llm._openai_send(), contextlib.nullcontext, model="m", base=base()
+    )
+    result = _complete_once(llm)
     assert result.error == "auth" and result.attempts == 1 and fake_openai == []
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_missing_base_url_is_an_auth_error_and_sends_nothing(fake_openai, monkeypatch, value):
+    """주소가 비면 SDK 기본 주소(공개 OpenAI)로 보내지 않는다. 운영진 API만 부른다(SPEC §7)."""
+    if value is None:
+        monkeypatch.delenv("OPENAI_BASE_URL")
+    else:
+        monkeypatch.setenv("OPENAI_BASE_URL", value)
+    llm = tutor_llm.TutorLLM(
+        tutor_llm._openai_send(), contextlib.nullcontext, model="m", base=base()
+    )
+    result = _complete_once(llm)
+    # 클라이언트도 만들지 않는다
+    assert result.error == "auth" and result.attempts == 1 and fake_openai == []
+    assert llm.calls["main"] == 1  # 보내지 못한 시도도 호출 수에 센다(키가 없을 때와 같음)
 
 
 CFG = load_config()

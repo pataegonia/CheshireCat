@@ -260,7 +260,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - `AsyncOpenAI`: SDK 재시도 0, 수동 재시도는 호출마다 1회이고 요청 예산 안에서만. `Retry-After`가 예산을 넘으면 기다리지 않는다.
 - **호출당 시간 제한**(기본값, T1 실측 뒤 조정): 주 호출 8초, 가드 `classify` 5초(주 호출과 병렬), 검증·`judge_output` 5초, 임베딩 2초. 재시도는 남은 예산이 그 호출의 제한보다 클 때만 한다. **게이트 대기 시간도 요청 예산에 넣는다**(가드 GR-10과 같음).
 - **요청당 호출 수**: 정상 경로 nano 3회(가드 `classify` ∥ 주 호출 + `judge_output`), 템플릿 경로 2회. **재시도는 주 호출만 1회**(남은 예산이 주 호출 제한보다 클 때)라 절대 상한 nano 4회, 임베딩 1회. `classify`·`judge_output`은 재시도하지 않고 실패하면 건너뛴다(TU-12). `vote`(3회)·`rerank`·자체 검증 추가처럼 상한을 넘는 조합은 동결 설정으로 채택하지 않는다.
-- `gpt-5-nano` 파라미터는 가드 GR-10과 같다: `reasoning_effort="low"`(**minimal 금지**, 가드 S3 근거), `verbosity="low"`, json_schema strict, `max_completion_tokens`는 `finish_reason=length` 비율로 정한다. `temperature`·`max_tokens`·`logprobs`는 보내지 않는다. 기동 시 시험 호출로 파라미터를 하나씩 확인해 거부된 것만 끈다(json_schema가 거부되면 JSON 모드). `medium`은 ablation이다.
+- `gpt-5-nano` 파라미터는 가드 GR-10과 같다: `reasoning_effort="low"`(**minimal 금지**, 가드 S3 근거), `verbosity="low"`, json_schema strict, `max_completion_tokens`는 `finish_reason=length` 비율로 정한다. 운영진 프록시는 스트리밍이 아닌 응답에 `max_completion_tokens` 2000까지만 받는다(넘기면 400, 11/12 런박스 확인). 튜터 설정은 2000을 넘으면 로드에서 실패한다. `temperature`·`max_tokens`·`logprobs`는 보내지 않는다. 기동 시 시험 호출로 파라미터를 하나씩 확인해 거부된 것만 끈다(json_schema가 거부되면 JSON 모드). `medium`은 ablation이다.
 - 프롬프트는 고정 부분을 앞에, 요청별 부분(예시·대화·근거)을 뒤에 둔다(접두 캐시).
 - 응답 캐시를 두지 않는다(TU-18).
 - **수용 기준**: 채점 수준 부하에서 시간 초과 0건, 튜터 요청 **p50 ≤6s·p95 ≤12s**(§6). CPU 작업(BM25·TF-IDF)이 이벤트 루프를 막지 않음.
@@ -659,7 +659,7 @@ P0(TU-01–03, TU-05–07, TU-10, TU-12–19)는 자르지 않는다. 특히 TU-
 - [ ] 서버 로그에 요청·답변 본문·범주·action 값이 없다(TU-15, grep)
 - [ ] 요청 처리 경로에 요청 간 상태(캐시·전역 기록·파일 쓰기)가 없다(TU-18)
 - [ ] 요청 헤더·`session_id`를 읽는 곳은 인증뿐이다(TU-18)
-- [ ] 서버가 부르는 외부 주소는 `OPENAI_BASE_URL`·`EMBEDDING_BASE_URL`뿐이다
+- [ ] 서버가 부르는 외부 주소는 `OPENAI_BASE_URL`·`EMBEDDING_BASE_URL`뿐이다. 튜터 채팅 호출은 `OPENAI_BASE_URL`이 비면 보내지 않는다(SDK 기본 주소로 나가지 않게)
 - [ ] `.env`·키가 git에 없다
 - [ ] 제출한 커밋 해시가 `submission.json`의 `commit`과 같다
 

@@ -265,17 +265,20 @@ class TutorLLM:
 def _openai_send() -> Send:
     """AsyncOpenAI는 이벤트 루프마다 첫 호출 때 만든다(httpx 연결이 루프에 묶이므로).
 
-    환경변수: OPENAI_API_KEY(없으면 auth 오류), OPENAI_BASE_URL(비어 있으면 SDK 기본). SDK 재시도 0.
+    환경변수: OPENAI_API_KEY·OPENAI_BASE_URL. 하나라도 비면 보내지 않고 auth 오류다. 주소가 비면
+    SDK가 기본 주소(공개 OpenAI)로 보내기 때문이다(운영진 API만 부른다, SPEC §7). SDK 재시도 0.
     """
     made: dict[str, Any] = {"loop": None, "client": None}
 
     async def send(kwargs: dict[str, Any]) -> Any:
         loop = asyncio.get_running_loop()
         if made["loop"] is not loop:
-            key = os.environ.get("OPENAI_API_KEY")
+            key = (os.environ.get("OPENAI_API_KEY") or "").strip()
             if not key:
                 raise openai.OpenAIError("OPENAI_API_KEY가 없다")
-            base_url = os.environ.get("OPENAI_BASE_URL") or None
+            base_url = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+            if not base_url:
+                raise openai.OpenAIError("OPENAI_BASE_URL이 없다")
             made["client"] = openai.AsyncOpenAI(api_key=key, base_url=base_url, max_retries=0)
             made["loop"] = loop
         return await made["client"].chat.completions.create(**kwargs)

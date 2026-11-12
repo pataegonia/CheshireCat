@@ -37,23 +37,44 @@ def test_every_request_gets_200_in_contract():
     assert report.requests == 600 and report.bad_status == 0 and report.invalid == 0
     assert report.covered_tutor_rows == 200  # 공개 세트 튜터 200행 전부
     assert report.over_limit == 0 and report.defaults == 0 and report.llm_failed == 0
-    assert report.llm_calls == 300  # 베이스라인은 요청당 1회
     assert report.slash_status not in range(300, 400)  # /tutor/ 리다이렉트 없음
-    assert report.mode == "baseline"
+    assert report.mode == "v2"  # 기본은 배포 설정과 같은 v2
     assert report.fake == pytest.approx((mock_load.P50_S, mock_load.P95_S))
 
 
-def test_llm_calls_fill_but_never_exceed_the_shared_gate():
-    # 동시 128로 보내면 게이트가 꽉 차고(대기열이 생기고), 그래도 게이트 크기를 넘지 않는다.
+def test_v2_runs_the_real_flow_on_schema_answers():
+    """v2 흐름(검색 → 주 호출 → 결정적 수정)이 가짜 전송의 스키마별 정상 답으로 끝까지 간다."""
+    report = run(n_tutor=40, n_guard=0, scale=0.001, seed=11)
+    assert report.llm_failed == 0 and report.defaults == 0 and report.invalid == 0
+    assert report.llm_calls > 0 and dict(report.schemas) == {"MainCallOut": report.llm_calls}
+
+
+def test_guard_requests_make_their_judge_calls():
+    report = run(n_tutor=0, n_guard=10, scale=0.001, seed=12, guard_calls=2)
+    assert report.guard_calls == 20 and report.llm_calls == 0  # 가드 요청당 2회
+
+
+def test_tutor_and_guard_share_one_gate():
+    # 동시 128이면 튜터·가드 호출이 게이트를 꽉 채운다. 게이트가 따로였다면 크기를 넘었다.
     # 가짜 지연(약 0.45초)이 요청 128개를 들여보내는 시간보다 길어야 꽉 찬다
-    report = run(n_tutor=200, n_guard=0, concurrency=128, scale=0.1, seed=2)
+    report = run(n_tutor=100, n_guard=100, concurrency=128, scale=0.1, seed=2)
     assert report.llm_peak == report.gate
+    assert report.llm_calls > 0 and report.guard_calls > 0
 
 
-def test_mode_override_cannot_leave_baseline():
-    # v2는 아직 LLM을 부르지 않아 기본값이 나온다. 덮어쓰기가 먹혔다면 호출 0·기본값 5다
-    report = run(n_tutor=5, n_guard=0, scale=0.001, seed=7, tutor_overrides={"mode": "v2"})
-    assert report.llm_calls == 5 and report.defaults == 0
+def test_an_unknown_reply_schema_counts_as_an_llm_failure(monkeypatch, capsys):
+    """가짜 답을 모르는 호출(예: 새 classify·검증 호출)은 LLM 실패로 드러난다(#88 때 답을 더한다)."""
+    monkeypatch.setattr(mock_load, "REPLIES", {})
+    report = run(n_tutor=5, n_guard=0, scale=0.001, seed=13)
+    assert report.llm_failed > 0 and not mock_load.show(report, mock_load.Bar())
+    assert "LLM 실패" in capsys.readouterr().out.splitlines()[-1]
+
+
+def test_tutor_overrides_cannot_change_the_mode():
+    report = run(
+        n_tutor=5, n_guard=0, scale=0.001, seed=7, mode="baseline", tutor_overrides={"mode": "v2"}
+    )
+    assert report.mode == "baseline" and dict(report.schemas) == {"BaselineOut": 5}
 
 
 def test_call_timeouts_answer_with_the_default_and_fail_the_bar(capsys):
@@ -62,6 +83,7 @@ def test_call_timeouts_answer_with_the_default_and_fail_the_bar(capsys):
         n_guard=0,
         scale=0.05,  # 가짜 지연 약 0.2초 > 호출 제한 0.05초
         seed=3,
+        mode="baseline",  # 베이스라인 실패는 라우터 기본값(TUTOR_DEFAULT) 본문이다
         tutor_overrides={"llm.timeout_s.main": 0.05},
     )
     assert report.bad_status == 0 and report.invalid == 0 and report.over_limit == 0
@@ -85,8 +107,10 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     ok = mock_load.show(report, mock_load.Bar())
     out = capsys.readouterr().out
     assert ok and "튜터 p50" in out and "시간 초과(30초 이상) 0" in out
-    assert "가정: 튜터 모드 baseline, 가짜 LLM 지연 p50 4.51초·p95 6.62초" in out
-    assert json.loads(mock_load.FAKE_ANSWER)["answer"] not in out
+    assert "가정: 튜터 모드 v2, 가짜 LLM 지연 p50 4.51초·p95 6.62초, 가드 판정 요청당 2회" in out
+    assert "튜터 20회" in out and "가드 40회" in out  # 역할별 LLM 호출 수
+    for reply in mock_load.REPLIES.values():  # 가짜 답 본문도 내지 않는다
+        assert json.dumps(reply, ensure_ascii=False) not in out
     assert TUTOR_DEFAULT["answer"] not in out
 
 
@@ -133,11 +157,14 @@ def test_summary_names_each_failure(capsys):
         llm_failed=1,
         covered_tutor_rows=0,
         llm_calls=70,
+        guard_calls=0,
+        schemas=(("MainCallOut", 70),),
         llm_peak=65,
         gate=64,
         slash_status=307,
-        mode="baseline",
+        mode="v2",
         fake=(4.51, 6.62),
+        guard_per_request=2,
     )
     assert not mock_load.show(report, mock_load.Bar())
     last = capsys.readouterr().out.splitlines()[-1]
@@ -170,6 +197,13 @@ def test_missing_or_non_json_responses_count_as_failures(client, status, monkeyp
     assert reply.status == status and reply.body is None
     fake = mock_load.FakeLLM(mock_load.Latency(0.0, 0.0), random.Random(0), scale=0)  # noqa: S311
     report = mock_load._report(
-        [reply], wall=1.0, fake=fake, gate=64, slash=404, llm_failed=0, mode="baseline"
+        [reply],
+        wall=1.0,
+        fake=fake,
+        gate=64,
+        slash=404,
+        llm_failed=0,
+        mode="v2",
+        guard_per_request=2,
     )
     assert report.invalid == 1 and report.bad_status == int(status != 200)

@@ -56,3 +56,17 @@ def test_answers_are_short():
     # 정답 답변 중앙값 12–108자(PRD §1). 판정 모델이 처리하기 쉬운 짧은 문장
     for t in TEXT.values():
         assert len(t) <= 200, t
+
+
+def test_template_for_covers_every_template_rule_in_table():
+    from integration.actions import load_actions
+    from tutor.answer.templates import template_for
+
+    for category, rule in load_actions().items():
+        for action in rule.actions:
+            kind = template_for(category, action)
+            if rule.generate == "template":
+                assert kind is not None, (category, action)
+                assert ACTION[kind] == action
+            else:
+                assert kind is None, (category, action)

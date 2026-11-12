@@ -70,15 +70,16 @@ def summarize(results: Sequence[LLMResult]) -> dict[str, Any]:
         else None,
         "p50_ms": _r(pct(lat, 50)),
         "p95_ms": _r(pct(lat, 95)),
+        "max_ms": _r(max(lat, default=None)),  # 표본이 작으면 p95가 가장 느린 호출을 가린다
         "tokens_p50": _r(pct(tok, 50)),
         "tokens_max": max(tok, default=None),
     }
 
 
 def estimate(cfg: Llm) -> dict[str, int]:
-    """재시도 없는 하한. length 잘림은 bad_json 재시도로 2회가 된다.
+    """재시도 없는 하한. ② 길이 칸은 재시도하지 않아 정확히 이 수다.
 
-    넘치면 max_calls가 budget으로 막고 보고의 cap_exhausted가 true가 된다.
+    ③에서 재시도로 넘치면 max_calls가 budget으로 막고 보고의 cap_exhausted가 true가 된다.
     """
     params = 1 + sum(getattr(cfg, k) is not None for k in OPTIONAL_PARAMS)
     params += cfg.structured_output == "json_schema"
@@ -137,7 +138,7 @@ async def run(
 
     # ② length 비율(잠정)
     length: dict[str, Any] = {"provisional": True}
-    default = llm.params["max_completion_tokens"]
+    default, cfg = llm.params["max_completion_tokens"], llm.cfg
     if default is None:
         rejected = "max_completion_tokens" in llm.probe_result
         length["skipped"] = f"max_completion_tokens_{'rejected' if rejected else 'disabled'}"
@@ -147,6 +148,8 @@ async def run(
             (OutputOut, "output_judge", answered),
         ]
         cells = [c for c in cells if c[2]]  # 답변 있는 행이 없으면 OutputOut 칸은 건너뜀
+        # 재시도 0: 잘린 응답(bad_json)을 재시도가 정상 응답으로 덮으면 length를 못 센다
+        llm.cfg = cfg.model_copy(update={"retries": 0})
         try:
             for limit in LIMITS:
                 llm.params["max_completion_tokens"] = limit
@@ -163,6 +166,7 @@ async def run(
                     length[str(limit)][schema.__name__] = summarize(res)
         finally:
             llm.params["max_completion_tokens"] = default
+            llm.cfg = cfg
 
     # ③ 동시 지연(InputOut, 설정 기본 max_completion_tokens)
     latency = []

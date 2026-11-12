@@ -237,6 +237,14 @@ def test_pm4_matches_merged_pm4_spans(answer, picks):
 def test_eojeol_expands_to_whitespace_boundaries():
     a = "값은 42개입니다 그리고 끝"
     assert rule_spans(a, [_tok(a, "42개")], "eojeol") == ("42개입니다",)
+    b = "총합=42개였다 끝"
+    assert rule_spans(b, [_tok(b, "42개")], "eojeol") == ("총합=42개였다",)
+
+
+def test_rule_spans_rejects_unknown_mode_and_skips_empty_token():
+    with pytest.raises(ValueError):
+        rule_spans("42", [], "words")
+    assert rule_spans("42", [LiteralToken("latin", "", 1, 1)]) == ()
 
 
 # --- literal_rule ---

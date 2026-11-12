@@ -14,12 +14,13 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
+import openai
 import pytest
 
 from tutor.retrieval import default_index, retrieve
 from tutor.retrieval import embedding as emb
 from tutor.retrieval.index import KbIndex
-from tutor.retrieval.kb import Section
+from tutor.retrieval.kb import Section, bigrams
 from tutor.runtime.config import ROOT, load_config
 
 DIM = 64
@@ -479,6 +480,48 @@ def test_run_local_builds_and_uses_the_embedding_when_turned_on(monkeypatch, tmp
     assert QUERY not in captured.out + captured.err and sample not in captured.out  # 본문 없음
     saved = _saved(tmp_path)
     assert saved["tainted"] is False and saved["embedding"]["ok"] is True
+
+
+def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, tmp_path):
+    """측정 경로의 실제 v2 흐름(#97·da8c030)이 기동 때 만든 임베딩으로 영어 질의를 검색한다.
+
+    주 호출은 가짜 전송이 실패로 돌려줘(밖으로 보내지 않는다) 답은 기본값이지만, 검색은 주 호출
+    전에 끝난다. 검색까지 간 영어 질의(retrieve와 같은 조건)마다 질의 임베딩이 한 번씩 잡혀야
+    한다. 검색 전에 끝나는 행이 생겨도(결정적 판정 등) 이 관계는 그대로다.
+    """
+    from tutor.eval import run_local
+    from tutor.judge import draft as draft_mod
+    from tutor.runtime import llm as llm_mod
+
+    sent, searched = [], []
+    real_retrieve = draft_mod.retrieve
+
+    def fake_openai_send():
+        async def send(kwargs):
+            sent.append(kwargs["model"])
+            raise openai.OpenAIError("가짜 전송")  # auth 오류: 다시 보내지 않는다
+
+        return send
+
+    async def watched_retrieve(query, history=(), **kw):
+        searched.append((emb.is_english(query) and bool(bigrams(query)), kw.get("embedding")))
+        return await real_retrieve(query, history, **kw)
+
+    monkeypatch.setattr(llm_mod, "_openai_send", fake_openai_send)
+    monkeypatch.setattr(draft_mod, "retrieve", watched_retrieve)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    for name, value in EMBEDDING_ENV.items():
+        monkeypatch.setenv(name, value)
+    fake = FakeEmbed()
+    monkeypatch.setattr(run_local, "openai_embed", lambda: fake)
+    code = run_local.main(["--preset", "tutor", *ON, "--out", str(tmp_path)])
+    assert load_config().mode == "v2" and sent  # v2 주 호출까지 갔다(가짜 전송)
+    english = [used for is_english, used in searched if is_english]
+    assert english and all(isinstance(used, emb.EmbeddingSearch) for used in english)
+    saved = _saved(tmp_path)
+    assert saved["embedding"]["calls"] == len(english) and saved["embedding"]["failures"] == 0
+    assert len(fake.calls) == BATCHES + len(english)
+    assert code == 0 and saved["tainted"] is False
 
 
 def test_run_local_reports_query_failures_over_several_runs(monkeypatch, tmp_path, capsys):

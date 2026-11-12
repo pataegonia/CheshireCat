@@ -1,12 +1,13 @@
-"""GR-01 전처리: 정규화본과 매칭 전용 골격 뷰 (ADR-0001).
+"""GR-02 전처리 v6: 정규화본과 숨긴 문자 드러내기 (ADR-0001).
 
 - normalize: LLM에 보내는 형태. 보이지 않는 문자 제거, 전각·반각 접기, 자모 조합만 한다.
-  위첨자·분수 같은 수식 기호는 그대로 둔다.
-- skeleton: 어휘 사전 매칭 전용. 호환 자모 구간 밖에 NFKC를 적용하고 공백·기호·숫자를 지운 뒤
-  조합한다.
+  위첨자·분수 같은 수식 기호는 그대로 둔다(NFKC는 쓰지 않는다).
+- reveal_hidden: 답변의 숨긴 문자를 눈에 보이게 바꾼다(태그 문자 → ASCII, 나머지 → <U+XXXX>).
+- decode_tags / strip_tags: 학습자 발화의 태그 문자(U+E0000–E007F) 처리.
+- skeleton: v4 어휘 사전 매칭 뷰. 가드는 쓰지 않고 튜터(#98·#99)가 import해서 남겨 둔다.
 
-호환 자모(ㄱ-ㅣ) 연속 구간은 NFKC에 맡기지 않고 직접 조합한다. NFKC는 앞 음절과 뒤따르는 자음을
-구분하지 못해 "야ㅅㅂ" 같은 초성 약어까지 받침으로 붙이기 때문이다.
+호환 자모(ㄱ-ㅣ) 연속 구간은 직접 조합한다. NFKC는 앞 음절과 뒤따르는 자음을 구분하지 못해
+"야ㅅㅂ" 같은 초성 약어까지 받침으로 붙이기 때문이다.
 """
 
 import re
@@ -25,6 +26,12 @@ _INVISIBLE_RANGES = (
 _JAMO_RUN = re.compile("[ㄱ-ㅣ]+")
 _FILLER = re.compile(r"[\s\W\d_]+")
 _REPEATED_VOWEL = re.compile("([ㅏ-ㅣ])\\1+")
+TAG_CHARS = re.compile("[\U000e0000-\U000e007f]")
+# 깃발 이모지: 검은 깃발 바로 뒤에 소문자·숫자 태그 1–7개와 종료 태그(C2-judges S2.3).
+# S2.3 has_hidden_tags가 같은 패턴을 쓴다. 이 밖의 태그 문자는 숨긴 것이다.
+FLAG_SEQUENCE = re.compile("\U0001f3f4[\U000e0030-\U000e0039\U000e0061-\U000e007a]{1,7}\U000e007f")
+_VS = "\ufe0e\ufe0f"
+_KEYCAP = "\u20e3"
 
 _CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
 _JONG = " ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ"  # 0번은 받침 없음
@@ -62,26 +69,13 @@ def _fold_width(ch: str) -> str:
     return ch
 
 
-def _nfkc_outside_jamo(text: str) -> str:
-    """호환 자모 구간은 보존하고 나머지에만 NFKC를 적용한다."""
-    parts: list[str] = []
-    pos = 0
-    for m in _JAMO_RUN.finditer(text):
-        parts.append(unicodedata.normalize("NFKC", text[pos : m.start()]))
-        parts.append(m.group())
-        pos = m.end()
-    parts.append(unicodedata.normalize("NFKC", text[pos:]))
-    return "".join(parts)
-
-
-def _prepare(text: str, full_nfkc: bool) -> str:
+def _prepare(text: str) -> str:
     s = "".join(_fold_width(ch) for ch in text if _visible(ch))
     # NFC는 완전한 조합형 음절(NFD 입력)만 합치고, 낱자모는 남겨 아래에서 호환 자모로 바꾼다
-    s = _nfkc_outside_jamo(s) if full_nfkc else unicodedata.normalize("NFC", s)
-    return s.translate(_CONJOINING_TO_COMPAT)
+    return unicodedata.normalize("NFC", s).translate(_CONJOINING_TO_COMPAT)
 
 
-def _compose_run(run: str, keep_emoticons: bool) -> str:
+def _compose_run(run: str, keep_emoticons: bool = True) -> str:
     """호환 자모 연속 구간을 두벌식 입력기처럼 음절로 조합한다. 모음이 없는 구간은 그대로 둔다."""
     out: list[str] = []
     i, n = 0, len(run)
@@ -112,8 +106,97 @@ def _compose_run(run: str, keep_emoticons: bool) -> str:
     return "".join(out)
 
 
-def _compose_all(text: str, keep_emoticons: bool) -> str:
+def _compose_all(text: str, keep_emoticons: bool = True) -> str:
     return _JAMO_RUN.sub(lambda m: _compose_run(m.group(), keep_emoticons), text)
+
+
+def normalize(text: str) -> str:
+    """LLM에 보내는 형태. 보이지 않는 문자 제거 → 전각·반각 접기 → 자모 조합."""
+    return unicodedata.normalize("NFC", _compose_all(_prepare(text)))
+
+
+def strip_tags(text: str) -> str:
+    """태그 문자 U+E0000–E007F만 지운다. 자모 조합 등 다른 정규화는 하지 않는다."""
+    return TAG_CHARS.sub("", text)
+
+
+def decode_tags(text: str) -> tuple[str, str]:
+    """학습자 발화의 태그 문자를 푼다. (태그를 지운 정규화본 [+ 숨긴 문자 표시], 푼 문자열).
+
+    깃발 이모지의 태그는 풀지 않는다. 태그가 없으면 푼 문자열은 빈 문자열이다.
+    """
+    decoded = "".join(
+        chr(ord(c) - 0xE0000) for c in FLAG_SEQUENCE.sub("", text) if 0xE0020 <= ord(c) <= 0xE007E
+    )
+    view = normalize(strip_tags(text))
+    return (f"{view} [숨긴 문자: {decoded}]" if decoded else view), decoded
+
+
+def _is_emoji(ch: str) -> bool:
+    """이모지 그림 문자(U+1F000대, 피부색 수정자 포함)와 기타 기호·딩뱃(U+2600–27BF).
+    라틴-1 기호·화살표(°, ©, →)는 이모지로 보지 않는다."""
+    return "☀" <= ch <= "➿" or "\U0001f000" <= ch <= "\U0001faff"
+
+
+def _in_emoji_sequence(text: str, i: int) -> bool:
+    """변형 선택자는 이모지·키캡 밑글자 뒤에서만, ZWJ는 (변형 선택자를 건너뛴) 앞 글자와
+    뒤 글자가 둘 다 이모지일 때만 정상으로 본다."""
+    ch, prev, nxt = text[i], text[i - 1 : i], text[i + 1 : i + 2]
+    if ch in _VS:
+        keycap = bool(prev) and prev in "#*0123456789" and nxt == _KEYCAP
+        return keycap or (bool(prev) and _is_emoji(prev))
+    if ch == "‍":
+        # 변형 선택자 하나는 건너뛴다. 그 선택자가 이모지 뒤에 있지 않으면 그 선택자도 드러난다.
+        base = text[i - 2 : i - 1] if prev and prev in _VS else prev
+        return bool(base) and bool(nxt) and _is_emoji(base) and _is_emoji(nxt)
+    return False
+
+
+def reveal_hidden(answer: str) -> str:
+    """답변의 숨긴 문자를 드러낸다. 태그 문자(U+E0020–E007E)는 ASCII로, 나머지 폭 없는 문자와
+    태그 블록(U+E0000–E00FF)의 남은 문자는 `<U+200B>` 형식으로 바꾼다. 이모지 시퀀스의
+    ZWJ·변형 선택자, 깃발 이모지, 맨 앞 BOM은 둔다.
+
+    파이썬 루프라 긴 입력은 느리다(140만 자에 약 1초). `max_answer_chars`로 자른 뒤 호출한다.
+    """
+    flags = {m.start(): m.end() for m in FLAG_SEQUENCE.finditer(answer)}
+    out: list[str] = []
+    i, n = 0, len(answer)
+    while i < n:
+        if i in flags:
+            out.append(answer[i : flags[i]])
+            i = flags[i]
+            continue
+        ch = answer[i]
+        cp = ord(ch)
+        if 0xE0020 <= cp <= 0xE007E:
+            out.append(chr(cp - 0xE0000))
+        elif cp <= 0xE00FF and cp >= 0xE0000:
+            out.append(f"<U+{cp:04X}>")
+        elif _visible(ch) or (i == 0 and cp == 0xFEFF) or _in_emoji_sequence(answer, i):
+            out.append(ch)
+        else:
+            out.append(f"<U+{cp:04X}>")
+        i += 1
+    return "".join(out)
+
+
+# --- 튜터 호환: skeleton -------------------------------------------------------------
+# 가드 v6은 쓰지 않는다. 튜터 #98(judge/signals.py)·#99(answer/postprocess.py)가 import한다.
+# 동작은 main(v4)과 같게 고정한다(tests/test_preprocess.py::test_skeleton).
+# 지우는 조건: 저장소에서 `from guardrail.preprocess import skeleton`이 하나도 없을 때.
+
+
+def _nfkc_outside_jamo(text: str) -> str:
+    """호환 자모 구간은 보존하고 나머지에만 NFKC를 적용한다."""
+    parts: list[str] = []
+    pos = 0
+    for m in _JAMO_RUN.finditer(text):
+        parts.append(unicodedata.normalize("NFKC", text[pos : m.start()]))
+        parts.append(m.group())
+        pos = m.end()
+    parts.append(unicodedata.normalize("NFKC", text[pos:]))
+    return "".join(parts)
 
 
 _STRETCHED_VOWEL = re.compile("([가-힣])([ㅏ-ㅣ])")
@@ -126,20 +209,16 @@ def _drop_stretched_vowel(m: re.Match[str]) -> str:
     return syllable if ord(vowel) - ord("ㅏ") == jung else m.group()
 
 
-def normalize(text: str) -> str:
-    """LLM에 보내는 형태. 보이지 않는 문자 제거 → 전각·반각 접기 → 자모 조합."""
-    composed = _compose_all(_prepare(text, full_nfkc=False), keep_emoticons=True)
-    return unicodedata.normalize("NFC", composed)
-
-
 def skeleton(text: str) -> str:
-    """어휘 사전 매칭 전용 뷰. 재현율 우선이라 이모티콘 예외 없이 조합한다.
+    """어휘 사전 매칭 전용 뷰(튜터 호환). 재현율 우선이라 이모티콘 예외 없이 조합한다.
 
     NFKC(①·²·𝟏 → 숫자) → 공백·기호·숫자 제거 → 같은 모음 반복 축약 → 자모 조합
     → 음절 뒤에 늘여 쓴 같은 모음 제거(시ㅣ발) → 소문자.
     라틴 문자는 남긴다(영어 공격 문구 매칭). 지운 구분자를 넘는 매칭 규칙은 ADR-0001 참고.
     """
-    s = _FILLER.sub("", _prepare(text, full_nfkc=True))
+    s = "".join(_fold_width(ch) for ch in text if _visible(ch))
+    s = _nfkc_outside_jamo(s).translate(_CONJOINING_TO_COMPAT)
+    s = _FILLER.sub("", s)
     s = _compose_all(_REPEATED_VOWEL.sub(r"\1", s), keep_emoticons=False)
     s = _STRETCHED_VOWEL.sub(_drop_stretched_vowel, s)
     return unicodedata.normalize("NFC", s).casefold()

@@ -59,7 +59,8 @@ async def tutor_route(request: Request) -> JSONResponse:
     try:
         async with asyncio.timeout(backstop_s(budget)):
             body = await parse_body(await read_body(request))
-            resp = ensure_contract(await respond(body, deadline=deadline))
+            state = request.app.state
+            resp = ensure_contract(await respond(body, deadline=deadline, state=state))
     except Exception as exc:  # 클래스 이름만 로그에 남긴다. 메시지는 남기지 않는다(TU-15)
         request.state.error = type(exc).__name__
         resp = default_response()

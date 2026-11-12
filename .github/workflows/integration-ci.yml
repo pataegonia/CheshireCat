@@ -18,7 +18,6 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "guardrail/pyproject.toml"
-      - "guardrail/uv.lock"
       - ".github/workflows/integration-ci.yml"
   workflow_dispatch:
 
@@ -86,14 +85,19 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - if: steps.proj.outputs.present == 'true'
-        run: uv sync --locked
-      # 존재하는 경로만 검사한다(tutor/ 등이 아직 없을 수 있다)
+        run: uv sync --locked --all-packages  # 멤버(가드·튜터)와 각자의 dev 그룹까지
+      # 존재하는 경로만 검사한다(tutor/ 등이 아직 없을 수 있다).
+      # tutor/는 튜터 설정(tutor/pyproject.toml)으로 따로 돈다: 루트 설정으로 보면 import 정렬 기준이 달라 I001이 난다.
       - if: steps.proj.outputs.present == 'true'
         run: |
-          targets=$(ls -d app.py integration tutor harness 2>/dev/null | tr '\n' ' ')
+          targets=$(ls -d app.py integration harness 2>/dev/null | tr '\n' ' ')
           echo "lint targets: $targets"
           uv run ruff check $targets
           uv run ruff format --check $targets
+          if [ -d tutor ]; then
+            uv run ruff check --config tutor/pyproject.toml tutor
+            uv run ruff format --check --config tutor/pyproject.toml tutor
+          fi
       # 실제 LLM API는 부르지 않는다(키 없음). 계약 테스트는 FakeLLM으로 돈다:
       # 퍼징 입력 → 전부 200 + 스키마, /tutor/ 3xx 없음, 전역 예외 → 200, 로그에 본문 없음.
       - if: steps.proj.outputs.present == 'true'

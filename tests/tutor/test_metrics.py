@@ -347,6 +347,25 @@ def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):
     assert len(loops) == 400 and all(loop is loops[0] for loop in loops)
 
 
+def test_collect_timed_measures_every_request_of_every_run(rows):
+    responses, latency = run_local.collect_timed("reference", rows[:3], 2)
+    assert responses == run_local.collect_runs("reference", rows[:3], 2)
+    assert len(latency) == 6 and all(t >= 0 for t in latency)  # 3행 × 2회
+
+
+def test_cli_prints_tutor_request_latency(monkeypatch, tmp_path, capsys):  # TU-16 "지연"
+    async def slow(_body):
+        await asyncio.sleep(0.01)
+        return dict(TUTOR_DEFAULT)
+
+    monkeypatch.setattr(run_local.tutor, "handle", slow)
+    assert run_local.main(["--preset", "tutor", "--out", str(tmp_path)]) == 0
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("튜터 요청 지연"))
+    assert "p50" in line and "p95" in line and "최대" in line and "요청 200개" in line
+    assert run_local.main(["--preset", "reference", "--out", str(tmp_path)]) == 0
+    assert "튜터 요청 지연" not in capsys.readouterr().out  # 튜터를 부르지 않는 프리셋
+
+
 def test_cli_never_prints_or_saves_bodies(tmp_path, capsys, rows):
     for preset in ("reference", "reference_top1", "tutor"):
         assert run_local.main(["--preset", preset, "--out", str(tmp_path)]) == 0

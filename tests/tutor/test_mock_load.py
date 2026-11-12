@@ -5,6 +5,7 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import math
 import random
@@ -33,6 +34,43 @@ def judged(report, capsys):
     return ok, capsys.readouterr().out.splitlines()[-1]
 
 
+def passed(**changes):
+    """기준 조건(SPEC §3 부하·기본 가정)에서 통과한 실행 요약. changes만 바꾼다."""
+    n_tutor, n_guard = mock_load.N_TUTOR, mock_load.N_GUARD
+    report = mock_load.Report(
+        requests=n_tutor + n_guard,
+        wall_s=60.0,
+        tutor_s=(4.5,) * n_tutor,
+        guard_s=(9.0,) * n_guard,
+        bad_status=0,
+        invalid=0,
+        over_limit=0,
+        defaults=0,
+        llm_failed=0,
+        covered_tutor_rows=200,
+        llm_calls=n_tutor,
+        llm_requests=n_tutor,
+        retried=0,
+        guard_calls=2 * n_guard,
+        guard_judged=n_guard,
+        schemas=(("MainCallOut", n_tutor),),
+        gate_entries=(("guard", 2 * n_guard), ("tutor", n_tutor)),
+        gate_queued=0,
+        gate_wait_p95=0.0,
+        gate_wait_max=0.0,
+        llm_peak=64,
+        gate=64,
+        server_gate=64,
+        slash_status=404,
+        mode="v2",
+        fake=(mock_load.P50_S, mock_load.P95_S),
+        scale=1.0,
+        guard_per_request=2,
+        concurrency=64,
+    )
+    return dataclasses.replace(report, **changes)
+
+
 def test_latency_model_matches_the_runbox_measurement():
     model = mock_load.Latency.from_quantiles(4.51, 6.62)  # 가드 #105 동시 64 실측
     assert math.exp(model.mu) == pytest.approx(4.51)
@@ -50,6 +88,8 @@ def test_every_request_gets_200_in_contract():
     assert report.mode == "v2"  # 기본은 배포 설정과 같은 v2
     assert report.guard_judged == 300 and report.guard_calls == 600
     assert report.fake == pytest.approx((mock_load.P50_S, mock_load.P95_S))
+    # 동시 64 ≤ 게이트 64이고 v2는 요청마다 한 번에 호출 하나라 게이트에 줄이 서지 않는다
+    assert report.gate_queued == 0 and report.server_gate == report.gate == 64
 
 
 def test_v2_runs_the_real_flow_on_schema_answers():
@@ -73,8 +113,8 @@ def test_tutor_and_guard_calls_all_go_through_one_gate():
 def test_gate_waits_are_measured_when_the_gate_is_tight():
     # 게이트 2에 요청 20개를 한꺼번에 보내면 호출이 줄을 선다(가짜 지연 약 0.045초)
     report = run(n_tutor=10, n_guard=10, concurrency=20, gate=2, scale=0.01, seed=14)
-    assert report.gate == 2 and report.llm_peak <= 2
-    assert report.gate_wait_max > 0.02 and report.gate_wait_p95 > 0.0
+    assert report.gate == 2 and report.llm_peak <= 2 and report.server_gate == 64
+    assert report.gate_queued > 0 and report.gate_wait_max > 0.02 and report.gate_wait_p95 > 0.0
 
 
 def test_a_tutor_call_that_skips_the_gate_fails_the_run(monkeypatch, capsys):
@@ -183,20 +223,70 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     assert ok and "튜터 p50" in out and "시간 초과(30초 이상) 0" in out
     assert (
         "가정: 튜터 모드 v2, 가짜 LLM 지연 p50 4.51초·p95 6.62초(배율 0.001)"
-        ", 가드 판정 요청당 2회, 게이트 64" in out
+        ", 가드 판정 요청당 2회, 게이트 64, 동시 64\n" in out
     )
-    assert "튜터 20회" in out and "가드 40회" in out and "게이트 대기" in out
-    assert out.splitlines()[-1] == "통과(스모크: 배율 0.001, 실측 아님)"  # 배율이면 실측이 아니다
+    assert "튜터 20회" in out and "가드 40회" in out and "게이트 줄 선 호출 0회" in out
+    assert out.splitlines()[-1] == (  # 배율·요청 수가 기준과 달라 실측이 아니다
+        "통과(스모크: 배율 0.001, 튜터 요청 20 < 300, 가드 요청 20 < 300, 실측 아님)"
+    )
     for reply in mock_load.REPLIES.values():  # 가짜 답 본문도 내지 않는다
         assert json.dumps(reply, ensure_ascii=False) not in out
     assert TUTOR_DEFAULT["answer"] not in out
 
 
-def test_a_real_time_pass_names_the_bar(capsys):
-    report = run(n_tutor=4, n_guard=0, scale=0.001, seed=20)
-    real = mock_load.Report(**{**vars(report), "scale": 1.0})
-    ok, last = judged(real, capsys)
+def test_a_real_time_pass_names_the_bar_and_says_when_the_gate_never_filled(capsys):
+    ok, last = judged(passed(), capsys)
+    assert ok and last == "통과(튜터 p50 ≤6초·p95 ≤12초, 게이트 경합 없음)"
+    ok, last = judged(passed(gate_queued=3), capsys)
     assert ok and last == "통과(튜터 p50 ≤6초·p95 ≤12초)"
+
+
+@pytest.mark.parametrize(
+    "changes, reason",
+    [
+        ({"scale": 0.5}, "배율 0.5"),
+        ({"fake": (0.1, 0.2)}, "가짜 지연이 기본보다 짧음"),
+        ({"fake": (mock_load.P50_S, 6.0)}, "가짜 지연이 기본보다 짧음"),
+        ({"guard_per_request": 1, "guard_calls": mock_load.N_GUARD}, "가드 판정 요청당 1회 < 2회"),
+        ({"gate": 128}, "게이트 128 > 서버 64"),
+        ({"concurrency": 2}, "동시 2 < 64"),
+        ({"tutor_s": (4.5,) * 5}, "튜터 요청 5 < 300"),
+        ({"guard_s": (), "guard_judged": 0, "guard_calls": 0}, "가드 요청 0 < 300"),
+    ],
+)
+def test_an_easier_run_passes_only_as_a_smoke_run(capsys, changes, reason):
+    """SPEC §3 부하나 기본 가정보다 쉬운 조건의 통과는 실측 통과로 내지 않는다."""
+    ok, last = judged(passed(**changes), capsys)
+    assert ok and last == f"통과(스모크: {reason}, 실측 아님)"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"fake": (8.0, 14.0)},  # 튜터 주 호출 실측이 더 느리면 바꿔 끼운다
+        {"gate": 32, "llm_peak": 32, "gate_queued": 100},
+        {"concurrency": 128},
+        {
+            "guard_per_request": 3,
+            "guard_calls": 3 * mock_load.N_GUARD,
+            "gate_entries": (("guard", 3 * mock_load.N_GUARD), ("tutor", mock_load.N_TUTOR)),
+        },
+    ],
+)
+def test_a_harder_run_keeps_the_real_time_label(capsys, changes):
+    ok, last = judged(passed(**changes), capsys)
+    assert ok and last.startswith("통과(튜터 p50 ≤6초·p95 ≤12초")
+
+
+def test_cli_passes_easy_inputs_only_as_a_smoke_run(capsys):
+    """검증 리뷰 재현: 배율이 1이어도 부하·지연을 줄인 통과는 스모크다."""
+    argv = ["--tutor", "5", "--guard", "0", "--concurrency", "2", "--seed", "21"]
+    argv += ["--fake-p50", "0.1", "--fake-p95", "0.2", "--guard-calls", "0"]
+    assert mock_load.main(argv) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "통과(스모크: 가짜 지연이 기본보다 짧음, 가드 판정 요청당 0회 < 2회, 동시 2 < 64"
+        ", 튜터 요청 5 < 300, 가드 요청 0 < 300, 실측 아님)"
+    )
 
 
 def test_default_bar_is_the_prd_latency_target():
@@ -229,9 +319,8 @@ def test_cli_takes_the_fake_latency_the_bar_and_the_gate(capsys):
 
 
 def test_summary_names_each_failure(capsys):
-    report = mock_load.Report(
+    report = passed(
         requests=2,
-        wall_s=1.0,
         tutor_s=(1.0,),
         guard_s=(31.0,),
         bad_status=1,
@@ -242,20 +331,12 @@ def test_summary_names_each_failure(capsys):
         covered_tutor_rows=0,
         llm_calls=70,
         llm_requests=0,
-        retried=0,
         guard_calls=0,
         guard_judged=0,
         schemas=(("Other", 70),),
         gate_entries=(("tutor", 1),),
-        gate_wait_p95=0.0,
-        gate_wait_max=0.0,
         llm_peak=65,
-        gate=64,
         slash_status=307,
-        mode="v2",
-        fake=(4.51, 6.62),
-        scale=1.0,
-        guard_per_request=2,
     )
     ok, last = judged(report, capsys)
     assert not ok
@@ -300,5 +381,7 @@ def test_missing_or_non_json_responses_count_as_failures(client, status, monkeyp
         slash=404,
         mode="v2",
         guard_per_request=2,
+        concurrency=1,
+        server_gate=64,
     )
     assert report.invalid == 1 and report.bad_status == int(status != 200)

@@ -64,6 +64,15 @@ def user(content: str) -> dict[str, Any]:
     }
 
 
+def _schema_name(kwargs: dict[str, Any], system: str) -> str:
+    """요청한 응답 스키마 이름. json_schema 방식이면 이름으로, json_object 방식이면 system에
+    붙은 스키마의 필드로 알아본다."""
+    spec = kwargs.get("response_format", {}).get("json_schema")
+    if isinstance(spec, dict):
+        return str(spec.get("name", ""))
+    return "MainCallOut" if '"sentences"' in system and '"category"' in system else ""
+
+
 class FakeSend:
     """chat.completions.create 자리에 넣는 가짜 전송. 실제 API를 부르지 않는다.
 
@@ -82,15 +91,21 @@ class FakeSend:
         digest = hashlib.sha256(payload).hexdigest()[:16]
         self.digests.append(digest)
         system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
-        cited = _SID_IN_PROMPT.search(system)
-        content = json.dumps(
-            {
-                "answer": f"{ANSWER_WORD} {digest}",
+        answer = f"{ANSWER_WORD} {digest}"
+        if _schema_name(kwargs, system) == "MainCallOut":  # v2 주 호출(tutor.judge.main_call)
+            reply: dict[str, Any] = {
+                "category": "normal",
+                "action": "answer",
+                "sentences": [{"text": answer, "kind": "non_claim", "evidence": []}],
+            }
+        else:  # 베이스라인: 튜터 규격 그대로
+            cited = _SID_IN_PROMPT.search(system)
+            reply = {
+                "answer": answer,
                 "action": "answer",
                 "citations": [cited.group(1)] if cited else [],
-            },
-            ensure_ascii=False,
-        )
+            }
+        content = json.dumps(reply, ensure_ascii=False)
         choice = types.SimpleNamespace(
             message=types.SimpleNamespace(content=content), finish_reason="stop"
         )

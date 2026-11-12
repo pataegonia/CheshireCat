@@ -90,10 +90,10 @@ def test_tutor_default_is_registered_for_the_tutor_path(client):
     assert client.app.state.defaults == {"/tutor": tutor.TUTOR_DEFAULT}
 
 
-def test_both_paths_answer_200_in_their_own_contract(baseline_client, fake_send):
-    t = post(baseline_client, "/tutor", as_bytes(user("리스트에 값을 넣는 방법이 뭐야?")))
-    g = post(baseline_client, "/guard", as_bytes(guard_body("리스트에 값을 넣는 방법이 뭐야?")))
-    g2 = post(baseline_client, "/guard", as_bytes(guard_body("질문", candidate="답변 후보")))
+def test_both_paths_answer_200_in_their_own_contract(llm_client, fake_send):
+    t = post(llm_client, "/tutor", as_bytes(user("리스트에 값을 넣는 방법이 뭐야?")))
+    g = post(llm_client, "/guard", as_bytes(guard_body("리스트에 값을 넣는 방법이 뭐야?")))
+    g2 = post(llm_client, "/guard", as_bytes(guard_body("질문", candidate="답변 후보")))
     assert (t.status_code, g.status_code, g2.status_code) == (200, 200, 200)
     assert_tutor_contract(t.json())
     assert_guard_contract(g.json(), has_candidate=False)
@@ -125,8 +125,8 @@ def test_default_config_serves_both_paths_too(client):
         {"Authorization": "Bearer integration-test-token "},  # 뒤 공백
     ],
 )
-def test_missing_or_wrong_token_is_401_on_both_paths(baseline_client, fake_send, path, headers):
-    r = post(baseline_client, path, as_bytes(user(MARKER)), headers)
+def test_missing_or_wrong_token_is_401_on_both_paths(llm_client, fake_send, path, headers):
+    r = post(llm_client, path, as_bytes(user(MARKER)), headers)
     assert r.status_code == 401
     assert MARKER not in r.text
     assert fake_send.count == 0  # 인증 전에 LLM을 부르지 않는다
@@ -191,17 +191,17 @@ BROKEN_GUARD = {
 
 
 @pytest.mark.parametrize("name", sorted(BROKEN))
-def test_broken_input_on_tutor_is_200_in_contract(baseline_client, name):
-    r = post(baseline_client, "/tutor", BROKEN[name])
+def test_broken_input_on_tutor_is_200_in_contract(llm_client, name):
+    r = post(llm_client, "/tutor", BROKEN[name])
     assert r.status_code == 200
     assert_tutor_contract(r.json())
     assert MARKER not in r.text
 
 
 @pytest.mark.parametrize("name", sorted(BROKEN_GUARD))
-def test_broken_input_on_guard_is_200_in_contract(baseline_client, name):
+def test_broken_input_on_guard_is_200_in_contract(llm_client, name):
     raw = BROKEN_GUARD[name]
-    r = post(baseline_client, "/guard", raw)
+    r = post(llm_client, "/guard", raw)
     assert r.status_code == 200
     assert_guard_contract(r.json(), has_candidate=b'"candidate_answer"' in raw)
     assert MARKER not in r.text
@@ -209,50 +209,48 @@ def test_broken_input_on_guard_is_200_in_contract(baseline_client, name):
 
 @pytest.mark.parametrize("path", ["/tutor", "/guard"])
 @pytest.mark.parametrize("content_type", [None, "text/plain", "application/x-www-form-urlencoded"])
-def test_no_422_whatever_the_content_type(baseline_client, path, content_type):
+def test_no_422_whatever_the_content_type(llm_client, path, content_type):
     headers = dict(AUTH) if content_type is None else {**AUTH, "Content-Type": content_type}
     for raw in BROKEN_GUARD.values():
-        assert post(baseline_client, path, raw, headers).status_code == 200
+        assert post(llm_client, path, raw, headers).status_code == 200
 
 
 # ── 예외 → 경로별 기본값 ─────────────────────────────────────────────────
 
 
-def test_exception_inside_tutor_router_gives_tutor_default(baseline_client, monkeypatch):
+def test_exception_inside_tutor_router_gives_tutor_default(llm_client, monkeypatch):
     async def boom(body, **_):
         raise RuntimeError(MARKER)
 
     monkeypatch.setattr(router_mod, "respond", boom)
-    r = post(baseline_client, "/tutor", as_bytes(user(MARKER)))
+    r = post(llm_client, "/tutor", as_bytes(user(MARKER)))
     assert r.status_code == 200
     assert r.json() == tutor.TUTOR_DEFAULT
     assert "input" not in r.json()  # 가드 규격이 아니다
     assert MARKER not in r.text
     # 같은 앱의 /guard는 영향을 받지 않는다
-    g = post(baseline_client, "/guard", as_bytes(guard_body("질문")))
+    g = post(llm_client, "/guard", as_bytes(guard_body("질문")))
     assert g.json() == GUARD_DEFAULT
 
 
-def test_exception_outside_tutor_route_still_gives_tutor_default(baseline_client, monkeypatch):
+def test_exception_outside_tutor_route_still_gives_tutor_default(llm_client, monkeypatch):
     def broken_response(*_a, **_k):
         raise RuntimeError(MARKER)
 
     monkeypatch.setattr(router_mod, "JSONResponse", broken_response)
-    r = post(baseline_client, "/tutor", as_bytes(user("질문")))
+    r = post(llm_client, "/tutor", as_bytes(user("질문")))
     assert r.status_code == 200
     assert r.json() == tutor.TUTOR_DEFAULT
 
 
 @pytest.mark.parametrize("candidate", [None, "답변 후보"])
-def test_exception_in_guard_gives_guard_default(
-    baseline_client, monkeypatch, caplog, capfd, candidate
-):
+def test_exception_in_guard_gives_guard_default(llm_client, monkeypatch, caplog, capfd, candidate):
     async def boom(req):
         raise RuntimeError(MARKER)
 
-    monkeypatch.setattr(baseline_client.app.state.guard, "judge", boom, raising=False)
+    monkeypatch.setattr(llm_client.app.state.guard, "judge", boom, raising=False)
     caplog.set_level(logging.DEBUG)
-    r = post(baseline_client, "/guard", as_bytes(guard_body(MARKER, candidate=candidate)))
+    r = post(llm_client, "/guard", as_bytes(guard_body(MARKER, candidate=candidate)))
     assert r.status_code == 200
     # 로그: 한 줄, 오류 클래스 이름만. 요청 문구 · 예외 메시지 · 트레이스백이 없다
     lines = [rec.getMessage() for rec in caplog.records if rec.name == "guardrail.access"]
@@ -268,18 +266,18 @@ def test_exception_in_guard_gives_guard_default(
     assert "answer" not in body and "action" not in body  # 튜터 규격이 아니다
     assert MARKER not in r.text
     # 같은 앱의 /tutor는 영향을 받지 않는다
-    t = post(baseline_client, "/tutor", as_bytes(user("질문")))
+    t = post(llm_client, "/tutor", as_bytes(user("질문")))
     assert t.json()["answer"].startswith(ANSWER_WORD)
 
 
 # ── 본문 상한 · 시간 상한(가드 골격은 주입된 /tutor에 걸어 주지 않는다) ──
 
 
-def test_5mib_body_on_the_assembled_app_gives_tutor_default(baseline_client, fake_send, caplog):
+def test_5mib_body_on_the_assembled_app_gives_tutor_default(llm_client, fake_send, caplog):
     caplog.set_level(logging.INFO, logger="guardrail.access")
     big = as_bytes(user(MARKER + "가" * (5 * 1024 * 1024 // 3)))
     assert len(big) > 5 * 1024 * 1024
-    r = post(baseline_client, "/tutor", big)
+    r = post(llm_client, "/tutor", big)
     assert r.status_code == 200
     assert r.json() == tutor.TUTOR_DEFAULT
     assert MARKER not in r.text
@@ -289,14 +287,12 @@ def test_5mib_body_on_the_assembled_app_gives_tutor_default(baseline_client, fak
     assert MARKER not in caplog.text
     # 같은 앱의 다음 요청은 정상이다
     assert (
-        post(baseline_client, "/tutor", as_bytes(user("질문")))
-        .json()["answer"]
-        .startswith(ANSWER_WORD)
+        post(llm_client, "/tutor", as_bytes(user("질문"))).json()["answer"].startswith(ANSWER_WORD)
     )
 
 
 def test_generation_that_never_ends_gives_tutor_default_within_the_budget(
-    open_app, baseline_mode, monkeypatch, tmp_path
+    open_app, llm_mode, monkeypatch, tmp_path
 ):
     """LLM 전송이 끝나지 않아도 예산 안에 200 + 튜터 기본값. 예산을 짧게 줘서 1초 안에 끝낸다."""
     guard_cfg = (ROOT / "guardrail" / "configs" / "default.yaml").read_text("utf-8")
@@ -386,39 +382,43 @@ def test_app_can_be_started_twice_from_the_same_module(app_env, fake_send):
 # ── 호출 상한(max_calls) ──────────────────────────────────────────────────
 
 
-def test_call_limits_are_off_in_the_server(baseline_client):
-    state = baseline_client.app.state
+def test_call_limits_are_off_in_the_server(llm_client):
+    state = llm_client.app.state
     assert state.tutor_llm.max_calls is None
     guard_llm = getattr(state.guard, "llm", None)
     # 지금 가드 기본 판정기(상수)는 LLM이 없다. LLM이 생기면 그 상한도 None이어야 한다.
     assert guard_llm is None or guard_llm.max_calls is None
     for i in range(5):
-        post(baseline_client, "/tutor", as_bytes(user(f"질문 {i}")))
+        post(llm_client, "/tutor", as_bytes(user(f"질문 {i}")))
     assert state.tutor_llm.max_calls is None
     assert sum(state.tutor_llm.blocked.values()) == 0
 
 
-def test_a_call_limit_would_change_responses(baseline_client, fake_send):
+def test_a_call_limit_would_change_responses(llm_client, llm_mode, fake_send):
     """상한이 None이어야 하는 이유: 값이 있으면 앞 요청 수에 따라 뒤 응답이 달라진다."""
-    baseline_client.app.state.tutor_llm.max_calls = 1
-    first = post(baseline_client, "/tutor", as_bytes(user("질문"))).json()
-    second = post(baseline_client, "/tutor", as_bytes(user("질문"))).json()
+    llm_client.app.state.tutor_llm.max_calls = 1
+    first = post(llm_client, "/tutor", as_bytes(user("질문"))).json()
+    second = post(llm_client, "/tutor", as_bytes(user("질문"))).json()
     assert first["answer"].startswith(ANSWER_WORD)
-    assert second == tutor.TUTOR_DEFAULT
+    # 막힌 요청은 LLM의 답이 아니라 고정 문장이다(baseline은 튜터 기본값, v2는 TU-12 기본 action)
+    assert second != first and not second["answer"].startswith(ANSWER_WORD)
+    assert_tutor_contract(second)
+    if llm_mode == "baseline":
+        assert second == tutor.TUTOR_DEFAULT
     assert fake_send.count == 1
 
 
 # ── 로그 ──────────────────────────────────────────────────────────────────
 
 
-def test_request_log_lines_have_seven_fields_and_no_body_words(baseline_client, caplog, capfd):
+def test_request_log_lines_have_seven_fields_and_no_body_words(llm_client, caplog, capfd):
     caplog.set_level(logging.DEBUG)
-    post(baseline_client, "/tutor", as_bytes(user(f"{MARKER} 리스트가 뭐야")))
-    post(baseline_client, "/guard", as_bytes(guard_body(MARKER, candidate=f"{MARKER} 후보")))
-    post(baseline_client, "/tutor", b"not json " + MARKER.encode())
+    post(llm_client, "/tutor", as_bytes(user(f"{MARKER} 리스트가 뭐야")))
+    post(llm_client, "/guard", as_bytes(guard_body(MARKER, candidate=f"{MARKER} 후보")))
+    post(llm_client, "/tutor", b"not json " + MARKER.encode())
     wrong = {"Authorization": f"Bearer {HEADER_MARKER}", "X-Note": HEADER_MARKER}
-    post(baseline_client, "/tutor", as_bytes(user(MARKER)), wrong)
-    post(baseline_client, f"/{MARKER}", as_bytes(user(MARKER)))
+    post(llm_client, "/tutor", as_bytes(user(MARKER)), wrong)
+    post(llm_client, f"/{MARKER}", as_bytes(user(MARKER)))
 
     lines = [r.getMessage() for r in caplog.records if r.name == "guardrail.access"]
     assert len(lines) == 5
@@ -443,13 +443,13 @@ def test_request_log_lines_have_seven_fields_and_no_body_words(baseline_client, 
         assert "리스트가 뭐야" not in text and "후보" not in text
 
 
-def test_exception_logs_the_class_name_only(baseline_client, caplog, capfd, monkeypatch):
+def test_exception_logs_the_class_name_only(llm_client, caplog, capfd, monkeypatch):
     async def boom(body, **_):
         raise RuntimeError(MARKER)
 
     monkeypatch.setattr(router_mod, "respond", boom)
     caplog.set_level(logging.DEBUG)
-    post(baseline_client, "/tutor", as_bytes(user("질문")))
+    post(llm_client, "/tutor", as_bytes(user("질문")))
     lines = [r.getMessage() for r in caplog.records if r.name == "guardrail.access"]
     assert len(lines) == 1 and lines[0].endswith(" RuntimeError")
     captured = capfd.readouterr()

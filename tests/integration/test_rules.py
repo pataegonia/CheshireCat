@@ -44,17 +44,30 @@ def post(client, path: str, body: dict, headers=AUTH):
 # ── 상태 · 캐시 없음 ──────────────────────────────────────────────────────
 
 
-def test_same_request_twice_calls_the_llm_twice(baseline_client, fake_send):
-    first = post(baseline_client, "/tutor", user(QUESTION_B))
-    second = post(baseline_client, "/tutor", user(QUESTION_B))
-    assert fake_send.count == 2  # 캐시가 있으면 1이다
+# TutorLLM.calls에 세는 역할 이름(모드별). 요청 하나에 LLM 호출은 한 번이다(세어 본 값).
+LLM_ROLE = {"v2": "main", "baseline": "baseline"}
+CALLS_PER_REQUEST = 1
+
+
+def test_same_request_twice_calls_the_llm_twice(llm_client, llm_mode, fake_send):
+    first = post(llm_client, "/tutor", user(QUESTION_B))
+    second = post(llm_client, "/tutor", user(QUESTION_B))
+    assert fake_send.count == 2 * CALLS_PER_REQUEST  # 캐시가 있으면 1이다
     assert fake_send.digests[0] == fake_send.digests[1]  # LLM이 받은 내용도 같다
     assert first.json() == second.json()
     assert first.json()["answer"].startswith(ANSWER_WORD)
-    assert dict(baseline_client.app.state.tutor_llm.calls) == {"baseline": 2}
+    assert dict(llm_client.app.state.tutor_llm.calls) == {LLM_ROLE[llm_mode]: 2}
 
 
-def test_earlier_request_does_not_change_a_later_response(open_app, baseline_mode, fake_send):
+def test_one_request_makes_one_llm_call(llm_client, llm_mode, fake_send):
+    for sent in range(1, 4):
+        r = post(llm_client, "/tutor", user(f"{QUESTION_B} {sent}"))
+        assert r.json()["answer"].startswith(ANSWER_WORD)  # 기본값이 아니라 LLM의 답이다
+        assert fake_send.count == sent * CALLS_PER_REQUEST
+    assert dict(llm_client.app.state.tutor_llm.calls) == {LLM_ROLE[llm_mode]: 3}
+
+
+def test_earlier_request_does_not_change_a_later_response(open_app, llm_mode, fake_send):
     with open_app() as alone:
         b_alone = post(alone, "/tutor", user(QUESTION_B)).json()
         digest_alone = fake_send.digests[-1]
@@ -71,7 +84,7 @@ def test_earlier_request_does_not_change_a_later_response(open_app, baseline_mod
     assert MARKER not in as_bytes(b_after).decode()
 
 
-def test_guard_response_is_not_changed_by_earlier_requests(open_app, baseline_mode):
+def test_guard_response_is_not_changed_by_earlier_requests(open_app, llm_mode):
     body = {**user(QUESTION_B), "candidate_answer": "예산은 계획이에요."}
     with open_app() as alone:
         g_alone = post(alone, "/guard", body).json()
@@ -83,14 +96,14 @@ def test_guard_response_is_not_changed_by_earlier_requests(open_app, baseline_mo
 
 
 @pytest.mark.parametrize("session", ["s_1", "s_2", "", None, 7])
-def test_session_id_does_not_change_the_response(baseline_client, fake_send, session):
-    base = post(baseline_client, "/tutor", user(QUESTION_B)).json()
+def test_session_id_does_not_change_the_response(llm_client, fake_send, session):
+    base = post(llm_client, "/tutor", user(QUESTION_B)).json()
     body = user(QUESTION_B)
     if session is None:
         del body["session_id"]
     else:
         body["session_id"] = session
-    assert post(baseline_client, "/tutor", body).json() == base
+    assert post(llm_client, "/tutor", body).json() == base
     assert fake_send.digests[-1] == fake_send.digests[0]
 
 
@@ -103,12 +116,12 @@ def test_session_id_does_not_change_the_response(baseline_client, fake_send, ses
         {"Content-Type": "text/plain"},
     ],
 )
-def test_headers_other_than_auth_do_not_change_the_response(baseline_client, fake_send, extra):
-    base = post(baseline_client, "/tutor", user(QUESTION_B)).json()
-    assert post(baseline_client, "/tutor", user(QUESTION_B), {**AUTH, **extra}).json() == base
+def test_headers_other_than_auth_do_not_change_the_response(llm_client, fake_send, extra):
+    base = post(llm_client, "/tutor", user(QUESTION_B)).json()
+    assert post(llm_client, "/tutor", user(QUESTION_B), {**AUTH, **extra}).json() == base
     assert fake_send.digests[-1] == fake_send.digests[0]
-    guard = post(baseline_client, "/guard", user(QUESTION_B)).json()
-    assert post(baseline_client, "/guard", user(QUESTION_B), {**AUTH, **extra}).json() == guard
+    guard = post(llm_client, "/guard", user(QUESTION_B)).json()
+    assert post(llm_client, "/guard", user(QUESTION_B), {**AUTH, **extra}).json() == guard
 
 
 def kept_after_each_request(client) -> list[str]:
@@ -138,11 +151,11 @@ def kept_after_each_request(client) -> list[str]:
     return found
 
 
-def test_request_content_is_not_kept_after_any_response(baseline_client):
-    assert find_text(state_roots(baseline_client.app), MARKER) == []  # 요청 전에는 당연히 없다
+def test_request_content_is_not_kept_after_any_response(llm_client):
+    assert find_text(state_roots(llm_client.app), MARKER) == []  # 요청 전에는 당연히 없다
     # 앱 상태 · 모듈 전역 · 클래스 속성 · 클로저 어디에도 요청 · 답변 내용이 남지 않고,
     # functools 캐시가 요청마다 늘지 않는다(기동 때 만든 것만 있다)
-    assert kept_after_each_request(baseline_client) == []
+    assert kept_after_each_request(llm_client) == []
 
 
 def test_search_helper_would_find_kept_content():
@@ -230,7 +243,7 @@ def _leak_app_state_last_body(module, state, text):
         _leak_app_state_last_body,
     ],
 )
-def test_state_search_catches_each_way_of_keeping_a_request(baseline_client, monkeypatch, leak):
+def test_state_search_catches_each_way_of_keeping_a_request(llm_client, monkeypatch, leak):
     module = _leak_module()
     monkeypatch.setitem(sys.modules, LEAK_MODULE, module)
     router_mod = importlib.import_module("tutor.router")
@@ -240,17 +253,19 @@ def test_state_search_catches_each_way_of_keeping_a_request(baseline_client, mon
         leak(module, kwargs["state"], json.dumps(body, ensure_ascii=False))
         return await real(body, **kwargs)
 
-    assert kept_after_each_request(baseline_client) == []  # 감싸기 전에는 깨끗하다
+    assert kept_after_each_request(llm_client) == []  # 감싸기 전에는 깨끗하다
     monkeypatch.setattr(router_mod, "respond", leaky)
-    found = kept_after_each_request(baseline_client)
+    found = kept_after_each_request(llm_client)
     assert found, leak.__name__
     assert any(f.startswith("요청0:") for f in found)  # 첫 요청 직후에 잡는다
 
 
 # ── 정적 검사: session_id · 요청 헤더 ─────────────────────────────────────
 
-# 서버가 import하지 않는 개발용 코드(tests/tutor가 import하지 않음을 확인한다)는 대상이 아니다
+# 개발용 코드(로컬 측정 · 지연 실험)는 대상이 아니다. tests/tutor는 이 폴더를 import하지만
+# 서버 코드는 import하지 않는다(test_server_code_does_not_import_dev_only_code가 확인한다).
 NOT_SERVER = ("tutor/eval/", "tutor/dev_only/")
+DEV_ONLY_MODULES = ("tutor.eval", "tutor.dev_only")
 
 
 def _rel(path: Path) -> str:
@@ -282,7 +297,8 @@ ALLOWLIST_HINT = (
 NOT_REQUEST_HEADERS = {
     # OpenAI **응답**의 Retry-After · x-should-retry(재시도 대기 계산). 요청 헤더가 아니다.
     ("tutor/runtime/llm.py", "_fail"),
-    ("tutor/runtime/llm.py", "complete"),
+    # (#125부터 본체는 `_complete`, `complete`는 실패 집계만 한다)
+    ("tutor/runtime/llm.py", "_complete"),
 }
 # 가드 서버에서 요청 · 응답 헤더를 읽는 함수와 헤더 이름(인증, 길이 계산뿐이어야 한다)
 GUARD_HEADER_FUNCS = {"check_token", "_log_line", "_access_log"}
@@ -437,6 +453,82 @@ def test_scan_covers_the_server_sources_only():
     assert len(SCANNED) >= 15
     assert not any(name.startswith(NOT_SERVER) for name in names)
     assert (ROOT / "tutor/eval").is_dir()  # 뺀 폴더가 실제로 있다(이름이 바뀌면 여기서 걸린다)
+    assert (ROOT / "tutor/dev_only").is_dir()
+    assert tuple(m.replace(".", "/") + "/" for m in DEV_ONLY_MODULES) == NOT_SERVER
+
+
+def _is_dev_only(module: str) -> bool:
+    return any(module == m or module.startswith(m + ".") for m in DEV_ONLY_MODULES)
+
+
+def dev_only_imports(source: str, rel: str) -> list[tuple[str, int]]:
+    """(모듈, 줄): `rel` 위치의 소스가 개발용 모듈(tutor.eval · tutor.dev_only)을 import하는 곳.
+
+    `import a.b`, `from a import b`, 상대 import(`from .eval import x`, `from . import eval`),
+    `import_module("…")` · `__import__("…")`(문자열은 이어 붙인 결과로 본다).
+    """
+    parts = rel.removesuffix(".py").split("/")
+    package = parts[:-1]  # 이 파일이 속한 패키지(`__init__.py`도 같은 계산이다)
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(ast.parse(source)):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package[: len(package) - (node.level - 1)] if node.level else []
+            module = ".".join([*base, *((node.module or "").split(".") if node.module else [])])
+            names = [module, *(f"{module}.{alias.name}" for alias in node.names)]
+        elif isinstance(node, ast.Call) and _last_name(node.func) in (
+            "import_module",
+            "__import__",
+        ):
+            names = [text for arg in node.args[:1] if (text := _fold(arg)) is not None]
+        found.extend((name, node.lineno) for name in names if _is_dev_only(name))
+    return sorted(set(found))
+
+
+def test_dev_only_import_check_catches_what_it_should():
+    def hits(source: str, rel: str = "tutor/judge/flow.py") -> list[str]:
+        return [name for name, _ in dev_only_imports(source, rel)]
+
+    assert hits("import tutor.eval.run_local\n") == ["tutor.eval.run_local"]
+    assert hits("import tutor.eval as e\n") == ["tutor.eval"]
+    assert hits("from tutor.eval import run_local\n") == ["tutor.eval", "tutor.eval.run_local"]
+    assert hits("from tutor import eval\n") == ["tutor.eval"]
+    assert hits("from tutor import router, dev_only\n") == ["tutor.dev_only"]
+    assert hits("from tutor.dev_only.tidy_latency import main\n") == [
+        "tutor.dev_only.tidy_latency",
+        "tutor.dev_only.tidy_latency.main",
+    ]
+    # 상대 import
+    assert hits("from ..eval import run_local\n") == ["tutor.eval", "tutor.eval.run_local"]
+    assert hits("from .. import eval\n") == ["tutor.eval"]
+    assert hits("from .eval import x\n", "tutor/pipeline.py") == ["tutor.eval", "tutor.eval.x"]
+    assert hits("from . import dev_only\n", "tutor/__init__.py") == ["tutor.dev_only"]
+    # 함수 안의 늦은 import, 문자열로 import
+    assert hits("def f():\n    from tutor.eval import recall\n") == [
+        "tutor.eval",
+        "tutor.eval.recall",
+    ]
+    assert hits('m = importlib.import_module("tutor.eval.recall")\n') == ["tutor.eval.recall"]
+    assert hits('m = import_module("tutor." + "eval")\n') == ["tutor.eval"]
+    assert hits('m = __import__("tutor.dev_only")\n') == ["tutor.dev_only"]
+
+    # 다른 모듈은 잡지 않는다
+    assert hits("from tutor.retrieval import retrieve\nimport tutor.router\n") == []
+    assert hits("from .eval import x\n") == []  # tutor/judge/eval 은 다른 모듈이다
+    assert hits("from tutor.evaluate import x\nimport tutor.evals\n") == []
+    assert hits("from guardrail.eval.cv import load_splits\n") == []  # 가드의 eval은 대상이 아니다
+    assert hits('m = importlib.import_module("tutor.router")\n') == []
+    assert hits('"""python -m tutor.dev_only.tidy_latency 로 잰다."""\n') == []
+
+
+def test_server_code_does_not_import_dev_only_code():
+    """정적 검사에서 뺀 폴더(NOT_SERVER)를 서버 코드가 불러 쓰면 그 코드도 서버 코드가 된다."""
+    found = {
+        _rel(p): hits for p in SCANNED if (hits := dev_only_imports(p.read_text("utf-8"), _rel(p)))
+    }
+    assert found == {}
 
 
 def test_no_code_reads_session_id():

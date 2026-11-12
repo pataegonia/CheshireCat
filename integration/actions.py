@@ -7,6 +7,7 @@
 `FinalizeConfig`로 받는다. 요청 사이에 아무것도 저장하지 않는다.
 """
 
+import re
 import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
@@ -161,6 +162,15 @@ def _normalize(text: str) -> str:
     return "".join(text.split()).translate(_PUNCT_TABLE)
 
 
+# 짝이 맞는 굵게 표시 "**…**"(한 줄 안, 안쪽이 공백으로 시작 · 끝나지 않음)
+_BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+
+
+def _strip_bold(text: str) -> str:
+    """굵게 표시의 별표만 벗긴다. `a ** b` · `a * b` 같은 연산자는 그대로 둔다."""
+    return _BOLD.sub(r"\1", text)
+
+
 def _is_real_sid(sid: str) -> bool:
     return SID_PATTERN.fullmatch(sid) is not None and sid in SECTION_IDS
 
@@ -169,17 +179,18 @@ def _verified_sids(sentence: Sentence, retrieved: Sequence[Section], min_chars: 
     """인용 문구가 그 섹션 원문(본문 + 표)에 실제로 있는 evidence의 sid.
 
     정규화한 길이가 `min_chars`보다 짧은 문구는 보지 않는다.
-    이 비교에서만 양쪽의 `*`를 지운다: 교재는 "**…**"로 굵게 적고 모델은 별표 없이 옮긴다.
+    이 비교에서만 양쪽에서 짝이 맞는 굵게 표시 "**…**"의 별표를 벗긴다: 교재는 굵게 적고
+    모델은 별표 없이 옮긴다. 그 밖의 `*`(곱셈 · 거듭제곱 예제)는 그대로 두고 비교한다.
     """
     out: list[str] = []
     for ev in sentence.evidence:
         if not _is_real_sid(ev.sid):
             continue
         section = next((s for s in retrieved if s.id == ev.sid), None)
-        quote = _normalize(ev.quote).replace("*", "")
+        quote = _normalize(_strip_bold(ev.quote))
         if section is None or len(quote) < min_chars:
             continue
-        if quote in _normalize("\n".join([section.text, *section.tables])).replace("*", ""):
+        if quote in _normalize(_strip_bold("\n".join([section.text, *section.tables]))):
             out.append(ev.sid)
     return out
 
@@ -266,8 +277,9 @@ def finalize(
     - `action`은 주 호출 · 합치기 단계가 고른 값이다(harmful_content의 redirect 등). None이면
       `rule.action`. 표와 다른 값이 와도 막지 않는다(표 강제는 튜터 설정).
     - `safe=false`면 답변을 버리고 `cfg.refuse_text` + refuse를 낸다.
-    - 인용은 최종 action으로 정한다: clarify · redirect · refuse · escalate는 `[]`, 표에 있는
-      조합이면 `rule.cite`, 그 밖에는 if_used.
+    - 인용은 최종 action으로 정한다(`_cite_policy`, 위에서부터 먼저 맞는 것): clarify ·
+      redirect · refuse · escalate는 `[]`, 표에 있는 조합이면 `rule.cite`, 표에 없는 조합이라도
+      answer · scaffold이고 그 범주의 cite가 always이면 always, 그 밖에는 if_used.
     - 길이 상한을 넘으면 뒤 문장부터 통째로 빼고, 인용은 남은 문장으로 계산한다. 첫 문장 하나로도
       넘을 때만 문자 수로 자른다.
     - `cfg.unverified_notice`는 인용 규칙이 always일 때, claim 문장이 판정이나 길이 자르기로

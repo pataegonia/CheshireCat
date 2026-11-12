@@ -17,6 +17,7 @@ _CLEARED_ENV = (
     "OPENAI_API_KEY",  # 없으면 실제 전송 함수는 보내기 전에 실패한다(실제 API를 부를 수 없다)
     "OPENAI_BASE_URL",
 )
+LLM_MODES = ("v2", "baseline")
 
 
 @pytest.fixture
@@ -41,14 +42,20 @@ def fake_send(monkeypatch):
     return fake
 
 
-@pytest.fixture
-def baseline_mode(tmp_path, monkeypatch, app_env):
-    """튜터 설정을 mode: baseline으로 바꾼 복사본을 쓴다(지금 LLM을 부르는 경로는 이것뿐이다)."""
+@pytest.fixture(params=LLM_MODES)
+def llm_mode(request, tmp_path, monkeypatch, app_env):
+    """LLM을 부르는 두 경로를 차례로 돈다. 값은 모드 이름이다.
+
+    v2는 저장소 설정 그대로(`config/tutor.yaml` 기본값, 검색 → 주 호출 → 결정적 수정)이고,
+    baseline은 mode만 바꾼 복사본을 쓴다(검색 → 일반 프롬프트 1회).
+    """
     text = (ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8")
-    assert "mode: v2" in text
-    path = tmp_path / "tutor.yaml"
-    path.write_text(text.replace("mode: v2", "mode: baseline", 1), encoding="utf-8")
-    monkeypatch.setenv("TUTOR_CONFIG", str(path))
+    assert "mode: v2" in text  # 기본값이 바뀌면 여기서 걸린다
+    if request.param == "baseline":
+        path = tmp_path / "tutor.yaml"
+        path.write_text(text.replace("mode: v2", "mode: baseline", 1), encoding="utf-8")
+        monkeypatch.setenv("TUTOR_CONFIG", str(path))
+    return request.param
 
 
 @pytest.fixture
@@ -73,7 +80,8 @@ def client(open_app):
 
 
 @pytest.fixture
-def baseline_client(baseline_mode, open_app):
-    """튜터가 가짜 LLM을 실제로 부르는 앱(mode: baseline)."""
+def llm_client(llm_mode, open_app):
+    """튜터가 가짜 LLM을 실제로 부르는 앱. v2와 baseline으로 한 번씩 돈다."""
     with open_app() as c:
+        assert c.app.state.tutor_cfg.mode == llm_mode
         yield c

@@ -897,7 +897,6 @@ BOLD_RETRIEVED = [B, BOLD, A]  # 검색 1위는 B: BOLD가 인용되면 문구 �
         "하루 이체 한도는 5만 원이에요",  # ** 없이 옮김(모델이 보통 이렇게 옮긴다)
         "**하루 이체 한도는 5만 원**이에요",  # ** 를 그대로 옮김
         "**하루 이체 한도는 5만 원**",
-        "하루 이체 한도는 5만 원**이에요",  # 한쪽만 남음
         "안내예요. 하루 이체 한도는",  # 굵게 표시 경계를 넘는 문구
     ],
 )
@@ -916,6 +915,8 @@ def test_quote_from_a_bold_sentence_is_verified(quote):
         ("PY-01-02", "하루 이체 한도는 5만 원이에요"),  # 문구는 맞지만 다른 섹션에 붙임
         ("FIN-01-02", "**"),  # 별표뿐
         ("FIN-01-02", "*원*"),  # 별표를 지우면 한 글자
+        ("FIN-01-02", "하루 이체 한도는 5만 원**이에요"),  # 짝이 없는 ** 는 벗기지 않는다
+        ("FIN-01-02", "하루 * 이체 한도는 5만 원이에요"),  # 원문에 없는 * 를 끼움
     ],
 )
 def test_bold_handling_does_not_verify_other_quotes(sid, quote):
@@ -935,26 +936,81 @@ def test_bold_is_ignored_only_for_quotes_not_for_normalize_or_unsupported_spans(
     assert actions._unsupported_indexes(sentences, ["**굵은** 문장"], 2) == {1}
 
 
-def _bold_line_failures() -> tuple[int, list[tuple[str, int]]]:
-    """교재에서 ** 가 든 줄마다 ** 를 뺀 앞 40자를 인용 문구로 넣어, 인용되지 않은 (섹션, 줄)."""
+def _cited(sid: str, quote: str) -> bool:
+    """실제 교재에서 그 섹션을 검색 2위에 두고, 인용 문구가 검증돼 그 섹션이 인용되는지."""
+    other = next(s for other_sid, s in KB.items() if other_sid != sid)
+    out = finalize([claim("설명이에요.", (sid, quote))], OK, [other, KB[sid]], NORMAL, CFG)
+    return out.citations == [sid]
+
+
+# 굵게 표시가 아닌 ** (PY-01-03의 거듭제곱 예제 한 줄)
+POWER_LINE = ("PY-01-03", "square = score ** group")
+
+
+def _bold_line_failures() -> tuple[int, list[tuple[str, int, str]]]:
+    """교재에서 굵게 표시가 든 줄마다 두 가지 문구를 넣어, 인용되지 않은 (섹션, 줄, 어느 쪽).
+
+    ** 를 뺀 앞 40자(모델이 보통 이렇게 옮긴다)와, ** 를 둔 줄 전체.
+    """
     total = 0
     failed = []
     for sid, section in KB.items():
-        other = next(s for other_sid, s in KB.items() if other_sid != sid)
         for number, line in enumerate(section.text.splitlines(), start=1):
             # 별표만 있는 줄(파이썬 별 찍기 예제의 출력)은 굵게 표시가 아니고 옮길 글자도 없다
             if "**" not in line or not line.replace("*", "").strip():
                 continue
+            if (sid, line.strip()) == POWER_LINE:
+                continue
             total += 1
-            quote = line.replace("**", "")[:40]
-            out = finalize([claim("설명이에요.", (sid, quote))], OK, [other, section], NORMAL, CFG)
-            if out.citations != [sid]:
-                failed.append((sid, number))
+            if not _cited(sid, line.replace("**", "")[:40]):
+                failed.append((sid, number, "별표 뺌"))
+            if not _cited(sid, line):
+                failed.append((sid, number, "별표 둠"))
     return total, failed
 
 
-def test_every_bold_line_in_the_real_kb_can_be_quoted_without_the_asterisks():
+def test_every_bold_line_in_the_real_kb_can_be_quoted_with_or_without_the_asterisks():
     assert len(KB) == 48
     total, failed = _bold_line_failures()
-    assert total == 30  # ** 가 든 37줄 중 별표만 있는 7줄(PY-02-04, PY-03-04)을 뺀 수
-    assert failed == [], f"{len(failed)}줄 실패 / ** 가 든 {total}줄"
+    # ** 가 든 37줄 중 별표만 있는 7줄(PY-02-04, PY-03-04)과 거듭제곱 예제 1줄(PY-01-03)을 뺀 수
+    assert total == 29
+    assert failed == [], f"{len(failed)}건 실패 / 굵게 표시가 든 {total}줄"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "square = score ** group",  # 원문 그대로(거듭제곱)
+        "multi = apple * basket",  # 원문 그대로(곱셈)
+        "multi = first * second",
+        "(6 + 2) * 2",
+    ],
+)
+def test_operators_in_the_real_kb_are_quoted_as_written(quote):
+    assert scoring.normalize(quote) in scoring.normalize(KB["PY-01-03"].text)
+    assert _cited("PY-01-03", quote)
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "square = score * group",  # ** 를 * 로 바꿈
+        "square = score group",  # 연산자를 뺌
+        "multi = apple basket",
+        "multi = apple ** basket",  # * 를 ** 로 바꿈
+        "square = score **** group",
+    ],
+)
+def test_quotes_with_a_changed_or_missing_operator_are_not_verified(quote):
+    assert scoring.normalize(quote) not in scoring.normalize(KB["PY-01-03"].text)
+    assert not _cited("PY-01-03", quote)
+
+
+def test_only_paired_bold_markers_are_removed():
+    strip = actions._strip_bold
+    assert strip("앞 **굵게** 뒤 **또 굵게** 끝") == "앞 굵게 뒤 또 굵게 끝"
+    assert strip("square = score ** group") == "square = score ** group"  # 짝이 없다
+    assert strip("a ** b ** c") == "a ** b ** c"  # 안쪽이 공백으로 시작 · 끝나면 연산자다
+    assert strip("a * b") == "a * b"
+    assert strip("**첫 줄\n둘째 줄**") == "**첫 줄\n둘째 줄**"  # 줄을 넘지 않는다
+    assert strip("**한쪽만") == "**한쪽만"

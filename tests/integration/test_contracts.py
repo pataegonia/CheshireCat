@@ -119,3 +119,26 @@ def test_unknown_action_rejected():
 def test_unknown_sentence_kind_rejected():
     with pytest.raises(ValidationError):
         Sentence(text="a", kind="fact")
+
+
+def _objects(schema: dict) -> list[dict]:
+    """스키마 안의 object 정의를 전부 모은다($defs 포함)."""
+    found = [schema] if schema.get("type") == "object" else []
+    found += [d for d in schema.get("$defs", {}).values() if d.get("type") == "object"]
+    return found
+
+
+def test_sentence_passes_guard_strict_schema():
+    """튜터가 `Sentence`를 LLM 출력 스키마로도 쓸 수 있다(가드 `strict_schema` 규칙).
+
+    strict 모드는 모든 object가 추가 필드를 막고 모든 필드를 required로 두어야 한다. 필드를
+    바꾸다 이 성질이 깨지면 여기서 잡는다.
+    """
+    from guardrail.judges.schemas import strict_schema
+
+    schema = strict_schema(Sentence)
+    objects = _objects(schema)
+    assert {o["title"] for o in objects} == {"Sentence", "Evidence"}
+    for obj in objects:
+        assert obj["additionalProperties"] is False
+        assert set(obj["required"]) == set(obj["properties"])

@@ -19,6 +19,7 @@
 - `/tutor` 흐름: `retrieve ∥ classify(가드) ∥ 주 호출` → 합치기(classify가 공격 4범주인데 주 호출 action이 표와 다르면 표 템플릿) → `judge_output(category=)` → **결정적 수정**(IN-04). v1은 이 병렬안(I13 ⓒ), 동결값은 11/18 측정.
 - 주입된 `/tutor`에는 가드의 `budget_s + 5` 안전망과 4MiB 본문 상한이 걸리지 않는다. 튜터 라우터가 직접 걸고, 통합 계약 테스트가 확인한다.
 - 설정은 루트 `config/` 한 곳: `actions.yaml`(통합) · `runtime.yaml`(`judge_skip_s` · `fallback_action`) · `tutor.yaml`(튜터). `budget_s`는 `request.app.state.cfg.budget_s`(가드 로드값)를 읽는다.
+- 서버(`app.py` · tutor)는 아직 `config/runtime.yaml`을 읽지 않는다. 튜터가 `judge_skip_s`를 쓸 때 `from integration.runtime import load_runtime`으로 읽는다. `integration.actions`를 import하면 그 시점에 파일을 읽으므로 파일이 없으면 실패한다.
 
 ## 계약 (IN-01 · IN-03 · IN-04)
 - `integration/contracts.py`: `Section{id, subject, title, text, tables, names}`(`tables` · `names`는 기본 빈 목록, PRD IN-01이 원본) · `Evidence{sid, quote}`(`sid` = `Section.id`) · `Sentence{text, kind: claim|non_claim, evidence}` · `TutorResult{answer, action, citations}`. action 7종: `answer` · `scaffold` · `clarify` · `abstain` · `redirect` · `refuse` · `escalate`.
@@ -36,7 +37,7 @@
 
 ## 명령 (저장소 루트에서)
 - `uv sync --locked` · `uv run pytest tests/integration` · `uv run ruff check .` · `uv run ruff format .`
-- 루트 `pyproject.toml`(workspace)이 생기기 전에는 `python -m pytest tests/integration`으로 돌린다. Python 3.12 기준(3.13 전용 기능 금지).
+- 루트 `pyproject.toml`(workspace)이 생기기 전에는 `python -m pytest tests/integration`으로 돌린다(guardrail 패키지가 설치돼 있어야 한다. 테스트가 경로를 대신 잡아 주지 않는다). Python 3.12 기준(3.13 전용 기능 금지).
 - 테스트 폴더는 `tests/__init__.py` + `tests/integration/__init__.py`를 둘 다 둔다. `tests/__init__.py`가 없으면 pytest가 `tests/`를 경로 앞에 넣어 `import integration`이 테스트 폴더를 가리킨다(튜터 `tests/tutor`도 같은 이유).
 - 하네스: `uv run python -m harness.run_public --preset v1_parallel`(실행 전 예상 호출 수를 출력하고 상한을 넘으면 멈춘다). 실제 API 부하(600요청 · 64동시)는 대회 기간 2회만.
 

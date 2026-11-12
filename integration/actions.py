@@ -167,16 +167,17 @@ def _verified_sids(sentence: Sentence, retrieved: Sequence[Section], min_chars: 
     """인용 문구가 그 섹션 원문(본문 + 표)에 실제로 있는 evidence의 sid.
 
     정규화한 길이가 `min_chars`보다 짧은 문구는 보지 않는다.
+    이 비교에서만 양쪽의 `*`를 지운다: 교재는 "**…**"로 굵게 적고 모델은 별표 없이 옮긴다.
     """
     out: list[str] = []
     for ev in sentence.evidence:
         if not _is_real_sid(ev.sid):
             continue
         section = next((s for s in retrieved if s.id == ev.sid), None)
-        quote = _normalize(ev.quote)
+        quote = _normalize(ev.quote).replace("*", "")
         if section is None or len(quote) < min_chars:
             continue
-        if quote in _normalize("\n".join([section.text, *section.tables])):
+        if quote in _normalize("\n".join([section.text, *section.tables])).replace("*", ""):
             out.append(ev.sid)
     return out
 

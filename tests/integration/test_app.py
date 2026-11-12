@@ -4,9 +4,12 @@
 앱에 조립됐을 때만 확인되는 것을 본다.
 """
 
+import asyncio
 import importlib
 import logging
+import os
 import re
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +18,7 @@ import tutor
 from tests.integration.applib import (
     ANSWER_WORD,
     AUTH,
+    ROOT,
     as_bytes,
     assert_guard_contract,
     assert_tutor_contract,
@@ -23,6 +27,8 @@ from tests.integration.applib import (
 
 router_mod = importlib.import_module("tutor.router")
 startup_mod = importlib.import_module("tutor.startup")
+budget_mod = importlib.import_module("tutor.runtime.budget")
+llm_mod = importlib.import_module("tutor.runtime.llm")
 
 MARKER = "본문표식QX7"  # 요청에 넣는 단어. 로그 · 다른 응답에 나오면 샌 것이다
 GUARD_DEFAULT = {"input": {"decision": "allow", "category": "normal"}}
@@ -68,7 +74,8 @@ def test_tutor_path_is_served_by_the_tutor_router_not_the_guard_starter(client, 
     async def from_tutor(body, **_):
         return {"answer": "튜터 라우터가 받음", "action": "scaffold", "citations": ["PY-01-01"]}
 
-    monkeypatch.setattr(guard_server, "_tutor_answer", starter)
+    # 가드 내부 이름이라 없어져도 이 테스트가 깨지지 않게 한다(판단은 아래 응답 비교가 한다)
+    monkeypatch.setattr(guard_server, "_tutor_answer", starter, raising=False)
     monkeypatch.setattr(router_mod, "respond", from_tutor)
     r = post(client, "/tutor", as_bytes(user("질문")))
     assert r.json() == {
@@ -237,13 +244,24 @@ def test_exception_outside_tutor_route_still_gives_tutor_default(baseline_client
 
 
 @pytest.mark.parametrize("candidate", [None, "답변 후보"])
-def test_exception_in_guard_gives_guard_default(baseline_client, monkeypatch, candidate):
+def test_exception_in_guard_gives_guard_default(
+    baseline_client, monkeypatch, caplog, capfd, candidate
+):
     async def boom(req):
         raise RuntimeError(MARKER)
 
     monkeypatch.setattr(baseline_client.app.state.guard, "judge", boom, raising=False)
+    caplog.set_level(logging.DEBUG)
     r = post(baseline_client, "/guard", as_bytes(guard_body(MARKER, candidate=candidate)))
     assert r.status_code == 200
+    # 로그: 한 줄, 오류 클래스 이름만. 요청 문구 · 예외 메시지 · 트레이스백이 없다
+    lines = [rec.getMessage() for rec in caplog.records if rec.name == "guardrail.access"]
+    assert len(lines) == 1 and ACCESS_LINE.fullmatch(lines[0]), lines
+    assert lines[0].split(" ")[1] == "/guard" and lines[0].endswith(" RuntimeError")
+    captured = capfd.readouterr()
+    logged = "\n".join(rec.getMessage() for rec in caplog.records) + caplog.text
+    for text in (logged, captured.out, captured.err):
+        assert MARKER not in text and "Traceback" not in text
     body = r.json()
     assert_guard_contract(body, has_candidate=candidate is not None)
     assert body["input"] == GUARD_DEFAULT["input"]
@@ -252,6 +270,61 @@ def test_exception_in_guard_gives_guard_default(baseline_client, monkeypatch, ca
     # 같은 앱의 /tutor는 영향을 받지 않는다
     t = post(baseline_client, "/tutor", as_bytes(user("질문")))
     assert t.json()["answer"].startswith(ANSWER_WORD)
+
+
+# ── 본문 상한 · 시간 상한(가드 골격은 주입된 /tutor에 걸어 주지 않는다) ──
+
+
+def test_5mib_body_on_the_assembled_app_gives_tutor_default(baseline_client, fake_send, caplog):
+    caplog.set_level(logging.INFO, logger="guardrail.access")
+    big = as_bytes(user(MARKER + "가" * (5 * 1024 * 1024 // 3)))
+    assert len(big) > 5 * 1024 * 1024
+    r = post(baseline_client, "/tutor", big)
+    assert r.status_code == 200
+    assert r.json() == tutor.TUTOR_DEFAULT
+    assert MARKER not in r.text
+    assert fake_send.count == 0  # 본문을 끝까지 읽지 않고, LLM도 부르지 않는다
+    lines = [rec.getMessage() for rec in caplog.records if rec.name == "guardrail.access"]
+    assert len(lines) == 1 and ACCESS_LINE.fullmatch(lines[0]), lines
+    assert MARKER not in caplog.text
+    # 같은 앱의 다음 요청은 정상이다
+    assert (
+        post(baseline_client, "/tutor", as_bytes(user("질문")))
+        .json()["answer"]
+        .startswith(ANSWER_WORD)
+    )
+
+
+def test_generation_that_never_ends_gives_tutor_default_within_the_budget(
+    open_app, baseline_mode, monkeypatch, tmp_path
+):
+    """LLM 전송이 끝나지 않아도 예산 안에 200 + 튜터 기본값. 예산을 짧게 줘서 1초 안에 끝낸다."""
+    guard_cfg = (ROOT / "guardrail" / "configs" / "default.yaml").read_text("utf-8")
+    assert "budget_s: 20" in guard_cfg
+    short = tmp_path / "guard.yaml"
+    short.write_text(guard_cfg.replace("budget_s: 20", "budget_s: 0.05"), "utf-8")
+    monkeypatch.setenv("GUARD_CONFIG", str(short))
+    monkeypatch.setattr(budget_mod, "BACKSTOP_MARGIN_S", 0.0)
+
+    started = []
+
+    async def never(kwargs):
+        started.append(1)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(llm_mod, "_openai_send", lambda: never)
+    with open_app() as c:
+        assert c.app.state.cfg.budget_s == 0.05
+        t0 = time.perf_counter()
+        r = post(c, "/tutor", as_bytes(user(f"{MARKER} 리스트가 뭐야")))
+        elapsed = time.perf_counter() - t0
+        assert r.status_code == 200
+        assert r.json() == tutor.TUTOR_DEFAULT
+        assert MARKER not in r.text
+        assert started  # 실제로 생성 단계까지 갔다가 끊겼다
+        assert elapsed < 1.0, f"{elapsed:.2f}s"
+        # 끊긴 뒤에도 같은 앱의 /guard는 답한다
+        assert post(c, "/guard", as_bytes(guard_body("질문"))).json() == GUARD_DEFAULT
 
 
 # ── 기동 ──────────────────────────────────────────────────────────────────
@@ -338,7 +411,7 @@ def test_a_call_limit_would_change_responses(baseline_client, fake_send):
 # ── 로그 ──────────────────────────────────────────────────────────────────
 
 
-def test_request_log_lines_have_seven_fields_and_no_body_words(baseline_client, caplog, capsys):
+def test_request_log_lines_have_seven_fields_and_no_body_words(baseline_client, caplog, capfd):
     caplog.set_level(logging.DEBUG)
     post(baseline_client, "/tutor", as_bytes(user(f"{MARKER} 리스트가 뭐야")))
     post(baseline_client, "/guard", as_bytes(guard_body(MARKER, candidate=f"{MARKER} 후보")))
@@ -361,7 +434,7 @@ def test_request_log_lines_have_seven_fields_and_no_body_words(baseline_client, 
     ]
 
     everything = "\n".join(r.getMessage() for r in caplog.records) + caplog.text
-    captured = capsys.readouterr()
+    captured = capfd.readouterr()  # 파일 디스크립터 수준(os.write · 하위 프로세스 출력 포함)
     for text in (everything, captured.out, captured.err):
         assert MARKER not in text  # 요청 본문 · 경로
         assert HEADER_MARKER not in text  # 헤더 값(틀린 토큰 포함)
@@ -370,7 +443,7 @@ def test_request_log_lines_have_seven_fields_and_no_body_words(baseline_client, 
         assert "리스트가 뭐야" not in text and "후보" not in text
 
 
-def test_exception_logs_the_class_name_only(baseline_client, caplog, monkeypatch):
+def test_exception_logs_the_class_name_only(baseline_client, caplog, capfd, monkeypatch):
     async def boom(body, **_):
         raise RuntimeError(MARKER)
 
@@ -379,4 +452,12 @@ def test_exception_logs_the_class_name_only(baseline_client, caplog, monkeypatch
     post(baseline_client, "/tutor", as_bytes(user("질문")))
     lines = [r.getMessage() for r in caplog.records if r.name == "guardrail.access"]
     assert len(lines) == 1 and lines[0].endswith(" RuntimeError")
-    assert MARKER not in caplog.text and "Traceback" not in caplog.text
+    captured = capfd.readouterr()
+    for text in (caplog.text, captured.out, captured.err):
+        assert MARKER not in text and "Traceback" not in text
+
+
+def test_log_capture_sees_writes_to_the_file_descriptor(capfd):
+    """capfd를 쓰는 이유: sys.stdout을 거치지 않는 출력도 잡는다(capsys는 못 잡는다)."""
+    os.write(2, MARKER.encode())
+    assert MARKER in capfd.readouterr().err

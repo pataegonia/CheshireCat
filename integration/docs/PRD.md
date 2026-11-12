@@ -97,7 +97,7 @@ CheshireCat/
   tutor/                 튜터 — judge · prompts · answer · retrieval/(공유 색인 · 이름 사전 · 임베딩) · runtime · eval
   integration/           통합 — contracts.py · actions.py
   harness/               통합 — run_public.py · load_test.py · redteam/ · check_logs.sh
-  config/                통합 — actions.yaml · runtime.yaml(budget_s · judge_skip_s · fallback_action) · tutor.yaml(튜터 토글, 튜터 소유) · ablation/*.yaml ✅ 루트 한 곳(튜터 수용)
+  config/                통합 — actions.yaml · runtime.yaml(judge_skip_s · fallback_action. budget_s는 가드 설정) · tutor.yaml(튜터 토글, 튜터 소유) · ablation/*.yaml ✅ 루트 한 곳(튜터 수용)
   competition/           배포 자료(변경 금지)
   docs/PRD.md            팀 기획서
   integration/docs/PRD.md 이 문서
@@ -156,7 +156,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 #                              category를 넘기지 않으면 classify()가 한 번 더 돈다(nano +1) → 튜터는 1단계 범주를 반드시 넘긴다
 #                              (요청, 우선순위 낮음) format_material(sections) -> str
 ```
-- 튜터 주 호출 출력은 `list[Sentence]`(문장 단위 + 문장별 `sid` · `quote`, 튜터 v2 TU-06 d7a4bce ✅). 하네스용 검색 시그니처는 `retrieve(query, history, *, subject=None, k=5, use_embedding=False) -> list[Section]`(튜터 TU-03).
+- 튜터 주 호출 출력은 `list[Sentence]`(문장 단위 + 문장별 `sid` · `quote`, 튜터 v2 TU-06 d7a4bce ✅). 하네스용 검색 시그니처는 `retrieve(query, history, *, subject=None, k=5, embedding=None) -> list[Section]`(튜터 TU-03).
 - **수용 기준**: 세 트랙이 같은 모듈을 import, 타입 중복 0.
 
 ### IN-02 검색 품질 측정 (P0, 검색 구현 · 세부값은 튜터 TU-03 · 04 · 11)
@@ -197,7 +197,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입** ✅ 가드 #92 `8fd8f5f`(리더 #92 리뷰로 요청, 테스트 5개 포함). 루트 `app.py`는 `app = create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `guard_factory`는 넘기지 않고 가드 기본값을 쓴다(지금은 상수 판정기 `constant_factory`. 실제 판정기는 가드가 기본값을 바꾸면 `app.py` 수정 없이 붙는다). `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
 - **경로별 기본값**: 예외 · 422 처리기는 FastAPI에서 앱 수준이므로(가드 지적) `create_app` 안의 처리기가 `request.url.path`로 `/guard` → GR-09 기본값, `/tutor` → `defaults["/tutor"]`를 고른다. 튜터 라우터는 그래도 자기 예외를 안에서 잡는다(TU-01 ✅) — 앱 처리기는 이중 안전망.
 - 공유 객체(`Guard` · `KbIndex` · `llm` 게이트)는 `create_app` lifespan이 만들어 `app.state`에 두고, 튜터 라우터는 `request.app.state`로 받는다. 가드에 요청하는 것: `tutor_router` · `defaults` · `startups` 인자 3개(#47 코멘트).
-- 라우터 흐름 = §3-1. 시간 예산 · 판정 생략 · 생성 실패 기본값은 §3-1의 설정 키 셋(`budget_s` · `judge_skip_s` · `fallback_action`).
+- 라우터 흐름 = §3-1. 시간 예산 · 판정 생략 · 생성 실패 기본값은 §3-1의 설정 키: `config/runtime.yaml`의 `judge_skip_s` · `fallback_action` 둘과, 가드 설정의 `budget_s`.
 - 가드 골격이 `/tutor`에는 해 주지 않는 것 — 튜터 라우터가 안에서 건다: `asyncio.timeout(budget_s)`(가드 `/guard`는 `budget_s + 5` 안전망), 본문 상한(가드 `_read_body` 4MiB는 비공개), `request.body()` 직접 파싱(pydantic 본문 모델은 `Content-Type` 없으면 422 → 기본값, 가드 #92 코멘트).
 - **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, Content-Type 없는 요청 200, 매달린 생성 → `budget_s` 안에 200 기본값, 5MiB 본문 → 200 기본값, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 내용을 요청 사이에 저장 · 재사용하지 않음(앞 요청이 뒤 응답을 바꾸지 않음), `session_id` · 헤더는 인증 외 미사용.
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마, `/tutor/` 3xx 없음, 계약 테스트 green.

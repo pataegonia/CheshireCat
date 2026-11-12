@@ -15,7 +15,7 @@
 - **import만 한다**: 가드 `guardrail.server.create_app` · `guardrail.schema.Category` · `decision_of` · `guardrail.eval.cv.load_splits` · `train_rows` · `guardrail.eval.score`, 튜터 `tutor.router` · `tutor.TUTOR_DEFAULT` · `tutor.startup` · `retrieve()`.
 
 ## 합의된 구조 (PRD §3 · IN-05, 가드 #92)
-- 루트 `app.py`는 한 줄: `create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])`. 인증 · 메타 로그 · 예외→200 · lifespan은 가드 골격.
+- 루트 `app.py`는 한 줄: `create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])`. `guard_factory`는 넘기지 않고 가드 기본값을 쓴다(지금은 상수 판정기, 실제 판정기는 가드가 기본값을 바꾸면 붙는다). 인증 · 메타 로그 · 예외→200 · lifespan은 가드 골격.
 - `/tutor` 흐름: `retrieve ∥ classify(가드) ∥ 주 호출` → 합치기(classify가 공격 4범주인데 주 호출 action이 표와 다르면 표 템플릿) → `judge_output(category=)` → **결정적 수정**(IN-04). v1은 이 병렬안(I13 ⓒ), 동결값은 11/18 측정.
 - 주입된 `/tutor`에는 가드의 `budget_s + 5` 안전망과 4MiB 본문 상한이 걸리지 않는다. 튜터 라우터가 직접 걸고, 통합 계약 테스트가 확인한다.
 - 설정은 루트 `config/` 한 곳: `actions.yaml`(통합) · `runtime.yaml`(`judge_skip_s` · `fallback_action`) · `tutor.yaml`(튜터). `budget_s`는 `request.app.state.cfg.budget_s`(가드 로드값)를 읽는다.

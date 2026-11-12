@@ -59,7 +59,7 @@
 ```
 채점기 ──POST /tutor──┐                          ┌──POST /guard── 채점기
                       ▼                          ▼
-   app.py(통합, 1줄) = guardrail.server.create_app(guard_factory, tutor_router=tutor.router, defaults={"/tutor": 튜터 기본값})
+   app.py(통합, 1줄) = guardrail.server.create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])
    ← 가드 #47: 인증(check_token · app.state.TEAM_TOKEN) · 메타 로그 · lifespan · 앱 수준 예외/422 처리기(경로별 기본값)
    llm.py 게이트 · probe()         ← 가드 #48: 세마포어 · 재시도 1 · slot()
                       │                          │
@@ -91,7 +91,7 @@
 
 ```
 CheshireCat/
-  app.py                 통합 — `create_app(guard_factory, tutor_router=tutor.router, defaults=…)` 한 줄
+  app.py                 통합 — `create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄
   pyproject.toml         통합 — uv workspace(members: guardrail · tutor · integration), lock 하나
   guardrail/             가드 — server.py(router · create_app) · llm.py(게이트) · judge · eval/score · probe
   tutor/                 튜터 — judge · prompts · answer · retrieval/(공유 색인 · 이름 사전 · 임베딩) · runtime · eval
@@ -194,12 +194,12 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **수용 기준**: quote 검증 100%, citations ⊆ 실존, 인용 F1 `[측정]`.
 
 ### IN-05 튜터 라우터 조립 (P0)
-- **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입** ✅ 가드 #92 `8fd8f5f`(리더 #92 리뷰로 요청, 테스트 5개 포함). 루트 `app.py`는 `app = create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
+- **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입** ✅ 가드 #92 `8fd8f5f`(리더 #92 리뷰로 요청, 테스트 5개 포함). 루트 `app.py`는 `app = create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `guard_factory`는 넘기지 않고 가드 기본값을 쓴다(지금은 상수 판정기 `constant_factory`. 실제 판정기는 가드가 기본값을 바꾸면 `app.py` 수정 없이 붙는다). `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
 - **경로별 기본값**: 예외 · 422 처리기는 FastAPI에서 앱 수준이므로(가드 지적) `create_app` 안의 처리기가 `request.url.path`로 `/guard` → GR-09 기본값, `/tutor` → `defaults["/tutor"]`를 고른다. 튜터 라우터는 그래도 자기 예외를 안에서 잡는다(TU-01 ✅) — 앱 처리기는 이중 안전망.
 - 공유 객체(`Guard` · `KbIndex` · `llm` 게이트)는 `create_app` lifespan이 만들어 `app.state`에 두고, 튜터 라우터는 `request.app.state`로 받는다. 가드에 요청하는 것: `tutor_router` · `defaults` · `startups` 인자 3개(#47 코멘트).
 - 라우터 흐름 = §3-1. 시간 예산 · 판정 생략 · 생성 실패 기본값은 §3-1의 설정 키 셋(`budget_s` · `judge_skip_s` · `fallback_action`).
 - 가드 골격이 `/tutor`에는 해 주지 않는 것 — 튜터 라우터가 안에서 건다: `asyncio.timeout(budget_s)`(가드 `/guard`는 `budget_s + 5` 안전망), 본문 상한(가드 `_read_body` 4MiB는 비공개), `request.body()` 직접 파싱(pydantic 본문 모델은 `Content-Type` 없으면 422 → 기본값, 가드 #92 코멘트).
-- **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, Content-Type 없는 요청 200, 매달린 생성 → `budget_s` 안에 200 기본값, 5MiB 본문 → 200 기본값, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 처리 중 전역 쓰기 없음, `session_id` · 헤더는 인증 외 미사용.
+- **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, Content-Type 없는 요청 200, 매달린 생성 → `budget_s` 안에 200 기본값, 5MiB 본문 → 200 기본값, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 내용을 요청 사이에 저장 · 재사용하지 않음(앞 요청이 뒤 응답을 바꾸지 않음), `session_id` · 헤더는 인증 외 미사용.
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마, `/tutor/` 3xx 없음, 계약 테스트 green.
 
 ### IN-06 통합 하네스 `harness/run_public.py` (P0)
@@ -230,7 +230,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 
 ### IN-11 규칙 준수 (P0)
 - `docs/provenance.md`(가드 양식 공유): 서버 자산 출처. 운영진 확인 §10-1.
-- **실격 조항 테스트**(리더 리뷰 2번, IN-05 계약 테스트에 포함): SPEC §8 상태 · 캐시 금지(같은 요청 두 번 → LLM 두 번), 하드코딩 금지(질문→답 표 없음을 코드 검색으로), 채점 요청 감지 금지(헤더 · `session_id`는 인증 외 미사용, 요청 처리 중 전역 쓰기 없음), 요청 처리 외부 위임 없음(런박스 안에서 전부).
+- **실격 조항 테스트**(리더 리뷰 2번, IN-05 계약 테스트에 포함): SPEC §8 상태 · 캐시 금지(같은 요청 두 번 → LLM 두 번), 하드코딩 금지(질문→답 표 없음을 코드 검색으로), 채점 요청 감지 금지(헤더 · `session_id`는 인증 외 미사용, 요청 내용을 요청 사이에 저장 · 재사용하지 않는다(같은 요청 두 번 → LLM 두 번, 앞 요청이 뒤 응답을 바꾸지 않음)). 호출 횟수 카운터는 요청 내용이 없고 응답에 쓰이지 않아 대상이 아니다(#107), 요청 처리 외부 위임 없음(런박스 안에서 전부).
 
 ---
 

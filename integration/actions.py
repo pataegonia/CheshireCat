@@ -18,7 +18,6 @@ from guardrail.schema import OutputVerdict
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from integration.contracts import (
-    ACTIONS,
     SECTION_IDS,
     SID_PATTERN,
     Action,
@@ -27,10 +26,10 @@ from integration.contracts import (
     Sentence,
     TutorResult,
 )
+from integration.runtime import RUNTIME_PATH, load_runtime
 
 __all__ = [
     "ACTIONS_PATH",
-    "DEFAULT_FALLBACK_ACTION",
     "FALLBACK_ACTION",
     "RUNTIME_PATH",
     "ActionRule",
@@ -44,10 +43,6 @@ __all__ = [
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 ACTIONS_PATH = CONFIG_DIR / "actions.yaml"
-RUNTIME_PATH = CONFIG_DIR / "runtime.yaml"  # I1.4에서 생긴다. 없으면 기본값을 쓴다
-
-# 생성 실패 · 모르는 범주의 기본 action. 주인은 튜터 TU-12(잠정 clarify, 11/18 측정으로 확정).
-DEFAULT_FALLBACK_ACTION: Action = "clarify"
 
 _CATEGORIES: tuple[str, ...] = get_args(Category)
 _FROZEN = ConfigDict(frozen=True, extra="forbid")
@@ -112,14 +107,11 @@ def load_actions(path: Path | None = None) -> dict[str, ActionRule]:
 
 
 def load_fallback_action(path: Path | None = None) -> Action:
-    """`config/runtime.yaml`의 `fallback_action`. 파일이나 키가 없으면 기본값."""
-    path = RUNTIME_PATH if path is None else path
-    if not path.is_file():
-        return DEFAULT_FALLBACK_ACTION
-    value = _read_mapping(path).get("fallback_action", DEFAULT_FALLBACK_ACTION)
-    if value not in ACTIONS:
-        raise ValueError(f"{path.name}: fallback_action이 action 7종이 아니다")
-    return value
+    """`config/runtime.yaml`(또는 준 경로)의 `fallback_action`. 검증은 `load_runtime`이 한다.
+
+    파일이 없거나, 키가 빠졌거나, 모르는 키가 있으면 실패한다(기본값으로 넘어가지 않는다).
+    """
+    return load_runtime(path).fallback_action
 
 
 _TABLE = MappingProxyType(load_actions())

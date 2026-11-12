@@ -1,0 +1,4 @@
+# 통합 런타임 설정(통합 PRD §3-1). 두 키가 모두 필수이고 모르는 키는 로드에서 실패한다.
+# budget_s는 여기 두지 않는다. 주인은 가드 설정이고 request.app.state.cfg.budget_s로 읽는다.
+judge_skip_s: 4            # 남은 시간이 이보다 적으면 judge_output을 건너뛴다(생성된 답 · action 유지). 잠정, 튜터 TU-09
+fallback_action: clarify   # 생성 실패 · 모르는 범주의 기본 action. 주인은 튜터 TU-12(잠정, 11/18 측정으로 확정)

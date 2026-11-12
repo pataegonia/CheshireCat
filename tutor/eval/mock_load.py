@@ -2,6 +2,8 @@
 
 운영진 API를 부르지 않는다. 가드 create_app에 튜터를 붙인 앱(통합 IN-05와 같은 조립)을 프로세스
 안에서 띄우고, 튜터·가드 요청을 섞어 동시 64로 보낸다(SPEC §3 동시 최대 64). 네트워크도 쓰지 않는다.
+- 튜터 설정이 임베딩(toggles.embedding)을 켜면 돌지 않는다. 기동이 실제 임베딩 API로 KB 임베딩을
+  만들고 요청마다 질의를 임베딩하게 되는데, 가짜 임베딩은 아직 없다(켤 때 더한다)
 - 튜터 LLM은 전송만 가짜로 바꾼다. 파라미터는 서버와 같은 build_llm 값이다. 가짜 전송은 응답
   스키마 이름(REPLIES)에 맞는 최소 정상 JSON을 내므로, v2는 검색 → 주 호출 → 결정적 수정까지
   실제 흐름을 탄다. 답을 모르는 스키마는 JSON이 아닌 답이라 LLM 실패로 드러난다(#88 때 더한다)
@@ -390,6 +392,8 @@ async def run_load(
     fake_quantiles는 가짜 LLM 지연의 (p50, p95) 초다(기본은 가드 #105 실측). mode는 튜터 모드,
     guard_calls는 가드 요청당 가짜 판정 호출 수, gate는 게이트 크기(없으면 가드 설정 llm.gate)다.
     """
+    if load_config().toggles.embedding:  # 기동은 덮어쓰기 없이 파일 설정(TUTOR_CONFIG)을 읽는다
+        raise RuntimeError("임베딩이 켜진 튜터 설정이라 운영진 임베딩 API를 부르게 된다")
     rng = random.Random(seed)  # noqa: S311 - 모의 지연·순서, 암호용 아님
     fake = FakeLLM(Latency.from_quantiles(*fake_quantiles), rng, scale=scale)
 

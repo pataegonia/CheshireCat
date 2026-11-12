@@ -184,6 +184,18 @@ def test_an_unknown_reply_schema_counts_as_an_llm_failure(monkeypatch, capsys):
     assert report.llm_failed > 0 and not ok and "LLM 실패" in last
 
 
+def test_refuses_a_config_that_would_call_the_embedding_api(monkeypatch):
+    """기동이 임베딩 검색을 만들면 운영진 임베딩 API를 부르게 된다(가짜 임베딩은 아직 없다)."""
+    real = mock_load.load_config
+
+    def embedding_on(overrides=None):
+        return real(overrides={**(overrides or {}), "toggles.embedding": True})
+
+    monkeypatch.setattr(mock_load, "load_config", embedding_on)
+    with pytest.raises(RuntimeError, match="임베딩"):
+        run(n_tutor=1, n_guard=0, scale=0.001, seed=22)
+
+
 def test_tutor_overrides_cannot_change_the_mode():
     report = run(
         n_tutor=5, n_guard=0, scale=0.001, seed=7, mode="baseline", tutor_overrides={"mode": "v2"}

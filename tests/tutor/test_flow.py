@@ -243,3 +243,24 @@ def test_failure_default_follows_signals_even_with_toggle_off(text, kind):
         "action": kind.value.split(".")[0],
         "citations": [],
     }
+
+
+# --- 임베딩 검색 연결(TU-11, #124) ---
+
+
+def test_flow_passes_state_embedding_to_retrieval(monkeypatch):
+    from tutor.judge import draft as draft_mod
+
+    seen = []
+
+    async def fake_retrieve(query, history=(), *, k=5, **kw):
+        seen.append(kw.get("embedding"))
+        return []
+
+    monkeypatch.setattr(draft_mod, "retrieve", fake_retrieve)
+    marker = object()
+    state = state_with(FakeLLM(out()))
+    ask(state, QUESTION)  # 기동 결과에 임베딩이 없으면(토글 끔) 넘기지 않는다
+    state.tutor_emb = marker
+    ask(state, QUESTION)
+    assert seen == [None, marker]

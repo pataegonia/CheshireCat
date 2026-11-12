@@ -441,6 +441,41 @@ def test_build_without_the_guard_uses_the_guard_config_values():
     assert built.structured == "json_schema"
 
 
+class Held:
+    """release가 열릴 때까지 붙잡는 가짜 전송. 동시에 진행 중인 호출 수와 그 최대를 잰다."""
+
+    def __init__(self) -> None:
+        self.now = self.peak = 0
+        self.release: asyncio.Event | None = None
+
+    async def __call__(self, _kwargs):
+        self.now += 1
+        self.peak = max(self.peak, self.now)
+        try:
+            await self.release.wait()
+        finally:
+            self.now -= 1
+        return ok()
+
+    async def flood(self, built, n, cap):
+        """n개를 한꺼번에 부르고, cap개가 보내질 때까지 루프를 돌린 뒤 모두 끝낸다."""
+        self.release = asyncio.Event()  # Event는 루프마다 새로 만든다
+        deadline = asyncio.get_running_loop().time() + 5
+        calls = [
+            asyncio.create_task(
+                built.complete("main", [], Out, deadline=deadline, timeout_s=5, retries=0)
+            )
+            for _ in range(n)
+        ]
+        for _ in range(200):  # 게이트에 든 호출이 모두 보내질 때까지
+            if self.now >= cap:
+                break
+            await asyncio.sleep(0)
+        sent_at_once = self.now
+        self.release.set()
+        return sent_at_once, await asyncio.gather(*calls)
+
+
 @pytest.mark.parametrize(
     "state",
     [
@@ -451,41 +486,24 @@ def test_build_without_the_guard_uses_the_guard_config_values():
 def test_build_without_a_guard_llm_still_caps_concurrent_calls(monkeypatch, state):
     """가드에 LLM이 없어도 튜터 호출은 가드 설정 llm.gate만큼만 동시에 나간다(TU-13, #126 리뷰)."""
     size = load_guard_config().llm.gate
-    release = asyncio.Event()
-    live = {"now": 0, "peak": 0}
-
-    async def held(_kwargs):
-        live["now"] += 1
-        live["peak"] = max(live["peak"], live["now"])
-        try:
-            await release.wait()
-        finally:
-            live["now"] -= 1
-        return ok()
-
+    held = Held()
     monkeypatch.setattr(tutor_llm, "_openai_send", lambda: held)
     built = tutor_llm.build_llm(state, CFG)
-
-    async def flood():
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + 5
-        calls = [
-            asyncio.create_task(
-                built.complete("main", [], Out, deadline=deadline, timeout_s=5, retries=0)
-            )
-            for _ in range(size + 6)
-        ]
-        for _ in range(200):  # 게이트에 든 호출이 모두 보내질 때까지 루프를 돌린다
-            if live["now"] >= size:
-                break
-            await asyncio.sleep(0)
-        sent_at_once = live["now"]
-        release.set()
-        return sent_at_once, await asyncio.gather(*calls)
-
-    sent_at_once, results = asyncio.run(flood())
-    assert sent_at_once == size and live["peak"] == size  # 상한까지 함께 나가고 넘지 않는다
+    sent_at_once, results = asyncio.run(held.flood(built, size + 6, size))
+    assert sent_at_once == size and held.peak == size  # 상한까지 함께 나가고 넘지 않는다
     assert all(r.error is None for r in results)  # 기다린 호출도 마감 안에 나간다
+
+
+def test_the_own_gate_is_made_per_event_loop(monkeypatch):
+    """경합한 세마포어는 그 루프에 묶인다. 측정 도구처럼 asyncio.run을 여러 번 써도 다음 루프에서
+    RuntimeError로 조용히 기본값이 되지 않게, 튜터 게이트는 루프마다 따로 만든다(bd1de1b 리뷰)."""
+    size = load_guard_config().llm.gate
+    held = Held()
+    monkeypatch.setattr(tutor_llm, "_openai_send", lambda: held)
+    built = tutor_llm.build_llm(types.SimpleNamespace(), CFG)
+    for _ in range(2):  # 두 루프 모두에서 상한을 넘겨 경합시킨다
+        sent_at_once, results = asyncio.run(held.flood(built, size + 6, size))
+        assert sent_at_once == size and all(r.error is None for r in results)
 
 
 def test_startup_builds_the_llm_on_the_guard_gate():

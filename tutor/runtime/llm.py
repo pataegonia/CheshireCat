@@ -308,9 +308,21 @@ def _openai_send() -> Send:
 
 
 def _own_gate(size: int) -> Gate:
-    """가드에 LLM이 없을 때 튜터만 쓰는 게이트. 그때는 튜터만 LLM을 부르므로 합계 상한이 같다."""
-    sem = asyncio.Semaphore(size)
-    return lambda: sem
+    """가드에 LLM이 없을 때 튜터만 쓰는 게이트. 그때는 튜터만 LLM을 부르므로 합계 상한이 같다.
+
+    세마포어는 이벤트 루프마다 하나다(_openai_send와 같은 방식). 경합한 세마포어는 그 루프에
+    묶여, 측정 도구가 asyncio.run을 여러 번 쓰면 다음 루프에서 RuntimeError가 나기 때문이다.
+    """
+    made: dict[str, Any] = {"loop": None, "sem": None}
+
+    def gate() -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if made["loop"] is not loop:
+            made["sem"] = asyncio.Semaphore(size)
+            made["loop"] = loop
+        return made["sem"]
+
+    return gate
 
 
 def build_llm(app_state: Any, cfg: TutorConfig) -> TutorLLM:

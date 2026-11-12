@@ -14,9 +14,9 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
-import openai
 import pytest
 
+from tests.tutor.tutor_testlib import answer_openai, block_openai
 from tutor.retrieval import default_index, retrieve
 from tutor.retrieval import embedding as emb
 from tutor.retrieval.index import KbIndex
@@ -452,6 +452,7 @@ def _run_local(
     """
     from tutor.eval import run_local
 
+    block_openai(monkeypatch)  # tutor 프리셋이 요구하는 OPENAI_*(가짜, 보내지 않는다)
     for name in EMBEDDING_ENV:
         if name in env:
             monkeypatch.setenv(name, env[name])
@@ -501,32 +502,23 @@ def test_run_local_builds_and_uses_the_embedding_when_turned_on(monkeypatch, tmp
 def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, tmp_path, capsys):
     """측정 경로의 실제 v2 흐름(#97·da8c030)이 기동 때 만든 임베딩으로 영어 질의를 검색한다.
 
-    주 호출은 가짜 전송이 실패로 돌려줘(밖으로 보내지 않는다) 답은 기본값이지만, 검색은 주 호출
-    전에 끝난다. 검색까지 간 영어 질의(retrieve와 같은 조건)마다 질의 임베딩이 한 번씩 잡혀야
+    주 호출은 가짜 전송이 최소 정상 JSON으로 답한다(밖으로 보내지 않는다). 검색은 주 호출 전에
+    끝난다. 검색까지 간 영어 질의(retrieve와 같은 조건)마다 질의 임베딩이 한 번씩 잡혀야
     한다. 검색 전에 끝나는 행이 생겨도(결정적 판정 등) 이 관계는 그대로다. 자기 state로 잴 때도
     실제 collect_timed가 요청마다 지연을 잰다(#122).
     """
     from tutor.eval import run_local
     from tutor.judge import draft as draft_mod
-    from tutor.runtime import llm as llm_mod
 
-    sent, searched = [], []
+    searched = []
     real_retrieve = draft_mod.retrieve
-
-    def fake_openai_send():
-        async def send(kwargs):
-            sent.append(kwargs["model"])
-            raise openai.OpenAIError("가짜 전송")  # auth 오류: 다시 보내지 않는다
-
-        return send
 
     async def watched_retrieve(query, history=(), **kw):
         searched.append((emb.is_english(query) and bool(bigrams(query)), kw.get("embedding")))
         return await real_retrieve(query, history, **kw)
 
-    monkeypatch.setattr(llm_mod, "_openai_send", fake_openai_send)
+    sent = answer_openai(monkeypatch)  # 주 호출은 보내지 않고 최소 정상 답
     monkeypatch.setattr(draft_mod, "retrieve", watched_retrieve)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TUTOR_CONFIG", raising=False)  # 개발자 셸의 설정 경로가 새지 않게
     assert load_config().mode == "v2"
     for name, value in EMBEDDING_ENV.items():

@@ -3,7 +3,8 @@
 프리셋
 - tutor: 지금 튜터(`tutor.handle`)를 프로세스 안에서 부른다(동시 8개). 라우터·인증·HTTP는
   거치지 않는다. 서버 경로 측정은 통합 하네스가 한다. `--tutor-set KEY=VALUE`로 설정을 덮는다
-  (예: `--tutor-set mode=baseline`은 베이스라인, 운영진 API를 부른다)
+  (예: `--tutor-set mode=baseline`은 베이스라인). v2(주 호출)도 베이스라인도 운영진 API를
+  부르므로 OPENAI_BASE_URL·OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다
 - reference: 공개 정답 답변·action·근거를 그대로 낸다(상한, PRD §7)
 - reference_top1: 정답 답변·action에, 근거가 있는 행은 검색 1위 섹션을 인용한다
 `--responses` 파일(JSONL, 줄마다 {"id", "response"})을 주면 그 응답(통합 하네스 결과 등)으로
@@ -22,7 +23,6 @@ import argparse
 import asyncio
 import json
 import math
-import os
 import secrets
 import sys
 import time
@@ -49,11 +49,14 @@ from tutor.eval.recall import (
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import TutorConfig, load_config
+from tutor.runtime.llm import missing_api_env
 from tutor.startup import build_embedding, prepare
 
 PRESETS = ("tutor", "reference", "reference_top1")
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
-TUTOR_CALLS = 3  # 튜터 요청당 nano 정상 호출 수(v2, TU-14)
+# 튜터 요청당 nano 정상 호출 수(v2 최종 구성 = 주 호출 + 가드 classify + judge_output, TU-14).
+# 지금 v2는 주 호출만 해서(#97, classify·judge_output은 #88) 예상이 실제보다 크다(상한 쪽이라 안전).
+TUTOR_CALLS = 3
 CALLS_PER_REQUEST = {"v2": TUTOR_CALLS, "baseline": 1}  # 모드별 요청당 nano 호출(재시도 제외)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
 
@@ -287,7 +290,7 @@ def _parser() -> argparse.ArgumentParser:
 def _tutor_config(
     ap: argparse.ArgumentParser, args: argparse.Namespace
 ) -> tuple[TutorConfig, dict[str, Any]]:
-    """--tutor-set을 읽어 튜터 설정을 만든다. 운영진 API를 부르는 모드는 환경변수를 본다."""
+    """--tutor-set을 읽어 튜터 설정을 만든다. tutor 프리셋은 운영진 API 환경변수를 본다."""
     if args.tutor_set and args.preset != "tutor":
         ap.error("--tutor-set은 --preset tutor에서만 쓴다")
     overrides: dict[str, Any] = {}
@@ -307,11 +310,10 @@ def _tutor_config(
         ap.error(f"튜터 설정 파일을 읽지 못했다: {type(exc).__name__}")
     except ValueError as exc:  # pydantic ValidationError도 ValueError
         ap.error(f"--tutor-set 설정이 맞지 않다: {type(exc).__name__}")
-    if args.preset == "tutor" and cfg.mode != "v2":
-        if not (os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_MODEL")):
-            ap.error(
-                f"mode {cfg.mode}는 운영진 API를 부른다: OPENAI_API_KEY·OPENAI_MODEL이 필요하다"
-            )
+    if args.preset == "tutor":  # 두 모드 모두 부른다. 없으면 모든 응답이 기본값으로 떨어진다
+        missing = missing_api_env()
+        if missing:
+            ap.error(f"mode {cfg.mode}는 운영진 API를 부른다: {'·'.join(missing)}이 필요하다")
     return cfg, overrides
 
 
@@ -460,8 +462,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         [metrics.score_run(rows, responses, judge=judge, kb=kb) for responses in all_responses]
     )
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
+    failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
-    tainted = bool(blocked) or (use is not None and not use.ok)
+    tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok)
     name = args.preset or args.responses.stem
     path = _write(
         report, name=name, judge=judge is not None, out_dir=args.out, tainted=tainted, embedding=use
@@ -482,7 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _show_tutor_calls(
     state: Any, blocked: int, latency: Sequence[float], *, cap: tuple[int, int, int, int]
 ) -> None:
-    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 상한에 막힌 호출 수.
+    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 실패한 호출, 상한에 막힌 호출 수.
 
     cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다.
     """
@@ -490,6 +493,11 @@ def _show_tutor_calls(
     shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
     sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
     sys.stdout.write(_latency_line(latency))
+    failures = state.tutor_llm.failures
+    if failures:  # 최종 실패한 호출의 답은 기본값이다(연결 안 됨·키 거절·시간 초과 등)
+        # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다
+        failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
+        sys.stdout.write(f"튜터 LLM 최종 실패: {failed}: 기본값이 섞인 결과다\n")
     if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
         tutor_cap, max_calls, reserve, embedding = cap
         sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")

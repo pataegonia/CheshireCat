@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
 ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트
 DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
+# 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
+PROXY_MAX_COMPLETION_TOKENS = 2000
 
 
 class _Strict(BaseModel):
@@ -56,7 +58,8 @@ class Timeouts(_Strict):
 
 class Llm(_Strict):
     reasoning_effort: Literal["low", "medium"]  # minimal 금지(TU-13)
-    max_completion_tokens: PositiveInt  # 튜터 주 호출 상한(가드 판정 호출과 따로)
+    # 튜터 주 호출 상한(가드 판정 호출과 따로). 프록시 상한을 넘으면 로드에서 실패한다
+    max_completion_tokens: Annotated[int, Field(ge=1, le=PROXY_MAX_COMPLETION_TOKENS)]
     timeout_s: Timeouts
 
 

@@ -68,7 +68,7 @@ def _report(capsys, text: str) -> None:
 def test_chunks_match_common_kb_chunks(index):
     expected = [(sid, text) for sid, _, text in common.kb_chunks(common.load_kb())]
     assert list(index.chunks) == expected
-    assert len(index.chunks) == 244
+    assert len(index.chunks) == 244  # 현재 공개 KB 기준 회귀 고정(KB가 바뀌면 다시 잼)
 
 
 def test_html_is_not_read(index):
@@ -193,7 +193,6 @@ def test_rank_computes_scores_once(index, monkeypatch):
     monkeypatch.setattr(KbIndex, "scores", counting)
     r = index.rank("이자 계산")
     assert calls == 1
-    assert r.hits[0].section_id == _sections(r)[0]
     calls = 0
     assert index.search("이자 계산", k=3) == list(r.hits[:3])
     assert calls == 1
@@ -225,9 +224,44 @@ def test_load_rejects_empty_kb(tmp_path):
         KbIndex.load(tmp_path)
 
 
-def test_rejects_bad_params():
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"ngram": 0},
+        {"ngram": 2.0},
+        {"ngram": True},
+        {"k1": -0.1},
+        {"k1": float("nan")},
+        {"k1": float("inf")},
+        {"b": 1.5},
+        {"b": float("nan")},
+    ],
+)
+def test_rejects_bad_params(params):
     with pytest.raises(ValueError):
-        KbIndex({"A-01-01": "## a\n사과"}, ngram=0)
+        KbIndex({"A-01-01": "## a\n사과"}, **params)
+
+
+def test_load_rejects_duplicate_section_id(tmp_path):
+    for subject in ("a", "b"):
+        (tmp_path / subject).mkdir()
+        (tmp_path / subject / "X-01-01.md").write_text("## x\n사과", encoding="utf-8")
+    with pytest.raises(ValueError, match="X-01-01"):
+        KbIndex.load(tmp_path)
+
+
+def test_search_rejects_k_below_one():
+    idx = KbIndex({"A-01-01": "## a\n사과"})
+    with pytest.raises(ValueError):
+        idx.search("사과", k=0)
+
+
+def test_ties_keep_chunk_order():
+    idx = KbIndex({"B-01-01": "## b\n사과", "A-01-01": "## a\n사과"})
+    r = idx.rank("사과")
+    assert r.hits[0].score == r.hits[1].score
+    assert [h.section_id for h in r.hits] == ["B-01-01", "A-01-01"]
+    assert r.margin == 0.0
 
 
 def test_rejects_kb_without_grams():
@@ -238,15 +272,63 @@ def test_rejects_kb_without_grams():
 # --- 공개 세트 적중률·속도 ---
 
 
+def test_margin_matches_common_on_public_queries(index, ref_bm25, public):
+    """rule_min_margin이 걸리는 값: 원본 점수로 따로 접은 margin과 1e-9 안에서 같다."""
+    sids = [c[0] for c in common.kb_chunks(common.load_kb())]
+    for r in public:
+        q = _all_user(r) + ("\n" + r.candidate_answer if r.candidate_answer else "")
+        best: dict[str, float] = {}
+        for sid, s in zip(sids, ref_bm25.scores(q), strict=True):
+            best[sid] = max(best.get(sid, 0.0), s)
+        top = max(best, key=best.get)
+        exp = best[top] - max(v for sid, v in best.items() if sid != top)
+        assert abs(index.rank(q).margin - exp) <= 1e-9, r.id
+
+
+def test_gold67_fixture_regenerates_from_q5():
+    """픽스처는 scripts/r13/q5_ungrounded.py의 배정 함수로 만든 값이다(생성 절차 고정)."""
+    import q5_ungrounded as q5
+
+    kb = common.load_kb()
+    gen = {}
+    for r in common.guard_rows():
+        if "candidate_answer" not in r or r["labels"]["category"] in common.BLOCK_CATS:
+            continue
+        if not r["labels"]["grounded"]:
+            gen[r["id"]] = q5.sections_with(kb, q5.ANN[r["id"]][0])
+            continue
+        sids, _ = q5.gold_sections_grounded(kb, r["candidate_answer"])
+        fact = q5.GROUNDED_FACTS.get(r["id"])
+        if fact:
+            fin = {k for k in kb if k.startswith("FIN")}
+            sids = sorted(set(sids) | set(q5.sections_with(kb, fact)) & fin)
+        gen[r["id"]] = sids
+    assert gen == GOLD67
+
+
 def test_gold67_top1_and_top3(index, public, capsys):
     rows = {r.id: r for r in public if r.endpoint == "guard"}
-    top1 = top3 = 0
+    groups = {
+        "전체": [],
+        "ungrounded(수작업 사실)": [],
+        "grounded(답변 4-gram)": [],
+        "정답 1개": [],
+    }
     for rid, gold in GOLD67.items():
         r = rows[rid]
         ranked = _sections(index.rank(_all_user(r) + "\n" + r.candidate_answer))
-        top1 += ranked[0] in gold
-        top3 += bool(set(gold) & set(ranked[:3]))
-    _report(capsys, f"가드 후보 67행 정답 섹션 1위 {top1}/67, 3위 {top3}/67")
+        res = (ranked[0] in gold, bool(set(gold) & set(ranked[:3])))
+        groups["전체"].append(res)
+        groups[
+            "grounded(답변 4-gram)" if r.labels["grounded"] else "ungrounded(수작업 사실)"
+        ].append(res)
+        if len(gold) == 1:
+            groups["정답 1개"].append(res)
+    for name, res in groups.items():
+        n = len(res)
+        top1, top3 = sum(a for a, _ in res), sum(b for _, b in res)
+        _report(capsys, f"가드 후보 {name} {n}행 정답 섹션 1위 {top1}/{n}, 3위 {top3}/{n}")
+    top1, top3 = (sum(x[i] for x in groups["전체"]) for i in (0, 1))
     assert len(GOLD67) == 67
     assert top1 >= 64
     assert top3 >= 66
@@ -269,8 +351,10 @@ def test_tutor_evidence_recall(index, public, capsys):
         f"튜터 evidence {n}행(질의=모든 user 발화) recall@1 {statistics.mean(rec[1]):.3f}"
         f" recall@3 {statistics.mean(rec[3]):.3f}, 적중@1 {hit[1]}/{n} 적중@3 {hit[3]}/{n}",
     )
-    assert n > 0
-    assert statistics.mean(rec[3]) >= statistics.mean(rec[1])
+    # 회귀 고정: 도입 시 실측 0.824·0.916(결정적 계산이라 값이 바뀌면 검색이 바뀐 것)
+    assert n == 119
+    assert statistics.mean(rec[1]) >= 0.82
+    assert statistics.mean(rec[3]) >= 0.91
 
 
 def test_rank_p95_under_20ms(index, public, capsys):

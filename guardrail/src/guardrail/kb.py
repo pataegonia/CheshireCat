@@ -20,7 +20,7 @@ from pathlib import Path
 from guardrail.config import resolve_path
 
 # competition/grader/scoring.py의 PUNCT·normalize 복사(런타임에 grader를 import하지 않음)
-PUNCT = set(".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
+PUNCT = frozenset(".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
 
 
 def normalize(s: str) -> str:
@@ -51,6 +51,8 @@ def _load_sections(kb_dir: Path) -> dict[str, str]:
     for md in sorted(kb_dir.glob("*/*.md")):
         tables = sorted(md.parent.glob(f"{md.stem}-table*.csv"))
         parts = [md.read_text(encoding="utf-8"), *(t.read_text(encoding="utf-8") for t in tables)]
+        if md.stem in sections:  # 다른 과목 폴더에 같은 섹션 ID가 있으면 한쪽이 사라진다
+            raise ValueError(f"KB 섹션 ID가 겹친다: {md.stem}")
         sections[md.stem] = "\n\n".join(parts)
     return sections
 
@@ -61,7 +63,8 @@ class KbIndex:
     def __init__(
         self, sections: Mapping[str, str], *, ngram: int = 2, k1: float = 1.2, b: float = 0.75
     ) -> None:
-        if ngram < 1 or k1 < 0 or not 0 <= b <= 1:
+        valid_n = isinstance(ngram, int) and not isinstance(ngram, bool) and ngram >= 1
+        if not (valid_n and math.isfinite(k1) and k1 >= 0 and 0 <= b <= 1):
             raise ValueError("kb 설정 값이 범위를 벗어났다(ngram ≥ 1, k1 ≥ 0, 0 ≤ b ≤ 1)")
         self._sections = dict(sections)
         self.chunks: tuple[tuple[str, str], ...] = tuple(
@@ -99,7 +102,10 @@ class KbIndex:
         return cls(sections, ngram=ngram, k1=k1, b=b)
 
     def scores(self, query: str) -> list[float]:
-        """조각 순서대로의 BM25 점수. 질의의 서로 다른 n-gram을 처음 나온 순서로 더한다."""
+        """조각 순서대로의 BM25 점수. 질의의 서로 다른 n-gram을 처음 나온 순서로 더한다.
+
+        질의 길이는 호출자가 retrieval.max_query_chars로 자른다(guard.py).
+        """
         s = [0.0] * len(self.chunks)
         for g in dict.fromkeys(_grams(query, self._n)):
             for i, w in self._postings.get(g, ()):
@@ -118,7 +124,10 @@ class KbIndex:
         return Ranking(hits, best[top] - other)
 
     def search(self, query: str, k: int = 3) -> list[Hit]:
+        if k < 1:
+            raise ValueError("k는 1 이상이어야 한다")
         return list(self.rank(query).hits[:k])
 
     def section_text(self, section_id: str) -> str:
+        """Hit.section_id로 부른다. 없는 ID면 KeyError."""
         return self._sections[section_id]

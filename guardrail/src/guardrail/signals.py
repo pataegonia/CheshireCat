@@ -33,19 +33,22 @@ REFUSAL_RX = re.compile(
 QUOTE_CODE_RX = re.compile(
     r"```.*?```|`[^`]*`|\"[^\"]*\"|“[^”]*”|‘[^’]*’|'[^']*'|「[^」]*」|『[^』]*』", re.S
 )
-# 조합형 자모, 호환 자모, 반각 자모
-_JAMO = re.compile("[ᄀ-ᇿ㄰-㆏ﾠ-ￜ]")
+# 조합형 자모, 호환 자모, 반각 자모(채움 문자 U+115F·U+1160·U+3164·U+FFA0은 뺀다)
+_JAMO = re.compile("[ᄀ-ᅞᅡ-ᇿㄱ-ㅣㅥ-ㆎﾡ-ￜ]")
+_FILLERS = frozenset("ᅟᅠㅤﾠ")
+# 문장부호 전부와 이모티콘 쪽 기호(So, Sk). 수학(Sm)·통화(Sc) 기호는 코드 조각일 수 있어 뺀다
+_SYMBOLIC_CATEGORIES = frozenset({"Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "So", "Sk"})
 _BLANK_CATEGORIES = frozenset({"Zs", "Zl", "Zp", "Cf", "Mn", "Me"})
 
 
-def _is_mark(ch: str) -> bool:
-    """자모·문장부호·기호(이모티콘 포함)."""
-    return bool(_JAMO.match(ch)) or unicodedata.category(ch)[0] in "PS"
+def _is_symbolic(ch: str) -> bool:
+    """자모·문장부호·이모티콘."""
+    return bool(_JAMO.match(ch)) or unicodedata.category(ch) in _SYMBOLIC_CATEGORIES
 
 
 def _is_blank(ch: str) -> bool:
-    """공백·서식 문자·결합 부호(변형 선택자, 키캡 등)."""
-    return ch.isspace() or unicodedata.category(ch) in _BLANK_CATEGORIES
+    """공백·서식 문자·결합 부호(변형 선택자, 키캡 등)·한글 채움 문자."""
+    return ch.isspace() or ch in _FILLERS or unicodedata.category(ch) in _BLANK_CATEGORIES
 
 
 def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
@@ -56,13 +59,17 @@ def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
     """
     if not has_history or hidden:
         return False
-    return any(_is_mark(c) for c in target_pre) and all(
-        _is_mark(c) or _is_blank(c) for c in target_pre
+    return any(_is_symbolic(c) for c in target_pre) and all(
+        _is_symbolic(c) or _is_blank(c) for c in target_pre
     )
 
 
 def is_refusal(answer_raw: str) -> bool:
-    """후보 답변이 거절·대안 제시인가. 인용·코드 안 문구는 보지 않는다. safe 규칙에만 쓴다."""
+    """후보 답변이 거절·대안 제시인가. 인용·코드 안 문구는 보지 않는다. safe 규칙에만 쓴다.
+
+    `input.max_answer_chars`로 자른 답변을 넘긴다(닫히지 않은 따옴표 반복은 2차 시간).
+    알려진 한계: 영어 축약형 아포스트로피 두 개 사이는 인용으로 보고 지운다.
+    """
     return REFUSAL_RX.search(QUOTE_CODE_RX.sub(" ", answer_raw)) is not None
 
 

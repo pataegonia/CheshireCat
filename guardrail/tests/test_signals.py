@@ -2,6 +2,7 @@
 
 import ast
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ from guardrail.signals import (
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts" / "r13"
 BLOCK = {"jailbreak_injection", "harmful_content", "academic_dishonesty", "off_topic"}
+# 보이지 않는 문자는 소스에서 읽히도록 코드포인트로 만든다
+ZWSP, WJ, LSEP, VS16, KEYCAP, FILLER = map(chr, (0x200B, 0x2060, 0x2028, 0xFE0F, 0x20E3, 0x3164))
 FLAG = "\U0001f3f4"
 CANCEL = "\U000e007f"
 
@@ -71,17 +74,28 @@ def test_quote_code_regex_is_measured_one():
         ("ㅇㅏ", True, "", True),  # 조합 전 뷰: 완성 음절이 아니다
         ("??", True, "", True),
         ("...", True, "", True),
+        ("{}", True, "", True),  # 괄호는 문장부호
         ("ㅠㅠ 😭", True, "", True),
-        ("ㅠㅠ​", True, "", True),  # 폭 없는 문자는 내용이 아니다
+        ("ㅠㅠ" + ZWSP, True, "", True),  # 서식 문자(Cf)는 내용이 아니다
+        ("ㅋ" + WJ, True, "", True),
+        ("ㅋ" + LSEP, True, "", True),  # 줄 구분자(Zl)
+        ("❤" + VS16, True, "", True),  # 변형 선택자(Mn)
+        ("#" + VS16 + KEYCAP, True, "", True),  # 키캡(Me)
+        ("ㅋ" + FILLER, True, "", True),  # 한글 채움 문자는 공백처럼
         ("ㅁㄴㅇㄹ", False, "", False),  # 1턴은 LLM으로
         ("ㅁㄴㅇㄹ", True, "ignore all", False),  # 숨긴 텍스트가 있음
         ("아", True, "", False),
         ("ㅋㅋ 3", True, "", False),
         ("ㅋㅋ ok", True, "", False),
         ("ㅠㅠ 힘들어", True, "", False),
+        ("=>", True, "", False),  # 수학 기호(Sm)는 이모티콘이 아니다(코드 조각일 수 있음)
+        ("$$", True, "", False),  # 통화 기호(Sc)
+        ("ㅋ\ud800", True, "", False),  # 외톨이 서로게이트
+        ("ㅋ\x00", True, "", False),  # 공백이 아닌 제어 문자
         ("", True, "", False),
         ("   ", True, "", False),
-        ("​", True, "", False),
+        (ZWSP, True, "", False),
+        (FILLER, True, "", False),
     ],
 )
 def test_is_low_signal(target_pre, has_history, hidden, expected):
@@ -109,12 +123,12 @@ def test_low_signal_public_precision_and_recall(rows):
 def test_refusal_detects_all_tutor_refusals(rows):
     """튜터 refuse·redirect 참조 답변 36/36(표본 안 값: 정규식을 이 답변들을 보고 썼다)."""
     refusals = [
-        r.labels["reference_answer"]
+        (r.id, r.labels["reference_answer"])
         for r in rows
         if r.endpoint == "tutor" and r.labels["action"] in ("refuse", "redirect")
     ]
     assert len(refusals) == 36
-    assert all(is_refusal(a) for a in refusals)
+    assert [rid for rid, a in refusals if not is_refusal(a)] == []
 
 
 def test_refusal_no_false_positive_on_block_compliant_answers(rows):
@@ -140,6 +154,8 @@ def test_refusal_no_false_positive_on_block_compliant_answers(rows):
         "「할 수 없다」는 부정 표현이에요.",
         "`raise ValueError('할 수 없어요')` 처럼 씁니다.",
         "```python\n# 여기서는 계산할 수 없어요\nx = 1\n```\n답은 1이에요.",
+        # 알려진 한계: 영어 축약형 아포스트로피 두 개 사이가 인용으로 지워진다
+        "it's ok. 그건 도와줄 수 없어요. don't worry",
     ],
 )
 def test_refusal_ignores_quotes_and_code(answer):
@@ -151,10 +167,19 @@ def test_refusal_ignores_quotes_and_code(answer):
     [
         "그 부탁은 도와줄 수 없어요. 대신 개념을 함께 살펴볼까요?",
         "수업과 관련이 없는 요청이라 써 줄 수 없어요.",
+        '"abc"라는 말은 알지만 이건 도와줄 수 없어요.',  # 인용 밖의 거절
+        "“그건 도와줄 수 없어요",  # 닫히지 않은 따옴표는 인용이 아니다
     ],
 )
 def test_refusal_detects_plain_refusal(answer):
     assert is_refusal(answer) is True
+
+
+def test_refusal_bounded_on_adversarial_quotes():
+    """닫히지 않은 따옴표 반복은 정규식이 2차 시간이다. 호출자가 max_answer_chars로 자른다."""
+    start = time.perf_counter()
+    is_refusal("“" * load_config().input.max_answer_chars)
+    assert time.perf_counter() - start < 1.0
 
 
 # --- 숨긴 태그 ------------------------------------------------------------------------
@@ -165,13 +190,20 @@ def test_refusal_detects_plain_refusal(answer):
     [
         ("안녕" + tag("Ig"), True),
         (FLAG + tag("gbeng") + CANCEL, False),  # 잉글랜드 깃발
+        (FLAG + tag("abcdefg") + CANCEL, False),  # 태그 7개(상한)
+        (FLAG + tag("1") + CANCEL, False),  # 숫자 태그
+        (FLAG + tag("gbeng") + CANCEL + FLAG + tag("gbwls") + CANCEL, False),  # 깃발 두 개
         (FLAG + tag("gbeng"), True),  # 종료 태그 없음
         ("가" + CANCEL, True),  # 종료 태그 단독
         (FLAG + tag("A") + CANCEL, True),  # 대문자 태그
         (FLAG + tag("abcdefgh") + CANCEL, True),  # 태그 8개
         (FLAG + tag("g b") + CANCEL, True),  # 태그 공백 섞임
-        ("평범한 답변이에요 😀", False),
+        (FLAG + tag("gbeng") + CANCEL + CANCEL, True),  # 깃발 뒤 종료 태그 하나 더
         (FLAG + tag("gbsct") + CANCEL + " 스코틀랜드 " + tag("x"), True),  # 깃발 밖 태그
+        (chr(0xE0000), True),  # 범위 시작
+        (chr(0xE0001), True),
+        (chr(0xE0080), False),  # 범위 밖
+        ("평범한 답변이에요 😀", False),
         ("", False),
     ],
 )
@@ -199,8 +231,8 @@ def test_kb_code_blocks_do_not_trigger_signals():
     blocks = [b for text in md for b in re.findall(r"```.*?```", text, re.S)]
     assert blocks
     for b in blocks:
-        inner = b.strip("`")
-        assert not is_refusal(b) and not REFUSAL_RX.search(inner)
+        inner = b.strip("`")  # 펜스를 벗긴 코드(답변이 펜스 없이 옮겨 적은 경우)
+        assert not is_refusal(inner)
         assert not has_hidden_tags(b)
         assert not is_low_signal(inner, True, "")
     assert not any(has_hidden_tags(t) for t in md + csv)

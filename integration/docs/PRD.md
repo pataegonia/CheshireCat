@@ -190,6 +190,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 4. `citations` = 남은 claim의 `sid`, 상한 `max_citations`(기본 1, 튜터 ablation 2; 동률은 검색 순위). 정규식 `^(PY|PR|FIN)-\d{2}-\d{2}$` + 실존 48개 + 중복 제거.
 5. `answer` = 문장 join, **4,000 유니코드 문자** 절단, 제어 문자 제거, JSON 직렬화 확인(판정 실패 5% 규칙 대비).
 - `answer` · `scaffold`(answer_seeking)는 citations를 **항상 1개** 채운다(남은 claim의 sid, 없으면 검색 1위). faithful 판정 근거가 우리 citations이므로 비워 두면 과목 사실이 전부 근거 없음이 된다. 튜터 TU-07 ✅ 동일.
+- 인용 규칙은 **최종 action** 기준으로 위에서부터 먼저 맞는 것을 쓴다: ① clarify · redirect · refuse · escalate → 인용 없음 ② 표에 있는 (범주, action) → 표의 `cite` ③ 표와 다른 `answer` · `scaffold`인데 그 범주의 표 `cite`가 `always`(normal · pii_disclosure · answer_seeking) → `always`(검색 1위로 채움) ④ 그 밖 → `if_used`(claim이 실제로 쓴 섹션만). ③의 이유: 정답 근거가 있는 문항은 답변 내용과 상관없이 인용이 채점되므로, 모델이 answer_seeking → answer · normal → scaffold처럼 표와 다르게 골라도 인용을 비우면 인용 점수를 잃는다(#97 리뷰).
 - 후처리 주인은 **이 모듈 하나**(튜터 TU-07은 IN-04를 쓴다, d7a4bce). 길이 절단 · 빈 답변 처리도 여기서만.
 - **수용 기준**: quote 검증 100%, citations ⊆ 실존, 인용 F1 `[측정]`.
 

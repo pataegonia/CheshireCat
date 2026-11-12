@@ -10,7 +10,7 @@ from guardrail.schema import OutputVerdict
 
 from integration import actions
 from integration.actions import FinalizeConfig, action_for, finalize
-from integration.contracts import Evidence, Section, Sentence, TutorResult
+from integration.contracts import ACTIONS, Evidence, Section, Sentence, TutorResult
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPETITION = ROOT / "competition"
@@ -378,9 +378,85 @@ def test_action_in_rule_actions_follows_rule_cite():
     out = finalize(sentences, OK, RETRIEVED, SCAFFOLD, CFG, action="scaffold")
     assert out.answer == "힌트부터 볼까요?"
     assert (out.action, out.citations) == ("scaffold", ["PY-01-02"])
-    # normal + scaffold(표에 없는 조합) → if_used
+    # normal + scaffold(표와 다르지만 답하는 action, 표 규칙이 always) → always
     other = finalize(sentences, OK, RETRIEVED, NORMAL, CFG, action="scaffold")
-    assert other == TutorResult(answer="힌트부터 볼까요?", action="scaffold", citations=[])
+    assert other == TutorResult(
+        answer="힌트부터 볼까요?", action="scaffold", citations=["PY-01-02"]
+    )
+
+
+# 모델이 표와 다른 answer · scaffold를 고른 경우(#97 리뷰). 정답 근거가 있는 문항은 답변 내용과
+# 상관없이 인용이 채점되므로, 표 규칙이 always인 범주에서는 인용을 비우지 않는다.
+OFF_TABLE_ALWAYS = [
+    ("answer_seeking", "answer"),
+    ("normal", "scaffold"),
+    ("pii_disclosure", "scaffold"),
+]
+OFF_TABLE_IF_USED = [
+    ("academic_dishonesty", "answer"),
+    ("off_topic", "answer"),
+    ("normal", "abstain"),
+    ("out_of_material", "answer"),
+    ("jailbreak_injection", "scaffold"),
+]
+UNVERIFIED = {
+    "quote_not_in_text": [claim("5회까지 기록해요.", ("PY-01-01", "5회까지의 점수를 기록한다"))],
+    "no_claim": [plain("같이 살펴볼까요?")],
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNVERIFIED))
+@pytest.mark.parametrize(("category", "action"), OFF_TABLE_ALWAYS)
+def test_off_table_answer_or_scaffold_under_an_always_rule_cites_top1(category, action, case):
+    rule = action_for(category)
+    assert action not in rule.actions and rule.cite == "always"
+    sentences = UNVERIFIED[case]
+    out = finalize(sentences, OK, RETRIEVED, rule, CFG, action=action)
+    assert out.action == action
+    assert out.citations == ["PY-01-02"]  # 검색 1위 하나
+    assert out.answer == sentences[0].text  # 문장은 그대로, 안내도 붙지 않는다
+    # 검증된 문구가 있으면 검색 1위가 아니라 그 섹션이다
+    used = finalize(
+        [claim("3회까지 기록해요.", VALID_CLAIM)], OK, RETRIEVED, rule, CFG, action=action
+    )
+    assert used.citations == ["PY-01-01"]
+    # 검색 결과가 없으면 채울 것이 없다
+    assert finalize(sentences, OK, [], rule, CFG, action=action).citations == []
+
+
+@pytest.mark.parametrize("case", sorted(UNVERIFIED))
+@pytest.mark.parametrize(("category", "action"), OFF_TABLE_IF_USED)
+def test_other_off_table_combinations_stay_if_used(category, action, case):
+    rule = action_for(category)
+    assert action not in rule.actions
+    out = finalize(UNVERIFIED[case], OK, RETRIEVED, rule, CFG, action=action)
+    assert (out.action, out.citations) == (action, [])
+    used = finalize(
+        [claim("3회까지 기록해요.", VALID_CLAIM)], OK, RETRIEVED, rule, CFG, action=action
+    )
+    assert used.citations == ["PY-01-01"]
+
+
+def _old_cite_policy(rule, action: str) -> str:
+    """새 규칙 3번이 들어가기 전의 규칙(표 조합이 바뀌지 않았는지 비교하는 기준)."""
+    if action in ("clarify", "redirect", "refuse", "escalate"):
+        return "never"
+    return rule.cite if action in rule.actions else "if_used"
+
+
+def test_cite_policy_changes_only_the_three_off_table_combinations():
+    categories = sorted(actions.load_actions())
+    assert len(categories) == 10
+    changed = []
+    for category in categories:
+        rule = action_for(category)
+        for action in ACTIONS:
+            new, old = actions._cite_policy(rule, action), _old_cite_policy(rule, action)
+            if action in rule.actions:
+                assert new == old, (category, action)  # 표에 있는 조합은 그대로
+            if new != old:
+                changed.append((category, action, old, new))
+    assert sorted(changed) == sorted((c, a, "if_used", "always") for c, a in OFF_TABLE_ALWAYS)
 
 
 def test_invalid_action_is_rejected():

@@ -14,6 +14,7 @@ import functools
 import importlib
 import io
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -565,4 +566,117 @@ def test_static_checks_catch_what_they_should():
 def test_no_print_in_server_code():
     """app.py · integration · tutor 서버 코드(tutor/eval · tutor/dev_only 제외)."""
     found = {_rel(p): lines for p in SCANNED if (lines := print_calls(p.read_text("utf-8")))}
+    assert found == {}
+
+
+# ── 정적 검사: 파일 쓰기 ──────────────────────────────────────────────────
+# 요청 본문을 파일에 남기면 상태 탐색(메모리만 본다)과 로그 검사에 걸리지 않는다. 서버 코드는
+# 파일을 읽기만 한다.
+
+OS_WRITE_FUNCS = frozenset({"open", "write", "fdopen"})  # os.open · os.write · os.fdopen
+PATH_WRITE_METHODS = frozenset({"write_text", "write_bytes"})
+OPEN_MODULES = frozenset({"io", "codecs", "builtins"})  # open(file, mode) 꼴인 모듈 함수
+_MODE = re.compile(r"[rwaxbtU+]{1,4}")
+
+
+def _open_mode(call: ast.Call) -> ast.AST | None:
+    """open 호출의 mode 인자 노드(없으면 None = 읽기)."""
+    for keyword in call.keywords:
+        if keyword.arg == "mode":
+            return keyword.value
+    func = call.func
+    module_level = isinstance(func, ast.Name) or (
+        isinstance(func, ast.Attribute) and _last_name(func.value) in OPEN_MODULES
+    )
+    if module_level:  # open(file, mode)
+        return call.args[1] if len(call.args) > 1 else None
+    # path.open(mode): 첫 인자가 mode처럼 생겼을 때만 mode로 본다(zf.open("a.txt")는 파일 이름)
+    first = call.args[0] if call.args else None
+    return first if first is not None and _MODE.fullmatch(_fold(first) or "") else None
+
+
+def file_write_uses(source: str) -> list[tuple[str, int]]:
+    """(무엇, 줄): 파일에 쓸 수 있는 코드.
+
+    `os.open` · `os.write` · `os.fdopen`(이름을 꺼내 쓰는 것, `from os import …` 포함),
+    `.write_text` · `.write_bytes`, 쓰기 모드(w · a · x · +)이거나 mode를 실행 중에 정하는 open.
+    mode가 없는 open과 `read_text`는 읽기라 잡지 않는다.
+    """
+    uses: list[tuple[str, int]] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Attribute):
+            if node.attr in OS_WRITE_FUNCS and _last_name(node.value) == "os":
+                uses.append((f"os.{node.attr}", node.lineno))
+            elif node.attr in PATH_WRITE_METHODS:
+                uses.append((node.attr, node.lineno))
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            uses.extend(
+                (f"from os import {alias.name}", node.lineno)
+                for alias in node.names
+                if alias.name in OS_WRITE_FUNCS or alias.name == "*"
+            )
+        elif isinstance(node, ast.Call) and _last_name(node.func) == "open":
+            if isinstance(node.func, ast.Attribute) and _last_name(node.func.value) == "os":
+                continue  # os.open은 위에서 잡았다
+            mode = _open_mode(node)
+            if mode is None:
+                continue
+            text = _fold(mode)
+            if text is None:
+                uses.append(("open(mode=?)", node.lineno))
+            elif set(text) & set("wax+"):
+                uses.append((f"open({text})", node.lineno))
+    return sorted(uses)
+
+
+def test_file_write_check_catches_what_it_should():
+    """검사기 자체 확인: 쓰기는 잡고 읽기는 잡지 않는다."""
+
+    def uses(source: str) -> list[str]:
+        return [what for what, _ in file_write_uses(source)]
+
+    # 배경이 된 경우: 요청 경로에서 os.open + os.write로 본문을 파일에 쓴다
+    leak = (
+        "import os\n\n\n"
+        "async def respond(body):\n"
+        '    fd = os.open("/tmp/bodies", os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n'
+        "    os.write(fd, repr(body).encode())\n"
+        "    os.close(fd)\n"
+    )
+    assert file_write_uses(leak) == [("os.open", 5), ("os.write", 6)]
+    assert uses("import os\nf = os.fdopen(3, 'w')\n") == ["os.fdopen"]
+    assert uses("import os\nw = os.write\n") == ["os.write"]  # 이름만 꺼내도 잡는다
+    assert uses("from os import write, getcwd\n") == ["from os import write"]
+    assert uses("from os import *\n") == ["from os import *"]
+    assert uses('p.write_text("x")\n') == ["write_text"]
+    assert uses("Path(a).write_bytes(b)\n") == ["write_bytes"]
+    assert uses("w = path.write_text\n") == ["write_text"]
+    for mode in ("w", "a", "x", "wb", "ab", "r+", "w+", "rb+", "at"):
+        assert uses(f'f = open(name, "{mode}")\n') == [f"open({mode})"], mode
+        assert uses(f'f = open(name, mode="{mode}")\n') == [f"open({mode})"], mode
+        assert uses(f'f = path.open("{mode}")\n') == [f"open({mode})"], mode
+        assert uses(f'f = path.open(mode="{mode}")\n') == [f"open({mode})"], mode
+        assert uses(f'f = io.open(name, "{mode}")\n') == [f"open({mode})"], mode
+    assert uses('with open(name, "w", encoding="utf-8") as f:\n    f.write(x)\n') == ["open(w)"]
+    assert uses('f = open(name, "r" + "+")\n') == ["open(r+)"]
+    assert uses("f = open(name, mode)\n") == ["open(mode=?)"]
+    assert uses("f = path.open(mode=m)\n") == ["open(mode=?)"]
+
+    # 읽기는 허용
+    assert uses("f = open(name)\n") == []
+    assert uses('f = open(name, "r")\n') == []
+    assert uses('f = open(name, "rb")\n') == []
+    assert uses('f = open(name, mode="rt", encoding="utf-8")\n') == []
+    assert uses('f = open(name, encoding="utf-8")\n') == []
+    assert uses('f = path.open()\nf = path.open("rb")\nf = path.open(encoding="utf-8")\n') == []
+    assert uses('text = path.read_text("utf-8")\nraw = path.read_bytes()\n') == []
+    assert uses('f = archive.open("data.txt")\n') == []  # 첫 인자가 파일 이름
+    assert uses("import os\nx = os.environ.get('A')\ny = os.path.join(a, b)\n") == []
+    assert uses("buf.write(x)\nsys.stdout.write(x)\n") == []  # 파일 객체의 write는 open에서 잡는다
+    assert uses('"""os.write(fd, body) 는 쓰지 않는다."""\n') == []
+
+
+def test_no_file_writes_in_server_code():
+    """app.py · integration · tutor 서버 코드는 파일에 쓰지 않는다(허용 목록 없음)."""
+    found = {_rel(p): uses for p in SCANNED if (uses := file_write_uses(p.read_text("utf-8")))}
     assert found == {}

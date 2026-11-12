@@ -135,6 +135,8 @@ def action_for(category: object) -> ActionRule:
 _PUNCT_TABLE = str.maketrans("", "", ".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
 # 최종 action이 이 넷이면 범주와 상관없이 인용하지 않는다.
 _NO_CITE_ACTIONS: frozenset[str] = frozenset({"clarify", "redirect", "refuse", "escalate"})
+# 과목 내용으로 답하는 action. 표와 다르게 골라졌을 때도 always 규칙을 잇는다(`_cite_policy`).
+_ANSWERING_ACTIONS: frozenset[str] = frozenset({"answer", "scaffold"})
 _KEPT_CONTROLS = frozenset("\n\t")
 
 
@@ -236,12 +238,16 @@ def _join(texts: Sequence[str]) -> str:
 
 
 def _cite_policy(rule: ActionRule, action: str) -> str:
-    """최종 action 기준의 인용 규칙: always | if_used | never."""
+    """최종 action 기준의 인용 규칙: always | if_used | never. 위에서부터 먼저 맞는 것."""
     if action in _NO_CITE_ACTIONS:
         return "never"
     if action in rule.actions:
         return rule.cite
-    return "if_used"  # 표에 없는 조합: claim이 실제로 쓴 섹션만
+    # 모델이 표와 다른 answer · scaffold를 골랐어도 표 규칙이 always인 범주면 인용을 비우지 않는다.
+    # 정답 근거가 있는 문항은 답변 내용과 상관없이 인용이 채점된다(#97 리뷰).
+    if action in _ANSWERING_ACTIONS and rule.cite == "always":
+        return "always"
+    return "if_used"  # 그 밖의 표에 없는 조합: claim이 실제로 쓴 섹션만
 
 
 def finalize(

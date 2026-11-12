@@ -108,6 +108,21 @@ def test_build_rejects_a_reply_with_missing_vectors():
         build(fake=Short())
 
 
+def test_build_rejects_batches_whose_counts_only_add_up():
+    """묶음마다 수를 본다. 한 묶음이 하나 많고 다음 묶음이 하나 적으면 총수는 맞아도
+    벡터가 조각과 어긋난다."""
+
+    class Shifted(FakeEmbed):
+        async def __call__(self, texts):
+            vectors = await super().__call__(texts)
+            return [*vectors, vectors[-1]] if len(self.calls) == 1 else vectors[:-1]
+
+    index = small_index()
+    assert math.ceil(len(index.chunks) / 3) == 2  # 묶음 두 개: 하나 많음 + 하나 적음
+    with pytest.raises(ValueError):
+        build(index, Shifted(), batch=3)
+
+
 @pytest.mark.parametrize(
     "broken",
     [
@@ -510,17 +525,21 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     monkeypatch.setattr(llm_mod, "_openai_send", fake_openai_send)
     monkeypatch.setattr(draft_mod, "retrieve", watched_retrieve)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("TUTOR_CONFIG", raising=False)  # 개발자 셸의 설정 경로가 새지 않게
+    assert load_config().mode == "v2"
     for name, value in EMBEDDING_ENV.items():
         monkeypatch.setenv(name, value)
     fake = FakeEmbed()
     monkeypatch.setattr(run_local, "openai_embed", lambda: fake)
     code = run_local.main(["--preset", "tutor", *ON, "--out", str(tmp_path)])
-    assert load_config().mode == "v2" and sent  # v2 주 호출까지 갔다(가짜 전송)
+    assert sent  # v2 주 호출까지 갔다(가짜 전송)
     english = [used for is_english, used in searched if is_english]
     assert english and all(isinstance(used, emb.EmbeddingSearch) for used in english)
     saved = _saved(tmp_path)
+    assert len(english) <= saved["embedding"]["queries"]  # 넘으면 임베딩 호출 추정이 모자라다
     assert saved["embedding"]["calls"] == len(english) and saved["embedding"]["failures"] == 0
     assert len(fake.calls) == BATCHES + len(english)
+    assert all(len(texts) == 1 for texts in fake.calls[BATCHES:])  # 질의마다 한 문장씩
     assert code == 0 and saved["tainted"] is False
 
 
@@ -546,11 +565,13 @@ def test_run_local_flags_an_embedding_that_no_query_used(monkeypatch, tmp_path, 
 def test_run_local_blocked_calls_taint_the_result_even_with_a_good_embedding(
     monkeypatch, tmp_path, capsys
 ):
-    code, _state = _run_local(monkeypatch, tmp_path, FakeEmbed(), *ON, query=QUERY, blocked=True)
+    code, state = _run_local(monkeypatch, tmp_path, FakeEmbed(), *ON, query=QUERY, blocked=True)
     saved = _saved(tmp_path)
     assert code == 1 and saved["tainted"] is True and saved["embedding"]["ok"] is True
     out = capsys.readouterr().out  # 튜터 상한에서 임베딩 몫도 뺐다고 알린다
-    assert "상한에 막혀 보내지 못한 튜터 호출 1회" in out and "- 임베딩 몫 24)" in out
+    assert "상한에 막혀 보내지 못한 튜터 호출 1회" in out
+    assert f"(튜터 상한 {state.tutor_llm.max_calls}회" in out  # 실제로 건 상한과 같다
+    assert f"- 임베딩 몫 {BATCHES + 20})" in out  # 기동 묶음 + 영어 질의 20개
 
 
 def test_run_local_without_the_embedding_neither_builds_nor_counts_it(

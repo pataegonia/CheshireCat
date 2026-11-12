@@ -76,15 +76,18 @@ class EmbeddingSearch:
     ) -> "EmbeddingSearch":
         """KB 조각을 batch개씩 임베딩한다.
 
-        받은 벡터 수가 조각 수와 다르거나, 차원이 섞였거나, 비교할 수 없는 벡터(영벡터·NaN)가
-        있으면 ValueError다. 기동 때 한 번 잡아야 요청마다 조용히 BM25로 떨어지지 않는다.
+        묶음마다 받은 벡터 수가 보낸 조각 수와 다르거나(총수만 맞아도 조각과 어긋난다), 차원이
+        섞였거나, 비교할 수 없는 벡터(영벡터·NaN·무한대)가 있으면 ValueError다. 기동 때 한 번
+        잡아야 요청마다 조용히 BM25로 떨어지거나 틀린 조각과 비교하지 않는다.
         """
         texts = [text for _sid, text in index.chunks]
         vectors: list[list[float]] = []
         for start in range(0, len(texts), batch):
-            vectors.extend(await embed(texts[start : start + batch]))
-        if len(vectors) != len(texts):
-            raise ValueError("임베딩 수가 KB 조각 수와 다르다")
+            sent = texts[start : start + batch]
+            got = await embed(sent)
+            if len(got) != len(sent):
+                raise ValueError("임베딩 수가 보낸 KB 조각 수와 다르다")
+            vectors.extend(got)
         if len({len(v) for v in vectors}) != 1:
             raise ValueError("KB 조각 임베딩의 차원이 섞였다")
         chunk_ids = tuple(sid for sid, _text in index.chunks)

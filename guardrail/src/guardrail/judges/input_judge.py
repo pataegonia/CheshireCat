@@ -1,0 +1,95 @@
+"""입력 판정 nano (GR-04, ADR-0012·0013, C2-judges S2.6).
+
+메시지 배치: system = `prompts/input_judge.md` 본문(요청마다 같은 접두라 프롬프트 캐시가 맞는다),
+user = `<examples>` → `<conversation>` → `<target>` → (`oom_kb_snippet`) `<kb>`.
+태그에 넣는 데이터는 원문을 `input.max_chars`로 자르고 → 정규화(숨긴 태그 문자는 드러냄) →
+`html.escape` 순서로 만든다(council D3). 길이 상한은 escape 전 문자열에 건다.
+"""
+
+import html
+from collections.abc import Sequence
+
+from guardrail.config import GuardConfig, load_prompt
+from guardrail.data import LabeledRow
+from guardrail.judges.schemas import InputOut
+from guardrail.llm import LLM
+from guardrail.preprocess import decode_tags
+from guardrail.schema import Category, Message
+
+_ROLES = frozenset({"user", "assistant"})
+
+
+def build_window(messages: Sequence[Message], last: int) -> list[Message]:
+    """첫 학습자 발화 + 마지막 `last`개. 첫 학습자 발화가 이미 그 안에 있으면 한 번만."""
+    msgs = list(messages)
+    start = max(len(msgs) - last, 0)
+    first = next((i for i, m in enumerate(msgs) if m.role == "user"), None)
+    if first is None or first >= start:
+        return msgs[start:]
+    return [msgs[first], *msgs[start:]]
+
+
+def _data(text: str, cfg: GuardConfig) -> str:
+    """원문 → 상한 → 정규화(태그 문자는 [숨긴 문자: …]로 드러냄) → escape."""
+    return html.escape(decode_tags(text[: cfg.input.max_chars])[0], quote=False)
+
+
+def _examples(examples: Sequence[LabeledRow], cfg: GuardConfig) -> str:
+    # LabeledRow.text는 이미 정규화본이다. 순서는 kNN이 정한 그대로(가장 비슷한 것 마지막)
+    lines = [
+        f'<example category="{ex.category}">'
+        f"{html.escape(ex.text[: cfg.input.max_chars], quote=False)}</example>"
+        for ex in examples
+    ]
+    return "<examples>\n" + "\n".join(lines) + "\n</examples>"
+
+
+def _conversation(window: Sequence[Message], cfg: GuardConfig) -> str:
+    # role은 요청 값이라 속성에 그대로 넣지 않는다
+    lines = [
+        f'<message role="{m.role if m.role in _ROLES else "other"}">'
+        f"{_data(m.content, cfg)}</message>"
+        for m in build_window(window, cfg.input.window_last)
+    ]
+    return "<conversation>\n" + "\n".join(lines) + "\n</conversation>"
+
+
+def build_messages(
+    window: Sequence[Message],
+    target: str,
+    examples: Sequence[LabeledRow],
+    cfg: GuardConfig,
+    kb_snippet: str | None = None,
+) -> list[dict]:
+    parts = []
+    if cfg.toggles.knn_fewshot and examples:
+        parts.append(_examples(examples, cfg))
+    parts.append(_conversation(window, cfg))
+    parts.append(f"<target>{_data(target, cfg)}</target>")
+    if cfg.toggles.oom_kb_snippet and kb_snippet:
+        snippet = html.escape(kb_snippet[: cfg.input.oom_snippet_chars], quote=False)
+        parts.append(f"<kb>{snippet}</kb>")
+    return [
+        {"role": "system", "content": load_prompt(cfg, "input_judge")[1]},
+        {"role": "user", "content": "\n\n".join(parts)},
+    ]
+
+
+async def judge_input(
+    window: list[Message],
+    target: str,
+    examples: list[LabeledRow],
+    llm: LLM,
+    cfg: GuardConfig,
+    *,
+    deadline: float,
+    kb_snippet: str | None = None,
+) -> Category | None:
+    """마지막 학습자 발화의 범주. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
+
+    window는 대화 전체를 넘겨도 된다(`build_window`로 자른다). 재시도는 `LLM.complete`가
+    일시적 오류에만 1회 한다.
+    """
+    messages = build_messages(window, target, examples, cfg, kb_snippet)
+    result = await llm.complete("input_judge", messages, InputOut, deadline=deadline)
+    return result.parsed.category if isinstance(result.parsed, InputOut) else None

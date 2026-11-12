@@ -291,15 +291,16 @@ def test_rank_p95_under_20ms(index, public, capsys):
 
 
 def test_index_time_and_memory_report(capsys):
-    tracemalloc.start()
     t0 = time.perf_counter()
-    idx = KbIndex.load(KB_DIR, **_params())
+    KbIndex.load(KB_DIR, **_params())
     secs = time.perf_counter() - t0
+    tracemalloc.start()
+    idx = KbIndex.load(KB_DIR, **_params())
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     _report(
         capsys,
-        f"색인 {secs * 1000:.0f}ms(tracemalloc 켠 상태), 최대 메모리 {peak / 1e6:.1f}MB,"
+        f"색인 {secs * 1000:.0f}ms, 색인 중 최대 할당 {peak / 1e6:.1f}MB(tracemalloc),"
         f" 조각 {len(idx.chunks)}",
     )
     assert secs < 10

@@ -6,8 +6,9 @@ from pathlib import Path
 
 from guardrail.config import load_config, resolve_path
 
+from tutor.retrieval.embedding import EmbeddingSearch, is_english
 from tutor.retrieval.index import KbIndex
-from tutor.retrieval.kb import Section
+from tutor.retrieval.kb import Section, bigrams
 
 # 가드 retrieval.max_query_chars와 같은 상한. 넘으면 뒤쪽(최근 발화)을 남긴다
 MAX_QUERY_CHARS = 4000
@@ -31,18 +32,27 @@ async def retrieve(
     *,
     subject: str | None = None,
     k: int = DEFAULT_K,
-    use_embedding: bool = False,
+    embedding: EmbeddingSearch | None = None,
 ) -> list[Section]:
-    """KB 섹션을 점수 높은 순으로 0개 이상 k개 이하 돌려준다. 겹치는 2-gram이 없으면 빈 목록이다.
+    """KB 섹션을 점수 높은 순으로 0개 이상 k개 이하 돌려준다.
+
+    임베딩을 쓰지 않으면 겹치는 2-gram이 없을 때 빈 목록이다. 임베딩을 섞은 영어 질의는 BM25가
+    아무것도 못 찾아도 임베딩 순위로 k개를 채운다.
 
     query는 판단 대상 학습자 발화, history는 창 안의 다른 학습자 발화다. 어느 발화를 넣을지는
     부르는 쪽이 고른다(버튼 문구는 빼서 넘긴다). 둘을 이어 한 질의로 쓰고 너무 길면 뒤쪽을 남긴다.
     subject는 과목 폴더 이름(python·prompt·finance)으로 거른다.
+    embedding(기동 때 만든 임베딩 검색)을 주면 영어 위주 질의에 한해 질의 임베딩 순위를 BM25
+    순위와 RRF로 섞는다(TU-11). 2-gram이 없는 질의는 임베딩도 부르지 않는다.
     """
-    if use_embedding:
-        raise NotImplementedError("임베딩 혼합 검색은 아직 없다(TU-03 ablation)")
     if k <= 0:
         return []
     index = default_index()
     text = "\n".join([*history, query])[-MAX_QUERY_CHARS:]
-    return [index.section(sid) for sid, _score in index.search(text, subject=subject)[:k]]
+    ranked = [sid for sid, _score in index.search(text, subject=subject)]
+    if embedding is not None and is_english(query) and bigrams(query):
+        allowed = None
+        if subject is not None:
+            allowed = {sid for sid, section in index.sections.items() if section.subject == subject}
+        ranked = await embedding.rerank(text, ranked, allowed=allowed)
+    return [index.section(sid) for sid in ranked[:k]]

@@ -31,6 +31,7 @@ guardrail = { workspace = true }
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["**/docs"]  # 문서의 코드 블록은 설계 기록이라 포맷하지 않는다(가드 pyproject와 같은 방침)
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S", "T20"]  # S: bandit 보안 규칙, T20: print 금지

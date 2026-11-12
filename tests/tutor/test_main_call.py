@@ -289,3 +289,25 @@ async def test_same_question_twice_calls_twice(prompt):
     for _ in range(2):
         await run_main_call(fake, prompt, conv(), [], deadline=1.0)
     assert len(fake.calls) == 2  # 응답 캐시 없음(TU-18)
+
+
+# --- 통합 표 연결(#102, 리뷰 2번) ---
+
+
+def test_from_rules_uses_real_action_table():
+    from integration.actions import load_actions
+
+    rules = load_actions()
+    prompt = MainCallPrompt.from_rules()
+    assert prompt == MainCallPrompt.from_rules(rules)
+    for category, rule in rules.items():
+        assert f"- {category} → {' 또는 '.join(rule.actions)}" in prompt.system
+    assert "- harmful_content → refuse 또는 redirect" in prompt.system
+
+
+def test_load_rejects_action_rule_objects_directly():
+    # load()는 {범주: action 목록}을 받는다. ActionRule을 그대로 넘기면 from_rules를 써야 한다
+    from integration.actions import load_actions
+
+    with pytest.raises(TypeError):
+        MainCallPrompt.load(load_actions())

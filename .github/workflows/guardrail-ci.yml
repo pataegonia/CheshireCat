@@ -10,7 +10,7 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
-    paths: ["guardrail/**", ".github/workflows/guardrail-ci.yml"]
+    paths: ["guardrail/**", "pyproject.toml", "uv.lock", ".github/workflows/guardrail-ci.yml"]
   workflow_dispatch:
 
 permissions:
@@ -51,7 +51,7 @@ jobs:
           git -c core.quotepath=false diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA" > "$list"
           # grep 종료 코드: 0=일치, 1=불일치, 2 이상=오류. 오류를 "변경 없음"으로 보지 않는다.
           rc=0
-          grep -zqE '^(guardrail/|\.github/workflows/guardrail-ci\.yml$)' "$list" || rc=$?
+          grep -zqE '^(guardrail/|pyproject\.toml$|uv\.lock$|\.github/workflows/guardrail-ci\.yml$)' "$list" || rc=$?
           case "$rc" in
             0) echo "guardrail=true" >> "$GITHUB_OUTPUT" ;;
             1) echo "guardrail=false" >> "$GITHUB_OUTPUT" ;;
@@ -76,7 +76,7 @@ jobs:
           version: "0.12.17"
           python-version: "3.12"
           enable-cache: true
-          cache-dependency-glob: guardrail/uv.lock
+          cache-dependency-glob: uv.lock  # lock은 루트 하나(uv workspace). 이 폴더에서 sync해도 루트 lock을 쓴다
       - run: uv sync --locked
       # ruff 규칙에 S(bandit 보안 규칙)가 포함된다. 설정은 pyproject.toml.
       - run: uv run ruff check .

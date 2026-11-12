@@ -4,12 +4,14 @@
 """
 
 import asyncio
+import contextlib
 import dataclasses
 import importlib
 import logging
 import math
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from tutor.retrieval import default_index, retrieve
@@ -90,7 +92,8 @@ def test_build_embeds_every_chunk_once_in_batches():
     assert len(fake.calls) == math.ceil(len(texts) / 2)
     assert [t for call in fake.calls for t in call] == texts
     assert search.chunk_ids == tuple(sid for sid, _text in index.chunks)
-    assert all(math.isclose(sum(x * x for x in v), 1.0) for v in search.vectors)  # 단위 벡터
+    assert search.matrix.shape == (len(texts), DIM)
+    assert np.allclose(np.linalg.norm(search.matrix, axis=1), 1.0)  # 행마다 단위 벡터
 
 
 def test_build_rejects_a_reply_with_missing_vectors():
@@ -122,6 +125,47 @@ def test_build_rejects_vectors_it_cannot_compare(broken):
 def test_ranking_folds_chunks_to_the_best_section():
     search = build()
     assert search.ranking(bag("baseball score board"))[0] == "A-02"
+
+
+@pytest.mark.parametrize("query", [[1.0] * (DIM - 1), [math.nan] * DIM, [0.0] * DIM])
+def test_ranking_rejects_a_query_vector_it_cannot_compare(query):
+    with pytest.raises(ValueError):  # 차원이 다름·NaN·영벡터(rerank가 받아 BM25로 떨어진다)
+        build().ranking(query)
+
+
+def test_rerank_scores_on_the_loop_without_a_thread(monkeypatch):
+    """유사도는 행렬곱 한 번이라 루프에서 바로 한다(순수 파이썬 루프는 스레드에서도 GIL을 쥔다)."""
+    search = build()
+    monkeypatch.setattr(emb.asyncio, "to_thread", lambda *_a, **_k: pytest.fail("스레드 없음"))
+    text = "bank card limit"
+    merged = run(search.rerank(text, ["A-01"], allowed=None))
+    assert merged == emb.rrf(["A-01"], search.ranking(bag(text)))
+
+
+def test_query_embedding_shares_the_gate_and_waits_within_its_time_limit():
+    """질의 임베딩도 가드 전역 게이트를 함께 쓴다(같은 팀 키, TU-13). 게이트 대기도 시간 제한 안이다."""
+    fake = FakeEmbed()
+    search = build()
+
+    async def go():
+        held = asyncio.Semaphore(1)
+        inside = []
+
+        @contextlib.asynccontextmanager
+        async def gate():
+            async with held:
+                inside.append(len(fake.calls))
+                yield
+
+        gated = dataclasses.replace(search, embed=fake, gate=gate, timeout_s=0.05)
+        async with held:  # 다른 호출이 게이트를 쥐고 있으면 시간 제한 안에 못 얻는다
+            blocked = await gated.rerank("bank card", ["B-01"], allowed=None)
+        free = await gated.rerank("bank card", ["B-01"], allowed=None)
+        return blocked, free, inside
+
+    blocked, free, inside = run(go())
+    assert blocked == ["B-01"] and free == emb.rrf(["B-01"], search.ranking(bag("bank card")))
+    assert len(fake.calls) == 1 and inside == [0]  # 게이트를 얻은 뒤에만 보낸다
 
 
 def test_rerank_mixes_the_query_embedding_with_bm25():
@@ -254,7 +298,18 @@ def test_startup_builds_the_kb_embedding_only_when_turned_on(monkeypatch):
     on = _state(True)
     run(startup.build_embedding(on))
     assert isinstance(on.tutor_emb, emb.EmbeddingSearch)
-    assert len(on.tutor_emb.vectors) == len(default_index().chunks)
+    assert on.tutor_emb.matrix.shape[0] == len(default_index().chunks)
+    assert on.tutor_emb.gate is on.tutor_llm.gate  # 튜터 LLM과 같은 게이트(서버는 가드 slot)
+
+
+def test_startup_uses_the_guard_gate_for_query_embeddings(monkeypatch):
+    monkeypatch.setattr(startup, "openai_embed", FakeEmbed)
+    slot = contextlib.nullcontext  # 가드 LLM의 slot() 자리
+    state = SimpleNamespace(guard=SimpleNamespace(llm=SimpleNamespace(slot=slot, params={})))
+    state.guard.llm.structured = "json_schema"
+    startup.prepare(state, load_config(overrides={"toggles.embedding": True}))
+    run(startup.build_embedding(state))
+    assert state.tutor_emb.gate is slot
 
 
 def test_startup_falls_back_to_bm25_when_the_kb_embedding_fails(monkeypatch, caplog):

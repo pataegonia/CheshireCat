@@ -39,7 +39,10 @@ async def build_embedding(app_state: Any) -> None:
     try:
         async with asyncio.timeout(BUILD_TIMEOUT_S):
             app_state.tutor_emb = await EmbeddingSearch.build(
-                app_state.tutor_kb, openai_embed(), timeout_s=cfg.llm.timeout_s.embedding
+                app_state.tutor_kb,
+                openai_embed(),
+                timeout_s=cfg.llm.timeout_s.embedding,
+                gate=app_state.tutor_llm.gate,  # 튜터 LLM과 같은 게이트(서버는 가드 slot, TU-13)
             )
     except Exception as exc:  # 메시지는 남기지 않는다(TU-15)
         log.warning("임베딩 검색을 만들지 못해 BM25만 쓴다: %s", type(exc).__name__)

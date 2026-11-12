@@ -3,23 +3,28 @@
 - KB 조각(BM25와 같은 조각)의 임베딩은 서버를 띄울 때 한 번 만든다(SPEC §7.1). 배포 자료
   파생물이고 요청 처리 중에는 바뀌지 않는다. 파일로 저장하지 않는다.
 - 질의 임베딩은 요청 안에서만 쓰고 버린다(TU-18). 실패·시간 초과면 BM25 순위를 그대로 쓴다.
+- 질의 임베딩 호출은 튜터 LLM과 같은 게이트(서버는 가드 전역 slot)를 쓴다(같은 팀 키, TU-13).
+- 유사도는 기동 때 만든 단위 벡터 행렬과의 행렬곱 한 번이다(조각 244개에 1ms 아래, 스레드 없음).
 - 부르는 곳은 운영진 임베딩 API뿐이다(EMBEDDING_BASE_URL·EMBEDDING_MODEL·EMBEDDING_API_KEY).
 """
 
 import asyncio
+import contextlib
 import logging
-import math
 import os
 from collections.abc import Awaitable, Callable, Collection, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import openai
 
 from tutor.retrieval.index import KbIndex
 
 log = logging.getLogger("tutor.retrieval")
 Embed = Callable[[Sequence[str]], Awaitable[list[list[float]]]]
+Gate = Callable[[], AbstractAsyncContextManager[Any]]
 RRF_K = 60  # RRF 순위 상수(관례값)
 BATCH = 64  # 기동 때 한 번에 보내는 KB 조각 수
 BUILD_TIMEOUT_S = 60.0  # 기동 때 KB 임베딩 전체 상한(넘으면 BM25만 쓴다)
@@ -41,12 +46,12 @@ def rrf(*rankings: Sequence[str], k: int = RRF_K) -> list[str]:
     return sorted(score, key=lambda sid: (-score[sid], sid))
 
 
-def _unit(vector: Sequence[float]) -> tuple[float, ...]:
-    """단위 벡터. 영벡터·NaN·무한대처럼 비교할 수 없는 벡터면 ValueError."""
-    norm = math.sqrt(sum(x * x for x in vector))
-    if not math.isfinite(norm) or norm == 0.0:
+def _unit_rows(matrix: np.ndarray) -> np.ndarray:
+    """마지막 축마다 단위 벡터. 영벡터·NaN·무한대처럼 비교할 수 없는 벡터가 있으면 ValueError."""
+    norms = np.linalg.norm(matrix, axis=-1, keepdims=True)
+    if not np.all(np.isfinite(norms)) or np.any(norms == 0.0):
         raise ValueError("비교할 수 없는 임베딩 벡터")
-    return tuple(x / norm for x in vector)
+    return matrix / norms
 
 
 @dataclass(frozen=True)
@@ -55,12 +60,19 @@ class EmbeddingSearch:
 
     embed: Embed = field(repr=False)
     chunk_ids: tuple[str, ...]  # 조각마다 섹션 ID(KbIndex.chunks 순서)
-    vectors: tuple[tuple[float, ...], ...] = field(repr=False)  # 조각 임베딩(단위 벡터)
-    timeout_s: float  # 질의 임베딩 호출 상한(설정 llm.timeout_s.embedding)
+    matrix: np.ndarray = field(repr=False, compare=False)  # 조각 임베딩 단위 벡터(조각 수 × 차원)
+    timeout_s: float  # 질의 임베딩 호출 상한(설정 llm.timeout_s.embedding). 게이트 대기도 포함
+    gate: Gate = field(default=contextlib.nullcontext, repr=False, compare=False)
 
     @classmethod
     async def build(
-        cls, index: KbIndex, embed: Embed, *, timeout_s: float, batch: int = BATCH
+        cls,
+        index: KbIndex,
+        embed: Embed,
+        *,
+        timeout_s: float,
+        batch: int = BATCH,
+        gate: Gate = contextlib.nullcontext,
     ) -> "EmbeddingSearch":
         """KB 조각을 batch개씩 임베딩한다.
 
@@ -76,14 +88,20 @@ class EmbeddingSearch:
         if len({len(v) for v in vectors}) != 1:
             raise ValueError("KB 조각 임베딩의 차원이 섞였다")
         chunk_ids = tuple(sid for sid, _text in index.chunks)
-        return cls(embed, chunk_ids, tuple(_unit(v) for v in vectors), timeout_s)
+        matrix = _unit_rows(np.asarray(vectors, dtype=np.float64))
+        return cls(embed, chunk_ids, matrix, timeout_s, gate)
 
     def ranking(self, query_vector: Sequence[float]) -> list[str]:
-        """섹션 순위: 조각 코사인 유사도를 섹션 최고값으로 접는다(BM25와 같은 접기)."""
-        q = _unit(query_vector)
+        """섹션 순위: 조각 코사인 유사도(행렬곱 한 번)를 섹션 최고값으로 접는다(BM25와 같은 접기).
+
+        차원이 다르거나 비교할 수 없는 질의 벡터(영벡터·NaN)면 ValueError.
+        """
+        q = np.asarray(query_vector, dtype=np.float64)
+        if q.shape != self.matrix.shape[1:]:
+            raise ValueError("질의 임베딩의 차원이 KB 조각과 다르다")
+        scores = self.matrix @ _unit_rows(q)
         best: dict[str, float] = {}
-        for sid, vector in zip(self.chunk_ids, self.vectors, strict=True):
-            score = sum(a * b for a, b in zip(q, vector, strict=True))
+        for sid, score in zip(self.chunk_ids, scores.tolist(), strict=True):
             if sid not in best or score > best[sid]:
                 best[sid] = score
         return sorted(best, key=lambda sid: (-best[sid], sid))
@@ -93,14 +111,14 @@ class EmbeddingSearch:
     ) -> list[str]:
         """질의 임베딩 순위를 BM25 순위(ranked)와 RRF로 섞는다. allowed가 있으면 그 섹션만.
 
-        질의 임베딩이 실패하거나 timeout_s를 넘으면 ranked를 그대로 돌려주고, 까닭은 예외 클래스
-        이름만 경고로 남긴다(본문·메시지 없음, TU-15). 취소는 전파한다. 유사도 계산(조각 244개,
-        수십 ms)은 이벤트 루프를 막지 않게 스레드에서 한다.
+        질의 임베딩이 실패하거나 timeout_s(게이트 대기 포함)를 넘으면 ranked를 그대로 돌려주고,
+        까닭은 예외 클래스 이름만 경고로 남긴다(본문·메시지 없음, TU-15). 취소는 전파한다.
         """
         try:
             async with asyncio.timeout(self.timeout_s):
-                vectors = await self.embed([text])
-            found = await asyncio.to_thread(self.ranking, vectors[0])
+                async with self.gate():
+                    vectors = await self.embed([text])
+            found = self.ranking(vectors[0])
         except Exception as exc:  # 시간 초과·API 오류·모양이 다른 벡터: BM25만 쓴다
             log.warning("질의 임베딩을 못 써서 BM25만 쓴다: %s", type(exc).__name__)
             return list(ranked)

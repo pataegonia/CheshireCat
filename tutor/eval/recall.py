@@ -18,10 +18,10 @@ from typing import Any
 
 from guardrail.eval.cv import load_splits
 
+from tutor.request import parse_request
 from tutor.retrieval import default_index, retrieve
 
 PUBLIC = Path(__file__).resolve().parents[2] / "competition" / "public" / "tutor.jsonl"
-WINDOW = 6  # 첫 학습자 발화 + 마지막 메시지 6개(TU-02, 가드 GR-04와 같은 창)
 KS = (1, 3, 5)
 
 
@@ -40,15 +40,11 @@ class Report:
 def query_parts(messages: Sequence[Any]) -> tuple[str, list[str]]:
     """창 안의 학습자 발화 → (마지막 발화, 그 앞 발화들). 읽을 수 없는 메시지는 건너뛴다.
 
-    버튼 문구 빼기는 #97 `tidy`(TU-02)를 연결하면 그쪽 `search_turns()`로 바꾼다.
+    서버와 같은 규칙(`TutorRequest.search_query`)을 쓴다. 버튼 문구 빼기는 #97 `tidy`(TU-02)를
+    연결하면 그쪽에서 맞춘다.
     """
-    turns = [m for m in messages if isinstance(m, dict) and isinstance(m.get("content"), str)]
-    users = [i for i, m in enumerate(turns) if m.get("role") == "user"]
-    if not users:
-        return "", []
-    window = set(range(max(len(turns) - WINDOW, 0), len(turns))) | {users[0]}
-    texts = [turns[i]["content"] for i in users if i in window]
-    return texts[-1], texts[:-1]
+    req = parse_request({"messages": list(messages)})
+    return req.search_query() if req is not None else ("", [])
 
 
 def is_english(text: str) -> bool:

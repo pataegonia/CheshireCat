@@ -103,6 +103,7 @@ class TutorLLM:
         self.calls: Counter[str] = Counter()  # 보낸 호출 수(역할별, 하네스가 센다)
         self.unexpected: Counter[str] = Counter()  # 분류 밖 예외의 클래스 이름별 수(메시지 없음)
         self.max_calls: int | None = None  # 하네스 예산(넘으면 error="budget", 보내지 않음)
+        self.blocked: Counter[str] = Counter()  # 예산에 막혀 보내지 못한 호출 수(역할별)
         self._base = base
         self._overrides = dict(overrides or {})
         self._send = send
@@ -143,6 +144,7 @@ class TutorLLM:
                 role, kwargs, schema, deadline, timeout_s, retrying=attempts > 0
             )
             if outcome == "budget":
+                self.blocked[role] += 1
                 return self._result(_Attempt(error="budget"), attempts, t0)
             if a is None:  # 게이트 대기로 마감이나 다시 보낼 시간을 다 썼다(앞 오류를 그대로)
                 return self._result(last, attempts, t0)

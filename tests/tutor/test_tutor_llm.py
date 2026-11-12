@@ -327,6 +327,7 @@ def test_call_budget_stops_before_sending():
     assert run(llm, clock).error is None
     result = run(llm, clock)
     assert result.error == "budget" and result.attempts == 0 and len(send.sent) == 1
+    assert llm.blocked == {"main": 1}  # 막혀 보내지 못한 호출을 역할별로 센다(#108 리뷰)
 
 
 def test_cancel_is_not_swallowed():

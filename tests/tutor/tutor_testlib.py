@@ -91,7 +91,11 @@ OK_REPLIES = {
 
 
 def answer_openai(monkeypatch) -> list[dict]:
-    """block_openai와 같되, 보내지 않고 응답 스키마 이름에 맞는 최소 정상 JSON으로 답한다."""
+    """block_openai와 같되, 보내지 않고 응답 스키마 이름에 맞는 최소 정상 JSON으로 답한다.
+
+    json_schema 모드(가드 설정 기본, structured_output)만 다룬다. json_object 모드면 스키마
+    이름이 없어 전송 안에서 KeyError가 나고, 튜터 LLM이 그것을 server 오류로 센다.
+    """
     import json
     import types
 

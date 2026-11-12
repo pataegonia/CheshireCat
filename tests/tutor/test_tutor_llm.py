@@ -120,6 +120,48 @@ def test_failures_are_counted_by_role_and_code_but_not_budget_stops():
     assert llm.failures == {("main", "bad_request"): 1} and llm.blocked == {"main": 1}
 
 
+def test_a_call_recovered_by_retry_is_not_a_failure():
+    llm, clock = make(Send(status(503), ok()))
+    assert run(llm, clock).error is None
+    assert llm.failures == {} and llm.calls == {"main": 2}  # 시도 2회, 실패 0
+
+
+@pytest.mark.parametrize(
+    "steps, code",
+    [
+        ((status(503), status(503)), "server"),  # 재시도 뒤 최종 실패도 호출당 1회
+        ((ok("not json"), ok("not json")), "bad_json"),
+    ],
+)
+def test_a_failed_call_counts_once_with_its_final_code(steps, code):
+    llm, clock = make(Send(*steps))
+    assert run(llm, clock).error == code
+    assert llm.failures == {("main", code): 1} and llm.calls == {"main": 2}
+
+
+def test_a_send_timeout_counts_as_a_failure():
+    async def slow(_kwargs):
+        await asyncio.sleep(5)
+
+    llm, clock = make(slow)
+    result = asyncio.run(call(llm, clock, budget=0.2, timeout_s=0.05, retries=0))
+    assert result.error == "timeout" and llm.failures == {("main", "timeout"): 1}
+
+
+def test_a_gate_timeout_counts_as_a_failure_without_a_call():
+    """게이트를 못 얻어 보내지 못해도 그 호출의 답은 기본값이다(실패 1, 시도 0)."""
+
+    @contextlib.asynccontextmanager
+    async def stuck():
+        await asyncio.sleep(5)
+        yield
+
+    llm, clock = make(Send(ok()), gate=stuck)
+    result = asyncio.run(call(llm, clock, budget=0.05, timeout_s=0.05, retries=1))
+    assert result.error == "timeout" and llm.failures == {("main", "timeout"): 1}
+    assert not llm.calls
+
+
 def test_tutor_settings_override_only_params_the_probe_kept():
     send = Send(ok())
     src = base({"reasoning_effort": "low", "verbosity": "low", "max_completion_tokens": None})

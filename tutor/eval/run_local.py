@@ -494,9 +494,10 @@ def _show_tutor_calls(
     sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
     sys.stdout.write(_latency_line(latency))
     failures = state.tutor_llm.failures
-    if failures:  # 실패한 호출의 답은 기본값이다(연결 안 됨·키 거절·시간 초과 등)
+    if failures:  # 최종 실패한 호출의 답은 기본값이다(연결 안 됨·키 거절·시간 초과 등)
+        # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다
         failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
-        sys.stdout.write(f"튜터 LLM 실패: {failed}: 기본값이 섞인 결과다\n")
+        sys.stdout.write(f"튜터 LLM 최종 실패: {failed}: 기본값이 섞인 결과다\n")
     if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
         tutor_cap, max_calls, reserve, embedding = cap
         sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")

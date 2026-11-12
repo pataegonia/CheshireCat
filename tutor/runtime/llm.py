@@ -104,7 +104,9 @@ class TutorLLM:
         self.unexpected: Counter[str] = Counter()  # 분류 밖 예외의 클래스 이름별 수(메시지 없음)
         self.max_calls: int | None = None  # 하네스 예산(넘으면 error="budget", 보내지 않음)
         self.blocked: Counter[str] = Counter()  # 예산에 막혀 보내지 못한 호출 수(역할별)
-        # 오류로 끝난 호출 수((역할, 오류 코드)별, 하네스가 센다). 예산 막힘은 blocked에만 센다
+        # 오류로 끝난 호출 수((역할, 최종 오류 코드)별, 하네스가 센다). complete 한 번이 1회다:
+        # 재시도 뒤 최종 오류·게이트 대기 초과도 1회(calls는 보낸 시도 수라 단위가 다르다).
+        # 예산 막힘은 blocked에만 센다
         self.failures: Counter[tuple[str, str]] = Counter()
         self._base = base
         self._overrides = dict(overrides or {})

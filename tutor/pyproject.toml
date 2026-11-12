@@ -1,0 +1,38 @@
+[project]
+name = "tutor"
+version = "0.1.0"
+description = "대회 POST /tutor 튜터"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.162.2",  # 가드와 같은 핀(가드 create_app에 주입돼 한 앱으로 뜬다)
+]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.16.0",
+    "httpx>=0.28.1",
+    "hypothesis>=6.170.14",
+    "jsonschema==4.26.0",
+    "pytest>=8",
+    "pytest-cov>=7",
+    "ruff>=0.6",
+]
+
+# tutor/ 폴더가 곧 패키지 `tutor`다(TUTOR_PRD 담당 표의 경로, integration/과 같은 모양).
+# 이 파일에는 의존성과 도구 설정만 두고 패키지로 설치하지 않는다. 코드는 저장소 루트에서
+# import한다(루트 app.py, pytest는 tests/__init__.py가 있어 루트를 경로에 넣는다).
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "T20"]  # S: bandit 보안 규칙, T20: print 금지(TU-15)
+
+[tool.ruff.lint.isort]
+known-first-party = ["tests", "tutor"]  # 설정 파일이 tutor/ 안에 있어 루트 패키지를 직접 적는다
+
+[tool.coverage.run]
+source = ["tutor"]

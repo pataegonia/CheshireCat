@@ -11,14 +11,14 @@ toggles:
   signals: true                # 결정적 신호 힌트(TU-05)
   verify: guard                # off | self | guard. 가드 judge_output 검증, v1 기본 켬(TU-09)
   guard_classify: parallel     # off | serial | parallel. 가드 classify 합치기, 기본 parallel(TU-10)
-  embedding: false             # 질의 임베딩(TU-11). 기본 0회
+  embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
   rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   scaffold_state_rule: true    # answer_seeking에서 기준은 밝히고 적용은 학습자에게(TU-06). 11/13 #75에서 정함
   inline_cite: false           # 답변 끝 (섹션 ID) 표기
   max_citations: 1             # 1 | 2. 2는 "두 대상 비교" 문항 수를 센 뒤 ablation(TU-07)
 retrieval:
-  k: 5                         # 근거 묶음 섹션 수. 2·3·5·8 중 recall@5 0.958 기준(T1.2). 측정 뒤 정함
+  k: 5                         # 근거 묶음 섹션 수. recall@5 = @8 = 0.958이라 5(#81). 끝까지 비교는 3·5만(통합 ablation)
 answer:
   max_sentences: 3             # 1–3문장 기본(상한 아님, TU-06)
 llm:

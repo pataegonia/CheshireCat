@@ -20,6 +20,7 @@ KB = score_local.load_kb_dir(KB_DIR)
 PUBLIC = score_local._read_jsonl(PUBLIC_DIR / "tutor.jsonl")
 UNSEEN = team_cases.uncovered_sections(PUBLIC, KB)
 TABLE = load_actions()
+PROXY_CEILING = 2000  # 운영진 프록시: 스트리밍이 아닌 응답의 출력 상한(넘기면 400, 11/12 런박스)
 
 
 def case(text="질문", category="normal", action="answer", evidence=(), roles=("user",)):
@@ -29,16 +30,16 @@ def case(text="질문", category="normal", action="answer", evidence=(), roles=(
     )
 
 
-def test_jobs_cover_every_axis_and_use_the_unseen_sections():
-    assert set(cd.AXIS_TASKS) == set(team_cases.AXES)
+def test_jobs_cycle_forms_and_sections_per_axis():
+    assert set(cd.AXIS_FORMS) == set(team_cases.AXES)
     jobs = cd.plan_jobs(15, random.Random(0), KB, UNSEEN)
-    assert len(jobs) == 5 * 3 == cd.expected_calls(15)  # 축 5개 × 15문항 ÷ 5
-    assert cd.expected_calls(6) == 5 * 2  # 5개씩 묶으니 올림
+    assert len(jobs) == 5 * 15 == cd.expected_calls(15)  # 호출 하나에 초안 하나
     by_axis = {axis: [j for j in jobs if j.axis == axis] for axis in team_cases.AXES}
-    assert all(len(v) == 3 for v in by_axis.values())
+    for axis, forms in cd.AXIS_FORMS.items():  # 꼴은 축 안에서 차례로 돈다
+        assert [j.form for j in by_axis[axis]] == [forms[i % len(forms)] for i in range(15)]
     unseen_jobs = by_axis["unseen_section"]
-    assert [j.sections[0] for j in unseen_jobs] == UNSEEN[:3]
-    assert sorted(sid for j in unseen_jobs for sid in j.sections) == UNSEEN  # 7개 모두
+    assert [j.sections for j in unseen_jobs] == [(UNSEEN[i % len(UNSEEN)],) for i in range(15)]
+    assert {j.sections[0] for j in unseen_jobs} == set(UNSEEN)  # 7개 모두
     others = [j for j in jobs if j.axis != "unseen_section"]
     assert all(len(set(j.sections)) == 2 for j in others)  # 두 섹션(mixed는 비교)
     assert all(
@@ -48,54 +49,46 @@ def test_jobs_cover_every_axis_and_use_the_unseen_sections():
     assert cd.plan_jobs(15, random.Random(0), KB, UNSEEN) == jobs  # 시드가 같으면 같다
 
 
-def test_more_calls_than_unseen_sections_reuse_them():
-    jobs = cd.plan_jobs(50, random.Random(0), KB, UNSEEN)
-    unseen_jobs = [j for j in jobs if j.axis == "unseen_section"]
-    assert len(unseen_jobs) == 10 and all(len(j.sections) == 1 for j in unseen_jobs)
-    assert {j.sections[0] for j in unseen_jobs} == set(UNSEEN)
-
-
-def test_prompt_carries_the_table_and_the_sections():
-    job = cd.Job("mixed", ("FIN-03-01", "FIN-03-02"))
-    system, user = cd.messages_for(job, KB, TABLE)
+def test_prompt_carries_the_table_the_form_and_the_sections():
+    form = cd.AXIS_FORMS["mixed"][-1]
+    system, user = cd.messages_for(cd.Job("mixed", form, ("FIN-03-01", "FIN-03-02")), KB, TABLE)
     assert (system["role"], user["role"]) == ("system", "user")
     assert all(category in system["content"] for category in TABLE)
     assert TABLE["harmful_content"].variants[0].when in system["content"]  # 표에서 읽는다
+    assert form in user["content"]
     assert "FIN-03-02" in user["content"] and KB["FIN-03-01"][:40] in user["content"]
 
 
 def test_no_public_question_reaches_any_prompt():
-    jobs = [cd.Job(axis, tuple(KB)) for axis in team_cases.AXES]  # 모든 축 × 모든 섹션
+    jobs = [  # 모든 축 × 모든 꼴 × 모든 섹션
+        cd.Job(axis, form, tuple(KB)) for axis, forms in cd.AXIS_FORMS.items() for form in forms
+    ]
     prompt = "".join(m["content"] for job in jobs for m in cd.messages_for(job, KB, TABLE))
     questions = {m["content"] for row in PUBLIC for m in row["messages"] if m["role"] == "user"}
     assert not [q for q in questions if len(q) >= 12 and q in prompt]  # 공개 세트 밖 변형(TU-16)
 
 
 def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
-    jobs = [cd.Job("paraphrase", ("PY-01-01", "PY-01-03")), cd.Job("premise", ("FIN-01-02",))]
+    job = cd.Job("paraphrase", "꼴", ("PY-01-01", "PY-01-03"))
     blank = cd.DraftCase(
         messages=[cd.DraftMessage(role="user", content="  ")],
         category="low_signal_input",
         action="clarify",
         evidence=[],
     )
-    batches = [
-        cd.DraftBatch(
-            cases=[
-                case("a", evidence=["PY-01-01", "NOPE-99", "PY-01-02", "PY-01-01"]),
-                case("b", category="off_topic", action="answer"),  # 표와 다른 action
-                case("c", roles=("user", "assistant")),  # 마지막이 user가 아님
-                case("a", evidence=["PY-01-01"]),  # 마지막 학습자 발화가 겹침
-                case("d", "jailbreak_injection", "refuse", ["PY-01-03"]),  # 인용 never 범주
-                case("e", "harmful_content", "redirect", roles=("user", "assistant", "user")),
-                case("f", "answer_seeking", "scaffold", ["PY-01-02"]),  # 준 섹션 근거가 없음
-                case("g", "low_signal_input", "clarify", roles=("user", "user")),  # 교대하지 않음
-                blank,  # 빈 발화
-            ]
-        ),
+    drafts = [
+        case("a", evidence=["PY-01-01", "NOPE-99", "PY-01-02", "PY-01-01"]),
+        case("b", category="off_topic", action="answer"),  # 표와 다른 action
+        case("c", roles=("user", "assistant")),  # 마지막이 user가 아님
+        case("a", evidence=["PY-01-01"]),  # 마지막 학습자 발화가 겹침
+        case("d", "jailbreak_injection", "refuse", ["PY-01-03"]),  # 인용 never 범주
+        case("e", "harmful_content", "redirect", roles=("user", "assistant", "user")),
+        case("f", "answer_seeking", "scaffold", ["PY-01-02"]),  # 준 섹션 근거가 없음
+        case("g", "low_signal_input", "clarify", roles=("user", "user")),  # 교대하지 않음
+        blank,  # 빈 발화
         None,  # 호출 실패
     ]
-    rows, dropped = cd.assemble(list(zip(jobs, batches, strict=True)), KB, TABLE)
+    rows, dropped = cd.assemble([(job, draft) for draft in drafts], KB, TABLE)
     assert [r["id"] for r in rows] == [f"draft-paraphrase-00{n}" for n in (1, 2, 3)]
     # 근거는 그 호출에 준 섹션만, 겹침 없이 남긴다(준 적 없는 PY-01-02와 모르는 ID는 뺀다)
     assert rows[0]["labels"] == {"action": "answer", "category": "normal", "evidence": ["PY-01-01"]}
@@ -110,18 +103,21 @@ def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
     }
 
 
-def _fake_llm(batch, *, fail_first=False, on_call=None):
+def _fake_llm(*, fail_first=False, fail_all=False, on_call=None):
+    """TutorLLM처럼 역할별 호출 수를 센다. 호출마다 다른 초안(근거 PY-01-01)을 돌려준다."""
     calls = Counter()
 
     async def complete(role, messages, schema, *, deadline, timeout_s, retries):
-        assert schema is cd.DraftBatch and [m["role"] for m in messages] == ["system", "user"]
+        assert schema is cd.DraftCase and [m["role"] for m in messages] == ["system", "user"]
         assert retries == cd.RETRIES and timeout_s == cd.TIMEOUT_S
         calls[role] += 1
+        n = sum(calls.values())
         if on_call is not None:
             on_call()
-        if batch is None or (fail_first and sum(calls.values()) == 1):
+        if fail_all or (fail_first and n == 1):
             return SimpleNamespace(parsed=None, error="bad_json", finish_reason="length")
-        return SimpleNamespace(parsed=batch, error=None, finish_reason="stop")
+        draft = case(f"본문{n}", evidence=["PY-01-01"])
+        return SimpleNamespace(parsed=draft, error=None, finish_reason="stop")
 
     return SimpleNamespace(complete=complete, calls=calls, max_calls=None)
 
@@ -133,19 +129,24 @@ def api_env(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
 
 
-@pytest.mark.usefixtures("api_env")
+@pytest.fixture
+def one_section_jobs(monkeypatch):
+    """근거가 남도록 모든 호출에 PY-01-01을 준다."""
+    jobs = [cd.Job(axis, "꼴", ("PY-01-01",)) for axis in team_cases.AXES]
+    monkeypatch.setattr(cd, "plan_jobs", lambda *a: jobs)
+
+
+@pytest.mark.usefixtures("api_env", "one_section_jobs")
 def test_cli_writes_loadable_drafts_and_prints_numbers_only(monkeypatch, tmp_path, capsys):
-    batch = cd.DraftBatch(cases=[case(f"본문{i}", evidence=["PY-01-01"]) for i in range(5)])
-    llm = _fake_llm(batch, fail_first=True)
+    llm = _fake_llm(fail_first=True)
     configs = []
     monkeypatch.setattr(cd, "make_llm", lambda cfg: configs.append(cfg) or llm)
-    monkeypatch.setattr(cd, "plan_jobs", lambda *a: [cd.Job("paraphrase", ("PY-01-01",))] * 5)
     out = tmp_path / "drafts.jsonl"
-    assert cd.main(["--out", str(out), "--per-axis", "5"]) == 0
+    assert cd.main(["--out", str(out), "--per-axis", "1"]) == 0
     assert configs[0].llm.max_completion_tokens == cd.MAX_TOKENS
     assert sum(llm.calls.values()) == 5 and llm.max_calls == 10  # 축마다 1회, 다시 보내기 몫까지
     rows = team_cases.load_cases(out, KB)  # 점검 세트 검사를 그대로 통과한다
-    assert len(rows) == 5  # 같은 가짜 묶음이라 뒤 호출의 초안은 마지막 발화가 겹쳐 빠진다
+    assert [r["axis"] for r in rows] == list(team_cases.AXES)[1:]  # 첫 호출만 실패
     shown = capsys.readouterr().out
     assert "nano 예상 호출 5회" in shown and "nano 호출 5회" in shown
     assert "호출 실패 까닭: bad_json 1" in shown and "잘린 응답 1개" in shown
@@ -154,20 +155,18 @@ def test_cli_writes_loadable_drafts_and_prints_numbers_only(monkeypatch, tmp_pat
 
 @pytest.mark.usefixtures("api_env")
 def test_cli_writes_nothing_when_every_call_fails(monkeypatch, tmp_path):
-    monkeypatch.setattr(cd, "make_llm", lambda cfg: _fake_llm(None))
+    monkeypatch.setattr(cd, "make_llm", lambda cfg: _fake_llm(fail_all=True))
     out = tmp_path / "drafts.jsonl"
-    assert cd.main(["--out", str(out), "--per-axis", "5"]) == 1
+    assert cd.main(["--out", str(out), "--per-axis", "1"]) == 1
     assert not out.exists()
 
 
-@pytest.mark.usefixtures("api_env")
+@pytest.mark.usefixtures("api_env", "one_section_jobs")
 def test_cli_never_overwrites_a_file_that_appears_while_running(monkeypatch, tmp_path):
     out = tmp_path / "drafts.jsonl"
-    batch = cd.DraftBatch(cases=[case(evidence=["PY-01-01"])])
-    llm = _fake_llm(batch, on_call=lambda: out.write_text("다른 실행", encoding="utf-8"))
+    llm = _fake_llm(on_call=lambda: out.write_text("다른 실행", encoding="utf-8"))
     monkeypatch.setattr(cd, "make_llm", lambda cfg: llm)
-    monkeypatch.setattr(cd, "plan_jobs", lambda *a: [cd.Job("paraphrase", ("PY-01-01",))])
-    assert cd.main(["--out", str(out), "--per-axis", "5"]) == 1
+    assert cd.main(["--out", str(out), "--per-axis", "1"]) == 1
     assert out.read_text(encoding="utf-8") == "다른 실행"
 
 
@@ -198,7 +197,8 @@ def test_cli_checks_inputs_before_calling(monkeypatch, tmp_path, capsys):
     assert out.read_text(encoding="utf-8") == "이전 초안"
 
 
-def test_real_client_sends_the_draft_token_cap(monkeypatch):
+def test_real_client_stays_under_the_proxy_ceiling(monkeypatch):
+    assert cd.MAX_TOKENS <= PROXY_CEILING
     monkeypatch.setenv("OPENAI_MODEL", "m")
     llm = cd.make_llm(load_config(overrides={"llm.max_completion_tokens": cd.MAX_TOKENS}))
     assert llm.model == "m" and llm.params["max_completion_tokens"] == cd.MAX_TOKENS

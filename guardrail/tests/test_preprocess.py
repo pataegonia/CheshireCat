@@ -15,6 +15,7 @@ from guardrail.preprocess import (
     decode_tags,
     normalize,
     reveal_hidden,
+    skeleton,
     strip_tags,
 )
 
@@ -104,6 +105,7 @@ def test_random_unicode_normalize_is_idempotent():
         text = "".join(chr(rng.choice(rng.choice(pools))) for _ in range(rng.randint(0, 12)))
         once = normalize(text)
         assert normalize(once) == once
+        skeleton(text)  # 튜터 호환 뷰도 오류 없이
 
 
 def _to_jamo(syllable: str) -> str:
@@ -121,6 +123,7 @@ def test_split_jamo_round_trip_on_random_syllables():
         word = "".join(chr(0xAC00 + rng.randrange(11172)) for _ in range(rng.randint(1, 4)))
         split = "".join(_to_jamo(s) for s in word)
         assert normalize(split) == word
+        assert skeleton(split) == skeleton(word)
 
 
 def tag(text: str) -> str:
@@ -299,3 +302,38 @@ def test_p95_under_10ms_for_400_rows():
     ]
     for fn in (reveal_hidden, decode_tags, strip_tags, normalize):
         assert _p95_ms(fn, rows) <= 10, fn.__name__
+
+
+# skeleton은 가드가 쓰지 않는다. 튜터 #98·#99가 import하므로 main과 같은 결과를 고정한다.
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("시1발", "시발"),
+        ("시①발", "시발"),
+        ("시⑴발", "시발"),
+        ("씨¹발", "씨발"),
+        ("시𝟏발", "시발"),
+        ("ㅈㅏ²ㅅㅏㄹ", "자살"),
+        ("바 . 보", "바보"),
+        ("ㅂ ㅏ ㅂ ㅗ", "바보"),
+        ("ㅈ ㅏ ㅅ ㅏ ㄹ", "자살"),
+        ("㉨ㅏ㉦ㅏ㉣", "자살"),
+        ("㈀", "ㄱ"),
+        ("ㅈㅏㅏㅅㅏㄹ", "자살"),
+        ("ㅅㅣㅣㅂㅏㄹ", "시발"),
+        ("시ㅣ발", "시발"),
+        ("자ㅏㅏ살", "자살"),
+        ("씨ㅣㅣ발", "씨발"),
+        ("주ㅜ거", "주거"),
+        ("가ㅓ", "가ㅓ"),
+        ("나 ㅈㅅ할래", "나ㅈㅅ할래"),
+        ("너 ㄲㅈ", "너ㄲㅈ"),
+        ("IGNORE  previous", "ignoreprevious"),
+        ("ＩＧＮＯＲＥ", "ignore"),
+        ("ㅋㅋㅠㅠ", "ㅋ큐"),
+        (f"{CONJ_SIOS}ㅣ발", "시발"),  # 조합형 낱자모
+        (HALF_UNASSIGNED, ""),  # 오류 없이 기호로 보고 지운다
+    ],
+)
+def test_skeleton(raw, expected):
+    assert skeleton(raw) == expected

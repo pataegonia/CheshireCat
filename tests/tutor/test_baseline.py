@@ -166,6 +166,11 @@ def test_tutor_set_is_checked_before_running(api_env, argv, tmp_path):
 
 
 @pytest.mark.parametrize(
+    "mode_args",
+    [("--tutor-set", "mode=baseline"), ("--tutor-set", "mode=v2"), ()],
+    ids=["baseline", "v2", "default"],  # default: 덮은 설정 없이 tutor.handle(v2)로 잰다
+)
+@pytest.mark.parametrize(
     "missing, value",
     [
         ("OPENAI_API_KEY", None),
@@ -174,15 +179,16 @@ def test_tutor_set_is_checked_before_running(api_env, argv, tmp_path):
         ("OPENAI_BASE_URL", "  "),  # 공백뿐인 값도 없는 것으로 본다
     ],
 )
-def test_baseline_needs_the_api_settings(api_env, monkeypatch, tmp_path, capsys, missing, value):
+def test_tutor_preset_needs_the_api_settings(
+    api_env, monkeypatch, tmp_path, capsys, mode_args, missing, value
+):
+    """베이스라인도 v2도 운영진 API를 부른다(v2는 주 호출, #97). 키 없이 재면 모두 기본값이다."""
     if value is None:
         monkeypatch.delenv(missing)
     else:
         monkeypatch.setenv(missing, value)
     with pytest.raises(SystemExit):  # 모든 응답이 기본값으로 떨어지는 실수를 막는다
-        run_local.main(
-            ["--preset", "tutor", "--tutor-set", "mode=baseline", "--out", str(tmp_path)]
-        )
+        run_local.main(["--preset", "tutor", *mode_args, "--out", str(tmp_path)])
     assert missing in capsys.readouterr().err  # 무엇이 빠졌는지 알린다
     assert not list(tmp_path.iterdir())
 

@@ -14,9 +14,9 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
-import openai
 import pytest
 
+from tests.tutor.tutor_testlib import fake_openai
 from tutor.retrieval import default_index, retrieve
 from tutor.retrieval import embedding as emb
 from tutor.retrieval.index import KbIndex
@@ -452,6 +452,7 @@ def _run_local(
     """
     from tutor.eval import run_local
 
+    fake_openai(monkeypatch)  # tutor 프리셋이 요구하는 OPENAI_*(가짜, 보내지 않는다)
     for name in EMBEDDING_ENV:
         if name in env:
             monkeypatch.setenv(name, env[name])
@@ -508,25 +509,16 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     """
     from tutor.eval import run_local
     from tutor.judge import draft as draft_mod
-    from tutor.runtime import llm as llm_mod
 
-    sent, searched = [], []
+    searched = []
     real_retrieve = draft_mod.retrieve
-
-    def fake_openai_send():
-        async def send(kwargs):
-            sent.append(kwargs["model"])
-            raise openai.OpenAIError("가짜 전송")  # auth 오류: 다시 보내지 않는다
-
-        return send
 
     async def watched_retrieve(query, history=(), **kw):
         searched.append((emb.is_english(query) and bool(bigrams(query)), kw.get("embedding")))
         return await real_retrieve(query, history, **kw)
 
-    monkeypatch.setattr(llm_mod, "_openai_send", fake_openai_send)
+    sent = fake_openai(monkeypatch)  # 주 호출은 보내지 않고 auth 오류(다시 보내지 않는다)
     monkeypatch.setattr(draft_mod, "retrieve", watched_retrieve)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TUTOR_CONFIG", raising=False)  # 개발자 셸의 설정 경로가 새지 않게
     assert load_config().mode == "v2"
     for name, value in EMBEDDING_ENV.items():

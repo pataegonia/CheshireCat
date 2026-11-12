@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.tutor.tutor_testlib import fake_openai
 from tutor.eval import grader, metrics, run_local
 from tutor.eval.grader import KB_DIR, score_local
 from tutor.runtime.response import TUTOR_DEFAULT
@@ -240,7 +241,8 @@ def test_judge_from_env_needs_all_three_settings(monkeypatch):
     assert grader.judge_from_env() is None
 
 
-def test_cli_writes_a_report_and_compares(tmp_path, capsys):
+def test_cli_writes_a_report_and_compares(monkeypatch, tmp_path, capsys):
+    fake_openai(monkeypatch)  # tutor 프리셋은 운영진 API 환경변수를 요구한다(보내지는 않는다)
     assert run_local.main(["--preset", "reference", "--out", str(tmp_path)]) == 0
     saved = next(tmp_path.glob("reference-*.json"))
     data = json.loads(saved.read_text(encoding="utf-8"))
@@ -322,7 +324,8 @@ def test_cli_budget_counts_every_judge_call(monkeypatch, tmp_path):
     assert data["judge"] is True and data["report"]["components"]["facts"] == 0.5
 
 
-def test_cli_stops_before_calling_the_tutor_when_over_budget(monkeypatch, tmp_path):
+def test_cli_stops_before_calling_the_tutor_when_over_budget(monkeypatch, tmp_path, capsys):
+    fake_openai(monkeypatch)  # 환경변수가 아니라 상한 때문에 멈추는지 본다
     called = []
 
     async def handle(_body):
@@ -332,10 +335,11 @@ def test_cli_stops_before_calling_the_tutor_when_over_budget(monkeypatch, tmp_pa
     monkeypatch.setattr(run_local.tutor, "handle", handle)
     with pytest.raises(SystemExit):
         run_local.main(["--preset", "tutor", "--max-calls", "100", "--out", str(tmp_path)])
-    assert called == []
+    assert called == [] and "상한" in capsys.readouterr().err
 
 
 def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):
+    fake_openai(monkeypatch)
     loops = []
 
     async def handle(_body):
@@ -354,6 +358,8 @@ def test_collect_timed_measures_every_request_of_every_run(rows):
 
 
 def test_cli_prints_tutor_request_latency(monkeypatch, tmp_path, capsys):  # TU-16 "지연"
+    fake_openai(monkeypatch)
+
     async def slow(_body):
         await asyncio.sleep(0.01)
         return dict(TUTOR_DEFAULT)
@@ -366,7 +372,8 @@ def test_cli_prints_tutor_request_latency(monkeypatch, tmp_path, capsys):  # TU-
     assert "튜터 요청 지연" not in capsys.readouterr().out  # 튜터를 부르지 않는 프리셋
 
 
-def test_cli_never_prints_or_saves_bodies(tmp_path, capsys, rows):
+def test_cli_never_prints_or_saves_bodies(monkeypatch, tmp_path, capsys, rows):
+    fake_openai(monkeypatch)  # tutor 프리셋은 실제 v2 흐름을 타되 운영진 API는 부르지 않는다
     for preset in ("reference", "reference_top1", "tutor"):
         assert run_local.main(["--preset", preset, "--out", str(tmp_path)]) == 0
     saved = "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.json"))

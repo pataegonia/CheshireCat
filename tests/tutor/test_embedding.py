@@ -500,10 +500,14 @@ def test_run_local_flags_an_embedding_that_no_query_used(monkeypatch, tmp_path, 
     assert _saved(tmp_path)["tainted"] is True
 
 
-def test_run_local_blocked_calls_taint_the_result_even_with_a_good_embedding(monkeypatch, tmp_path):
+def test_run_local_blocked_calls_taint_the_result_even_with_a_good_embedding(
+    monkeypatch, tmp_path, capsys
+):
     code, _state = _run_local(monkeypatch, tmp_path, FakeEmbed(), *ON, query=QUERY, blocked=True)
     saved = _saved(tmp_path)
     assert code == 1 and saved["tainted"] is True and saved["embedding"]["ok"] is True
+    out = capsys.readouterr().out  # 튜터 상한에서 임베딩 몫도 뺐다고 알린다
+    assert "상한에 막혀 보내지 못한 튜터 호출 1회" in out and "- 임베딩 몫 24)" in out
 
 
 def test_run_local_without_the_embedding_neither_builds_nor_counts_it(

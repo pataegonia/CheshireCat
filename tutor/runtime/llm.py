@@ -104,6 +104,8 @@ class TutorLLM:
         self.unexpected: Counter[str] = Counter()  # 분류 밖 예외의 클래스 이름별 수(메시지 없음)
         self.max_calls: int | None = None  # 하네스 예산(넘으면 error="budget", 보내지 않음)
         self.blocked: Counter[str] = Counter()  # 예산에 막혀 보내지 못한 호출 수(역할별)
+        # 오류로 끝난 호출 수((역할, 오류 코드)별, 하네스가 센다). 예산 막힘은 blocked에만 센다
+        self.failures: Counter[tuple[str, str]] = Counter()
         self._base = base
         self._overrides = dict(overrides or {})
         self._send = send
@@ -125,6 +127,23 @@ class TutorLLM:
         return self._base.structured
 
     async def complete(
+        self,
+        role: str,
+        messages: list[dict[str, str]],
+        schema: type[BaseModel],
+        *,
+        deadline: float,
+        timeout_s: float,
+        retries: int,
+    ) -> Result:
+        result = await self._complete(
+            role, messages, schema, deadline=deadline, timeout_s=timeout_s, retries=retries
+        )
+        if result.error is not None and result.error != "budget":
+            self.failures[(role, result.error)] += 1
+        return result
+
+    async def _complete(
         self,
         role: str,
         messages: list[dict[str, str]],

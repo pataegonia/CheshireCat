@@ -46,6 +46,25 @@ FAKE_OPENAI_ENV = {
 }
 
 
+def _fake_send(monkeypatch, reply) -> list[dict]:
+    """가짜 환경변수를 넣고 튜터 LLM 전송을 reply(kwargs)로 바꾼다. 보내려던 요청을 차례로 돌려준다."""
+    from tutor.runtime import llm as llm_mod
+
+    for name, value in FAKE_OPENAI_ENV.items():
+        monkeypatch.setenv(name, value)
+    sent: list[dict] = []
+
+    def make_send():
+        async def send(kwargs):
+            sent.append(kwargs)
+            return reply(kwargs)
+
+        return send
+
+    monkeypatch.setattr(llm_mod, "_openai_send", make_send)
+    return sent
+
+
 def block_openai(monkeypatch) -> list[dict]:
     """운영진 API 환경변수 자리에 가짜 값을 넣고, 튜터 LLM 전송은 막는다(보내지 않고 auth 오류).
 
@@ -54,18 +73,36 @@ def block_openai(monkeypatch) -> list[dict]:
     """
     import openai
 
-    from tutor.runtime import llm as llm_mod
+    def refuse(_kwargs):
+        raise openai.OpenAIError("막은 전송")  # auth 오류: 다시 보내지 않는다
 
-    for name, value in FAKE_OPENAI_ENV.items():
-        monkeypatch.setenv(name, value)
-    sent: list[dict] = []
+    return _fake_send(monkeypatch, refuse)
 
-    def blocked_send():
-        async def send(kwargs):
-            sent.append(kwargs)
-            raise openai.OpenAIError("막은 전송")  # auth 오류: 다시 보내지 않는다
 
-        return send
+# 응답 스키마 이름별 최소 정상 답(주 호출 MainCallOut, 베이스라인 BaselineOut). 과목 사실은 없다
+OK_REPLIES = {
+    "MainCallOut": {
+        "category": "normal",
+        "action": "answer",
+        "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
+    },
+    "BaselineOut": {"answer": "자료를 바탕으로 답해요.", "action": "answer", "citations": []},
+}
 
-    monkeypatch.setattr(llm_mod, "_openai_send", blocked_send)
-    return sent
+
+def answer_openai(monkeypatch) -> list[dict]:
+    """block_openai와 같되, 보내지 않고 응답 스키마 이름에 맞는 최소 정상 JSON으로 답한다."""
+    import json
+    import types
+
+    def answer(kwargs):
+        name = kwargs["response_format"]["json_schema"]["name"]
+        content = json.dumps(OK_REPLIES[name], ensure_ascii=False)
+        choice = types.SimpleNamespace(
+            message=types.SimpleNamespace(content=content), finish_reason="stop"
+        )
+        return types.SimpleNamespace(
+            choices=[choice], usage=types.SimpleNamespace(completion_tokens=5)
+        )
+
+    return _fake_send(monkeypatch, answer)

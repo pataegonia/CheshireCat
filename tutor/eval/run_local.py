@@ -462,8 +462,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         [metrics.score_run(rows, responses, judge=judge, kb=kb) for responses in all_responses]
     )
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
+    failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
-    tainted = bool(blocked) or (use is not None and not use.ok)
+    tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok)
     name = args.preset or args.responses.stem
     path = _write(
         report, name=name, judge=judge is not None, out_dir=args.out, tainted=tainted, embedding=use
@@ -484,7 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _show_tutor_calls(
     state: Any, blocked: int, latency: Sequence[float], *, cap: tuple[int, int, int, int]
 ) -> None:
-    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 상한에 막힌 호출 수.
+    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 실패한 호출, 상한에 막힌 호출 수.
 
     cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다.
     """
@@ -492,6 +493,10 @@ def _show_tutor_calls(
     shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
     sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
     sys.stdout.write(_latency_line(latency))
+    failures = state.tutor_llm.failures
+    if failures:  # 실패한 호출의 답은 기본값이다(연결 안 됨·키 거절·시간 초과 등)
+        failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
+        sys.stdout.write(f"튜터 LLM 실패: {failed}: 기본값이 섞인 결과다\n")
     if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
         tutor_cap, max_calls, reserve, embedding = cap
         sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")

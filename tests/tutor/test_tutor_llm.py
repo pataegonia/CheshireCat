@@ -110,6 +110,16 @@ def test_ok_sends_fixed_params_and_a_strict_schema():
     assert llm.calls == {"main": 1}
 
 
+def test_failures_are_counted_by_role_and_code_but_not_budget_stops():
+    """오류로 끝난 호출을 역할·코드별로 센다(측정이 기본값 섞인 것을 알게). 예산 막힘은 blocked에."""
+    llm, clock = make(Send(status(400), ok()))
+    assert run(llm, clock).error == "bad_request"
+    assert run(llm, clock).error is None
+    llm.max_calls = 2
+    assert run(llm, clock).error == "budget"
+    assert llm.failures == {("main", "bad_request"): 1} and llm.blocked == {"main": 1}
+
+
 def test_tutor_settings_override_only_params_the_probe_kept():
     send = Send(ok())
     src = base({"reasoning_effort": "low", "verbosity": "low", "max_completion_tokens": None})

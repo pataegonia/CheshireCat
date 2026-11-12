@@ -4,12 +4,15 @@
 안에서 띄우고, 튜터·가드 요청을 섞어 동시 64로 보낸다(SPEC §3 동시 최대 64). 네트워크도 쓰지 않는다.
 - 튜터 LLM은 전송만 가짜로 바꾼다. 파라미터는 서버와 같은 build_llm 값이고, 게이트는 가드 설정
   llm.gate 크기 하나다(서버에서는 가드 LLM의 slot()).
-- 가짜 지연은 가드 #105 런박스 실측(가드 판정 호출, 동시 64, p50 4.51초·p95 6.62초)에 맞춘
-  로그정규 분포다. 튜터 답변은 출력이 길어 실제로는 더 느릴 수 있다. 429·5xx 재시도는 없다
-- 튜터 모드는 baseline으로 고정한다(요청당 nano 1회). 다른 모드는 가짜로 바꾸지 않은 호출이
-  생길 수 있다
+- 가짜 지연은 로그정규 분포다. 기본은 가드 #105 런박스 실측(가드 판정 호출, 동시 64, p50 4.51초·
+  p95 6.62초)이다. 튜터 주 호출은 출력이 길어 더 느릴 수 있으니, 실측이 나오면 `--fake-p50`·
+  `--fake-p95`로 바꿔 끼운다. 429·5xx 재시도는 없다
+- 튜터 모드는 baseline으로 고정한다(요청당 nano 1회). 그래서 v2(요청당 nano 3회 + 가드 2회)의
+  게이트 경합은 아직 재지 않는다. 다른 모드는 가짜로 바꾸지 않은 호출이 생길 수 있다
 - 가드 판정기는 상수(constant_factory)라 가드 쪽 LLM 호출은 없다. 가드 판정 부하는 재지 않는다
 - httpx ASGITransport로 앱을 바로 부른다. uvicorn·HTTP 파싱은 거치지 않는다
+- 합격선은 튜터 p50 ≤6초·p95 ≤12초(TU-13·TU-17)다. LLM 실패는 응답 문구가 아니라 튜터 LLM이
+  오류로 끝낸 호출 수로 센다(모드·고정 문장과 상관없다)
 출력은 숫자만 낸다(질문·답변 본문 없음). 가드 접속 로그(본문 없음)는 요청마다 stderr로 나온다.
 """
 
@@ -33,7 +36,7 @@ from guardrail.server import constant_factory, create_app
 import tutor
 from tutor.eval.grader import PUBLIC_DIR, scoring
 from tutor.runtime.config import load_config
-from tutor.runtime.llm import TutorLLM, build_llm
+from tutor.runtime.llm import Result, TutorLLM, build_llm
 
 P50_S, P95_S = 4.51, 6.62  # 가드 #105 런박스 실측(InputOut, 동시 64)
 Z95 = 1.6448536269514722  # 표준정규 95백분위
@@ -59,6 +62,10 @@ class Latency:
     def sample(self, rng: random.Random) -> float:
         return rng.lognormvariate(self.mu, self.sigma)
 
+    def quantiles(self) -> tuple[float, float]:
+        """(p50, p95) 초."""
+        return math.exp(self.mu), math.exp(self.mu + Z95 * self.sigma)
+
 
 class FakeLLM:
     """chat.completions.create 자리. 지연만큼 기다린 뒤 베이스라인 출력 모양의 JSON을 낸다."""
@@ -83,6 +90,20 @@ class FakeLLM:
         return SimpleNamespace(choices=[choice], usage=SimpleNamespace(completion_tokens=40))
 
 
+class CountingLLM(TutorLLM):
+    """오류로 끝난 호출(시간 초과·게이트 대기 초과·깨진 JSON 등)을 센다."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.failed = 0
+
+    async def complete(self, *args: Any, **kwargs: Any) -> Result:
+        result = await super().complete(*args, **kwargs)
+        if result.error is not None:
+            self.failed += 1
+        return result
+
+
 class Reply(NamedTuple):
     endpoint: str
     row_id: str
@@ -101,17 +122,21 @@ class Report:
     bad_status: int  # 200이 아닌 응답
     invalid: int  # 채점기 parse_tutor·parse_guard를 못 지나는 본문
     over_limit: int  # 채점기 시간 제한(30초) 이상
-    defaults: int  # 튜터 기본값 응답(LLM 실패·시간 부족). 가짜 LLM에서는 0이어야 한다
+    defaults: int  # 라우터 기본값 본문(TUTOR_DEFAULT)과 같은 응답. 가짜 LLM에서는 0이어야 한다
+    llm_failed: int  # 튜터 LLM 호출 중 오류로 끝난 것. 가짜 LLM에서는 0이어야 한다
     covered_tutor_rows: int  # 200 + 규격으로 답한 공개 튜터 행 수
     llm_calls: int
     llm_peak: int
     gate: int  # 쓴 게이트 크기(가드 설정 llm.gate)
     slash_status: int  # POST /tutor/ 상태 코드(3xx면 리다이렉트)
+    mode: str  # 튜터 모드(지금은 baseline 고정)
+    fake: tuple[float, float]  # 가짜 LLM 지연 (p50, p95) 초
 
 
 @dataclass(frozen=True)
 class Bar:
-    p95_s: float = 15.0  # #79 수용 기준(튜터 p95 ≤15초). PRD TU-17은 p50 ≤6초·p95 ≤12초
+    p50_s: float = 6.0  # PRD TU-13·TU-17, 통합 PRD v1.1: 튜터 p50 ≤6초
+    p95_s: float = 12.0  # 튜터 p95 ≤12초
 
 
 def _rows(name: str) -> list[dict[str, Any]]:
@@ -143,7 +168,7 @@ def _mock_tutor_llm(state: Any, fake: FakeLLM, overrides: dict[str, Any] | None)
     built = build_llm(state, cfg)
     gate = asyncio.Semaphore(state.cfg.llm.gate)  # 서버에서는 가드 LLM의 slot()(같은 크기)
     state.tutor_cfg = cfg
-    state.tutor_llm = TutorLLM(fake.send, lambda: gate, model=built.model, base=built)
+    state.tutor_llm = CountingLLM(fake.send, lambda: gate, model=built.model, base=built)
 
 
 async def _one(
@@ -167,7 +192,14 @@ async def _one(
 
 
 def _report(
-    results: Sequence[Reply], *, wall: float, fake: FakeLLM, gate: int, slash: int
+    results: Sequence[Reply],
+    *,
+    wall: float,
+    fake: FakeLLM,
+    gate: int,
+    slash: int,
+    llm_failed: int,
+    mode: str,
 ) -> Report:
     tutor_s: list[float] = []
     guard_s: list[float] = []
@@ -195,11 +227,14 @@ def _report(
         invalid=invalid,
         over_limit=over,
         defaults=defaults,
+        llm_failed=llm_failed,
         covered_tutor_rows=len(covered),
         llm_calls=fake.calls,
         llm_peak=fake.peak,
         gate=gate,
         slash_status=slash,
+        mode=mode,
+        fake=fake.latency.quantiles(),
     )
 
 
@@ -211,10 +246,14 @@ async def run_load(
     scale: float = 1.0,
     seed: int = 0,
     tutor_overrides: dict[str, Any] | None = None,
+    fake_quantiles: tuple[float, float] = (P50_S, P95_S),
 ) -> Report:
-    """TEAM_TOKEN 환경변수가 있어야 한다(앱과 요청이 같은 값을 쓴다)."""
+    """TEAM_TOKEN 환경변수가 있어야 한다(앱과 요청이 같은 값을 쓴다).
+
+    fake_quantiles는 가짜 LLM 지연의 (p50, p95) 초다(기본은 가드 #105 실측).
+    """
     rng = random.Random(seed)  # noqa: S311 - 모의 지연·순서, 암호용 아님
-    fake = FakeLLM(Latency.from_quantiles(P50_S, P95_S), rng, scale=scale)
+    fake = FakeLLM(Latency.from_quantiles(*fake_quantiles), rng, scale=scale)
     app = create_app(
         constant_factory,
         tutor_router=tutor.router,
@@ -236,7 +275,10 @@ async def run_load(
             wall = time.perf_counter() - started
             slash = (await client.post("/tutor/", json={})).status_code
         gate = app.state.cfg.llm.gate
-    return _report(results, wall=wall, fake=fake, gate=gate, slash=slash)
+        failed, mode = app.state.tutor_llm.failed, app.state.tutor_cfg.mode
+    return _report(
+        results, wall=wall, fake=fake, gate=gate, slash=slash, llm_failed=failed, mode=mode
+    )
 
 
 def _pct(values: Sequence[float], q: float) -> float:
@@ -251,11 +293,14 @@ def show(report: Report, bar: Bar, out: TextIO | None = None) -> bool:
     out = out or sys.stdout  # 부를 때의 stdout(기본 인자로 묶지 않는다)
     t50, t95 = _pct(report.tutor_s, 0.5), _pct(report.tutor_s, 0.95)
     tmax, g95 = max(report.tutor_s, default=0.0), _pct(report.guard_s, 0.95)
+    f50, f95 = report.fake
+    out.write(f"가정: 튜터 모드 {report.mode}, 가짜 LLM 지연 p50 {f50:g}초·p95 {f95:g}초\n")
     out.write(f"요청 {report.requests}개(튜터 {len(report.tutor_s)}·가드 {len(report.guard_s)})")
     out.write(f", 전체 {report.wall_s:.1f}초\n")
     out.write(f"튜터 p50 {t50:.2f}초 · p95 {t95:.2f}초 · 최대 {tmax:.2f}초, 가드 p95 {g95:.2f}초\n")
     out.write(f"200 아님 {report.bad_status}, 규격 밖 {report.invalid}")
-    out.write(f", 시간 초과(30초 이상) {report.over_limit}, 튜터 기본값 {report.defaults}\n")
+    out.write(f", 시간 초과(30초 이상) {report.over_limit}, 튜터 기본값 {report.defaults}")
+    out.write(f", LLM 실패 {report.llm_failed}\n")
     out.write(f"공개 튜터 행 {report.covered_tutor_rows}개 응답, LLM 호출 {report.llm_calls}회")
     out.write(
         f"(동시 최대 {report.llm_peak}, 게이트 {report.gate}), /tutor/ {report.slash_status}\n"
@@ -267,10 +312,14 @@ def show(report: Report, bar: Bar, out: TextIO | None = None) -> bool:
         failures.append("시간 초과")
     if report.defaults:  # 가짜 LLM인데 기본값이면 LLM 경로가 실패한 것이다
         failures.append("기본값")
+    if report.llm_failed:  # 응답 문구와 상관없이(v2 고정 문장도) LLM 경로 실패
+        failures.append("LLM 실패")
     if report.llm_peak > report.gate:
         failures.append("게이트")
     if 300 <= report.slash_status < 400:
         failures.append("리다이렉트")
+    if t50 > bar.p50_s:
+        failures.append(f"p50 기준 넘음({bar.p50_s:g}초)")
     if t95 > bar.p95_s:
         failures.append(f"p95 기준 넘음({bar.p95_s:g}초)")
     out.write("통과\n" if not failures else f"실패: {', '.join(failures)}\n")
@@ -284,7 +333,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--concurrency", type=int, default=64)
     ap.add_argument("--scale", type=float, default=1.0, help="가짜 지연 배율(1은 실측 그대로)")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--p95", type=float, default=Bar().p95_s, help="튜터 p95 기준(초)")
+    ap.add_argument("--fake-p50", type=float, default=P50_S, help="가짜 LLM 지연 p50(초)")
+    ap.add_argument("--fake-p95", type=float, default=P95_S, help="가짜 LLM 지연 p95(초)")
+    ap.add_argument("--max-p50", type=float, default=Bar().p50_s, help="튜터 p50 합격선(초)")
+    ap.add_argument("--max-p95", type=float, default=Bar().p95_s, help="튜터 p95 합격선(초)")
     args = ap.parse_args(argv)
     os.environ.setdefault("TEAM_TOKEN", secrets.token_hex(16))  # 프로세스 안 앱과 요청이 같이 쓴다
     report = asyncio.run(
@@ -294,9 +346,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             concurrency=args.concurrency,
             scale=args.scale,
             seed=args.seed,
+            fake_quantiles=(args.fake_p50, args.fake_p95),
         )
     )
-    return 0 if show(report, Bar(p95_s=args.p95)) else 1
+    return 0 if show(report, Bar(p50_s=args.max_p50, p95_s=args.max_p95)) else 1
 
 
 if __name__ == "__main__":

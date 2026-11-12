@@ -43,6 +43,15 @@ def _is_jamo(ch: str) -> bool:
     return any(lo <= cp <= hi for lo, hi in _JAMO_RANGES)
 
 
+_SYLLABLE = re.compile("[가-힣]")
+
+
+def _spelled_syllables(raw: str) -> int:
+    """자모만 모아 조합했을 때의 완성 음절 수. 풀어 쓴 문장(NFD·호환 자모)을 찾는다."""
+    jamo = "".join(ch for ch in raw if _is_jamo(ch))
+    return len(_SYLLABLE.findall(normalize_fast(jamo)))
+
+
 def _ignorable(ch: str) -> bool:
     """보이지 않는 문자: 공백, 서식 문자(ZWJ·방향 제어 등), 결합 표시(변형 선택자 등)."""
     return ch.isspace() or unicodedata.category(ch) in ("Cf", "Mn", "Me", "Cc")
@@ -91,13 +100,22 @@ def direct_clarify(conv: Conversation) -> bool:
       판단은 `Conversation.is_empty` 하나로 한다.
     - 앞 대화가 있고 자모·문장부호·기호만 있으면 참이다. 다만 튜터가 바로 앞에서 질문했다면
       짧은 대답("ㅇㅇ")일 수 있으니 주 호출로 보낸다(공개 세트 저신호 8행은 모두 해당 없음).
+    - 원문은 NFC를 먼저 건다(NFD로 쪼갠 완성 음절은 보통 글자로 본다). 그다음 자모만 모아
+      조합하면 완성 음절이 2개 이상인 글(풀어 쓴 문장)은 거짓이다. 'ㅎㅏ' 같은 1음절은
+      저신호로 둔다(가드 #130과 같은 기준).
     - 숨긴 텍스트가 있으면 거짓이다.
     """
     if conv.target_hidden:
         return False
     if conv.is_empty:
         return True
-    return conv.has_history and is_low_signal_text(conv.target_raw) and not _tutor_asked(conv)
+    raw = unicodedata.normalize("NFC", conv.target_raw)
+    return (
+        conv.has_history
+        and is_low_signal_text(raw)
+        and _spelled_syllables(raw) < 2
+        and not _tutor_asked(conv)
+    )
 
 
 # --- 판단 힌트 신호 ---

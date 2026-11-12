@@ -77,7 +77,7 @@
 
 <rect x="70" y="538" width="840" height="102" rx="6" fill="#fff" stroke="#999"/>
 <text x="85" y="559" class="h">시간 · 계약</text>
-<text x="85" y="579" class="sm">예산 = request.app.state.cfg.budget_s (가드 설정 20s) · 주 호출 ≤8s · 목표 p50 ≤6s · p95 ≤12s · 판정 생략/실패 → 답과 action 그대로(abstain 전환 금지)</text>
+<text x="85" y="579" class="sm">예산 = request.app.state.cfg.budget_s (가드 설정 20s) · 주 호출 ≤8s · nano 1회 p50 4~4.5s(실측) · 판정 생략/실패 → 답과 action 그대로</text>
 <text x="85" y="599" class="sm">integration/contracts.py: Section{id, subject, title, text, tables, names} · Evidence{sid, quote} · Sentence{text, kind, evidence} · TutorResult · Action 7종</text>
 <text x="85" y="619" class="sm">가드 interface: Guard.classify · decision_of · judge_output(category=) · KbIndex · llm.slot() / probe 결과 · Category (가드 schema에서 import)</text>
 <text x="85" y="634" class="sm">생성 실패 기본 action = fallback_action (튜터 TU-12 주인, 잠정 clarify)</text>
@@ -132,7 +132,7 @@
 <text x="415" y="734" text-anchor="middle" class="h">KbIndex</text>
 <text x="415" y="754" text-anchor="middle" class="sm">competition/kb 48섹션(md + CSV)</text>
 <text x="415" y="770" text-anchor="middle" class="sm">BM25 문자 2-gram</text>
-<text x="415" y="786" text-anchor="middle" class="sm">튜터 retrieval이 그 위에 얹음</text>
+<text x="415" y="786" text-anchor="middle" class="sm">색인은 tutor/retrieval(공유)</text>
 <rect x="550" y="710" width="250" height="88" rx="6" class="box s"/>
 <text x="675" y="734" text-anchor="middle" class="h">LLM 게이트 (guard.llm)</text>
 <text x="675" y="754" text-anchor="middle" class="sm">세마포어 64 · 재시도 1 · 오류는 코드로</text>
@@ -152,7 +152,7 @@
 <!-- 외부 API -->
 <rect x="400" y="868" width="700" height="50" rx="6" class="box"/>
 <text x="750" y="890" text-anchor="middle" class="h">운영진 API (팀 키 1개)</text>
-<text x="750" y="908" text-anchor="middle" class="sm">gpt-5-nano · text-embedding-3-small — 채점 1회 ≈ nano 1,210회(튜터 ≈780 + 가드 ≈430), 60~80s</text>
+<text x="750" y="908" text-anchor="middle" class="sm">gpt-5-nano · text-embedding-3-small — 채점 1회 ≈ nano 1,210회(튜터 ≈780 + 가드 ≈430), 약 90s(추정)</text>
 <path d="M670 814 L670 868" class="ar"/><text x="560" y="846" class="sm">게이트 통해서만</text>
 <path d="M830 868 L830 814" class="ar"/>
 

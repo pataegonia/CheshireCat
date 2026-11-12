@@ -3,12 +3,14 @@
 ① 대화 정리(TU-02)
 ③⑤ 검색 상위 k(TU-03) → 주 호출(TU-06) → 실패면 TU-12 기본값
    표(`config/actions.yaml`)가 template이라고 한 (범주, action)이면 튜터 고정 문장(IN-03)
-⑦ 그 밖은 통합 결정적 수정 `integration.actions.finalize`(IN-04) → 빈 답변 고정 문장(TU-07)
+⑦ 그 밖은 통합 결정적 수정 `integration.actions.finalize`(IN-04)
 
 ② 결정적 신호(TU-05): 저신호 직접 판정이면 LLM 없이 고정 clarify, 신호는 주 호출 <신호> 힌트
    (`toggles.signals`)와 실패 기본값(위기 → escalate, 지시 무력화 → refuse)에 쓴다
 
-아직 없는 단계(뒤 이슈): 튜터 후처리(#76), kNN 예시(#77),
+⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
+
+아직 없는 단계(뒤 이슈): kNN 예시(#77),
 가드 classify 병렬 합치기·judge_output(#88). 각 단계는 `config/tutor.yaml` 토글로 켜고 끈다(TU-14).
 
 요청 내용은 지역 변수로만 쓰고 남기지 않는다(TU-18). LLM 실패는 예외가 아니라 결과 코드로 온다.
@@ -18,7 +20,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
-from integration.contracts import Action, Section, Sentence
+from integration.contracts import SECTION_IDS, Action, Section, Sentence
+from tutor.answer import postprocess
 from tutor.answer.templates import (
     NOT_IN_MATERIAL_NOTE,
     TEXT,
@@ -111,10 +114,17 @@ def assemble(
         cfg,
         action=action,
     )
-    body = result.model_dump()
-    if not body["answer"].strip():
-        body["answer"] = empty_answer(result.action, out.category)
-    return body
+    return result.model_dump()
+
+
+def tutor_post(body: dict[str, Any], category: str | None = None) -> dict[str, Any]:
+    """튜터 고유 후처리(TU-07, #76): 숨김 문자·채점 지시 문장 제거, 빈 답변 고정 문장, 인용 정리.
+
+    모든 응답이 마지막에 지난다. 고정 문장 응답은 바뀌지 않는다(테스트).
+    """
+    return postprocess.finalize(
+        body, fallback_action=FALLBACK_ACTION, known_sections=SECTION_IDS, category=category
+    )
 
 
 def _complete(state: Any):
@@ -138,7 +148,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다)."""
     conv: Conversation = tidy(_messages(req))
     if direct_clarify(conv):
-        return fixed_body(Fixed.CLARIFY)  # TU-05: 빈 발화, 앞 대화 뒤의 자모·기호만
+        return tutor_post(fixed_body(Fixed.CLARIFY))  # TU-05: 빈 발화, 앞 대화 뒤의 자모·기호만
     cfg = state.tutor_cfg
     signals = detect(conv)  # 기본값 선택에는 토글과 상관없이 쓴다(TU-12)
     draft = await draft_answer(
@@ -151,8 +161,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
     )
     if draft.out is None:
-        return fallback_body(signals)
+        return tutor_post(fallback_body(signals))
     action = choose_action(draft.out, from_category=cfg.toggles.action_from_category)
-    return assemble(
+    body = assemble(
         draft.out, draft.sections, action=action, max_citations=cfg.toggles.max_citations
     )
+    return tutor_post(body, draft.out.category)

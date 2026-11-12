@@ -615,7 +615,7 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     est = estimate_calls(configs, judged, args.repeat, base.llm)
     _say(
         f"estimate_calls={est} probe={probe_calls(base.llm)} max_calls={limit} "
-        f"rows={','.join(configs)} judged_rows={len(judged)} repeat={args.repeat}"
+        f"configs={','.join(configs)} judged_rows={len(judged)} repeat={args.repeat}"
     )
     return Plan(base, configs, public, labeled_rows(public), split, est, limit)
 

@@ -1,0 +1,62 @@
+# 저장소 루트 프로젝트: 서버 한 개(app.py)가 쓰는 실행 환경을 정한다.
+#
+# - 가드(guardrail/)는 자기 pyproject.toml · uv.lock · CI를 그대로 둔다. 여기서는 경로 의존성으로만 가져온다.
+#   workspace 멤버로 넣으면 guardrail/ 안에서 돌리는 uv 명령이 이 파일의 lock을 쓰게 되어 가드 CI가 바뀐다.
+# - 튜터(tutor/)는 workspace 멤버다. tutor/pyproject.toml의 의존성이 여기 lock에 들어온다. 설치하지 않는
+#   패키지(package = false)라 코드는 저장소 루트에서 import한다.
+# - integration/ · harness/ · app.py도 루트에서 import한다. 서버와 테스트는 저장소 루트에서 실행한다.
+# - 가드와 겹치는 패키지는 guardrail/uv.lock과 같은 버전이어야 한다(tests/integration/test_workspace.py).
+[project]
+name = "cheshirecat"
+version = "0.1.0"
+description = "대회 서버: POST /guard + POST /tutor"
+requires-python = ">=3.12"
+dependencies = [
+    "guardrail",
+    "tutor",
+    "pydantic>=2.14.2",  # integration/contracts.py · actions.py
+    "pyyaml>=6.0.3",  # config/*.yaml
+]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.16.0",
+    "httpx>=0.28.1",
+    "hypothesis>=6.170.14",
+    "jsonschema==4.26.0",
+    "pytest>=8",
+    "pytest-cov>=7",
+    "ruff>=0.6",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["tutor"]
+
+[tool.uv.sources]
+guardrail = { path = "guardrail", editable = true }
+tutor = { workspace = true }
+
+# 통합 코드(integration/ · harness/ · app.py · tests/integration)에 쓰는 설정이다.
+# guardrail/ · tutor/는 각자 폴더의 pyproject.toml 설정을 따른다(ruff는 가장 가까운 설정을 쓴다).
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["guardrail", "competition", "docs"]  # 문서의 코드 블록은 손대지 않는다
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "T20"]  # S: bandit 보안 규칙, T20: print 금지
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S311"]  # 테스트의 assert와 시드 고정 random은 정상
+
+[tool.ruff.lint.isort]
+known-first-party = ["integration", "harness", "tutor", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["integration"]

@@ -35,8 +35,10 @@
 - 분할은 가드 `guardrail/src/guardrail/eval/splits/v1.json` **하나**를 두 트랙이 같이 쓴다(홀드아웃 가드 40 + 튜터 40, 폴드마다 32 + 32, `load_splits` · `train_rows(split, holdout=True)`). 따로 분할 파일을 만들지 않는다 — 가드 kNN · LR이 튜터 행도 학습해서 분할이 둘이면 홀드아웃이 샌다. 홀드아웃 실행은 동결 전 최대 3회.
 
 ## 명령 (저장소 루트에서)
-- `uv sync --locked` · `uv run pytest tests/integration` · `uv run ruff check .` · `uv run ruff format .`
-- 루트 `pyproject.toml`(workspace)이 생기기 전에는 `python -m pytest tests/integration`으로 돌린다. Python 3.12 기준(3.13 전용 기능 금지).
+- `uv sync --locked` · `uv run pytest tests/integration tests/tutor` · `uv run ruff check integration tests` · `uv run ruff format integration tests`
+- 루트 `pyproject.toml`이 서버 실행 환경이다. 가드는 경로 의존성(자기 `guardrail/uv.lock` · CI 그대로), 튜터는 workspace 멤버(설치하지 않고 루트에서 import). **서버와 테스트는 저장소 루트에서 실행한다**(다른 폴더에서는 `tutor` · `integration`이 import되지 않는다).
+- 의존성을 바꾸면 `uv lock`으로 루트 lock을 다시 만든다. 가드와 겹치는 패키지는 `guardrail/uv.lock`과 같은 버전이어야 한다(`tests/integration/test_workspace.py`). 어긋나면 `guardrail/uv.lock`을 루트에 복사한 뒤 `uv lock`.
+- uv 없이 돌릴 때: `pip install -e guardrail pytest pytest-cov pyyaml httpx hypothesis jsonschema anyio` 뒤 `python -m pytest tests/integration`. Python 3.12 기준(3.13 전용 기능 금지).
 - 테스트 폴더는 `tests/__init__.py` + `tests/integration/__init__.py`를 둘 다 둔다. `tests/__init__.py`가 없으면 pytest가 `tests/`를 경로 앞에 넣어 `import integration`이 테스트 폴더를 가리킨다(튜터 `tests/tutor`도 같은 이유).
 - 하네스: `uv run python -m harness.run_public --preset v1_parallel`(실행 전 예상 호출 수를 출력하고 상한을 넘으면 멈춘다). 실제 API 부하(600요청 · 64동시)는 대회 기간 2회만.
 

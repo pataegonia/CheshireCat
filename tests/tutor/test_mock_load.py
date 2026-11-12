@@ -3,12 +3,14 @@
 테스트는 가짜 LLM 지연을 줄여(scale) 빠르게 돈다. 실제 시간 실행은 CLI로 한다.
 """
 
+import ast
 import asyncio
 import contextlib
 import dataclasses
 import json
 import math
 import random
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -92,6 +94,39 @@ def test_every_request_gets_200_in_contract():
     assert report.fake == pytest.approx((mock_load.P50_S, mock_load.P95_S))
     # 동시 64 ≤ 게이트 64이고 v2는 요청마다 한 번에 호출 하나라 게이트에 줄이 서지 않는다
     assert report.gate_queued == 0 and report.server_gate == report.gate == 64
+
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def create_app_call(path):
+    """파일 안 create_app(...) 호출 하나의 (위치 인자 수, 키워드 인자 AST)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "create_app"
+    ]
+    assert len(calls) == 1, f"{path}: create_app(...) 호출이 {len(calls)}개"
+    return len(calls[0].args), {kw.arg: ast.dump(kw.value) for kw in calls[0].keywords}
+
+
+def test_mock_load_assembles_the_app_like_the_root_app():
+    """모의 부하는 루트 app.py와 같은 인자로 앱을 만들고 가드 판정기만 가짜로 넣는다(#79·#126)."""
+    root_args, root_kwargs = create_app_call(REPO / "app.py")
+    mock_args, mock_kwargs = create_app_call(REPO / "tutor" / "eval" / "mock_load.py")
+    assert root_args == 0 and mock_args == 1  # 루트는 가드 기본 판정기, 모의 부하는 가짜 판정기
+    assert set(root_kwargs) == {"tutor_router", "defaults", "startups"}
+    assert mock_kwargs == root_kwargs
+    # 루트 app.py는 import와 create_app 대입뿐이다(호출 뒤 미들웨어·state·재할당이 붙으면 실패)
+    body = ast.parse((REPO / "app.py").read_text(encoding="utf-8")).body
+    rest = [
+        node
+        for node in body
+        if not isinstance(node, (ast.Import, ast.ImportFrom))
+        and not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))
+    ]
+    assert len(rest) == 1 and isinstance(rest[0], ast.Assign)
 
 
 def direct_count(n_tutor, seed):

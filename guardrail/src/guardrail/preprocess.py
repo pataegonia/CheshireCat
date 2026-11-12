@@ -4,6 +4,7 @@
   위첨자·분수 같은 수식 기호는 그대로 둔다(NFKC는 쓰지 않는다).
 - reveal_hidden: 답변의 숨긴 문자를 눈에 보이게 바꾼다(태그 문자 → ASCII, 나머지 → <U+XXXX>).
 - decode_tags / strip_tags: 학습자 발화의 태그 문자(U+E0000–E007F) 처리.
+- skeleton: v4 어휘 사전 매칭 뷰. 가드는 쓰지 않고 튜터(#98·#99)가 import해서 남겨 둔다.
 
 호환 자모(ㄱ-ㅣ) 연속 구간은 직접 조합한다. NFKC는 앞 음절과 뒤따르는 자음을 구분하지 못해
 "야ㅅㅂ" 같은 초성 약어까지 받침으로 붙이기 때문이다.
@@ -23,6 +24,8 @@ _INVISIBLE_RANGES = (
     (0xE0100, 0xE01EF),
 )
 _JAMO_RUN = re.compile("[ㄱ-ㅣ]+")
+_FILLER = re.compile(r"[\s\W\d_]+")
+_REPEATED_VOWEL = re.compile("([ㅏ-ㅣ])\\1+")
 TAG_CHARS = re.compile("[\U000e0000-\U000e007f]")
 # 깃발 이모지: 검은 깃발 바로 뒤에 소문자·숫자 태그 1–7개와 종료 태그(C2-judges S2.3).
 # S2.3 has_hidden_tags가 같은 패턴을 쓴다. 이 밖의 태그 문자는 숨긴 것이다.
@@ -72,7 +75,7 @@ def _prepare(text: str) -> str:
     return unicodedata.normalize("NFC", s).translate(_CONJOINING_TO_COMPAT)
 
 
-def _compose_run(run: str) -> str:
+def _compose_run(run: str, keep_emoticons: bool = True) -> str:
     """호환 자모 연속 구간을 두벌식 입력기처럼 음절로 조합한다. 모음이 없는 구간은 그대로 둔다."""
     out: list[str] = []
     i, n = 0, len(run)
@@ -81,8 +84,8 @@ def _compose_run(run: str) -> str:
         v = run[i + 1] if i + 1 < n else ""
         # 이모티콘: 조합되지 않고 남은 같은 자음 뒤(ㅋㅋㅠ), ㅠ·ㅜ 반복(ㅋㅠㅠ)은 조합하지 않는다.
         # 앞 자음이 받침으로 들어갔으면(ㅎㅏㄱㄱㅛ) out[-1]은 음절이라 해당하지 않는다.
-        emoticon = (out and out[-1] == c) or (
-            v in _EMOTICON_VOWELS and i + 2 < n and run[i + 2] == v
+        emoticon = keep_emoticons and (
+            (out and out[-1] == c) or (v in _EMOTICON_VOWELS and i + 2 < n and run[i + 2] == v)
         )
         if c in _CHO and _is_vowel(v) and not emoticon:
             jong, i = 0, i + 2
@@ -103,8 +106,8 @@ def _compose_run(run: str) -> str:
     return "".join(out)
 
 
-def _compose_all(text: str) -> str:
-    return _JAMO_RUN.sub(lambda m: _compose_run(m.group()), text)
+def _compose_all(text: str, keep_emoticons: bool = True) -> str:
+    return _JAMO_RUN.sub(lambda m: _compose_run(m.group(), keep_emoticons), text)
 
 
 def normalize(text: str) -> str:
@@ -176,3 +179,46 @@ def reveal_hidden(answer: str) -> str:
             out.append(f"<U+{cp:04X}>")
         i += 1
     return "".join(out)
+
+
+# --- 튜터 호환: skeleton -------------------------------------------------------------
+# 가드 v6은 쓰지 않는다. 튜터 #98(judge/signals.py)·#99(answer/postprocess.py)가 import한다.
+# 동작은 main(v4)과 같게 고정한다(tests/test_preprocess.py::test_skeleton).
+# 지우는 조건: 저장소에서 `from guardrail.preprocess import skeleton`이 하나도 없을 때.
+
+
+def _nfkc_outside_jamo(text: str) -> str:
+    """호환 자모 구간은 보존하고 나머지에만 NFKC를 적용한다."""
+    parts: list[str] = []
+    pos = 0
+    for m in _JAMO_RUN.finditer(text):
+        parts.append(unicodedata.normalize("NFKC", text[pos : m.start()]))
+        parts.append(m.group())
+        pos = m.end()
+    parts.append(unicodedata.normalize("NFKC", text[pos:]))
+    return "".join(parts)
+
+
+_STRETCHED_VOWEL = re.compile("([가-힣])([ㅏ-ㅣ])")
+
+
+def _drop_stretched_vowel(m: re.Match[str]) -> str:
+    """음절 바로 뒤의 모음이 그 음절의 중성과 같으면 늘여 쓴 것으로 보고 지운다."""
+    syllable, vowel = m.groups()
+    jung = (ord(syllable) - 0xAC00) % 588 // 28
+    return syllable if ord(vowel) - ord("ㅏ") == jung else m.group()
+
+
+def skeleton(text: str) -> str:
+    """어휘 사전 매칭 전용 뷰(튜터 호환). 재현율 우선이라 이모티콘 예외 없이 조합한다.
+
+    NFKC(①·²·𝟏 → 숫자) → 공백·기호·숫자 제거 → 같은 모음 반복 축약 → 자모 조합
+    → 음절 뒤에 늘여 쓴 같은 모음 제거(시ㅣ발) → 소문자.
+    라틴 문자는 남긴다(영어 공격 문구 매칭). 지운 구분자를 넘는 매칭 규칙은 ADR-0001 참고.
+    """
+    s = "".join(_fold_width(ch) for ch in text if _visible(ch))
+    s = _nfkc_outside_jamo(s).translate(_CONJOINING_TO_COMPAT)
+    s = _FILLER.sub("", s)
+    s = _compose_all(_REPEATED_VOWEL.sub(r"\1", s), keep_emoticons=False)
+    s = _STRETCHED_VOWEL.sub(_drop_stretched_vowel, s)
+    return unicodedata.normalize("NFC", s).casefold()

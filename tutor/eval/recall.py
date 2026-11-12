@@ -119,8 +119,8 @@ def _percentile(values: Sequence[float], q: float) -> float:
     return ordered[min(len(ordered) - 1, max(0, math.ceil(q * len(ordered)) - 1))]
 
 
-class _Counted:
-    """임베딩 호출 수와 실패 수(오류·시간 초과)를 센다(TU-16 호출 수 보고)."""
+class CountedEmbed:
+    """임베딩 호출 수와 실패 수(오류·시간 초과)를 센다(TU-16 호출 수 보고, recall·run_local)."""
 
     def __init__(self, embed: Embed) -> None:
         self.embed = embed
@@ -140,26 +140,44 @@ class KbEmbeddingError(RuntimeError):
     """KB 임베딩을 만들지 못했다(클래스 이름만 담는다)."""
 
 
-def _english_queries(rows: Sequence[dict[str, Any]]) -> int:
+def english_queries(rows: Sequence[dict[str, Any]]) -> int:
     """임베딩을 부르는 질의 수(retrieve와 같은 조건: 영어 위주이고 2-gram이 있다)."""
     queries = (query_parts(row["messages"])[0] for row in rows)
     return sum(1 for q in queries if is_english(q) and bigrams(q))
 
 
-def _embedding(ap: argparse.ArgumentParser) -> tuple[Build, _Counted]:
+def kb_embedding_batches() -> int:
+    """기동 때 KB 조각을 임베딩하는 호출 수(BATCH개씩)."""
+    return math.ceil(len(default_index().chunks) / BATCH)
+
+
+def expected_embedding_calls(rows: Sequence[dict[str, Any]], *, runs: int) -> int:
+    """임베딩을 켰을 때 운영진 임베딩 API 호출 수: 기동 때 KB 묶음 + 실행마다 영어 질의.
+
+    임베딩은 다시 보내지 않으므로(SDK 재시도 0, 수동 재시도 없음) 이 수가 최대값이다.
+    """
+    return kb_embedding_batches() + english_queries(rows) * runs
+
+
+def missing_embedding_env() -> list[str]:
+    """운영진 임베딩 API에 필요한데 비었거나 공백뿐인 환경변수(주소가 비면 공개 OpenAI로 간다)."""
+    return [name for name in EMBEDDING_ENV if not (os.environ.get(name) or "").strip()]
+
+
+def _embedding(ap: argparse.ArgumentParser) -> tuple[Build, CountedEmbed]:
     """임베딩 검색을 만드는 함수를 준비한다. 부르기 전에 예상 호출 수(KB 묶음 + 영어 질의)를
     내고 상한을 본다.
     """
-    missing = [name for name in EMBEDDING_ENV if not (os.environ.get(name) or "").strip()]
+    missing = missing_embedding_env()
     if missing:  # 주소가 비면 SDK 기본 주소(공개 OpenAI)로 나간다
         ap.error(f"--embedding에는 {'·'.join(missing)}이 필요하다(런박스)")
     cfg = load_config()
     index = default_index()
-    expected = math.ceil(len(index.chunks) / BATCH) + _english_queries(public_rows())
+    expected = expected_embedding_calls(public_rows(), runs=1)
     sys.stdout.write(f"임베딩 예상 호출 {expected}회(상한 {cfg.eval.max_calls}회)\n")
     if expected > cfg.eval.max_calls:
         ap.error(f"임베딩 예상 호출 {expected}회가 상한 {cfg.eval.max_calls}회를 넘는다")
-    counted = _Counted(openai_embed())
+    counted = CountedEmbed(openai_embed())
 
     async def build() -> EmbeddingSearch:
         try:

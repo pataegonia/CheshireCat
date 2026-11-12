@@ -37,10 +37,18 @@ import tutor
 from tutor import pipeline
 from tutor.eval import metrics
 from tutor.eval.grader import KB_DIR, PUBLIC_DIR, judge_from_env, score_local, scoring
-from tutor.eval.recall import query_parts
+from tutor.eval.recall import (
+    CountedEmbed,
+    english_queries,
+    expected_embedding_calls,
+    kb_embedding_batches,
+    missing_embedding_env,
+    query_parts,
+)
 from tutor.retrieval import retrieve
+from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import TutorConfig, load_config
-from tutor.startup import prepare
+from tutor.startup import build_embedding, prepare
 
 PRESETS = ("tutor", "reference", "reference_top1")
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
@@ -259,24 +267,61 @@ def _tutor_config(
     return cfg, overrides
 
 
-def _tutor_state(cfg: TutorConfig, overrides: dict[str, Any], cap: int) -> Any:
-    """tutor 프리셋이 쓸 기동 결과(덮은 설정이 없으면 handle의 기본 state).
+def _own_state(cfg: TutorConfig, overrides: dict[str, Any]) -> bool:
+    """tutor 프리셋이 handle의 기본 state 대신 자기 state를 만들어 재는가.
+
+    설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다).
+    """
+    return bool(overrides) or cfg.toggles.embedding
+
+
+def _tutor_state(
+    cfg: TutorConfig, overrides: dict[str, Any], cap: int
+) -> tuple[Any, CountedEmbed | None]:
+    """tutor 프리셋이 쓸 기동 결과와, 임베딩을 켰으면 그 호출을 세는 함수.
 
     튜터 LLM 호출에 상한을 건다: 예상 수 확인은 시작 전에 한 번이고, 이것은 실행 중의 멈춤이다.
+    임베딩을 켰으면 서버 기동과 같은 함수(startup.build_embedding)로 KB 임베딩을 만든다.
     """
-    if overrides:
+    if _own_state(cfg, overrides):
         state = SimpleNamespace()
         prepare(state, cfg)
     else:
         state = pipeline.default_state()
     state.tutor_llm.max_calls = cap
-    return state
+    counted = None
+    if cfg.toggles.embedding:
+        counted = CountedEmbed(openai_embed())
+        asyncio.run(build_embedding(state, counted))
+    return state, counted
+
+
+def embedding_summary(counted: Any, out: TextIO, *, kb_batches: int, queries: int) -> bool:
+    """임베딩 호출 수를 내고, 이 결과를 임베딩 효과로 읽어도 되는지 돌려준다.
+
+    질의 임베딩이 실패했으면(그 질의는 BM25로 떨어짐), 또는 영어 질의가 있는데 한 번도 쓰지
+    않았으면(이 모드는 검색에 임베딩을 쓰지 않음: 베이스라인은 정의상 BM25) 아니다.
+    """
+    used = counted.calls - kb_batches
+    out.write(f"임베딩 호출 {counted.calls}회(기동 {kb_batches}회 + 질의 {used}회")
+    out.write(f", 실패 {counted.failures}회)\n")
+    ok = True
+    if counted.failures:
+        out.write(
+            "일부 질의 임베딩이 실패해 BM25로 떨어졌다: 이 결과를 임베딩 효과로 읽지 않는다\n"
+        )
+        ok = False
+    if queries and used <= 0:
+        out.write("질의 임베딩이 한 번도 쓰이지 않았다(이 모드는 검색에 임베딩을 쓰지 않는다)")
+        out.write(": 이 결과는 BM25 수치다\n")
+        ok = False
+    return ok
 
 
 def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any, ...]:
     """API를 부르기 전에 입력을 모두 읽고 검사한다.
 
-    돌려주는 것: (행, 저장 응답, 판정기, 비교 점수, 튜터 설정, 덮은 설정).
+    돌려주는 것: (행, 저장 응답, 판정기, 비교 점수, 튜터 설정, 덮은 설정, 임베딩 예상 호출).
     """
     if args.runs < 1:
         ap.error("--runs는 1 이상이어야 한다")
@@ -308,20 +353,32 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     )
     sys.stdout.write(f"운영진 API 예상 호출 {calls}회")
     sys.stdout.write(f"(재시도 여유 1.1배, 상한 {args.max_calls}회)\n")
-    if calls > args.max_calls:
-        ap.error(f"예상 호출 {calls}회가 상한 {args.max_calls}회를 넘는다")
-    return rows, fixed, judge, previous, cfg, overrides
+    embedding = 0
+    if args.preset == "tutor" and cfg.toggles.embedding:
+        missing = missing_embedding_env()
+        if missing:  # 주소가 비면 SDK 기본 주소(공개 OpenAI)로 나간다
+            ap.error(f"임베딩을 켜면 {'·'.join(missing)}이 필요하다(런박스)")
+        embedding = expected_embedding_calls(rows, runs=args.runs)
+        sys.stdout.write(f"임베딩 예상 호출 {embedding}회(기동 KB 묶음 + 실행마다 영어 질의)\n")
+    if calls + embedding > args.max_calls:
+        ap.error(f"예상 호출 {calls + embedding}회가 상한 {args.max_calls}회를 넘는다")
+    return rows, fixed, judge, previous, cfg, overrides, embedding
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
-    rows, fixed, judge, previous, cfg, overrides = _inputs(ap, args)
+    rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
-    tutor_cap = args.max_calls - reserve
-    state = _tutor_state(cfg, overrides, tutor_cap) if args.preset == "tutor" else None
-    if fixed is None:  # 덮은 설정이 없으면 tutor.handle(기본 state)로 부른다
-        all_responses = collect_runs(args.preset, rows, args.runs, state if overrides else None)
+    tutor_cap = args.max_calls - reserve - embedding
+    state, counted = None, None
+    if args.preset == "tutor":
+        state, counted = _tutor_state(cfg, overrides, tutor_cap)
+    if counted is not None and state.tutor_emb is None:
+        ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
+    if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
+        own = state if _own_state(cfg, overrides) else None
+        all_responses = collect_runs(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs
     kb = score_local.load_kb_dir(KB_DIR)
@@ -342,11 +399,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(
             f" = --max-calls {args.max_calls} - 판정 몫 {reserve}): 기본값이 섞인 결과다\n"
         )
+    embedding_ok = True
+    if counted is not None:
+        queries = english_queries(rows) * args.runs
+        embedding_ok = embedding_summary(
+            counted, sys.stdout, kb_batches=kb_embedding_batches(), queries=queries
+        )
     if previous is not None:
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
     sys.stdout.write(f"저장: {path}\n")
-    return 1 if blocked else 0
+    return 1 if blocked or not embedding_ok else 0
 
 
 if __name__ == "__main__":

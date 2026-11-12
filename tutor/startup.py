@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from tutor.retrieval import default_index
-from tutor.retrieval.embedding import BUILD_TIMEOUT_S, EmbeddingSearch, openai_embed
+from tutor.retrieval.embedding import BUILD_TIMEOUT_S, Embed, EmbeddingSearch, openai_embed
 from tutor.runtime.config import TutorConfig, load_config
 from tutor.runtime.llm import build_llm
 
@@ -28,10 +28,11 @@ def prepare(app_state: Any, cfg: TutorConfig | None = None) -> None:
     app_state.tutor_emb = None
 
 
-async def build_embedding(app_state: Any) -> None:
+async def build_embedding(app_state: Any, embed: Embed | None = None) -> None:
     """toggles.embedding이 켜져 있으면 KB 조각 임베딩을 만든다(SPEC §7.1: 서버를 띄울 때).
 
     만들지 못하면(API 오류, BUILD_TIMEOUT_S 초과) BM25만 쓰고 예외 클래스 이름만 경고로 남긴다.
+    embed가 없으면 운영진 임베딩 API를 쓴다. 측정 도구는 호출 수를 세는 함수를 넘긴다.
     """
     cfg = app_state.tutor_cfg
     if not cfg.toggles.embedding:
@@ -40,7 +41,7 @@ async def build_embedding(app_state: Any) -> None:
         async with asyncio.timeout(BUILD_TIMEOUT_S):
             app_state.tutor_emb = await EmbeddingSearch.build(
                 app_state.tutor_kb,
-                openai_embed(),
+                embed if embed is not None else openai_embed(),
                 timeout_s=cfg.llm.timeout_s.embedding,
                 gate=app_state.tutor_llm.gate,  # 튜터 LLM과 같은 게이트(서버는 가드 slot, TU-13)
             )

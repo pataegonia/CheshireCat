@@ -1,5 +1,7 @@
-# 통합·평가 CI. 모든 PR에서 돌고, 통합 영역(app.py, integration/, tutor/, harness/, config/)을 건드린 경우에만
-# lint·test·대회 규칙 검사를 실행한다. 대회 규칙 중 금지 의존성 검사는 guardrail/의 의존성 파일까지,
+# 통합·평가 CI. 모든 PR에서 돌고, 통합 영역을 건드린 경우에만 lint·test·대회 규칙 검사를 실행한다.
+# 통합 영역 = 런박스에 뜨는 앱을 바꿀 수 있는 경로 전부: app.py, integration/, tutor/, guardrail/, harness/,
+# config/, tests/, 루트 pyproject.toml·uv.lock, 이 파일. 가드·튜터 PR이 조립을 깨면 그 PR에서 걸리게 한다
+# (tests/integration/test_e2e.py, S1 I1.7). 대회 규칙 중 금지 의존성 검사는 guardrail/의 의존성 파일까지,
 # 비밀 키 검사는 저장소 전체를 본다(제출물이 저장소 전체이기 때문. guardrail-ci는 guardrail/ 코드 품질만 본다).
 # 필수 검사(required check)로는 `integration / gate` 하나만 지정한다. 구조는 guardrail-ci.yml과 같다.
 name: integration-ci
@@ -13,11 +15,12 @@ on:
       - "app.py"
       - "integration/**"
       - "tutor/**"
+      - "guardrail/**"
       - "harness/**"
       - "config/**"
+      - "tests/**"
       - "pyproject.toml"
       - "uv.lock"
-      - "guardrail/pyproject.toml"
       - ".github/workflows/integration-ci.yml"
   workflow_dispatch:
 
@@ -54,7 +57,7 @@ jobs:
           list="$RUNNER_TEMP/changed-files"
           git -c core.quotepath=false diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA" > "$list"
           rc=0
-          grep -zqE '^(app\.py$|integration/|tutor/|harness/|config/|pyproject\.toml$|uv\.lock$|guardrail/pyproject\.toml$|guardrail/uv\.lock$|\.github/workflows/integration-ci\.yml$)' "$list" || rc=$?
+          grep -zqE '^(app\.py$|integration/|tutor/|guardrail/|harness/|config/|tests/|pyproject\.toml$|uv\.lock$|\.github/workflows/integration-ci\.yml$)' "$list" || rc=$?
           case "$rc" in
             0) echo "integration=true" >> "$GITHUB_OUTPUT" ;;
             1) echo "integration=false" >> "$GITHUB_OUTPUT" ;;

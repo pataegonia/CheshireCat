@@ -81,6 +81,14 @@ def test_empty_and_whitespace_target():
     assert not tidy([u("ㅠㅠ")]).is_empty
 
 
+def test_invisible_only_target_is_empty():
+    # 리뷰 재현: str.strip()이 지우지 않는 문자만 있으면 정규화본은 ""인데 is_empty가 False였다
+    for c in ["​", "﻿", "‮", "​ ‍\n﻿", "­⁠"]:
+        conv = tidy([u(c)])
+        assert conv.target == "" and conv.is_empty, repr(c)
+    assert tidy([u("ab"), a("x"), u("​")]).is_empty
+
+
 def test_single_turn_has_no_history():
     assert not tidy([u("질문")]).has_history
 

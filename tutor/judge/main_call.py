@@ -22,13 +22,11 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 import yaml
-from guardrail.schema import Category
 from pydantic import BaseModel, ConfigDict
 
+from integration.actions import ActionRule, load_actions
+from integration.contracts import Action, Category
 from tutor.judge.conversation import Conversation
-
-# 응답 action 7종(SPEC §4). 통합 contracts(#57)가 생기면 그쪽 타입으로 바꾼다
-Action = Literal["answer", "scaffold", "clarify", "abstain", "redirect", "refuse", "escalate"]
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PROMPT_ID = "main_call"
@@ -120,6 +118,18 @@ class MainCallPrompt:
             raise ValueError("범주 → action 표가 비어 있다")
         body = text[m.end() :].replace("{action_table}", render_action_table(action_table))
         return cls(version=str(head["version"]), system=body.strip())
+
+    @classmethod
+    def from_rules(
+        cls, rules: Mapping[str, ActionRule] | None = None, prompt_dir: Path = PROMPT_DIR
+    ) -> "MainCallPrompt":
+        """통합 표(`integration.actions.load_actions()`, 기본은 `config/actions.yaml`)로 만든다.
+
+        `ActionRule.actions`가 기본 action과 변형을 함께 주므로 harmful_content는 refuse·redirect
+        둘 다 들어간다. 표를 복사하지 않고 기동 때 읽기만 한다(TD-12).
+        """
+        table = load_actions() if rules is None else rules
+        return cls.load({c: r.actions for c, r in table.items()}, prompt_dir)
 
 
 class SectionLike(Protocol):

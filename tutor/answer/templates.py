@@ -12,6 +12,9 @@
 
 from enum import StrEnum
 from types import MappingProxyType
+from typing import cast
+
+from integration.contracts import Action
 
 
 class Fixed(StrEnum):
@@ -61,7 +64,7 @@ _TEXT: dict[Fixed, str] = {
 TEXT = MappingProxyType(_TEXT)
 
 # Fixed → 응답 action
-_ACTION: dict[Fixed, str] = {f: f.value.split(".", 1)[0] for f in Fixed}
+_ACTION: dict[Fixed, Action] = {f: cast(Action, f.value.split(".", 1)[0]) for f in Fixed}
 ACTION = MappingProxyType(_ACTION)
 
 # 남은 claim이 0개일 때 덧붙이는 안내(통합 IN-04-3이 쓴다. 문구 주인은 튜터)
@@ -69,7 +72,7 @@ NOT_IN_MATERIAL_NOTE = "이 부분은 자료에서 확인하지 못했어요."
 
 # 답변 문장이 하나도 남지 않았을 때 action별 고정 문장(TU-07 "빈 답변").
 # answer·scaffold는 action을 바꾸지 않고(IN-04-3) 자료에서 확인하지 못했다는 안내를 낸다.
-_EMPTY: dict[str, str] = {
+_EMPTY: dict[Action, str] = {
     "answer": NOT_IN_MATERIAL_NOTE,
     "scaffold": "자료에서 관련 기준을 먼저 찾아보고, 그 기준을 문제에 하나씩 적용해 보세요.",
     "abstain": TEXT[Fixed.ABSTAIN],
@@ -79,6 +82,38 @@ _EMPTY: dict[str, str] = {
     "escalate": TEXT[Fixed.ESCALATE],
 }
 EMPTY_ANSWER = MappingProxyType(_EMPTY)
+
+# action만으로 문장이 갈리는 범주. harmful_content의 redirect는 비하·혐오 발언이다(PRD §3)
+_EMPTY_BY_CATEGORY: dict[tuple[Action, str], str] = {
+    ("redirect", "harmful_content"): TEXT[Fixed.REDIRECT_HARMFUL],
+}
+
+
+def empty_answer(action: Action, category: str | None = None) -> str:
+    """답변 문장이 하나도 남지 않았을 때의 고정 문장. 범주를 알면 범주에 맞는 문장을 고른다."""
+    if category is not None and (action, category) in _EMPTY_BY_CATEGORY:
+        return _EMPTY_BY_CATEGORY[(action, category)]
+    return EMPTY_ANSWER[action]
+
+
+# 표(`config/actions.yaml`)에서 generate: template인 (범주, action) → 고정 문장.
+# 표에는 문구와 키를 두지 않고 튜터가 (범주, action)으로 찾는다(통합 CLAUDE.md, IN-03)
+_TEMPLATE: dict[tuple[str, Action], Fixed] = {
+    ("academic_dishonesty", "scaffold"): Fixed.SCAFFOLD_ACADEMIC,
+    ("out_of_material", "abstain"): Fixed.ABSTAIN,
+    ("off_topic", "redirect"): Fixed.REDIRECT_OFF_TOPIC,
+    ("jailbreak_injection", "refuse"): Fixed.REFUSE_JAILBREAK,
+    ("harmful_content", "refuse"): Fixed.REFUSE_HARMFUL,
+    ("harmful_content", "redirect"): Fixed.REDIRECT_HARMFUL,
+    ("emotional_distress", "escalate"): Fixed.ESCALATE,
+    ("low_signal_input", "clarify"): Fixed.CLARIFY,
+}
+TEMPLATE = MappingProxyType(_TEMPLATE)
+
+
+def template_for(category: str, action: Action) -> Fixed | None:
+    """표가 템플릿이라고 한 (범주, action)의 고정 문장. 없으면 None(주 호출 문장을 쓴다)."""
+    return TEMPLATE.get((category, action))
 
 
 def fixed_body(kind: Fixed) -> dict[str, object]:

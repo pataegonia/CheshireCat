@@ -78,18 +78,25 @@ _GENERIC_OBJECTS = (*_CORE_OBJECTS, *_BROAD_OBJECTS)
 # 정형 요청의 행위(요약·설명·힌트·도움)
 _REQUEST_ACTS = re.compile(r"요약|설명|힌트|도움|도와|알려|가르쳐|알고\s*싶")
 _SELF_CONTAINED_ACTS = re.compile(r"요약|힌트|도움|도와")
-# 남아도 되는 말: 지시어·조사·요청 어미·정도 부사(낱말 단위)
-_FILLERS = frozenset(
+# 남아도 되는 말은 문장 성분의 종류로 정한다(특정 문구의 낱말 목록이 아니다, TD-10)
+# - 지시어·조사·의존 명사·정도 부사: 낱말 그대로
+_FUNCTION_WORDS = frozenset(
     (
-        "이", "그", "이번", "지금", "의", "을", "를", "은", "는", "이가", "가", "에", "에서",
-        "좀", "다시", "한번", "해", "해서", "해요", "해줘", "줘", "해주세요", "주세요", "줄래요",
-        "줄", "주실", "주시겠어요", "받을", "받고", "수", "있을까요", "있나요", "있어요",
-        "싶어요", "싶습니다", "어요", "습니다", "할", "부탁해요", "부탁드려요", "자세히",
-        "차근차근", "단계별로", "간단히", "쉽게", "하는", "데", "푸는", "중", "도중", "어려운",
-        "어려워요", "모르겠어요", "요",
+        "이", "그", "이번", "지금",  # 지시어
+        "의", "을", "를", "은", "는", "가", "에", "에서", "도",  # 조사
+        "수", "데", "중", "도중", "때",  # 의존 명사
+        "좀", "다시", "한번", "자세히", "차근차근", "단계별로", "간단히", "쉽게",  # 정도·방식 부사
     )
 )  # fmt: skip
+# - 일반 보조·요청 용언(하다·주다·받다·있다·싶다·부탁하다·모르다·어렵다·풀다)의 활용형과 높임 어미
+_GENERAL_PREDICATE = re.compile(
+    r"^(?:하|해|할|주|줘|줄|받|있|싶|부탁|모르|어렵|어려|풀|푸|요$|어요$|습니다$)"
+)
 _WORD = re.compile(r"[0-9A-Za-z가-힣ㄱ-ㅣ]+")
+
+
+def _is_filler(word: str) -> bool:
+    return word in _FUNCTION_WORDS or bool(_GENERAL_PREDICATE.match(word))
 
 
 def _strip_vocab(text: str) -> str:
@@ -111,7 +118,7 @@ def is_button_phrase(text: str) -> bool:
         return False
     if not (any(w in s for w in _CORE_OBJECTS) or _SELF_CONTAINED_ACTS.search(s)):
         return False
-    leftover = [w for w in _WORD.findall(_strip_vocab(s)) if w not in _FILLERS]
+    leftover = [w for w in _WORD.findall(_strip_vocab(s)) if not _is_filler(w)]
     return not leftover
 
 
@@ -143,8 +150,12 @@ class Conversation:
 
     @property
     def is_empty(self) -> bool:
-        """판단 대상이 없거나 공백뿐인가(1턴이어도 고정 clarify, TU-05)."""
-        return not self.target_raw.strip() and not self.target_hidden
+        """판단 대상이 없거나 공백·보이지 않는 문자뿐인가(1턴이어도 고정 clarify, TU-05).
+
+        정규화본으로 본다. `str.strip()`은 U+200B·U+FEFF·U+202E 같은 문자를 지우지 않아서
+        원문 뷰로 보면 빈 판단 대상이 주 호출로 넘어간다. 숨긴 문자 표기가 붙으면 비지 않았다.
+        제어 문자(`\\x00` 등)처럼 출력되지 않는 글자만 있어도 비었다고 본다."""
+        return not any(ch.isprintable() and not ch.isspace() for ch in self.target)
 
     def search_turns(self) -> tuple[str, ...]:
         """검색 질의용 학습자 발화(창 안, 버튼 문구 제외, 판단 대상이 마지막). TU-03."""

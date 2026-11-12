@@ -5,6 +5,7 @@
 
 from typing import Any
 
+from tutor.judge.flow import prepare_judge
 from tutor.retrieval import default_index
 from tutor.runtime.config import TutorConfig, load_config
 from tutor.runtime.llm import build_llm
@@ -19,6 +20,7 @@ def prepare(app_state: Any, cfg: TutorConfig | None = None) -> None:
     app_state.tutor_cfg = cfg if cfg is not None else load_config()
     app_state.tutor_kb = default_index()
     app_state.tutor_llm = build_llm(app_state, app_state.tutor_cfg)
+    prepare_judge(app_state)  # 주 호출 프롬프트(범주 → action 표 포함, #72)
 
 
 async def startup(app_state: Any) -> None:

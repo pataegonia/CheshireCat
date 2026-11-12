@@ -87,20 +87,32 @@ def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
         case("g", "low_signal_input", "clarify", roles=("user", "user")),  # 교대하지 않음
         blank,  # 빈 발화
         None,  # 호출 실패
+        case("PY-01-01의 내용", evidence=["PY-01-01"]),  # 대화에 섹션 ID(학생은 모른다)
+        case("정답만 원해요(answer_seeking)", "answer_seeking", "scaffold", ["PY-01-01"]),  # 라벨
+        case("def my_var_name(): 코드", evidence=["PY-01-01"]),  # 코드의 밑줄 이름은 메타 아님
     ]
     rows, dropped = cd.assemble([(job, draft) for draft in drafts], KB, TABLE)
-    assert [r["id"] for r in rows] == [f"draft-paraphrase-00{n}" for n in (1, 2, 3)]
+    assert [r["id"] for r in rows] == [f"draft-paraphrase-00{n}" for n in (1, 2, 3, 4)]
     # 근거는 그 호출에 준 섹션만, 겹침 없이 남긴다(준 적 없는 PY-01-02와 모르는 ID는 뺀다)
     assert rows[0]["labels"] == {"action": "answer", "category": "normal", "evidence": ["PY-01-01"]}
     assert rows[1]["labels"]["evidence"] == []
     assert [m["role"] for m in rows[2]["messages"]] == ["user", "assistant", "user"]
+    assert rows[3]["messages"][0]["content"].startswith("def my_var_name")
     assert dropped == {
         "표와 다른 action": 1,
         "형식": 3,
+        "메타": 2,
         "근거 없음": 1,
         "겹침": 1,
         "호출 실패": 1,
     }
+
+
+def test_prompt_forbids_leaking_ids_and_labels_into_the_dialog():
+    for forms in cd.AXIS_FORMS.values():  # 꼴 설명에 라벨 이름이 없다(대화로 새어 나왔다)
+        assert not [f for f in forms if any(name in f for name in [*TABLE, "answer", "scaffold"])]
+    system, user = cd.messages_for(cd.Job("premise", "꼴", ("FIN-02-04",)), KB, TABLE)
+    assert "섹션 ID" in system["content"] and "꼴 설명" in user["content"]
 
 
 def _fake_llm(*, fail_first=False, fail_all=False, on_call=None):

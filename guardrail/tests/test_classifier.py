@@ -80,11 +80,8 @@ def test_trains_without_convergence_warning(rows, c):
         LrClassifier(rows, load_config(overrides={"input.lr.C": c}))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="미정: input.lr.C=1.0이면 LR이 모든 행을 normal로 낸다(5-분할 block F1 0)",
-)
 def test_fold_predictions_are_not_constant(rows, cfg):
+    # D12 회귀 방지: input.lr.C=1.0이면 LR이 모든 행을 normal로 냈다(5-분할 block F1 0)
     split = cv.load_splits()
     preds = set()
     for fold in range(split.folds):

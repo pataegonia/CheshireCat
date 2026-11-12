@@ -7,7 +7,8 @@
 - 튜터 LLM은 전송만 가짜로 바꾼다. 파라미터는 서버와 같은 build_llm 값이다. 가짜 전송은 응답
   스키마 이름(REPLIES)에 맞는 최소 정상 JSON을 내므로, v2는 검색 → 주 호출 → 결정적 수정까지
   실제 흐름을 탄다. 답을 모르는 스키마는 JSON이 아닌 답이라 LLM 실패로 드러난다(#88 때 더한다)
-- 튜터 모드는 `mode`(기본 v2, 배포 설정과 같음)로 정한다. 지금 v2는 요청당 주 호출 1회다
+- 튜터 모드는 `mode`(기본 v2, 배포 설정과 같음)로 정한다. 지금 v2는 요청당 주 호출 1회다(저신호
+  직접 판정 #98처럼 LLM 없이 끝나는 요청은 0회)
 - 가드 판정기는 가짜다. 가드 요청마다 nano `guard_calls`회(기본 2)를 차례로 흉내 내며, 튜터 LLM과
   같은 게이트를 쥔다(서버에서는 튜터가 가드 LLM의 slot()을 같이 쓴다). 판정 자체는 상수다
 - 게이트 크기는 가드 설정 llm.gate이고 `gate`로 줄여 볼 수 있다. 경합은 게이트가 차 있어 줄을 선
@@ -227,7 +228,7 @@ class Report:
     llm_failed: int  # 튜터 LLM 호출 중 오류로 끝난 것. 가짜 LLM에서는 0이어야 한다
     covered_tutor_rows: int  # 200 + 규격으로 답한 공개 튜터 행 수
     llm_calls: int  # 튜터 LLM 전송 수(다시 보낸 것 포함)
-    llm_requests: int  # 튜터 LLM을 부른 횟수(complete). v2는 요청당 1회
+    llm_requests: int  # 튜터 LLM을 부른 횟수(complete). v2는 요청당 최대 1회(직접 판정은 0회)
     retried: int  # 다시 보낸 튜터 LLM 호출 수
     guard_calls: int  # 가드 판정 호출 수
     guard_judged: int  # 판정을 끝낸 가드 요청 수

@@ -16,6 +16,8 @@ import pytest
 
 from tutor.eval import mock_load
 from tutor.judge import flow
+from tutor.judge.conversation import tidy
+from tutor.judge.signals import direct_clarify
 from tutor.runtime.response import TUTOR_DEFAULT
 
 
@@ -92,12 +94,19 @@ def test_every_request_gets_200_in_contract():
     assert report.gate_queued == 0 and report.server_gate == report.gate == 64
 
 
+def direct_count(n_tutor, seed):
+    """plan()이 고른 튜터 행 중 저신호 직접 판정(#98)으로 LLM 없이 끝나는 행 수."""
+    work = mock_load.plan(n_tutor, 0, random.Random(seed))  # noqa: S311
+    return sum(direct_clarify(tidy(row["messages"])) for _endpoint, row in work)
+
+
 def test_v2_runs_the_real_flow_on_schema_answers():
     """v2 흐름(검색 → 주 호출 → 결정적 수정)이 가짜 전송의 스키마별 정상 답으로 끝까지 간다."""
     report = run(n_tutor=40, n_guard=0, scale=0.001, seed=11)
     assert report.llm_failed == 0 and report.defaults == 0 and report.invalid == 0
     assert report.llm_calls > 0 and dict(report.schemas) == {"MainCallOut": report.llm_calls}
-    assert report.llm_requests == 40  # 지금 v2는 튜터 요청마다 주 호출을 부른다
+    # 저신호 직접 판정(#98)을 뺀 튜터 요청은 모두 주 호출을 부른다
+    assert report.llm_requests == 40 - direct_count(40, 11)
 
 
 def test_guard_requests_make_their_judge_calls():
@@ -237,7 +246,9 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
         "가정: 튜터 모드 v2, 가짜 LLM 지연 p50 4.51초·p95 6.62초(배율 0.001)"
         ", 가드 판정 요청당 2회, 게이트 64, 동시 64\n" in out
     )
-    assert "튜터 20회" in out and "가드 40회" in out and "게이트 줄 선 호출 0회" in out
+    assert f"튜터 {report.llm_calls}회" in out and "가드 40회" in out  # 튜터는 직접 판정을 뺀 수
+    assert report.llm_calls >= mock_load.MIN_LLM_SHARE * 20  # 출력 숫자 자체도 하한을 지킨다
+    assert "게이트 줄 선 호출 0회" in out
     assert out.splitlines()[-1] == (  # 배율·요청 수가 기준과 달라 실측이 아니다
         "통과(스모크: 배율 0.001, 튜터 요청 20 < 300, 가드 요청 20 < 300, 실측 아님)"
     )

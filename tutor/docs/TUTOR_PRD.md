@@ -169,7 +169,7 @@ HTTP 200 + JSON
 - **가드 GR-03의 KB 색인을 공유한다**(가드 §9 D2에 동의). 조각 = 섹션 텍스트(md + 붙은 CSV)를 `## ` 줄 앞에서 자른 것, 토큰 = `scoring.normalize` 뒤 문자 2-gram, BM25(k1 1.2, b 0.75), HTML은 읽지 않는다. 공유가 정해지기 전에는 같은 코드를 튜터 모듈에서 기동한다.
 - 튜터는 조각 점수를 섹션 최고 점수로 접어 **섹션 상위 5개**를 쓴다(`KbIndex.search` → 섹션 순위). 근거 묶음에는 섹션 원문 전체(`KbIndex.section_text`, 표 포함)를 넣는다.
 - 질의 = 창 안의 학습자 발화(버튼 문구 제외). 가드와 달리 후보 답변이 없다.
-- 공개 함수(통합 IN-02가 recall 측정에 쓴다): `async retrieve(query, history, *, subject=None, k=5, use_embedding=False) -> list[Section]`(`Section`은 통합 `integration/contracts.py`, 통합 IN-01). 생성에 넣는 섹션 수 K는 측정으로 정한다(통합 I5는 top-2 제안, 튜터 기본 5, `retrieval.k` 2·3·5·8 비교).
+- 공개 함수(통합 IN-02가 recall 측정에 쓴다): `async retrieve(query, history, *, subject=None, k=5, embedding=None) -> list[Section]`(`embedding`은 기동 때 만든 임베딩 검색 `EmbeddingSearch`, TU-11)(`Section`은 통합 `integration/contracts.py`, 통합 IN-01). 생성에 넣는 섹션 수 K는 측정으로 정한다(통합 I5는 top-2 제안, 튜터 기본 5, `retrieval.k` 2·3·5·8 비교).
 - 공개 측정: 위 방식으로 recall@1 0.82, @3 0.92, @5 0.96(§1).
 - **수용 기준**: 짝 묶음 교차 검증에서 recall@5 ≥ 0.95 보고, 요청당 검색 p95 ≤20ms. recall@5가 인용·사실 점수의 상한이므로 놓친 행을 매 실행 목록으로 낸다.
 
@@ -634,13 +634,13 @@ P0(TU-01–03, TU-05–07, TU-10, TU-12–19)는 자르지 않는다. 특히 TU-
 | KB 색인(문자 2-gram BM25, 소제목 조각), `normalize` 복사본 | `kb/`에서 기동 때 만듦(배포 자료 가공). 가드 `KbIndex`가 생기기 전까지 튜터 `tutor/retrieval/`에 가드 R13과 같은 조각·점수로 둔다(#103) | 팀(코드) | TU-03 |
 | 전역 LLM 게이트 | 가드와 공유(`app.state.guard.llm.slot()`, 출처는 가드 provenance 1절). 튜터 호출기 `tutor/runtime/llm.py`가 그 게이트와 probe 결과를 쓴다(#107) | 가드 | TU-13 |
 | 튜터 설정 `config/tutor.yaml`(모드·토글·검색 K·호출당 시간 제한·호출 상한) | — | 팀이 직접 씀. 키·주소 없음 | TU-14 |
-| 이름 사전(이름 → 섹션 ID) | `kb/`에서 기동 때 코드로 추출(배포 자료 가공) | 팀(코드) | TU-04, 예정 |
+| 이름 사전(이름 → 섹션 ID) | `kb/`에서 기동 때 코드로 추출(배포 자료 가공) | 팀(코드) | TU-04, 측정 뒤 넣지 않음(#81: 상위 5개 안 순위 올리기로 recall@1 0.824 → 최선 0.782, 고친 행 0) |
 | 예시 kNN 색인(문자 n-gram TF-IDF) | `public/tutor.jsonl` 200행(배포 자료). SPEC §7.1이 공개 세트 few-shot·유사도 검색 허용 | 주최측 | TU-08, 예정. 요청 처리 중 바뀌지 않음 |
 | 신호 정규식(저신호·지시 무력화·위기·정답 요구·과제 대행·자기 개인정보·채점 조작), 채점 지시 문장 제거 규칙 | — | 팀이 직접 씀, 코드 안에 둠 | TU-05·TU-07, 예정. 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
 | 주 호출 프롬프트 `tutor/prompts/*.md`(범주 정의는 가드 §3, 범주 → action·답변 방식 표, 고정 예시) | 공개 세트를 보고 팀이 씀 | 팀 | TU-06, 예정 |
 | 베이스라인 프롬프트(`tutor/baseline.py`, `mode: baseline`일 때만) | action 설명은 SPEC §4 정의 그대로 | 팀이 씀(AI 코딩 도구로 쓴 것도 프롬프트 안이면 팀이 쓴 것, SPEC §7.1). 예시 없음 | TU-14(#108) |
 | 고정 문장(거절·위기 안내·되묻기·빈 답변) | — | 팀이 직접 씀. 전화번호·기관명 없음 | TU-12, 예정 |
-| (쓰면) KB 임베딩 결과 파일 | `kb/`를 운영진 `text-embedding-3-small`로 임베딩(배포 자료 가공) | 팀 + 운영진 API | TU-11, ablation |
+| KB 조각 임베딩(메모리, 파일 없음) | `kb/` 조각(BM25와 같은 244개)을 서버를 띄울 때 운영진 `text-embedding-3-small`로 임베딩(배포 자료 가공, SPEC §7.1). 질의 임베딩은 영어 위주 질의에서 요청마다 1회 쓰고 남기지 않음 | 팀(코드) + 운영진 API | TU-11(#81), `toggles.embedding`이 켜졌을 때만(기본 끔, 런박스 측정 뒤 정함) |
 | (쓰면) nano 합성 예시 | 운영진 `gpt-5-nano`. 생성 스크립트와 함께 커밋 | 팀 + nano | 기본 안 씀 |
 | 라이브러리 | 가드 provenance 1절의 목록과 같은 범위(`openai`, `pydantic`, `pyyaml`, `fastapi`, `uvicorn`, `scikit-learn`). 튜터가 더하는 것은 여기에 행으로 적는다 | 오픈소스, 모델·사전 파일 없음, 외부 호출은 운영진 엔드포인트만. `tiktoken`·Kiwi는 쓰지 않음 | — |
 

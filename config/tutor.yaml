@@ -5,7 +5,7 @@
 version: "tutor-1"
 mode: v2                       # v2 | baseline(검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리, 토글은 모두 끔)
 toggles:
-  name_dict: true              # 이름 사전으로 섹션 찾기(TU-04)
+  name_dict: false             # 이름 사전(TU-04). 순위 올리기 방식은 채택 안 함(#81: recall@1 하락). 힌트 방식은 #82에서 잰다
   fewshot: true                # 공개 세트 kNN few-shot(TU-08)
   action_from_category: false  # 범주 → action 표 강제. 기본 끔, 켜도 answer 쪽으로는 덮지 않음(TU-06)
   signals: true                # 결정적 신호 힌트(TU-05)

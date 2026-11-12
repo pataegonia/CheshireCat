@@ -1,6 +1,6 @@
-"""handle 흐름(TU-01). TUTOR_PRD 담당 표에서 A의 경로이고, 지금은 #69가 둔 골격이다.
+"""handle 흐름(TU-01). TUTOR_PRD 담당 표에서 A의 경로다.
 
-답변 생성(검색 #70, 주 호출 #72)이 들어오기 전까지는 읽을 수 있는 요청에도 TU-12 기본값을 낸다.
+읽을 수 있는 요청은 `mode`에 따라 베이스라인(#73) 또는 v2 흐름(`tutor.judge.flow`, #72)으로 간다.
 """
 
 import asyncio
@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from tutor import baseline
+from tutor.judge import flow
 from tutor.request import TutorRequest, parse_request
 from tutor.runtime.budget import backstop_s, budget_s
 from tutor.runtime.response import default_response, ensure_contract
@@ -28,15 +29,15 @@ async def respond(body: Any, *, deadline: float, state: Any) -> dict[str, Any]:
 
 
 async def _answer(req: TutorRequest, *, deadline: float, state: Any) -> dict[str, Any]:
-    """답변을 만드는 자리(#70 검색, #72 주 호출). 그 전까지는 기본값.
+    """답변을 만든다(TU-01·TU-06).
 
     주 호출·판정에는 deadline을 그대로 넘긴다. LLM 호출을 넣을 때 취소(CancelledError)를
     삼키지 않는다: asyncio.shield, except BaseException, gather(return_exceptions=True)로 막으면
     라우터의 시간 상한이 깨진다.
     """
-    if state.tutor_cfg.mode == "baseline":  # TU-14 베이스라인(#73). v2 흐름은 주 호출(#72)이 채운다
+    if state.tutor_cfg.mode == "baseline":  # TU-14 베이스라인(#73)
         return await baseline.answer(req, state, deadline=deadline)
-    return default_response()
+    return await flow.answer_v2(req, state, deadline=deadline)  # v2(#72): 검색 → 주 호출 → IN-04
 
 
 @cache

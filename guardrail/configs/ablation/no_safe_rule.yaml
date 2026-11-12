@@ -1,0 +1,2 @@
+# ablation: 기본 설정에서 toggles.safe_rule만 끈다(GR-11)
+toggles: {safe_rule: false}

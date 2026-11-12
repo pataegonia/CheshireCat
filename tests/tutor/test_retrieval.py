@@ -133,11 +133,6 @@ def test_non_positive_k_returns_nothing(k):
     assert run(retrieve("변수", [], k=k)) == []
 
 
-def test_embedding_mix_is_not_built_yet():
-    with pytest.raises(NotImplementedError):
-        run(retrieve("변수", [], use_embedding=True))
-
-
 def test_history_is_part_of_the_query():
     plain = run(retrieve("그거 다시 알려 줘", []))
     with_history = run(retrieve("그거 다시 알려 줘", [heading("FIN-01-01")]))

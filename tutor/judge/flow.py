@@ -8,16 +8,23 @@
 ② 결정적 신호(TU-05): 저신호 직접 판정이면 LLM 없이 고정 clarify, 신호는 주 호출 <신호> 힌트
    (`toggles.signals`)와 실패 기본값(위기 → escalate, 지시 무력화 → refuse)에 쓴다
 
+⑤-2 가드 classify 병렬 합치기(TU-10, `tutor.judge.guard_merge`): classify를 주 호출과 동시에 돌려
+   공격 4범주에서 주 호출 action이 표와 다르면 그 범주의 고정 문장으로 바꾼다
+   (`toggles.guard_classify`)
+⑥ 가드 judge_output 검증(TU-09 ②): 주 호출 문장이 그대로 나가는 경로에만, 합친 범주를 넘겨 부른다
+   (`toggles.verify: guard`). 시간 부족·실패면 판정만 건너뛴다
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
 
-아직 없는 단계(뒤 이슈): kNN 예시(#77),
-가드 classify 병렬 합치기·judge_output(#88). 각 단계는 `config/tutor.yaml` 토글로 켜고 끈다(TU-14).
+아직 없는 단계(뒤 이슈): kNN 예시(#77). 각 단계는 `config/tutor.yaml` 토글로 켜고 끈다(TU-14).
 
 요청 내용은 지역 변수로만 쓰고 남기지 않는다(TU-18). LLM 실패는 예외가 아니라 결과 코드로 온다.
 """
 
+import asyncio
 from collections.abc import Sequence
 from typing import Any
+
+from guardrail.schema import OutputVerdict
 
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
@@ -32,6 +39,12 @@ from tutor.answer.templates import (
 )
 from tutor.judge.conversation import Conversation, tidy
 from tutor.judge.draft import draft_answer
+from tutor.judge.guard_merge import (
+    JUDGE_SKIP_S,
+    judge_candidate,
+    merge_category,
+    start_classify,
+)
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.request import TutorRequest
@@ -95,8 +108,11 @@ def assemble(
     *,
     action: Action,
     max_citations: int,
+    verdict: OutputVerdict | None = None,
 ) -> dict[str, Any]:
-    """주 호출 결과 → 규격 본문. 템플릿 조합이면 고정 문장, 아니면 결정적 수정(IN-04)."""
+    """주 호출 결과 → 규격 본문. 템플릿 조합이면 고정 문장, 아니면 결정적 수정(IN-04).
+
+    `verdict`는 가드 `judge_output` 결과다. None(판정 생략·실패)이면 판정 단계만 건너뛴다."""
     kind = template_for(out.category, action)
     if kind is not None:
         return fixed_body(kind)
@@ -108,7 +124,7 @@ def assemble(
     )
     result = finalize(
         sentences,
-        None,  # 가드 judge_output 검증은 #88에서 연결(TU-09)
+        verdict,
         [_contract_section(s) for s in sections],
         action_for(out.category),
         cfg,
@@ -144,26 +160,85 @@ def _complete(state: Any):
     return complete
 
 
+def _candidate(out: MainCallOut) -> str:
+    """`judge_output`에 넘기는 후보 답변: 주 호출 문장을 공백 하나로 이어 붙인 것."""
+    return " ".join(s.text for s in out.sentences if s.text)
+
+
+def _judge_skip_s(state: Any) -> float:
+    """공유 설정 `judge_skip_s`(통합 `config/runtime.yaml`). state에 값이 있으면 그것을 쓴다."""
+    value = getattr(state, "judge_skip_s", None)
+    return float(value) if isinstance(value, int | float) and value >= 0 else JUDGE_SKIP_S
+
+
 async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
-    """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다)."""
+    """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+
+    가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
+    함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).
+    """
     conv: Conversation = tidy(_messages(req))
     if direct_clarify(conv):
         return tutor_post(fixed_body(Fixed.CLARIFY))  # TU-05: 빈 발화, 앞 대화 뒤의 자모·기호만
     cfg = state.tutor_cfg
     signals = detect(conv)  # 기본값 선택에는 토글과 상관없이 쓴다(TU-12)
-    draft = await draft_answer(
-        conv,
-        prompt=state.tutor_prompt,
-        complete=_complete(state),
+    guard = getattr(state, "guard", None)
+    messages = _messages(req)
+    classify = start_classify(
+        guard,
+        messages,
+        mode=cfg.toggles.guard_classify,
+        timeout_s=cfg.llm.timeout_s.classify,
         deadline=deadline,
-        k=cfg.retrieval.k,
-        signals=labels(signals) if cfg.toggles.signals else (),
-        embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
     )
-    if draft.out is None:
-        return tutor_post(fallback_body(signals))
-    action = choose_action(draft.out, from_category=cfg.toggles.action_from_category)
+    try:
+        classified: str | None = None
+        if classify is not None:
+            await asyncio.sleep(
+                0
+            )  # classify 요청이 주 호출보다 먼저 나가도록 한 번 양보한다(TU-10)
+        if classify is not None and cfg.toggles.guard_classify == "serial":
+            classified = await classify  # ⓐ: 주 호출 앞에서 끝까지 기다린다(#83 비교용)
+        draft = await draft_answer(
+            conv,
+            prompt=state.tutor_prompt,
+            complete=_complete(state),
+            deadline=deadline,
+            k=cfg.retrieval.k,
+            signals=labels(signals) if cfg.toggles.signals else (),
+            embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
+        )
+        if draft.out is None:
+            return tutor_post(fallback_body(signals))
+        if classify is not None and classified is None:
+            classified = await classify  # classify는 자기 시간 제한 안에서 끝난다(실패면 None)
+    finally:
+        if classify is not None and not classify.done():
+            classify.cancel()
+    out = draft.out
+    action = choose_action(out, from_category=cfg.toggles.action_from_category)
+    merged = merge_category(out.category, action, classified)
+    if (
+        merged.fixed is not None
+    ):  # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다
+        return tutor_post(fixed_body(merged.fixed), merged.category)
+    verdict = None
+    # 주 호출 문장이 그대로 나가는 경로만 검증한다(고정 문장에는 판정할 주장이 없다, TU-09)
+    if cfg.toggles.verify == "guard" and template_for(merged.category, action) is None:
+        verdict = await judge_candidate(
+            guard,
+            messages,
+            _candidate(out),
+            merged.category,
+            timeout_s=cfg.llm.timeout_s.verify,
+            deadline=deadline,
+            skip_s=_judge_skip_s(state),
+        )
     body = assemble(
-        draft.out, draft.sections, action=action, max_citations=cfg.toggles.max_citations
+        out,
+        draft.sections,
+        action=action,
+        max_citations=cfg.toggles.max_citations,
+        verdict=verdict,
     )
-    return tutor_post(body, draft.out.category)
+    return tutor_post(body, merged.category)

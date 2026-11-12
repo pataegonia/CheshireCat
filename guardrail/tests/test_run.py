@@ -200,7 +200,7 @@ async def test_ablation_only_selects_rows_and_keeps_baseline_default(tmp_path, c
             "--config", DEFAULT, "--name", "a", "--estimate", "--repeat", "2"]  # fmt: skip
     assert await run.amain(argv) == 0
     out = capsys.readouterr().out
-    assert "rows=baseline,default,no_lr,with_embedding" in out
+    assert "configs=baseline,default,no_lr,with_embedding" in out
     assert await run.amain([*argv[:3], "nope", *argv[4:]]) == 2
 
 

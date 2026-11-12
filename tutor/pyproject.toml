@@ -5,6 +5,7 @@ description = "대회 POST /tutor 튜터"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.162.2",  # 가드와 같은 핀(가드 create_app에 주입돼 한 앱으로 뜬다)
+    "numpy==2.5.4",  # 임베딩 유사도 행렬(TU-11). 가드 scikit-learn이 끌어오는 것과 같은 판(guardrail/uv.lock)
 ]
 
 [dependency-groups]

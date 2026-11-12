@@ -3,6 +3,8 @@
 import asyncio
 import contextlib
 import json
+import logging
+import os
 import types
 
 import httpx
@@ -11,6 +13,8 @@ import pytest
 from pydantic import BaseModel
 
 from guardrail import llm as guard_llm_mod
+from guardrail.config import load_config as load_guard_config
+from guardrail.guard import ConstantGuard
 from tutor.runtime import llm as tutor_llm
 from tutor.runtime.config import load_config
 
@@ -106,6 +110,58 @@ def test_ok_sends_fixed_params_and_a_strict_schema():
     assert fmt["type"] == "json_schema" and fmt["json_schema"]["strict"] is True
     assert fmt["json_schema"]["schema"]["additionalProperties"] is False
     assert llm.calls == {"main": 1}
+
+
+def test_failures_are_counted_by_role_and_code_but_not_budget_stops():
+    """오류로 끝난 호출을 역할·코드별로 센다(측정이 기본값 섞인 것을 알게). 예산 막힘은 blocked에."""
+    llm, clock = make(Send(status(400), ok()))
+    assert run(llm, clock).error == "bad_request"
+    assert run(llm, clock).error is None
+    llm.max_calls = 2
+    assert run(llm, clock).error == "budget"
+    assert llm.failures == {("main", "bad_request"): 1} and llm.blocked == {"main": 1}
+
+
+def test_a_call_recovered_by_retry_is_not_a_failure():
+    llm, clock = make(Send(status(503), ok()))
+    assert run(llm, clock).error is None
+    assert llm.failures == {} and llm.calls == {"main": 2}  # 시도 2회, 실패 0
+
+
+@pytest.mark.parametrize(
+    "steps, code",
+    [
+        ((status(503), status(503)), "server"),  # 재시도 뒤 최종 실패도 호출당 1회
+        ((ok("not json"), ok("not json")), "bad_json"),
+    ],
+)
+def test_a_failed_call_counts_once_with_its_final_code(steps, code):
+    llm, clock = make(Send(*steps))
+    assert run(llm, clock).error == code
+    assert llm.failures == {("main", code): 1} and llm.calls == {"main": 2}
+
+
+def test_a_send_timeout_counts_as_a_failure():
+    async def slow(_kwargs):
+        await asyncio.sleep(5)
+
+    llm, clock = make(slow)
+    result = asyncio.run(call(llm, clock, budget=0.2, timeout_s=0.05, retries=0))
+    assert result.error == "timeout" and llm.failures == {("main", "timeout"): 1}
+
+
+def test_a_gate_timeout_counts_as_a_failure_without_a_call():
+    """게이트를 못 얻어 보내지 못해도 그 호출의 답은 기본값이다(실패 1, 시도 0)."""
+
+    @contextlib.asynccontextmanager
+    async def stuck():
+        await asyncio.sleep(5)
+        yield
+
+    llm, clock = make(Send(ok()), gate=stuck)
+    result = asyncio.run(call(llm, clock, budget=0.05, timeout_s=0.05, retries=1))
+    assert result.error == "timeout" and llm.failures == {("main", "timeout"): 1}
+    assert not llm.calls
 
 
 def test_tutor_settings_override_only_params_the_probe_kept():
@@ -385,6 +441,71 @@ def test_build_without_the_guard_uses_the_guard_config_values():
     assert built.structured == "json_schema"
 
 
+class Held:
+    """release가 열릴 때까지 붙잡는 가짜 전송. 동시에 진행 중인 호출 수와 그 최대를 잰다."""
+
+    def __init__(self) -> None:
+        self.now = self.peak = 0
+        self.release: asyncio.Event | None = None
+
+    async def __call__(self, _kwargs):
+        self.now += 1
+        self.peak = max(self.peak, self.now)
+        try:
+            await self.release.wait()
+        finally:
+            self.now -= 1
+        return ok()
+
+    async def flood(self, built, n, cap):
+        """n개를 한꺼번에 부르고, cap개가 보내질 때까지 루프를 돌린 뒤 모두 끝낸다."""
+        self.release = asyncio.Event()  # Event는 루프마다 새로 만든다
+        deadline = asyncio.get_running_loop().time() + 5
+        calls = [
+            asyncio.create_task(
+                built.complete("main", [], Out, deadline=deadline, timeout_s=5, retries=0)
+            )
+            for _ in range(n)
+        ]
+        for _ in range(200):  # 게이트에 든 호출이 모두 보내질 때까지
+            if self.now >= cap:
+                break
+            await asyncio.sleep(0)
+        sent_at_once = self.now
+        self.release.set()
+        return sent_at_once, await asyncio.gather(*calls)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        types.SimpleNamespace(),  # 가드 없음(프로세스 안 측정)
+        types.SimpleNamespace(guard=ConstantGuard()),  # 루트 앱 기본 판정기: LLM이 없다
+    ],
+)
+def test_build_without_a_guard_llm_still_caps_concurrent_calls(monkeypatch, state):
+    """가드에 LLM이 없어도 튜터 호출은 가드 설정 llm.gate만큼만 동시에 나간다(TU-13, #126 리뷰)."""
+    size = load_guard_config().llm.gate
+    held = Held()
+    monkeypatch.setattr(tutor_llm, "_openai_send", lambda: held)
+    built = tutor_llm.build_llm(state, CFG)
+    sent_at_once, results = asyncio.run(held.flood(built, size + 6, size))
+    assert sent_at_once == size and held.peak == size  # 상한까지 함께 나가고 넘지 않는다
+    assert all(r.error is None for r in results)  # 기다린 호출도 마감 안에 나간다
+
+
+def test_the_own_gate_is_made_per_event_loop(monkeypatch):
+    """경합한 세마포어는 그 루프에 묶인다. 측정 도구처럼 asyncio.run을 여러 번 써도 다음 루프에서
+    RuntimeError로 조용히 기본값이 되지 않게, 튜터 게이트는 루프마다 따로 만든다(bd1de1b 리뷰)."""
+    size = load_guard_config().llm.gate
+    held = Held()
+    monkeypatch.setattr(tutor_llm, "_openai_send", lambda: held)
+    built = tutor_llm.build_llm(types.SimpleNamespace(), CFG)
+    for _ in range(2):  # 두 루프 모두에서 상한을 넘겨 경합시킨다
+        sent_at_once, results = asyncio.run(held.flood(built, size + 6, size))
+        assert sent_at_once == size and all(r.error is None for r in results)
+
+
 def test_startup_builds_the_llm_on_the_guard_gate():
     import tutor
 
@@ -393,6 +514,43 @@ def test_startup_builds_the_llm_on_the_guard_gate():
     asyncio.run(tutor.startup(state))
     assert isinstance(state.tutor_llm, tutor_llm.TutorLLM)
     assert state.tutor_llm.gate is guard.slot
+
+
+def test_startup_names_the_missing_api_env_without_values(monkeypatch, caplog):
+    """서버가 OPENAI_* 없이 뜨면 모든 답이 기본값이 된다. 기동 때 빈 이름만 오류로 남긴다."""
+    import tutor
+
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key-value")
+    monkeypatch.setenv("OPENAI_MODEL", "  ")  # 공백뿐인 값도 없는 것으로 본다
+    # OPENAI_BASE_URL은 conftest가 지운 상태다
+    with caplog.at_level(logging.ERROR, logger="tutor.startup"):
+        asyncio.run(tutor.startup(types.SimpleNamespace()))
+    text = "\n".join(r.getMessage() for r in caplog.records if r.name == "tutor.startup")
+    assert "OPENAI_MODEL" in text and "OPENAI_BASE_URL" in text
+    assert "OPENAI_API_KEY" not in text and "secret-key-value" not in text  # 값은 남기지 않는다
+
+
+def test_startup_is_quiet_when_the_api_env_is_set(monkeypatch, caplog):
+    import tutor
+
+    for name, value in (("OPENAI_API_KEY", "k"), ("OPENAI_MODEL", "m")):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
+    with caplog.at_level(logging.ERROR, logger="tutor.startup"):
+        asyncio.run(tutor.startup(types.SimpleNamespace()))
+    assert [r for r in caplog.records if r.name == "tutor.startup"] == []
+
+
+def test_build_strips_the_model_name(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL", "  openai/gpt-5-nano\n")  # .env 줄 끝 공백
+    assert tutor_llm.build_llm(types.SimpleNamespace(), CFG).model == "openai/gpt-5-nano"
+
+
+def test_shell_api_keys_never_reach_tests():
+    """런박스 셸에 진짜 키가 있어도 테스트는 보지 못한다(conftest가 지운다, 운영진 API를 부르지 않게)."""
+    names = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")
+    names += ("EMBEDDING_API_KEY", "EMBEDDING_MODEL", "EMBEDDING_BASE_URL")
+    assert [name for name in names if name in os.environ] == []
 
 
 class FakeClient:
@@ -412,7 +570,7 @@ def fake_openai(monkeypatch):
     FakeClient.made = []
     monkeypatch.setattr(tutor_llm.openai, "AsyncOpenAI", FakeClient)
     monkeypatch.setenv("OPENAI_API_KEY", "k")
-    monkeypatch.setenv("OPENAI_BASE_URL", "")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
     return FakeClient.made
 
 
@@ -424,23 +582,46 @@ def test_openai_client_is_made_per_event_loop_without_sdk_retries(fake_openai):
         return [await send({"model": "m"}), await send({"model": "m"})]
 
     asyncio.run(twice())
-    assert fake_openai == [{"api_key": "k", "base_url": None, "max_retries": 0}]  # 빈 주소는 기본
+    assert fake_openai == [{"api_key": "k", "base_url": "http://127.0.0.1:9", "max_retries": 0}]
     asyncio.run(twice())  # 다른 이벤트 루프(다른 asyncio.run)에서는 새로 만든다
     assert len(fake_openai) == 2
 
 
-def test_missing_api_key_is_an_auth_error(fake_openai, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY")
-    llm = tutor_llm.TutorLLM(
-        tutor_llm._openai_send(), contextlib.nullcontext, model="m", base=base()
-    )
-
+def _complete_once(llm):
     async def go():
         loop = asyncio.get_running_loop()
         return await llm.complete("main", [], Out, deadline=loop.time() + 5, timeout_s=1, retries=1)
 
-    result = asyncio.run(go())
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_missing_api_key_is_an_auth_error(fake_openai, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("OPENAI_API_KEY")
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", value)
+    llm = tutor_llm.TutorLLM(
+        tutor_llm._openai_send(), contextlib.nullcontext, model="m", base=base()
+    )
+    result = _complete_once(llm)
     assert result.error == "auth" and result.attempts == 1 and fake_openai == []
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_missing_base_url_is_an_auth_error_and_sends_nothing(fake_openai, monkeypatch, value):
+    """주소가 비면 SDK 기본 주소(공개 OpenAI)로 보내지 않는다. 운영진 API만 부른다(SPEC §7)."""
+    if value is None:
+        monkeypatch.delenv("OPENAI_BASE_URL")
+    else:
+        monkeypatch.setenv("OPENAI_BASE_URL", value)
+    llm = tutor_llm.TutorLLM(
+        tutor_llm._openai_send(), contextlib.nullcontext, model="m", base=base()
+    )
+    result = _complete_once(llm)
+    # 클라이언트도 만들지 않는다
+    assert result.error == "auth" and result.attempts == 1 and fake_openai == []
+    assert llm.calls["main"] == 1  # 보내지 못한 시도도 호출 수에 센다(키가 없을 때와 같음)
 
 
 CFG = load_config()

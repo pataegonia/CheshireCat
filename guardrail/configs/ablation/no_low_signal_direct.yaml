@@ -1,0 +1,2 @@
+# ablation: 기본 설정에서 toggles.low_signal_direct만 끈다(GR-11)
+toggles: {low_signal_direct: false}

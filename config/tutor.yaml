@@ -5,7 +5,7 @@
 version: "tutor-1"
 mode: v2                       # v2 | baseline(검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리, 토글은 모두 끔)
 toggles:
-  name_dict: true              # 이름 사전으로 섹션 찾기(TU-04)
+  name_dict: false             # 이름 사전(TU-04). 순위 올리기 방식은 채택 안 함(#81: recall@1 하락). 힌트 방식은 #82에서 잰다
   fewshot: true                # 공개 세트 kNN few-shot(TU-08)
   action_from_category: false  # 범주 → action 표 강제. 기본 끔, 켜도 answer 쪽으로는 덮지 않음(TU-06)
   signals: true                # 결정적 신호 힌트(TU-05)
@@ -23,9 +23,9 @@ answer:
   max_sentences: 3             # 1–3문장 기본(상한 아님, TU-06)
 llm:
   reasoning_effort: low        # low | medium. minimal 금지(TU-13). 가드 probe가 끈 파라미터는 보내지 않는다
-  max_completion_tokens: 1600  # 주 호출 상한(추론 토큰 포함). 가드 판정 호출(800)과 따로, 주 호출 실측(finish_reason=length 비율) 뒤 정함
-  timeout_s:                   # 호출당 시간 제한(TU-13 기본값, T1 실측 뒤 조정)
-    main: 8                    # 주 호출
+  max_completion_tokens: 1600  # 주 호출 상한(추론 토큰 포함). 가드 판정 호출(800)과 따로, 주 호출 실측(finish_reason=length 비율) 뒤 정함. 운영진 프록시 상한 2000(넘기면 400, 로드에서 실패)
+  timeout_s:                   # 호출당 시간 제한(TU-13). 주 호출은 T1 실측으로 정함
+    main: 15                   # 주 호출. T1 실측으로 8초에서 올림(#73): 8초는 v2 출력이 길어 재시도 36%, 15초는 재시도 0·동시 8 지연 최대 14.45초. 보낸 시각부터 센다
     classify: 5                # 가드 classify(주 호출과 병렬)
     verify: 5                  # 검증·judge_output
     embedding: 2

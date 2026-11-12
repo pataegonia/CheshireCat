@@ -55,6 +55,79 @@ def test_english_query_is_flagged():
 def test_main_prints_the_report(capsys):
     from tutor.eval.recall import main
 
-    assert main() == 0
+    assert main([]) == 0
     out = capsys.readouterr().out
     assert "recall@1" in out and "@5" in out and "p95" in out and "놓친 행" in out
+
+
+EMBEDDING_ENV = {
+    "EMBEDDING_API_KEY": "k",
+    "EMBEDDING_MODEL": "m",
+    "EMBEDDING_BASE_URL": "http://127.0.0.1:9",
+}
+
+
+@pytest.fixture
+def embedding_env(monkeypatch):
+    for name, value in EMBEDDING_ENV.items():
+        monkeypatch.setenv(name, value)
+
+
+@pytest.mark.usefixtures("embedding_env")
+def test_embedding_run_counts_calls_before_and_after(monkeypatch, capsys):
+    from tests.tutor.test_embedding import FakeEmbed
+    from tutor.eval import recall
+
+    fake = FakeEmbed()  # 운영진 API 대신(런박스에서는 openai_embed)
+    monkeypatch.setattr(recall, "openai_embed", lambda: fake)
+    assert recall.main(["--embedding"]) == 0
+    out = capsys.readouterr().out
+    # KB 조각 244개 = 64개씩 4번 + 정답 근거가 있는 행의 영어 질의 13개
+    assert "임베딩 예상 호출 17회" in out and "임베딩 호출 17회" in out
+    assert len(fake.calls) == 17
+
+
+@pytest.mark.usefixtures("embedding_env")
+def test_embedding_run_flags_query_failures(monkeypatch, capsys):
+    from tests.tutor.test_embedding import FakeEmbed
+    from tutor.eval import recall
+
+    class FailQueries(FakeEmbed):  # KB 묶음은 되고 질의(1개씩)만 실패: 결과는 BM25와 같아진다
+        async def __call__(self, texts):
+            if len(texts) == 1:
+                raise RuntimeError("본문")
+            return await super().__call__(texts)
+
+    monkeypatch.setattr(recall, "openai_embed", FailQueries)
+    assert recall.main(["--embedding"]) == 1  # 임베딩 효과로 읽으면 안 되는 결과
+    out = capsys.readouterr().out
+    assert "실패 13회" in out and "임베딩 효과가 아니다" in out and "본문" not in out
+
+
+@pytest.mark.usefixtures("embedding_env")
+def test_embedding_run_stops_when_the_kb_embedding_fails(monkeypatch):
+    from tests.tutor.test_embedding import FakeEmbed
+    from tutor.eval import recall
+
+    monkeypatch.setattr(recall, "openai_embed", lambda: FakeEmbed(fail=RuntimeError("본문")))
+    with pytest.raises(SystemExit):
+        recall.main(["--embedding"])
+
+
+@pytest.mark.parametrize(
+    "missing, value",
+    [(name, None) for name in EMBEDDING_ENV] + [("EMBEDDING_BASE_URL", "  ")],
+)
+@pytest.mark.usefixtures("embedding_env")
+def test_embedding_run_needs_the_embedding_env(monkeypatch, capsys, missing, value):
+    """주소가 비면 SDK 기본 주소(공개 OpenAI)로 나가므로 부르기 전에 멈춘다."""
+    from tutor.eval import recall
+
+    if value is None:
+        monkeypatch.delenv(missing)
+    else:
+        monkeypatch.setenv(missing, value)
+    monkeypatch.setattr(recall, "openai_embed", lambda: pytest.fail("부르기 전에 멈춘다"))
+    with pytest.raises(SystemExit):
+        recall.main(["--embedding"])
+    assert missing in capsys.readouterr().err  # 무엇이 빠졌는지 알린다

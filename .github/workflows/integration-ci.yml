@@ -15,6 +15,7 @@ on:
       - "tutor/**"
       - "harness/**"
       - "config/**"
+      - "tests/**"
       - "pyproject.toml"
       - "uv.lock"
       - "guardrail/pyproject.toml"
@@ -55,7 +56,7 @@ jobs:
           list="$RUNNER_TEMP/changed-files"
           git -c core.quotepath=false diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA" > "$list"
           rc=0
-          grep -zqE '^(app\.py$|integration/|tutor/|harness/|config/|pyproject\.toml$|uv\.lock$|guardrail/pyproject\.toml$|guardrail/uv\.lock$|\.github/workflows/integration-ci\.yml$)' "$list" || rc=$?
+          grep -zqE '^(app\.py$|integration/|tutor/|harness/|config/|tests/|pyproject\.toml$|uv\.lock$|guardrail/pyproject\.toml$|guardrail/uv\.lock$|\.github/workflows/integration-ci\.yml$)' "$list" || rc=$?
           case "$rc" in
             0) echo "integration=true" >> "$GITHUB_OUTPUT" ;;
             1) echo "integration=false" >> "$GITHUB_OUTPUT" ;;
@@ -94,8 +95,9 @@ jobs:
           echo "lint targets: $targets"
           uv run ruff check $targets
           uv run ruff format --check $targets
-      # 튜터는 튜터가 로컬에서 쓰는 방식 그대로 설정 파일을 지정해 돌린다. 지정하지 않으면 ruff가 tutor/ 를
-      # 기준 폴더로 잡아 tutor/judge/ 와 운영진 채점기의 `import judge` 를 같은 패키지로 보고 import 순서를 틀렸다고 한다.
+      # 튜터는 튜터가 로컬에서 쓰는 방식 그대로 설정 파일을 지정해 돌린다. 지금은 지정하지 않아도 통과하지만,
+      # tutor/judge/ 가 생기면(#97) ruff가 그것과 운영진 채점기의 `import judge` 를 같은 패키지로 보고
+      # tutor/eval/grader.py 의 import 순서를 틀렸다고 한다(#97 브랜치를 합쳐 확인).
       - if: steps.proj.outputs.present == 'true' && hashFiles('tutor/pyproject.toml') != ''
         run: |
           uv run ruff check tutor --config tutor/pyproject.toml

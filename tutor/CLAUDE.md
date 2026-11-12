@@ -45,7 +45,7 @@
 |---|---|---|
 | `normal` | answer | 1–3문장. 정답이 되는 값·이름·조건을 자료 표현 그대로 쓰고 근거 섹션을 인용 |
 | `pii_disclosure` | answer | 질문에 답하고 "개인정보는 적지 않아도 돼요" 한 문장. 개인정보를 되풀이하지 않음 |
-| `answer_seeking` | scaffold | 최종 정답 대신 자료의 기준과 다음 단계. 근거 섹션 인용 |
+| `answer_seeking` | scaffold | 정답 사실을 자료 표현 그대로 먼저 밝히고(`scaffold_state_rule`, 11/12 결정) 기준과 다음 단계를 안내. 근거 섹션 인용. 운영진 답(§11-1-4) 전까지 기본이며 토글로 되돌린다 |
 | `academic_dishonesty` | scaffold | 완성 글·코드 대신 직접 할 순서. 자료 내용을 썼으면 그 섹션 인용 |
 | `out_of_material` | abstain | "자료에 나와 있지 않아요". 자료 내용을 덧붙이면 그 섹션을 꼭 인용하고, 인용할 수 없으면 덧붙이지 않음 |
 | `low_signal_input` | clarify | 무엇이 궁금한지 되묻는 한 문장 |
@@ -59,7 +59,7 @@
 - 공격·사기 수법을 **배우려는** 질문은 `normal`이다. 자기소개와 남의 정보 요청이 같이 있으면 `harmful_content`(refuse)다.
 - 전제가 자료와 틀린 질문은 abstain이 아니라 answer로 바로잡는다. 자료에 아무 내용이 없을 때만 abstain이다.
 - 근거 밖의 과목 고유 사실은 쓰지 않는다. 가상 은행·실습·도우미 이름·수치가 그렇다(SPEC §2).
-- scaffold에는 KB Q&A의 답, 완성 코드, 최종 선택지를 넣지 않는다.
+- scaffold에는 KB Q&A의 답, 완성 코드, 최종 선택지를 넣지 않는다. 단 answer_seeking은 위 정책대로 정답 사실을 밝힌다. academic_dishonesty는 어느 경우에도 밝히지 않는다.
 
 ## KB·공개 세트에서 확인된 함정 (TUTOR_PRD §1, TU-02·03·05·07·11)
 - `kb/finance/FIN-01.html`은 FIN-01-01~04 md의 사본이다. 색인하지도 인용하지도 않는다.
@@ -118,7 +118,6 @@
 - 생성 실패 시 기본 action 값(`fallback_action`, 잠정 clarify): TU-12
 - CSV 표현(원문 CSV / "열: 값" 문장): TU-03, 통합 I4
 - 생성에 넣는 섹션 수 K(`retrieval.k`): TU-03, 통합 I5
-- answer_seeking에서 정답 사실이 곧 정답일 때의 정책: TU-06, §11-1-4
 - 설정 파일 위치·형식(루트 `config/` 안): TU-14
 - 빠른 질문 버튼 문구만 있는 1턴의 기대 action(clarify `[가설]`): §3, §11-1-1
 - 팀 provenance 합본·시연 체크리스트 위치: §11-3-2

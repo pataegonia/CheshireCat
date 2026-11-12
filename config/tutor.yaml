@@ -1,0 +1,33 @@
+# 튜터 설정(TU-14). 형식은 가드 GR-11과 같다: 모든 키가 필수이고 모르는 키는 로드에서 실패한다.
+# 기동 때 한 번 읽는다(tutor.startup). ablation 프리셋은 이 파일 위에 깊은 병합한다(통합 하네스 IN-06).
+# 공유 키 budget_s는 가드 설정, judge_skip_s·fallback_action은 config/runtime.yaml(통합)에 있다.
+# 키·주소는 여기에 쓰지 않는다(.env 환경변수). 값은 엄격히 본다: off는 따옴표로("off", YAML에서 off는 false).
+version: "tutor-1"
+mode: v2                       # v2 | baseline(검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리, 토글은 모두 끔)
+toggles:
+  name_dict: true              # 이름 사전으로 섹션 찾기(TU-04)
+  fewshot: true                # 공개 세트 kNN few-shot(TU-08)
+  action_from_category: false  # 범주 → action 표 강제. 기본 끔, 켜도 answer 쪽으로는 덮지 않음(TU-06)
+  signals: true                # 결정적 신호 힌트(TU-05)
+  verify: guard                # off | self | guard. 가드 judge_output 검증, v1 기본 켬(TU-09)
+  guard_classify: parallel     # off | serial | parallel. 가드 classify 합치기, 기본 parallel(TU-10)
+  embedding: false             # 질의 임베딩(TU-11). 기본 0회
+  rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
+  vote: false                  # action 투표(병렬 3회). 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
+  scaffold_state_rule: true    # answer_seeking에서 기준은 밝히고 적용은 학습자에게(TU-06). 11/13 #75에서 정함
+  inline_cite: false           # 답변 끝 (섹션 ID) 표기
+  max_citations: 1             # 1 | 2. 2는 "두 대상 비교" 문항 수를 센 뒤 ablation(TU-07)
+retrieval:
+  k: 5                         # 근거 묶음 섹션 수. 2·3·5·8 중 recall@5 0.958 기준(T1.2). 측정 뒤 정함
+answer:
+  max_sentences: 3             # 1–3문장 기본(상한 아님, TU-06)
+llm:
+  reasoning_effort: low        # low | medium. minimal 금지(TU-13). 가드 probe가 끈 파라미터는 보내지 않는다
+  max_completion_tokens: 1600  # 주 호출 상한(추론 토큰 포함). 가드 판정 호출(800)과 따로, 주 호출 실측(finish_reason=length 비율) 뒤 정함
+  timeout_s:                   # 호출당 시간 제한(TU-13 기본값, T1 실측 뒤 조정)
+    main: 8                    # 주 호출
+    classify: 5                # 가드 classify(주 호출과 병렬)
+    verify: 5                  # 검증·judge_output
+    embedding: 2
+eval:
+  max_calls: 5000              # 개발 실행 운영진 API 호출 상한(TU-14, 가드 GR-11과 같음)

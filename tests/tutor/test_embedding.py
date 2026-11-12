@@ -498,12 +498,13 @@ def test_run_local_builds_and_uses_the_embedding_when_turned_on(monkeypatch, tmp
     assert saved["tainted"] is False and saved["embedding"]["ok"] is True
 
 
-def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, tmp_path):
+def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, tmp_path, capsys):
     """측정 경로의 실제 v2 흐름(#97·da8c030)이 기동 때 만든 임베딩으로 영어 질의를 검색한다.
 
     주 호출은 가짜 전송이 실패로 돌려줘(밖으로 보내지 않는다) 답은 기본값이지만, 검색은 주 호출
     전에 끝난다. 검색까지 간 영어 질의(retrieve와 같은 조건)마다 질의 임베딩이 한 번씩 잡혀야
-    한다. 검색 전에 끝나는 행이 생겨도(결정적 판정 등) 이 관계는 그대로다.
+    한다. 검색 전에 끝나는 행이 생겨도(결정적 판정 등) 이 관계는 그대로다. 자기 state로 잴 때도
+    실제 collect_timed가 요청마다 지연을 잰다(#122).
     """
     from tutor.eval import run_local
     from tutor.judge import draft as draft_mod
@@ -540,6 +541,8 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     assert len(english) <= saved["embedding"]["queries"]  # 넘으면 임베딩 호출 추정이 모자라다
     assert saved["embedding"]["calls"] == len(english) and saved["embedding"]["failures"] == 0
     assert len(fake.calls) == BATCHES + len(english)
+    out = capsys.readouterr().out  # 자기 state 경로에서도 행마다 지연을 잰다
+    assert f"(요청 {len(run_local.public_tutor_rows())}개)" in out
     assert all(len(texts) == 1 for texts in fake.calls[BATCHES:])  # 질의마다 한 문장씩
     assert code == 0 and saved["tainted"] is False
 
@@ -573,6 +576,9 @@ def test_run_local_blocked_calls_taint_the_result_even_with_a_good_embedding(
     assert "상한에 막혀 보내지 못한 튜터 호출 1회" in out
     assert f"(튜터 상한 {state.tutor_llm.max_calls}회" in out  # 실제로 건 상한과 같다
     assert f"- 임베딩 몫 {BATCHES + 20})" in out  # 기동 묶음 + 영어 질의 20개
+    marks = ["튜터 LLM 호출:", "튜터 요청 지연", "상한에 막혀 보내지 못한", "임베딩 호출 "]
+    at = [out.index(mark) for mark in marks]
+    assert at == sorted(at)  # 호출 → 지연(#122) → 상한 막힘 → 임베딩 요약 순
 
 
 def test_run_local_without_the_embedding_neither_builds_nor_counts_it(
@@ -665,7 +671,8 @@ def test_run_local_with_saved_responses_never_builds_the_embedding(monkeypatch, 
         monkeypatch, tmp_path / "runs", fake, env={}, source=("--responses", str(saved))
     )
     assert code == 0 and fake.calls == [] and state is None  # 환경변수도 요구하지 않는다
-    assert "임베딩" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "임베딩" not in out and "튜터 요청 지연" not in out  # 튜터를 부르지 않는다
 
 
 def test_reference_preset_never_builds_the_embedding(monkeypatch, tmp_path, capsys):

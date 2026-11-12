@@ -4,7 +4,8 @@
 정답 섹션이 상위 k개에 있는지 본다. 폴드별 값(가드 `splits/v1.json`), 놓친 행,
 검색 지연을 함께 낸다.
 `--embedding`을 주면 영어 질의에 임베딩 RRF를 섞는다(TU-11). 운영진 임베딩 API를 부르므로
-EMBEDDING_API_KEY·EMBEDDING_MODEL이 있어야 하고(런박스), 부르기 전에 예상 호출 수를 낸다.
+EMBEDDING_API_KEY·EMBEDDING_MODEL·EMBEDDING_BASE_URL이 있어야 하고(런박스), 부르기 전에
+예상 호출 수를 낸다.
 질문 본문은 출력하지 않고 행 id와 섹션 id만 낸다.
 """
 
@@ -30,6 +31,7 @@ from tutor.runtime.config import load_config
 
 PUBLIC = Path(__file__).resolve().parents[2] / "competition" / "public" / "tutor.jsonl"
 KS = (1, 3, 5)
+EMBEDDING_ENV = ("EMBEDDING_API_KEY", "EMBEDDING_MODEL", "EMBEDDING_BASE_URL")  # --embedding에 필요
 
 
 @dataclass(frozen=True)
@@ -148,8 +150,9 @@ def _embedding(ap: argparse.ArgumentParser) -> tuple[Build, _Counted]:
     """임베딩 검색을 만드는 함수를 준비한다. 부르기 전에 예상 호출 수(KB 묶음 + 영어 질의)를
     내고 상한을 본다.
     """
-    if not (os.environ.get("EMBEDDING_API_KEY") and os.environ.get("EMBEDDING_MODEL")):
-        ap.error("--embedding에는 EMBEDDING_API_KEY·EMBEDDING_MODEL이 필요하다(런박스)")
+    missing = [name for name in EMBEDDING_ENV if not (os.environ.get(name) or "").strip()]
+    if missing:  # 주소가 비면 SDK 기본 주소(공개 OpenAI)로 나간다
+        ap.error(f"--embedding에는 {'·'.join(missing)}이 필요하다(런박스)")
     cfg = load_config()
     index = default_index()
     expected = math.ceil(len(index.chunks) / BATCH) + _english_queries(public_rows())

@@ -110,18 +110,21 @@ class EmbeddingSearch:
 def openai_embed() -> Embed:
     """운영진 임베딩 API(OpenAI 호환 /embeddings). 클라이언트는 이벤트 루프마다 첫 호출 때 만든다.
 
-    환경변수: EMBEDDING_API_KEY·EMBEDDING_MODEL(없으면 오류), EMBEDDING_BASE_URL(비면 SDK 기본).
-    SDK 재시도는 0이다.
+    환경변수: EMBEDDING_API_KEY·EMBEDDING_MODEL·EMBEDDING_BASE_URL. 하나라도 비면 클라이언트를
+    만들지 않고 오류다. 주소가 비면 SDK가 기본 주소(공개 OpenAI)로 보내기 때문이다(운영진 API만
+    부른다, SPEC §7). SDK 재시도는 0이다.
     """
     made: dict[str, Any] = {"loop": None, "client": None}
 
     async def embed(texts: Sequence[str]) -> list[list[float]]:
-        key, model = os.environ.get("EMBEDDING_API_KEY"), os.environ.get("EMBEDDING_MODEL")
-        if not key or not model:
-            raise openai.OpenAIError("EMBEDDING_API_KEY·EMBEDDING_MODEL이 없다")
+        key, model, base_url = (
+            (os.environ.get(name) or "").strip()
+            for name in ("EMBEDDING_API_KEY", "EMBEDDING_MODEL", "EMBEDDING_BASE_URL")
+        )
+        if not (key and model and base_url):
+            raise openai.OpenAIError("EMBEDDING_API_KEY·EMBEDDING_MODEL·EMBEDDING_BASE_URL이 없다")
         loop = asyncio.get_running_loop()
         if made["loop"] is not loop:
-            base_url = os.environ.get("EMBEDDING_BASE_URL") or None
             made["client"] = openai.AsyncOpenAI(api_key=key, base_url=base_url, max_retries=0)
             made["loop"] = loop
         resp = await made["client"].embeddings.create(model=model, input=list(texts))

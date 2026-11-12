@@ -214,15 +214,30 @@ def test_openai_embed_reads_the_env_and_orders_by_index(monkeypatch):
     assert seen["init"] is not first
 
 
-def test_openai_embed_needs_a_key_and_a_model(monkeypatch):
-    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
-    monkeypatch.setenv("EMBEDDING_MODEL", "m")
-    with pytest.raises(emb.openai.OpenAIError):
-        run(emb.openai_embed()(["a"]))
+@pytest.mark.parametrize(
+    "missing, value",
+    [
+        ("EMBEDDING_API_KEY", None),
+        ("EMBEDDING_MODEL", None),
+        ("EMBEDDING_BASE_URL", None),  # 주소가 비면 SDK 기본 주소(공개 OpenAI)로 나간다
+        ("EMBEDDING_BASE_URL", ""),
+        ("EMBEDDING_BASE_URL", "  "),
+        ("EMBEDDING_API_KEY", "  "),
+    ],
+)
+def test_openai_embed_needs_a_key_a_model_and_an_address(monkeypatch, missing, value):
+    made = []
+    monkeypatch.setattr(emb.openai, "AsyncOpenAI", lambda **kwargs: made.append(kwargs))
     monkeypatch.setenv("EMBEDDING_API_KEY", "k")
-    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    monkeypatch.setenv("EMBEDDING_MODEL", "m")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://127.0.0.1:9")
+    if value is None:
+        monkeypatch.delenv(missing)
+    else:
+        monkeypatch.setenv(missing, value)
     with pytest.raises(emb.openai.OpenAIError):
         run(emb.openai_embed()(["a"]))
+    assert made == []  # 클라이언트를 만들지 않는다(아무 데도 보내지 않음)
 
 
 def _state(embedding_on):

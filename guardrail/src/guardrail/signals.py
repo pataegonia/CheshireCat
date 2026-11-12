@@ -56,12 +56,13 @@ def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
 
     target_pre는 태그 문자만 지운 원문(자모 조합 전). 정규화본을 쓰면 "ㅋㅋㅠㅠ"가 음절로 조합된다.
     hidden은 `preprocess.decode_tags`가 푼 숨긴 문자열. 1턴 입력은 False(LLM으로 보낸다).
+    NFC만 먼저 건다: NFD로 쪼갠 음절(화면에는 보통 문장)은 음절로 되돌리고, 호환 자모(ㅋㅠ)는
+    NFC가 조합하지 않으므로 "자모 조합 전" 뷰는 그대로다.
     """
     if not has_history or hidden:
         return False
-    return any(_is_symbolic(c) for c in target_pre) and all(
-        _is_symbolic(c) or _is_blank(c) for c in target_pre
-    )
+    text = unicodedata.normalize("NFC", target_pre)
+    return any(_is_symbolic(c) for c in text) and all(_is_symbolic(c) or _is_blank(c) for c in text)
 
 
 def is_refusal(answer_raw: str) -> bool:

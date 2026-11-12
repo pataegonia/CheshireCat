@@ -70,10 +70,21 @@ def out(category="normal", action="answer", sentences=None):
 
 
 def test_prepare_judge_builds_prompt_from_real_action_table():
-    s = types.SimpleNamespace()
+    s = types.SimpleNamespace(tutor_cfg=load_config())
     flow.prepare_judge(s)
     assert isinstance(s.tutor_prompt, MainCallPrompt)
     assert "- harmful_content → refuse 또는 redirect" in s.tutor_prompt.system
+
+
+@pytest.mark.parametrize("state_rule", [True, False])
+def test_prepare_judge_follows_scaffold_state_rule_toggle(state_rule):
+    # #75: answer_seeking scaffold 정책은 설정 토글이 정한다(기본 켬 = 정답 사실을 먼저 밝힘)
+    s = types.SimpleNamespace(
+        tutor_cfg=load_config(overrides={"toggles.scaffold_state_rule": state_rule})
+    )
+    flow.prepare_judge(s)
+    assert ("정답 사실(값·이름·조건)을" in s.tutor_prompt.system) is state_rule
+    assert ("최종 정답을 말하지 않습니다" in s.tutor_prompt.system) is (not state_rule)
 
 
 # --- 빈 판단 대상·실패 ---

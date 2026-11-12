@@ -44,10 +44,11 @@ REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
 
 def prepare_judge(app_state: Any) -> None:
-    """기동 때 한 번: 범주 → action 표로 주 호출 프롬프트를 만든다.
-
-    `tutor.startup.prepare`가 부른다."""
-    app_state.tutor_prompt = MainCallPrompt.from_rules()
+    """기동 때 한 번: 범주 → action 표와 scaffold 정책(`scaffold_state_rule`)으로 주 호출 프롬프트를
+    만든다. `tutor.startup.prepare`가 부른다."""
+    app_state.tutor_prompt = MainCallPrompt.from_rules(
+        scaffold_state_rule=app_state.tutor_cfg.toggles.scaffold_state_rule
+    )
 
 
 def _messages(req: TutorRequest) -> list[dict[str, str]]:

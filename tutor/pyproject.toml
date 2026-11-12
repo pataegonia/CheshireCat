@@ -5,6 +5,10 @@ description = "대회 POST /tutor 튜터"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.162.2",  # 가드와 같은 핀(가드 create_app에 주입돼 한 앱으로 뜬다)
+    "guardrail",  # 서버 골격 · schema · LLM 게이트(경로 의존성, 아래 sources)
+    "openai>=3,<4",  # 가드와 같은 범위
+    "pydantic>=2.14.2",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -23,6 +27,9 @@ dev = [
 # import한다(루트 app.py, pytest는 tests/__init__.py가 있어 루트를 경로에 넣는다).
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+guardrail = { path = "../guardrail", editable = true }
 
 [tool.ruff]
 line-length = 100

@@ -460,16 +460,17 @@ def _run_local(
     monkeypatch.setattr(run_local, "openai_embed", lambda: fake)
     seen = {}
 
-    def fake_runs(preset, rows, runs, state=None):
+    def fake_timed(preset, rows, runs, state=None):
         seen["state"] = state
         for _ in range(runs):
             if query is not None and state is not None and state.tutor_emb is not None:
                 run(state.tutor_emb.rerank(query, [], allowed=None))
         if blocked and state is not None:
             state.tutor_llm.blocked["main"] += 1
-        return [{row["id"]: None for row in rows} for _ in range(runs)]
+        responses = [{row["id"]: None for row in rows} for _ in range(runs)]
+        return responses, [0.0] * (len(rows) * runs)  # 요청마다 걸린 시간(#122)
 
-    monkeypatch.setattr(run_local, "collect_runs", fake_runs)
+    monkeypatch.setattr(run_local, "collect_timed", fake_timed)
     code = run_local.main([*source, *argv, "--out", str(tmp_path)])
     return code, seen.get("state")
 

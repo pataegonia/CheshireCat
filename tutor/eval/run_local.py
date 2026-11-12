@@ -21,9 +21,11 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 import argparse
 import asyncio
 import json
+import math
 import os
 import secrets
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -87,34 +89,49 @@ async def _respond(preset: str, row: dict[str, Any], state: Any = None) -> Any:
     return _reference(row, top)
 
 
-async def _collect(preset: str, rows: Sequence[dict[str, Any]], state: Any) -> dict[str, Any]:
+async def _collect(
+    preset: str, rows: Sequence[dict[str, Any]], state: Any
+) -> tuple[dict[str, Any], list[float]]:
+    """한 실행의 (행 id → 응답, 요청마다 걸린 시간(초)). 실패한 요청도 시간을 잰다."""
     gate = asyncio.Semaphore(metrics.WORKERS)
 
-    async def one(row: dict[str, Any]) -> tuple[str, Any]:
+    async def one(row: dict[str, Any]) -> tuple[str, Any, float]:
         async with gate:
+            started = time.perf_counter()
             try:
-                return row["id"], await _respond(preset, row, state)
+                response = await _respond(preset, row, state)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
                 sys.stderr.write(f"{row['id']}: {type(exc).__name__}\n")  # 메시지는 내지 않는다
-                return row["id"], None
+                response = None
+            return row["id"], response, time.perf_counter() - started
 
-    return dict(await asyncio.gather(*(one(row) for row in rows)))
+    done = await asyncio.gather(*(one(row) for row in rows))
+    return {row_id: response for row_id, response, _took in done}, [t for _i, _r, t in done]
 
 
-def collect_runs(
+def collect_timed(
     preset: str, rows: Sequence[dict[str, Any]], runs: int, state: Any = None
-) -> list[dict[str, Any]]:
-    """실행마다 응답을 모은다. 튜터가 루프에 묶인 클라이언트를 써도 되게 루프 하나에서 돈다.
+) -> tuple[list[dict[str, Any]], list[float]]:
+    """실행마다 응답을, 그리고 요청마다 걸린 시간(초, 모든 실행)을 모은다(TU-16 지연).
 
+    튜터가 루프에 묶인 클라이언트를 써도 되게 루프 하나에서 돈다. 동시 요청은 metrics.WORKERS개다.
     state가 없으면 tutor 프리셋은 tutor.handle(기본 설정)로, 있으면 그 state로 부른다.
     """
     if preset not in PRESETS:
         raise ValueError(f"모르는 프리셋: {preset}")
 
-    async def every_run() -> list[dict[str, Any]]:
+    async def every_run() -> list[tuple[dict[str, Any], list[float]]]:
         return [await _collect(preset, rows, state) for _ in range(runs)]
 
-    return asyncio.run(every_run())
+    results = asyncio.run(every_run())
+    return [responses for responses, _t in results], [t for _r, ts in results for t in ts]
+
+
+def collect_runs(
+    preset: str, rows: Sequence[dict[str, Any]], runs: int, state: Any = None
+) -> list[dict[str, Any]]:
+    """실행마다 응답을 모은다(collect_timed에서 시간을 뺀 것)."""
+    return collect_timed(preset, rows, runs, state)[0]
 
 
 def responses_for(preset: str, rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -200,6 +217,24 @@ def _write(
 
 def _ids(ids: Sequence[str]) -> str:
     return "".join(f" {i}" for i in ids[:SHOW_IDS]) + (" …" if len(ids) > SHOW_IDS else "")
+
+
+def _pct(values: Sequence[float], q: float) -> float:
+    """가까운 순위 백분위(값이 없으면 0)."""
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    return ordered[min(len(ordered) - 1, max(0, math.ceil(q * len(ordered)) - 1))]
+
+
+def _latency_line(latency: Sequence[float]) -> str:
+    """튜터 요청 지연 한 줄(TU-16·TU-17 지표). 프로세스 안 호출이라 HTTP 시간은 빠진다."""
+    p50, p95 = _pct(latency, 0.5), _pct(latency, 0.95)
+    top = max(latency, default=0.0)
+    return (
+        f"튜터 요청 지연(초, 동시 {metrics.WORKERS}): p50 {p50:.2f} · p95 {p95:.2f}"
+        f" · 최대 {top:.2f} (요청 {len(latency)}개)\n"
+    )
 
 
 def _show(report: metrics.Report, out: TextIO) -> None:
@@ -414,9 +449,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
+    latency: list[float] = []
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
-        all_responses = collect_runs(args.preset, rows, args.runs, own)
+        all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs
     kb = score_local.load_kb_dir(KB_DIR)
@@ -432,7 +468,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _show(report, sys.stdout)
     if state is not None:
-        _show_tutor_calls(state, blocked, cap=(tutor_cap, args.max_calls, reserve, embedding))
+        cap = (tutor_cap, args.max_calls, reserve, embedding)
+        _show_tutor_calls(state, blocked, latency, cap=cap)
     if use is not None:
         embedding_summary(use, sys.stdout)
     if previous is not None:
@@ -442,14 +479,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 1 if tainted else 0
 
 
-def _show_tutor_calls(state: Any, blocked: int, *, cap: tuple[int, int, int, int]) -> None:
-    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16)와 상한에 막힌 호출 수.
+def _show_tutor_calls(
+    state: Any, blocked: int, latency: Sequence[float], *, cap: tuple[int, int, int, int]
+) -> None:
+    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 상한에 막힌 호출 수.
 
     cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다.
     """
     calls = state.tutor_llm.calls
     shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
     sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
+    sys.stdout.write(_latency_line(latency))
     if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
         tutor_cap, max_calls, reserve, embedding = cap
         sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")

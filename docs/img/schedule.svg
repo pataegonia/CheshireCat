@@ -114,9 +114,12 @@
 <rect x="673" y="218" width="394" height="52" rx="6" class="t" stroke-width="1.2"/>
 <text x="870.0" y="239" text-anchor="middle" class="h">T3 조정</text>
 <text x="870.0" y="257" text-anchor="middle" class="sm">검색 · 판단 ablation, 범주 판정 비교, 홀드아웃</text>
-<rect x="1073" y="218" width="314" height="52" rx="6" class="t" stroke-width="1.2"/>
-<text x="1230.0" y="239" text-anchor="middle" class="h">T4 마무리</text>
-<text x="1230.0" y="257" text-anchor="middle" class="sm">만점 검증 · 최종 회귀</text>
+<rect x="1073" y="218" width="154" height="52" rx="6" class="t" stroke-width="1.2"/>
+<text x="1150.0" y="239" text-anchor="middle" class="h">T4 마무리</text>
+<text x="1150.0" y="257" text-anchor="middle" class="sm">최종 검증 · 회귀(11/21–22)</text>
+<rect x="1233" y="218" width="154" height="52" rx="6" class="t" stroke-width="1.2" stroke-dasharray="5 3"/>
+<text x="1310.0" y="239" text-anchor="middle" class="h">예비</text>
+<text x="1310.0" y="257" text-anchor="middle" class="sm">새 작업 없음 · 비상 수정만</text>
 <rect x="1393" y="218" width="74" height="52" rx="6" class="t" stroke-width="1.2"/>
 <text x="1430.0" y="249.0" text-anchor="middle" class="h">시연</text>
 <rect x="193" y="290" width="74" height="52" rx="6" class="i" stroke-width="1.2"/>

@@ -36,8 +36,8 @@
 
 ## 명령 (저장소 루트에서)
 - `uv sync --locked` · `uv run pytest tests/integration tests/tutor` · `uv run ruff check integration tests` · `uv run ruff format integration tests`
-- 루트 `pyproject.toml`이 서버 실행 환경이다. 가드는 경로 의존성(자기 `guardrail/uv.lock` · CI 그대로), 튜터는 workspace 멤버(설치하지 않고 루트에서 import). **서버와 테스트는 저장소 루트에서 실행한다**(다른 폴더에서는 `tutor` · `integration`이 import되지 않는다).
-- 의존성을 바꾸면 `uv lock`으로 루트 lock을 다시 만든다. 가드와 겹치는 패키지는 `guardrail/uv.lock`과 같은 버전이어야 한다(`tests/integration/test_workspace.py`). 어긋나면 `guardrail/uv.lock`을 루트에 복사한 뒤 `uv lock`.
+- 루트 `pyproject.toml`이 서버 실행 환경이다. **uv workspace이고 lock은 루트 `uv.lock` 하나**(멤버 `guardrail` · `tutor`). `guardrail/`이나 `tutor/` 안에서 uv를 돌려도 루트 lock과 루트 `.venv`를 쓴다. 튜터 · 통합 코드는 설치하지 않고 루트에서 import하므로 **서버와 테스트는 저장소 루트에서 실행한다**(다른 폴더에서는 `tutor` · `integration`이 import되지 않는다).
+- 의존성은 쓰는 트랙의 `pyproject.toml`에 적고(가드 `guardrail/`, 튜터 `tutor/`, 통합은 루트) `uv lock`으로 루트 lock을 갱신한다. Python은 루트 `.python-version`의 3.12.
 - uv 없이 돌릴 때: `pip install -e guardrail pytest pytest-cov pyyaml httpx hypothesis jsonschema anyio` 뒤 `python -m pytest tests/integration`. Python 3.12 기준(3.13 전용 기능 금지).
 - 테스트 폴더는 `tests/__init__.py` + `tests/integration/__init__.py`를 둘 다 둔다. `tests/__init__.py`가 없으면 pytest가 `tests/`를 경로 앞에 넣어 `import integration`이 테스트 폴더를 가리킨다(튜터 `tests/tutor`도 같은 이유).
 - 하네스: `uv run python -m harness.run_public --preset v1_parallel`(실행 전 예상 호출 수를 출력하고 상한을 넘으면 멈춘다). 실제 API 부하(600요청 · 64동시)는 대회 기간 2회만.

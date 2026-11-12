@@ -1,7 +1,7 @@
-"""I1.1 루트 실행 환경: 루트 lock과 가드 lock이 같은 버전을 쓰는지 확인한다.
+"""I1.1 루트 실행 환경: uv workspace 하나, lock 하나(통합 PRD §5).
 
-가드는 `guardrail/uv.lock`으로 자기 CI를 돌리고, 서버는 루트 `uv.lock`으로 뜬다. 두 lock이 같은
-패키지를 다른 버전으로 잡으면 가드 CI가 통과한 코드가 서버에서는 다른 버전 위에서 돈다.
+서버는 `/guard`와 `/tutor`가 한 프로세스로 뜬다. 그래서 세 트랙 코드가 같은 환경, 같은 lock 위에서
+돌아야 한다. 가드 CI가 통과한 버전과 제출 서버가 쓰는 버전이 달라지지 않게 한다.
 """
 
 import tomllib
@@ -10,29 +10,43 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _versions(lock: Path) -> dict[str, str]:
-    packages = tomllib.loads(lock.read_text(encoding="utf-8"))["package"]
-    return {p["name"]: p["version"] for p in packages}
+def _lock(path: Path) -> dict:
+    return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
-def test_root_lock_matches_guard_lock():
-    root = _versions(ROOT / "uv.lock")
-    guard = _versions(ROOT / "guardrail" / "uv.lock")
-    shared = root.keys() & guard.keys()
+def _versions(lock: dict) -> dict[str, set[str]]:
+    found: dict[str, set[str]] = {}
+    for package in lock["package"]:
+        found.setdefault(package["name"], set()).add(package["version"])
+    return found
+
+
+def test_guard_and_tutor_are_members_of_the_root_workspace():
+    members = set(_lock(ROOT / "uv.lock")["manifest"]["members"])
+    assert {"guardrail", "tutor"} <= members
+
+
+def test_tutor_has_no_lock_of_its_own():
+    assert not (ROOT / "tutor" / "uv.lock").exists()
+
+
+def test_leftover_guard_lock_does_not_disagree_with_the_root_lock():
+    """`guardrail/uv.lock`은 workspace로 합친 뒤에는 쓰이지 않는다.
+
+    가드 쪽에서 지우기 전까지 남아 있을 수 있으므로, 남아 있는 동안에는 겹치는 패키지 버전이
+    루트와 같은지 본다(지워지면 볼 것이 없다).
+    """
+    leftover = ROOT / "guardrail" / "uv.lock"
+    if not leftover.exists():
+        return
+    root = _versions(_lock(ROOT / "uv.lock"))
+    guard = _versions(_lock(leftover))
     different = {
-        name: (root[name], guard[name]) for name in sorted(shared) if root[name] != guard[name]
+        name: (sorted(root[name]), sorted(guard[name]))
+        for name in sorted(root.keys() & guard.keys())
+        if root[name] != guard[name]
     }
-    assert different == {}, (
-        "루트 uv.lock과 guardrail/uv.lock의 버전이 다르다(루트, 가드). "
-        "guardrail/uv.lock을 루트에 복사한 뒤 `uv lock`으로 다시 맞춘다."
-    )
-
-
-def test_root_lock_has_every_guard_package():
-    """가드가 쓰는 패키지는 전부 서버 환경에도 있어야 한다."""
-    root = _versions(ROOT / "uv.lock")
-    guard = _versions(ROOT / "guardrail" / "uv.lock")
-    assert sorted(guard.keys() - root.keys()) == []
+    assert different == {}, "루트 uv.lock과 남아 있는 guardrail/uv.lock의 버전이 다르다(루트, 가드)"
 
 
 def test_server_packages_import_from_repo_root():

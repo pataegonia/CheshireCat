@@ -307,18 +307,25 @@ def _openai_send() -> Send:
     return send
 
 
+def _own_gate(size: int) -> Gate:
+    """가드에 LLM이 없을 때 튜터만 쓰는 게이트. 그때는 튜터만 LLM을 부르므로 합계 상한이 같다."""
+    sem = asyncio.Semaphore(size)
+    return lambda: sem
+
+
 def build_llm(app_state: Any, cfg: TutorConfig) -> TutorLLM:
     """서버에서는 가드 LLM의 게이트·probe 결과를 같이 쓴다(TU-13, 가드 D4).
 
-    가드가 없으면(프로세스 안 측정) 가드 설정의 파라미터 값을 쓰고 게이트는 두지 않는다.
-    튜터 설정의 reasoning_effort·max_completion_tokens를 그 위에 덮는다.
+    가드에 LLM이 없으면(루트 앱의 상수 판정기, 프로세스 안 측정) 가드 설정의 파라미터 값을
+    쓰고, 가드 게이트와 같은 크기(llm.gate)의 튜터 게이트를 둔다(#126 리뷰: 없으면 동시 상한이
+    없다). 튜터 설정의 reasoning_effort·max_completion_tokens를 그 위에 덮는다.
     """
     guard_llm = getattr(getattr(app_state, "guard", None), "llm", None)
     if guard_llm is not None:
         gate, base = guard_llm.slot, guard_llm
     else:
         guard_cfg = load_guard_config().llm
-        gate = contextlib.nullcontext
+        gate = _own_gate(guard_cfg.gate)
         params = {k: getattr(guard_cfg, k) for k in OPTIONAL_PARAMS}
         base = SimpleNamespace(params=params, structured=guard_cfg.structured_output)
     overrides = {

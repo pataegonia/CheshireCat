@@ -13,6 +13,8 @@ import pytest
 from pydantic import BaseModel
 
 from guardrail import llm as guard_llm_mod
+from guardrail.config import load_config as load_guard_config
+from guardrail.guard import ConstantGuard
 from tutor.runtime import llm as tutor_llm
 from tutor.runtime.config import load_config
 
@@ -437,6 +439,53 @@ def test_build_without_the_guard_uses_the_guard_config_values():
         "max_completion_tokens": 1600,  # 튜터 주 호출 상한(설정)
     }
     assert built.structured == "json_schema"
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        types.SimpleNamespace(),  # 가드 없음(프로세스 안 측정)
+        types.SimpleNamespace(guard=ConstantGuard()),  # 루트 앱 기본 판정기: LLM이 없다
+    ],
+)
+def test_build_without_a_guard_llm_still_caps_concurrent_calls(monkeypatch, state):
+    """가드에 LLM이 없어도 튜터 호출은 가드 설정 llm.gate만큼만 동시에 나간다(TU-13, #126 리뷰)."""
+    size = load_guard_config().llm.gate
+    release = asyncio.Event()
+    live = {"now": 0, "peak": 0}
+
+    async def held(_kwargs):
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        try:
+            await release.wait()
+        finally:
+            live["now"] -= 1
+        return ok()
+
+    monkeypatch.setattr(tutor_llm, "_openai_send", lambda: held)
+    built = tutor_llm.build_llm(state, CFG)
+
+    async def flood():
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5
+        calls = [
+            asyncio.create_task(
+                built.complete("main", [], Out, deadline=deadline, timeout_s=5, retries=0)
+            )
+            for _ in range(size + 6)
+        ]
+        for _ in range(200):  # 게이트에 든 호출이 모두 보내질 때까지 루프를 돌린다
+            if live["now"] >= size:
+                break
+            await asyncio.sleep(0)
+        sent_at_once = live["now"]
+        release.set()
+        return sent_at_once, await asyncio.gather(*calls)
+
+    sent_at_once, results = asyncio.run(flood())
+    assert sent_at_once == size and live["peak"] == size  # 상한까지 함께 나가고 넘지 않는다
+    assert all(r.error is None for r in results)  # 기다린 호출도 마감 안에 나간다
 
 
 def test_startup_builds_the_llm_on_the_guard_gate():

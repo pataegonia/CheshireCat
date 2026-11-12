@@ -25,7 +25,7 @@ import os
 import secrets
 import sys
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,7 +41,6 @@ from tutor.eval.recall import (
     CountedEmbed,
     english_queries,
     expected_embedding_calls,
-    kb_embedding_batches,
     missing_embedding_env,
     query_parts,
 )
@@ -148,6 +147,8 @@ def load_previous(path: Path, *, judge: bool) -> dict[str, list[float | None]]:
         raise ValueError(f"비교 파일에 report.points가 없다: {path}")
     if data.get("judge") is not judge:
         raise ValueError("판정 모드(--judge)가 다른 결과와는 비교하지 않는다")
+    if data.get("tainted"):
+        raise ValueError("비교 파일은 기본값이나 BM25가 섞인 결과다(tainted): 기준으로 쓰지 않는다")
     return points
 
 
@@ -176,11 +177,23 @@ def expected_calls(
     return (per_run * runs * 11 + 9) // 10  # 정수로 1.1배 올림(가드 하네스와 같음)
 
 
-def _write(report: metrics.Report, *, name: str, judge: bool, out_dir: Path) -> Path:
+def _write(
+    report: metrics.Report,
+    *,
+    name: str,
+    judge: bool,
+    out_dir: Path,
+    tainted: bool,
+    embedding: "EmbeddingUse | None",
+) -> Path:
+    """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다."""
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = out_dir / f"{name}-{stamp}.json"
-    data = {"preset": name, "judge": judge, "created": stamp, "report": asdict(report)}
+    data: dict[str, Any] = {"preset": name, "judge": judge, "created": stamp, "tainted": tainted}
+    if embedding is not None:
+        data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
+    data["report"] = asdict(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return path
 
@@ -277,8 +290,8 @@ def _own_state(cfg: TutorConfig, overrides: dict[str, Any]) -> bool:
 
 def _tutor_state(
     cfg: TutorConfig, overrides: dict[str, Any], cap: int
-) -> tuple[Any, CountedEmbed | None]:
-    """tutor 프리셋이 쓸 기동 결과와, 임베딩을 켰으면 그 호출을 세는 함수.
+) -> tuple[Any, CountedEmbed | None, tuple[int, int]]:
+    """tutor 프리셋이 쓸 기동 결과, 임베딩을 켰으면 그 호출을 세는 함수, 기동 직후 (호출, 실패).
 
     튜터 LLM 호출에 상한을 건다: 예상 수 확인은 시작 전에 한 번이고, 이것은 실행 중의 멈춤이다.
     임베딩을 켰으면 서버 기동과 같은 함수(startup.build_embedding)로 KB 임베딩을 만든다.
@@ -289,33 +302,56 @@ def _tutor_state(
     else:
         state = pipeline.default_state()
     state.tutor_llm.max_calls = cap
-    counted = None
-    if cfg.toggles.embedding:
-        counted = CountedEmbed(openai_embed())
-        asyncio.run(build_embedding(state, counted))
-    return state, counted
+    if not cfg.toggles.embedding:
+        return state, None, (0, 0)
+    counted = CountedEmbed(openai_embed())
+    asyncio.run(build_embedding(state, counted))
+    return state, counted, (counted.calls, counted.failures)
 
 
-def embedding_summary(counted: Any, out: TextIO, *, kb_batches: int, queries: int) -> bool:
-    """임베딩 호출 수를 내고, 이 결과를 임베딩 효과로 읽어도 되는지 돌려준다.
+@dataclass(frozen=True)
+class EmbeddingUse:
+    """측정 중 임베딩 사용. 기동 빌드와 그 뒤 질의를 나눠 센다.
 
-    질의 임베딩이 실패했으면(그 질의는 BM25로 떨어짐), 또는 영어 질의가 있는데 한 번도 쓰지
-    않았으면(이 모드는 검색에 임베딩을 쓰지 않음: 베이스라인은 정의상 BM25) 아니다.
+    queries는 영어 질의 × 실행, 곧 임베딩을 쓸 것으로 예상한 질의 수다. 검색 전에 끝나는 행이
+    있을 수 있어 정확한 값은 아니다.
     """
-    used = counted.calls - kb_batches
-    out.write(f"임베딩 호출 {counted.calls}회(기동 {kb_batches}회 + 질의 {used}회")
-    out.write(f", 실패 {counted.failures}회)\n")
-    ok = True
-    if counted.failures:
-        out.write(
-            "일부 질의 임베딩이 실패해 BM25로 떨어졌다: 이 결과를 임베딩 효과로 읽지 않는다\n"
-        )
-        ok = False
-    if queries and used <= 0:
+
+    build: int  # 기동 때 KB 묶음 호출
+    calls: int  # 기동 뒤 질의 임베딩 호출
+    failures: int  # 기동 뒤 실패(오류·시간 초과·쓸 수 없는 벡터: 그 질의는 BM25)
+    queries: int
+
+    @property
+    def ok(self) -> bool:
+        """임베딩 효과로 읽어도 되는가: 질의 실패가 없고, 영어 질의가 있으면 한 번은 썼다."""
+        return not self.failures and not (self.queries and self.calls == 0)
+
+
+def _embedding_use(
+    counted: CountedEmbed | None, built: tuple[int, int], rows: Sequence[Any], runs: int
+) -> EmbeddingUse | None:
+    if counted is None:
+        return None
+    calls, failures = counted.calls - built[0], counted.failures - built[1]
+    return EmbeddingUse(built[0], calls, failures, english_queries(rows) * runs)
+
+
+def embedding_summary(use: EmbeddingUse, out: TextIO) -> None:
+    """임베딩 호출 수를 내고, 결과를 임베딩 효과로 읽으면 안 되는 까닭이 있으면 알린다."""
+    out.write(f"임베딩 호출 {use.build + use.calls}회(기동 {use.build}회 + 질의 {use.calls}회")
+    out.write(f" / 영어 질의 {use.queries}회, 실패 {use.failures}회)\n")
+    if use.failures:
+        out.write("일부 질의 임베딩이 실패해 BM25로 떨어졌다")
+        out.write(": 이 결과를 임베딩 효과로 읽지 않는다\n")
+    if use.queries and use.calls == 0:
         out.write("질의 임베딩이 한 번도 쓰이지 않았다(이 모드는 검색에 임베딩을 쓰지 않는다)")
         out.write(": 이 결과는 BM25 수치다\n")
-        ok = False
-    return ok
+    elif 0 < use.calls < use.queries:
+        out.write(f"영어 질의 {use.queries}회 중 {use.calls}회만 임베딩을 썼다")
+        out.write("(검색 전에 끝난 행이 있을 수 있다)\n")
+    elif use.calls > use.queries:
+        out.write(f"질의 임베딩이 예상({use.queries}회)보다 많다: 예상 호출 수 계산을 다시 본다\n")
 
 
 def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any, ...]:
@@ -355,6 +391,8 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     sys.stdout.write(f"(재시도 여유 1.1배, 상한 {args.max_calls}회)\n")
     embedding = 0
     if args.preset == "tutor" and cfg.toggles.embedding:
+        if cfg.mode == "baseline":  # 기동 호출을 헛되게 쓰지 않는다
+            ap.error("베이스라인은 정의상 BM25만 쓴다(TU-14): 임베딩을 켜고 재지 않는다")
         missing = missing_embedding_env()
         if missing:  # 주소가 비면 SDK 기본 주소(공개 OpenAI)로 나간다
             ap.error(f"임베딩을 켜면 {'·'.join(missing)}이 필요하다(런박스)")
@@ -371,9 +409,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
-    state, counted = None, None
+    state, counted, built = None, None, (0, 0)
     if args.preset == "tutor":
-        state, counted = _tutor_state(cfg, overrides, tutor_cap)
+        state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
@@ -385,31 +423,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = metrics.build_report(
         [metrics.score_run(rows, responses, judge=judge, kb=kb) for responses in all_responses]
     )
+    blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
+    use = _embedding_use(counted, built, rows, args.runs)
+    tainted = bool(blocked) or (use is not None and not use.ok)
     name = args.preset or args.responses.stem
-    path = _write(report, name=name, judge=judge is not None, out_dir=args.out)
+    path = _write(
+        report, name=name, judge=judge is not None, out_dir=args.out, tainted=tainted, embedding=use
+    )
     _show(report, sys.stdout)
-    blocked = 0
-    if state is not None:  # 튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16)
-        calls = state.tutor_llm.calls
-        shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
-        sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
-        blocked = sum(state.tutor_llm.blocked.values())
-    if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
-        sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")
-        sys.stdout.write(
-            f" = --max-calls {args.max_calls} - 판정 몫 {reserve}): 기본값이 섞인 결과다\n"
-        )
-    embedding_ok = True
-    if counted is not None:
-        queries = english_queries(rows) * args.runs
-        embedding_ok = embedding_summary(
-            counted, sys.stdout, kb_batches=kb_embedding_batches(), queries=queries
-        )
+    if state is not None:
+        _show_tutor_calls(state, blocked, cap=(tutor_cap, args.max_calls, reserve, embedding))
+    if use is not None:
+        embedding_summary(use, sys.stdout)
     if previous is not None:
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
     sys.stdout.write(f"저장: {path}\n")
-    return 1 if blocked or not embedding_ok else 0
+    return 1 if tainted else 0
+
+
+def _show_tutor_calls(state: Any, blocked: int, *, cap: tuple[int, int, int, int]) -> None:
+    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16)와 상한에 막힌 호출 수.
+
+    cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다.
+    """
+    calls = state.tutor_llm.calls
+    shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
+    sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
+    if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
+        tutor_cap, max_calls, reserve, embedding = cap
+        sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")
+        sys.stdout.write(f" = --max-calls {max_calls} - 판정 몫 {reserve}")
+        sys.stdout.write(f" - 임베딩 몫 {embedding}" if embedding else "")
+        sys.stdout.write("): 기본값이 섞인 결과다\n")
 
 
 if __name__ == "__main__":

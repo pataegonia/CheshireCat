@@ -120,20 +120,39 @@ def _percentile(values: Sequence[float], q: float) -> float:
 
 
 class CountedEmbed:
-    """임베딩 호출 수와 실패 수(오류·시간 초과)를 센다(TU-16 호출 수 보고, recall·run_local)."""
+    """임베딩 호출 수와 실패 수를 센다(TU-16 호출 수 보고, recall·run_local).
+
+    실패: 오류·시간 초과(취소), 그리고 호출은 됐지만 받은 벡터를 쓸 수 없을 때(수가 다름·차원이
+    처음과 다름·NaN·무한대·영벡터). 뒤의 것은 EmbeddingSearch가 조용히 BM25로 떨어지는 경우다.
+    """
 
     def __init__(self, embed: Embed) -> None:
         self.embed = embed
         self.calls = 0
         self.failures = 0
+        self._dim: int | None = None  # 처음 받은 벡터의 차원(기동 때 KB 묶음)
 
     async def __call__(self, texts: Sequence[str]) -> list[list[float]]:
         self.calls += 1
         try:
-            return await self.embed(texts)
+            vectors = await self.embed(texts)
         except BaseException:  # 시간 초과(취소)도 센다. 예외는 그대로 올린다
             self.failures += 1
             raise
+        if not self._usable(vectors, len(texts)):
+            self.failures += 1
+        return vectors
+
+    def _usable(self, vectors: Sequence[Sequence[float]], count: int) -> bool:
+        if len(vectors) != count:
+            return False
+        for vector in vectors:
+            if self._dim is None:
+                self._dim = len(vector)
+            norm = math.sqrt(sum(x * x for x in vector))
+            if len(vector) != self._dim or not math.isfinite(norm) or norm == 0.0:
+                return False
+        return True
 
 
 class KbEmbeddingError(RuntimeError):

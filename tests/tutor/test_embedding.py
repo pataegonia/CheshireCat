@@ -346,12 +346,28 @@ def test_counted_embed_counts_calls_and_failures_including_timeouts():
     assert (bad.calls, bad.failures) == (1, 1) and (slow.calls, slow.failures) == (1, 1)
 
 
-def test_expected_embedding_calls_are_kb_batches_plus_english_queries_per_run():
-    from tutor.eval.recall import english_queries, expected_embedding_calls, public_rows
+@pytest.mark.parametrize(
+    "reply",
+    [
+        [],  # 수가 모자람(rerank의 vectors[0]이 IndexError)
+        [[1.0] * (DIM - 1)],  # 차원이 처음과 다름
+        [[math.nan] * DIM],  # NaN
+        [[0.0] * DIM],  # 영벡터
+    ],
+)
+def test_counted_embed_counts_unusable_vectors_as_failures(reply):
+    """호출은 성공해도 EmbeddingSearch가 쓰지 못해 BM25로 떨어지는 벡터는 실패로 센다."""
+    from tutor.eval.recall import CountedEmbed
 
-    rows = public_rows()
-    batches = math.ceil(len(default_index().chunks) / emb.BATCH)
-    assert expected_embedding_calls(rows, runs=3) == batches + 3 * english_queries(rows)
+    replies = iter([[bag("first")], reply])
+
+    async def embed(_texts):
+        return next(replies)
+
+    counted = CountedEmbed(embed)
+    run(counted(["first"]))  # 첫 벡터로 차원을 정한다
+    run(counted(["second"]))
+    assert (counted.calls, counted.failures) == (2, 1)
 
 
 EMBEDDING_ENV = {
@@ -361,15 +377,62 @@ EMBEDDING_ENV = {
 }
 BATCHES = math.ceil(len(default_index().chunks) / emb.BATCH)  # 기동 때 KB 묶음 호출 수
 ON = ("--tutor-set", "toggles.embedding=true")
+QUERY = "bank card limit"
+
+
+def test_expected_embedding_calls_are_kb_batches_plus_english_queries_per_run():
+    from tutor.eval import run_local
+    from tutor.eval.recall import (
+        english_queries,
+        expected_embedding_calls,
+        kb_embedding_batches,
+        public_rows,
+    )
+
+    rows = public_rows()
+    assert kb_embedding_batches() == BATCHES == 4  # KB 조각 244개를 64개씩
+    assert expected_embedding_calls(rows, runs=3) == 4 + 3 * english_queries(rows)
+    assert expected_embedding_calls(run_local.public_tutor_rows(), runs=1) == 4 + 20  # 영어 20개
+
+
+class Returns(FakeEmbed):
+    """기동 묶음은 제대로 내고, 그 뒤 질의 호출에는 정해 둔 벡터를 낸다."""
+
+    def __init__(self, reply):
+        super().__init__()
+        self.reply = reply
+
+    async def __call__(self, texts):
+        if len(self.calls) < BATCHES:
+            return await super().__call__(texts)
+        self.calls.append(list(texts))
+        return self.reply
+
+
+def _embedding_on_config(monkeypatch, tmp_path):
+    """설정 파일에서 임베딩을 켠다(TUTOR_CONFIG). 정말 켜졌는지 확인한다."""
+    text = (ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8")
+    config = tmp_path / "tutor.yaml"
+    config.write_text(text.replace("embedding: false", "embedding: true"), encoding="utf-8")
+    monkeypatch.setenv("TUTOR_CONFIG", str(config))
+    assert load_config().toggles.embedding is True
 
 
 def _run_local(
-    monkeypatch, tmp_path, fake, *argv, query=None, env=EMBEDDING_ENV, source=("--preset", "tutor")
+    monkeypatch,
+    tmp_path,
+    fake,
+    *argv,
+    query=None,
+    blocked=False,
+    env=EMBEDDING_ENV,
+    source=("--preset", "tutor"),
 ):
     """run_local을 부르고 (종료 코드, 측정에 쓴 state)를 돌려준다.
 
     임베딩과 측정 실행을 가짜로 바꿔 튜터 모드와 상관없이 임베딩 배선만 본다. query가 있으면
-    가짜 측정이 실행마다 그 질의로 임베딩 검색을 한 번 쓴다(v2 검색 자리).
+    가짜 측정이 실행마다 그 질의로 임베딩 검색을 한 번 쓴다(v2 검색 자리). blocked면 튜터
+    호출 하나가 상한에 막힌 것으로 둔다.
     """
     from tutor.eval import run_local
 
@@ -386,6 +449,8 @@ def _run_local(
         for _ in range(runs):
             if query is not None and state is not None and state.tutor_emb is not None:
                 run(state.tutor_emb.rerank(query, [], allowed=None))
+        if blocked and state is not None:
+            state.tutor_llm.blocked["main"] += 1
         return [{row["id"]: None for row in rows} for _ in range(runs)]
 
     monkeypatch.setattr(run_local, "collect_runs", fake_runs)
@@ -393,28 +458,71 @@ def _run_local(
     return code, seen.get("state")
 
 
+def _saved(tmp_path):
+    return json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
+
+
 def test_run_local_builds_and_uses_the_embedding_when_turned_on(monkeypatch, tmp_path, capsys):
+    from tutor.eval import run_local
+
     fake = FakeEmbed()
-    code, state = _run_local(monkeypatch, tmp_path, fake, *ON, query="bank card limit")
+    code, state = _run_local(monkeypatch, tmp_path, fake, *ON, query=QUERY)
     assert code == 0 and isinstance(state.tutor_emb, emb.EmbeddingSearch)  # 그 state로 잰다
     assert len(fake.calls) == BATCHES + 1  # 기동 묶음 + 질의 1회(실행 1회)
+    captured = capsys.readouterr()
+    assert "임베딩 예상 호출 24회" in captured.out
+    assert (
+        f"임베딩 호출 {BATCHES + 1}회(기동 {BATCHES}회 + 질의 1회 / 영어 질의 20회" in captured.out
+    )
+    assert "영어 질의 20회 중 1회만" in captured.out  # 일부만 써도 실패는 아니고 알린다
+    sample = run_local.public_tutor_rows()[0]["messages"][-1]["content"]
+    assert QUERY not in captured.out + captured.err and sample not in captured.out  # 본문 없음
+    saved = _saved(tmp_path)
+    assert saved["tainted"] is False and saved["embedding"]["ok"] is True
+
+
+def test_run_local_reports_query_failures_over_several_runs(monkeypatch, tmp_path, capsys):
+    """질의 임베딩이 실패하면(그 질의는 BM25) 종료 코드 1이고 결과 파일도 tainted다."""
+    fake = Returns([[math.nan] * DIM])  # 기동은 되고 질의 벡터는 쓸 수 없다
+    code, _state = _run_local(monkeypatch, tmp_path, fake, *ON, "--runs", "2", query=QUERY)
     out = capsys.readouterr().out
-    assert "임베딩 예상 호출" in out
-    assert f"임베딩 호출 {BATCHES + 1}회(기동 {BATCHES}회 + 질의 1회, 실패 0회)" in out
+    assert code == 1 and len(fake.calls) == BATCHES + 2
+    assert "임베딩 예상 호출 44회" in out and "질의 2회" in out and "실패 2회" in out
+    assert "BM25로 떨어졌다" in out
+    saved = _saved(tmp_path)
+    assert saved["tainted"] is True and saved["embedding"]["failures"] == 2
 
 
 def test_run_local_flags_an_embedding_that_no_query_used(monkeypatch, tmp_path, capsys):
-    """켜도 이 모드가 검색에 임베딩을 쓰지 않으면(베이스라인은 정의상 BM25) BM25 수치로 알린다."""
+    """켜도 이 모드가 검색에 임베딩을 쓰지 않으면 BM25 수치로 알리고 tainted로 남긴다."""
     code, _state = _run_local(monkeypatch, tmp_path, FakeEmbed(), *ON)
     assert code == 1 and "질의 임베딩이 한 번도 쓰이지 않았다" in capsys.readouterr().out
+    assert _saved(tmp_path)["tainted"] is True
+
+
+def test_run_local_blocked_calls_taint_the_result_even_with_a_good_embedding(monkeypatch, tmp_path):
+    code, _state = _run_local(monkeypatch, tmp_path, FakeEmbed(), *ON, query=QUERY, blocked=True)
+    saved = _saved(tmp_path)
+    assert code == 1 and saved["tainted"] is True and saved["embedding"]["ok"] is True
 
 
 def test_run_local_without_the_embedding_neither_builds_nor_counts_it(
     monkeypatch, tmp_path, capsys
 ):
     fake = FakeEmbed()
-    code, state = _run_local(monkeypatch, tmp_path, fake, query="bank card limit")
+    code, state = _run_local(monkeypatch, tmp_path, fake, query=QUERY)
     assert code == 0 and fake.calls == [] and state is None  # 기본 state(tutor.handle)로 잰다
+    assert "임베딩" not in capsys.readouterr().out
+    saved = _saved(tmp_path)
+    assert saved["tainted"] is False and "embedding" not in saved
+
+
+def test_run_local_other_overrides_alone_do_not_build_the_embedding(monkeypatch, tmp_path, capsys):
+    fake = FakeEmbed()
+    code, state = _run_local(
+        monkeypatch, tmp_path, fake, "--tutor-set", "retrieval.k=3", query=QUERY
+    )
+    assert code == 0 and state.tutor_emb is None and fake.calls == []  # 자기 state, 임베딩 없음
     assert "임베딩" not in capsys.readouterr().out
 
 
@@ -424,56 +532,102 @@ def test_run_local_stops_before_measuring_when_the_kb_embedding_fails(
     fake = FakeEmbed(fail=RuntimeError("본문"))
     with pytest.raises(SystemExit):  # 켰는데 못 만들면 BM25 수치를 임베딩 수치로 남기지 않는다
         _run_local(monkeypatch, tmp_path, fake, *ON)
-    assert "BM25" in capsys.readouterr().err and not list(tmp_path.iterdir())
+    err = capsys.readouterr().err
+    assert "KB 임베딩" in err and "BM25" in err and "본문" not in err
+    assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("missing", list(EMBEDDING_ENV))
-def test_run_local_checks_the_embedding_env_before_building(monkeypatch, tmp_path, capsys, missing):
+def test_run_local_does_not_build_the_embedding_for_the_baseline(monkeypatch, tmp_path, capsys):
+    """베이스라인은 정의상 BM25만 쓰므로(TU-14) 켜도 만들지 않고 멈춘다(기동 호출 낭비 방지)."""
+    for name, value in (("OPENAI_API_KEY", "k"), ("OPENAI_MODEL", "m")):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
+    fake = FakeEmbed()
+    with pytest.raises(SystemExit):
+        _run_local(monkeypatch, tmp_path, fake, "--tutor-set", "mode=baseline", *ON)
+    assert "베이스라인" in capsys.readouterr().err and fake.calls == []
+
+
+@pytest.mark.parametrize(
+    "missing, value", [*((name, None) for name in EMBEDDING_ENV), ("EMBEDDING_BASE_URL", "  ")]
+)
+def test_run_local_checks_the_embedding_env_before_building(
+    monkeypatch, tmp_path, capsys, missing, value
+):
     fake = FakeEmbed()
     env = {k: v for k, v in EMBEDDING_ENV.items() if k != missing}
+    if value is not None:
+        env[missing] = value  # 공백뿐인 값도 없는 것으로 본다
     with pytest.raises(SystemExit):  # 무엇이 빠졌는지 알리고, 만들기 전에 멈춘다
         _run_local(monkeypatch, tmp_path, fake, *ON, env=env)
     assert missing in capsys.readouterr().err and fake.calls == []
 
 
-def test_run_local_counts_the_embedding_in_the_call_cap(monkeypatch, tmp_path):
+def test_run_local_counts_the_embedding_in_the_call_cap(monkeypatch, tmp_path, capsys):
     from tutor.eval import run_local
-    from tutor.eval.recall import expected_embedding_calls
 
     rows = run_local.public_tutor_rows()
-    tutor_calls = run_local.expected_calls(rows, preset="tutor", runs=1, judge=False)
-    cap = ["--max-calls", str(tutor_calls + expected_embedding_calls(rows, runs=1) - 1)]
-    assert _run_local(monkeypatch, tmp_path, FakeEmbed(), *cap)[0] == 0  # 끄면 들어간다
-    with pytest.raises(SystemExit):  # 켜면 임베딩 몫까지 더해 상한을 넘는다
-        _run_local(monkeypatch, tmp_path, FakeEmbed(), *cap, *ON)
+    assert (
+        run_local.expected_calls(rows, preset="tutor", runs=1, judge=False) == 660
+    )  # 3 × 200 × 1.1
+    exact = 660 + 24  # 튜터 + 임베딩(기동 4 + 영어 질의 20)
+    code, state = _run_local(
+        monkeypatch, tmp_path, FakeEmbed(), "--max-calls", str(exact), *ON, query=QUERY
+    )
+    assert code == 0 and state.tutor_llm.max_calls == exact - 24  # 실행 중 튜터 상한에서도 뺀다
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as stop:  # 하나 모자라면 시작 전에 멈춘다
+        _run_local(monkeypatch, tmp_path, FakeEmbed(), "--max-calls", str(exact - 1), *ON)
+    assert stop.value.code == 2 and "상한" in capsys.readouterr().err
+    code, state = _run_local(monkeypatch, tmp_path, FakeEmbed(), "--max-calls", str(exact - 1))
+    assert code == 0 and state is None  # 끄면 임베딩 몫이 없어 들어간다
 
 
 def test_run_local_with_saved_responses_never_builds_the_embedding(monkeypatch, tmp_path, capsys):
     """--responses는 튜터를 부르지 않으므로, 설정 파일에서 임베딩을 켜 두어도 만들지 않는다."""
     from tutor.eval import run_local
 
-    text = (ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8")
-    config = tmp_path / "tutor.yaml"
-    config.write_text(text.replace("embedding: false", "embedding: true"), encoding="utf-8")
-    monkeypatch.setenv("TUTOR_CONFIG", str(config))
+    _embedding_on_config(monkeypatch, tmp_path)
     saved = tmp_path / "responses.jsonl"
     row_id = run_local.public_tutor_rows()[0]["id"]
     saved.write_text(json.dumps({"id": row_id, "response": None}) + "\n", encoding="utf-8")
     fake = FakeEmbed()
     code, state = _run_local(
-        monkeypatch, tmp_path / "runs", fake, source=("--responses", str(saved))
+        monkeypatch, tmp_path / "runs", fake, env={}, source=("--responses", str(saved))
+    )
+    assert code == 0 and fake.calls == [] and state is None  # 환경변수도 요구하지 않는다
+    assert "임베딩" not in capsys.readouterr().out
+
+
+def test_reference_preset_never_builds_the_embedding(monkeypatch, tmp_path, capsys):
+    _embedding_on_config(monkeypatch, tmp_path)
+    fake = FakeEmbed()
+    code, state = _run_local(
+        monkeypatch, tmp_path / "runs", fake, env={}, source=("--preset", "reference")
     )
     assert code == 0 and fake.calls == [] and state is None
     assert "임베딩" not in capsys.readouterr().out
 
 
+def test_compare_refuses_a_tainted_baseline(tmp_path):
+    from tutor.eval import run_local
+
+    path = tmp_path / "old.json"
+    data = {"judge": False, "tainted": True, "report": {"points": {}}}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="tainted"):  # 기본값·BM25가 섞인 결과는 기준이 아니다
+        run_local.load_previous(path, judge=False)
+
+
 @pytest.mark.parametrize(
     "calls, failures, queries, ok, said",
     [
-        (5, 0, 20, True, "임베딩 호출 5회(기동 4회 + 질의 1회, 실패 0회)"),
-        (5, 1, 20, False, "BM25로 떨어졌다"),
-        (4, 0, 20, False, "질의 임베딩이 한 번도 쓰이지 않았다"),
-        (4, 0, 0, True, "질의 0회"),  # 영어 질의가 없는 행만 재면 질의 임베딩이 없는 게 맞다
+        (20, 0, 20, True, "임베딩 호출 24회(기동 4회 + 질의 20회 / 영어 질의 20회, 실패 0회)"),
+        (20, 1, 20, False, "BM25로 떨어졌다"),
+        (0, 0, 20, False, "질의 임베딩이 한 번도 쓰이지 않았다"),
+        (0, 0, 0, True, "질의 0회"),  # 영어 질의가 없는 행만 재면 질의 임베딩이 없는 게 맞다
+        (5, 0, 20, True, "영어 질의 20회 중 5회만"),  # 검색 전에 끝난 행이 있을 수 있다
+        (25, 0, 20, True, "예상(20회)보다 많다"),
     ],
 )
 def test_embedding_summary_judges_failures_and_unused_queries(
@@ -481,7 +635,7 @@ def test_embedding_summary_judges_failures_and_unused_queries(
 ):
     from tutor.eval import run_local
 
-    counted = SimpleNamespace(calls=calls, failures=failures)
-    assert run_local.embedding_summary(counted, sys.stdout, kb_batches=4, queries=queries) is ok
-    out = capsys.readouterr().out
-    assert said in out and "본문" not in out
+    use = run_local.EmbeddingUse(build=4, calls=calls, failures=failures, queries=queries)
+    assert use.ok is ok
+    run_local.embedding_summary(use, sys.stdout)
+    assert said in capsys.readouterr().out

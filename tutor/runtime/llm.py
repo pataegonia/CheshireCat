@@ -104,6 +104,10 @@ class TutorLLM:
         self.unexpected: Counter[str] = Counter()  # 분류 밖 예외의 클래스 이름별 수(메시지 없음)
         self.max_calls: int | None = None  # 하네스 예산(넘으면 error="budget", 보내지 않음)
         self.blocked: Counter[str] = Counter()  # 예산에 막혀 보내지 못한 호출 수(역할별)
+        # 오류로 끝난 호출 수((역할, 최종 오류 코드)별, 하네스가 센다). complete 한 번이 1회다:
+        # 재시도 뒤 최종 오류·게이트 대기 초과도 1회(calls는 보낸 시도 수라 단위가 다르다).
+        # 예산 막힘은 blocked에만 센다
+        self.failures: Counter[tuple[str, str]] = Counter()
         self._base = base
         self._overrides = dict(overrides or {})
         self._send = send
@@ -125,6 +129,23 @@ class TutorLLM:
         return self._base.structured
 
     async def complete(
+        self,
+        role: str,
+        messages: list[dict[str, str]],
+        schema: type[BaseModel],
+        *,
+        deadline: float,
+        timeout_s: float,
+        retries: int,
+    ) -> Result:
+        result = await self._complete(
+            role, messages, schema, deadline=deadline, timeout_s=timeout_s, retries=retries
+        )
+        if result.error is not None and result.error != "budget":
+            self.failures[(role, result.error)] += 1
+        return result
+
+    async def _complete(
         self,
         role: str,
         messages: list[dict[str, str]],
@@ -265,17 +286,20 @@ class TutorLLM:
 def _openai_send() -> Send:
     """AsyncOpenAI는 이벤트 루프마다 첫 호출 때 만든다(httpx 연결이 루프에 묶이므로).
 
-    환경변수: OPENAI_API_KEY(없으면 auth 오류), OPENAI_BASE_URL(비어 있으면 SDK 기본). SDK 재시도 0.
+    환경변수: OPENAI_API_KEY·OPENAI_BASE_URL. 하나라도 비면 보내지 않고 auth 오류다. 주소가 비면
+    SDK가 기본 주소(공개 OpenAI)로 보내기 때문이다(운영진 API만 부른다, SPEC §7). SDK 재시도 0.
     """
     made: dict[str, Any] = {"loop": None, "client": None}
 
     async def send(kwargs: dict[str, Any]) -> Any:
         loop = asyncio.get_running_loop()
         if made["loop"] is not loop:
-            key = os.environ.get("OPENAI_API_KEY")
+            key = (os.environ.get("OPENAI_API_KEY") or "").strip()
             if not key:
                 raise openai.OpenAIError("OPENAI_API_KEY가 없다")
-            base_url = os.environ.get("OPENAI_BASE_URL") or None
+            base_url = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+            if not base_url:
+                raise openai.OpenAIError("OPENAI_BASE_URL이 없다")
             made["client"] = openai.AsyncOpenAI(api_key=key, base_url=base_url, max_retries=0)
             made["loop"] = loop
         return await made["client"].chat.completions.create(**kwargs)
@@ -283,23 +307,50 @@ def _openai_send() -> Send:
     return send
 
 
+def _own_gate(size: int) -> Gate:
+    """가드에 LLM이 없을 때 튜터만 쓰는 게이트. 그때는 튜터만 LLM을 부르므로 합계 상한이 같다.
+
+    세마포어는 이벤트 루프마다 하나다(_openai_send와 같은 방식). 경합한 세마포어는 그 루프에
+    묶여, 측정 도구가 asyncio.run을 여러 번 쓰면 다음 루프에서 RuntimeError가 나기 때문이다.
+    """
+    made: dict[str, Any] = {"loop": None, "sem": None}
+
+    def gate() -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if made["loop"] is not loop:
+            made["sem"] = asyncio.Semaphore(size)
+            made["loop"] = loop
+        return made["sem"]
+
+    return gate
+
+
 def build_llm(app_state: Any, cfg: TutorConfig) -> TutorLLM:
     """서버에서는 가드 LLM의 게이트·probe 결과를 같이 쓴다(TU-13, 가드 D4).
 
-    가드가 없으면(프로세스 안 측정) 가드 설정의 파라미터 값을 쓰고 게이트는 두지 않는다.
-    튜터 설정의 reasoning_effort·max_completion_tokens를 그 위에 덮는다.
+    가드에 LLM이 없으면(루트 앱의 상수 판정기, 프로세스 안 측정) 가드 설정의 파라미터 값을
+    쓰고, 가드 게이트와 같은 크기(llm.gate)의 튜터 게이트를 둔다(#126 리뷰: 없으면 동시 상한이
+    없다). 튜터 설정의 reasoning_effort·max_completion_tokens를 그 위에 덮는다.
     """
     guard_llm = getattr(getattr(app_state, "guard", None), "llm", None)
     if guard_llm is not None:
         gate, base = guard_llm.slot, guard_llm
     else:
         guard_cfg = load_guard_config().llm
-        gate = contextlib.nullcontext
+        gate = _own_gate(guard_cfg.gate)
         params = {k: getattr(guard_cfg, k) for k in OPTIONAL_PARAMS}
         base = SimpleNamespace(params=params, structured=guard_cfg.structured_output)
     overrides = {
         "reasoning_effort": cfg.llm.reasoning_effort,
         "max_completion_tokens": cfg.llm.max_completion_tokens,
     }
-    model = os.environ.get("OPENAI_MODEL", "")
+    model = (os.environ.get("OPENAI_MODEL") or "").strip()  # .env 줄 끝 공백
     return TutorLLM(_openai_send(), gate, model=model, base=base, overrides=overrides)
+
+
+API_ENV = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")  # 튜터 LLM이 부를 때 필요한 것
+
+
+def missing_api_env() -> list[str]:
+    """비었거나 공백뿐인 운영진 API 환경변수 이름. 하나라도 있으면 튜터 LLM은 보내지 못한다."""
+    return [name for name in API_ENV if not (os.environ.get(name) or "").strip()]

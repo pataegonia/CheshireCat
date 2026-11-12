@@ -37,3 +37,76 @@ def make_app():
         defaults={"/tutor": tutor.TUTOR_DEFAULT},
         startups=[tutor.startup],
     )
+
+
+FAKE_OPENAI_ENV = {
+    "OPENAI_API_KEY": "k",
+    "OPENAI_MODEL": "m",
+    "OPENAI_BASE_URL": "http://127.0.0.1:9",  # 로컬 9번 포트: 전송을 못 바꿔도 밖으로 나가지 않는다
+}
+
+
+def _fake_send(monkeypatch, reply) -> list[dict]:
+    """가짜 환경변수를 넣고 튜터 LLM 전송을 reply(kwargs)로 바꾼다. 보내려던 요청을 차례로 돌려준다."""
+    from tutor.runtime import llm as llm_mod
+
+    for name, value in FAKE_OPENAI_ENV.items():
+        monkeypatch.setenv(name, value)
+    sent: list[dict] = []
+
+    def make_send():
+        async def send(kwargs):
+            sent.append(kwargs)
+            return reply(kwargs)
+
+        return send
+
+    monkeypatch.setattr(llm_mod, "_openai_send", make_send)
+    return sent
+
+
+def block_openai(monkeypatch) -> list[dict]:
+    """운영진 API 환경변수 자리에 가짜 값을 넣고, 튜터 LLM 전송은 막는다(보내지 않고 auth 오류).
+
+    run_local의 tutor 프리셋은 두 모드 모두 이 환경변수를 요구한다(#125). 셸에 진짜 키가 있어도
+    테스트가 운영진 API를 부르지 않는다. 보내려던 요청(kwargs)을 차례로 돌려준다.
+    """
+    import openai
+
+    def refuse(_kwargs):
+        raise openai.OpenAIError("막은 전송")  # auth 오류: 다시 보내지 않는다
+
+    return _fake_send(monkeypatch, refuse)
+
+
+# 응답 스키마 이름별 최소 정상 답(주 호출 MainCallOut, 베이스라인 BaselineOut). 과목 사실은 없다
+OK_REPLIES = {
+    "MainCallOut": {
+        "category": "normal",
+        "action": "answer",
+        "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
+    },
+    "BaselineOut": {"answer": "자료를 바탕으로 답해요.", "action": "answer", "citations": []},
+}
+
+
+def answer_openai(monkeypatch) -> list[dict]:
+    """block_openai와 같되, 보내지 않고 응답 스키마 이름에 맞는 최소 정상 JSON으로 답한다.
+
+    json_schema 모드(가드 설정 기본, structured_output)만 다룬다. json_object 모드면 스키마
+    이름이 없어 전송 안에서 KeyError가 나고, 튜터 LLM이 그것을 server 오류로 센다.
+    """
+    import json
+    import types
+
+    def answer(kwargs):
+        name = kwargs["response_format"]["json_schema"]["name"]
+        content = json.dumps(OK_REPLIES[name], ensure_ascii=False)
+        choice = types.SimpleNamespace(
+            message=types.SimpleNamespace(content=content), finish_reason="stop"
+        )
+        return types.SimpleNamespace(
+            choices=[choice], usage=types.SimpleNamespace(completion_tokens=5)
+        )
+
+    return _fake_send(monkeypatch, answer)

@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.tutor.tutor_testlib import answer_openai, block_openai
 from tutor.eval import grader, metrics, run_local
 from tutor.eval.grader import KB_DIR, score_local
 from tutor.runtime.response import TUTOR_DEFAULT
@@ -240,7 +242,8 @@ def test_judge_from_env_needs_all_three_settings(monkeypatch):
     assert grader.judge_from_env() is None
 
 
-def test_cli_writes_a_report_and_compares(tmp_path, capsys):
+def test_cli_writes_a_report_and_compares(monkeypatch, tmp_path, capsys):
+    answer_openai(monkeypatch)  # 운영진 API 환경변수 자리 + 보내지 않고 정상 답
     assert run_local.main(["--preset", "reference", "--out", str(tmp_path)]) == 0
     saved = next(tmp_path.glob("reference-*.json"))
     data = json.loads(saved.read_text(encoding="utf-8"))
@@ -251,6 +254,28 @@ def test_cli_writes_a_report_and_compares(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "튜터 점수" in out and "새로 틀린 문항" in out and "오차단" in out
     assert "예상 호출" in out
+
+
+ORDER = ("튜터 LLM 호출", "튜터 요청 지연", "튜터 LLM 최종 실패")
+
+
+def test_cli_flags_a_run_whose_tutor_llm_calls_failed(monkeypatch, tmp_path, capsys):
+    """키는 있는데 주 호출이 모두 실패하면(연결 안 됨·키 거절) 답이 전부 기본값이다.
+
+    정상 측정처럼 끝나지 않게 실패 수를 역할·코드별로 내고 tainted·종료 코드 1로 남긴다.
+    """
+    block_openai(monkeypatch)  # 환경변수는 있고 전송은 auth 오류
+    assert run_local.main(["--preset", "tutor", "--out", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    calls = re.search(r"튜터 LLM 호출: main (\d+)회", out)
+    failed = re.search(r"튜터 LLM 최종 실패: main auth (\d+)회", out)
+    assert calls and failed and failed.group(1) == calls.group(1)  # auth는 다시 보내지 않는다
+    assert "기본값이 섞인 결과다" in out and "상한에 막혀" not in out  # 실패만으로 tainted
+    lines = out.splitlines()
+    at = [next(i for i, x in enumerate(lines) if x.startswith(m)) for m in ORDER]
+    assert at == sorted(at)  # 호출 → 지연 → 최종 실패
+    data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
+    assert data["tainted"] is True
 
 
 def test_cli_compare_needs_points_and_the_same_judge_mode(tmp_path):
@@ -322,7 +347,8 @@ def test_cli_budget_counts_every_judge_call(monkeypatch, tmp_path):
     assert data["judge"] is True and data["report"]["components"]["facts"] == 0.5
 
 
-def test_cli_stops_before_calling_the_tutor_when_over_budget(monkeypatch, tmp_path):
+def test_cli_stops_before_calling_the_tutor_when_over_budget(monkeypatch, tmp_path, capsys):
+    block_openai(monkeypatch)  # 환경변수가 아니라 상한 때문에 멈추는지 본다
     called = []
 
     async def handle(_body):
@@ -332,10 +358,11 @@ def test_cli_stops_before_calling_the_tutor_when_over_budget(monkeypatch, tmp_pa
     monkeypatch.setattr(run_local.tutor, "handle", handle)
     with pytest.raises(SystemExit):
         run_local.main(["--preset", "tutor", "--max-calls", "100", "--out", str(tmp_path)])
-    assert called == []
+    assert called == [] and "상한" in capsys.readouterr().err
 
 
 def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):
+    block_openai(monkeypatch)
     loops = []
 
     async def handle(_body):
@@ -354,6 +381,8 @@ def test_collect_timed_measures_every_request_of_every_run(rows):
 
 
 def test_cli_prints_tutor_request_latency(monkeypatch, tmp_path, capsys):  # TU-16 "지연"
+    block_openai(monkeypatch)
+
     async def slow(_body):
         await asyncio.sleep(0.01)
         return dict(TUTOR_DEFAULT)
@@ -366,9 +395,11 @@ def test_cli_prints_tutor_request_latency(monkeypatch, tmp_path, capsys):  # TU-
     assert "튜터 요청 지연" not in capsys.readouterr().out  # 튜터를 부르지 않는 프리셋
 
 
-def test_cli_never_prints_or_saves_bodies(tmp_path, capsys, rows):
+def test_cli_never_prints_or_saves_bodies(monkeypatch, tmp_path, capsys, rows):
+    sent = answer_openai(monkeypatch)  # tutor 프리셋은 실제 v2 흐름, 운영진 API는 부르지 않는다
     for preset in ("reference", "reference_top1", "tutor"):
         assert run_local.main(["--preset", preset, "--out", str(tmp_path)]) == 0
+    assert sent  # v2 주 호출까지 갔다
     saved = "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.json"))
     shown = capsys.readouterr().out + saved
     bodies = [row["labels"]["reference_answer"] for row in rows] + [TUTOR_DEFAULT["answer"]]
@@ -379,8 +410,10 @@ def test_cli_never_prints_or_saves_bodies(tmp_path, capsys, rows):
 def test_server_does_not_load_measurement_code():
     # 시연 때 서버 코드를 확인한다(SPEC §8). 측정 코드는 공개 세트 정답을 읽으니
     # 서버와 섞이지 않게 한다
-    argv = [sys.executable, "-c", SERVER_ONLY]
-    done = subprocess.run(argv, capture_output=True, text=True, check=True, cwd=ROOT, timeout=120)  # noqa: S603
+    argv = [sys.executable, "-X", "utf8", "-c", SERVER_ONLY]  # 기동 오류 로그(한글)도 UTF-8로
+    done = subprocess.run(  # noqa: S603
+        argv, capture_output=True, encoding="utf-8", check=True, cwd=ROOT, timeout=120
+    )
     assert done.stdout.strip() == ""
 
 

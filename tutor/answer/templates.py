@@ -70,8 +70,8 @@ ACTION = MappingProxyType(_ACTION)
 # 남은 claim이 0개일 때 덧붙이는 안내(통합 IN-04-3이 쓴다. 문구 주인은 튜터)
 NOT_IN_MATERIAL_NOTE = "이 부분은 자료에서 확인하지 못했어요."
 
-# 답변 문장이 하나도 남지 않았을 때 action별 고정 문장(TU-07 "빈 답변").
-# answer·scaffold는 action을 바꾸지 않고(IN-04-3) 자료에서 확인하지 못했다는 안내를 낸다.
+# 답변 문장이 하나도 남지 않았을 때 action별 고정 문장(TU-07 "빈 답변"). action은 바꾸지 않는다
+# (IN-04-3). answer는 자료에서 확인하지 못했다는 안내, scaffold는 과목 사실 없는 다음 단계 안내다.
 _EMPTY: dict[Action, str] = {
     "answer": NOT_IN_MATERIAL_NOTE,
     "scaffold": "자료에서 관련 기준을 먼저 찾아보고, 그 기준을 문제에 하나씩 적용해 보세요.",

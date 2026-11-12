@@ -25,7 +25,7 @@ from typing import Any
 
 from guardrail.preprocess import skeleton
 
-from tutor.answer.templates import EMPTY_ANSWER
+from tutor.answer.templates import empty_answer
 
 ACTIONS = ("answer", "scaffold", "clarify", "abstain", "redirect", "refuse", "escalate")
 NO_CITATION_ACTIONS = frozenset({"clarify", "redirect", "refuse", "escalate"})
@@ -68,7 +68,10 @@ def _hidden(ch: str) -> bool:
     if ch in "\n\t":
         return False
     cat = unicodedata.category(ch)
-    if cat in ("Cf", "Cc", "Co", "Cs", "Cn"):  # 서식·제어·사용자 정의·짝 없는 surrogate·미할당
+    # 서식·제어·사용자 정의·짝 없는 surrogate. 미할당(Cn)은 넣지 않는다: Python의 유니코드 버전에
+    # 따라 새 이모지가 지워지기 때문이다(리뷰 #99). 서식 문자에는 ZWJ(U+200D)도 들어 있어
+    # 이모지 묶음(👨‍👩‍👧)이 낱개로 풀린다. 숨긴 글을 막는 쪽을 택한 것이고 점수 영향은 없다
+    if cat in ("Cf", "Cc", "Co", "Cs"):
         return True
     cp = ord(ch)
     return (
@@ -93,17 +96,29 @@ _GRADING = re.compile(
     "|".join(
         f"(?:{p})"
         for p in (
-            r"채점자|채점관|채점기|채점모델|판정모델|평가자|심사위원|grader|evaluator|judgemodel",
+            # 채점자를 부르며 하는 지시(호칭 + 명령). "채점기를 만들 때는…", "평가자 역할 프롬프트를
+            # 작성해 보세요"처럼 일반 명사로 쓴 문장은 지우지 않는다(리뷰 #99)
+            r"(?:채점자|채점관|채점기|채점모델|판정모델|평가자|심사위원|grader|evaluator|judge)"
+            r"(?:님)?(?:은|는|에게|께|여|야)?\w{0,24}?"
+            r"(?:처리해|처리하세요|처리하십시오|인정해|판정해|매겨|주세요|주십시오|줘|하세요"
+            r"|하십시오|하라|무시해|채점해|답해)",
+            # 채점자를 높여 부르는 호칭("채점관님", "평가자께")은 과목 내용에 나오지 않는다
+            r"(?:채점자|채점관|채점기|평가자|심사위원)(?:님|께)",
+            r"(?:dear|attention|noteto)(?:the)?(?:grader|evaluator|judge)",
+            # 이 답을 정답으로 처리(조사 없는 "정답 처리"도)
             r"(?:답변|응답|대답|답|이글|이내용)(?:을|를|은|는|이)?\w{0,6}?"
-            r"(?:정답|만점|맞는답|올바른답|통과)(?:으로|이라고|라고|로)"
+            r"(?:정답|만점|맞는답|올바른답|통과)(?:으로|이라고|라고|로)?"
             r"(?:처리|채점|인정|판정|간주|평가|표시|기록)",
-            r"(?:정답|만점|통과)(?:으로|이라고|라고|로)(?:처리|채점|인정|판정|간주)"
+            r"(?:정답|만점|통과)(?:으로|이라고|라고|로)?(?:처리|채점|인정|판정|간주)"
+            r"(?:해|하세요|하십시오|하라|해야|할것|바랍)",
+            r"(?:맞다고|옳다고|참이라고|정답이라고)(?:채점|판정|처리|평가|인정)"
             r"(?:해|하세요|하십시오|하라|해야|할것|바랍)",
             r"(?:만점|높은점수|최고점|좋은점수|점수를높게)(?:을|를)?"
-            r"(?:줘|주세요|주십시오|주라|주어야|줘야|부여|매겨|받아야|받게)",
+            r"(?:줘|주세요|주십시오|주라|주어야|줘야|부여|매겨)",
             r"(?:답변|응답|대답|답)(?:에|에게)(?:점수|만점|높은점수)(?:를|을)?(?:주|줘|매겨|부여)",
+            # "true로 답하세요"(판정 모델에게). "True로 출력해요" 같은 파이썬 설명은 아니다
             r"(?:true|참|yes|정답)(?:로|으로|라고|이라고)"
-            r"(?:답|대답|응답|출력|판정|평가)(?:해|하세요|하라|하십시오|해야|할것)",
+            r"(?:답|대답|응답)(?:해|하세요|하라|하십시오|해야|할것)",
             r"(?:mark|grade|score|rate|evaluate|judge)(?:this|the|my|it)?(?:answer|response)?(?:as)?"
             r"(?:correct|true|right|fullmarks|perfect|pass)",
             r"(?:give|award|assign)(?:this|it|me)?(?:answer|response)?"
@@ -156,8 +171,14 @@ def finalize(
     *,
     fallback_action: str,
     known_sections: Collection[str] | None = None,
+    category: str | None = None,
 ) -> dict[str, Any]:
-    """IN-04를 지난 응답(또는 고정 문장 응답)에 튜터 고유 검사를 걸어 규격 본문을 낸다."""
+    """IN-04를 지난 응답(또는 고정 문장 응답)에 튜터 고유 검사를 걸어 규격 본문을 낸다.
+
+    채점 지시 문장을 지워 답이 비어도 citations는 IN-04가 낸 값을 그대로 둔다. answer·scaffold는
+    정답 근거가 있으면 답 내용과 상관없이 인용이 채점되므로 비우면 인용 점수만 잃는다(IN-04와 같은
+    규칙, 통합 #99 코멘트). 범주(`category`)를 알면 빈 답변 문장을 범주에 맞게 고른다.
+    """
     src = body if isinstance(body, Mapping) else {}
     action = normalize_action(src.get("action"), fallback_action)
     raw = src.get("answer")
@@ -166,7 +187,7 @@ def finalize(
     answer = drop_grading_sentences(answer)
     answer = cut_to_limit(answer.strip())
     if not answer:
-        answer = EMPTY_ANSWER[action]
+        answer = empty_answer(action, category)
     return {
         "answer": answer,
         "action": action,

@@ -74,7 +74,10 @@ class KnnIndex:
     __slots__ = ("_rows", "_vec", "_matrix", "_clusters", "_block", "_vote_k", "_max", "_per_cat")
 
     def __init__(self, rows: Sequence[LabeledRow], cfg: GuardConfig) -> None:
+        rows = tuple(rows)  # 제너레이터도 한 번만 읽는다
         k = cfg.input.knn
+        if cfg.input.knn_vote_k < 1:  # 요청 때 IndexError 대신 기동 때 실패
+            raise ValueError("input.knn_vote_k는 1 이상")
         vec = TfidfVectorizer(analyzer=k.analyzer, ngram_range=tuple(k.ngram))
         # 행마다 L2 정규화 → 내적 = 코사인
         matrix = vec.fit_transform([r.text for r in rows]).tocsr()
@@ -82,7 +85,7 @@ class KnnIndex:
         for arr in (matrix.data, matrix.indices, matrix.indptr, vec.idf_):
             arr.flags.writeable = False
         init = object.__setattr__
-        init(self, "_rows", tuple(rows))
+        init(self, "_rows", rows)
         init(self, "_vec", vec)
         init(self, "_matrix", matrix)
         init(self, "_clusters", MappingProxyType(build_clusters(rows)))

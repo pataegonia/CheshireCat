@@ -1,7 +1,9 @@
 """S2.5 kNN 보조 판정기: few-shot 규칙·다수결·누수·불변 (GR-05, GR-14, ADR-0013)."""
 
 import ast
+import random
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -227,6 +229,73 @@ def test_majority_uses_knn_vote_k_neighbors():
     five = load_config(overrides={"input.knn_vote_k": 5})
     assert KnnIndex(rs, one).majority("사과 사과 사과") == "off_topic"
     assert KnnIndex(rs, five).majority("사과 사과 사과") == "normal"
+
+
+@pytest.mark.parametrize("over", [{}, {"input.knn.analyzer": "char", "input.knn.ngram": [2, 4]}])
+def test_vectorizer_follows_config(over):
+    cfg = load_config(overrides=over)
+    rs = [_row("a", text="반복문 설명"), _row("b", text="저녁 메뉴 추천")]
+    idx = KnnIndex(rs, cfg)
+    p = idx._vec.get_params()
+    assert p["analyzer"] == cfg.input.knn.analyzer
+    assert p["ngram_range"] == tuple(cfg.input.knn.ngram)
+    assert p["norm"] == "l2"
+    norms = np.sqrt(np.asarray(idx._matrix.multiply(idx._matrix).sum(axis=1))).ravel()
+    assert np.allclose(norms, 1.0)  # 내적 = 코사인
+
+
+def test_fewshot_caps_follow_config(rows):
+    small = KnnIndex(
+        rows, load_config(overrides={"input.knn.max_examples": 4, "input.knn.per_category": 1})
+    )
+    big = KnnIndex(
+        rows, load_config(overrides={"input.knn.max_examples": 6, "input.knn.per_category": 3})
+    )
+    seen_three = False
+    for r in rows[::7]:
+        out = small.fewshot(r.text)
+        assert len(out) == 4
+        assert len({x.category for x in out}) == 4
+        out = big.fewshot(r.text)
+        assert len(out) == 6
+        seen_three |= max(Counter(x.category for x in out).values()) == 3
+    assert seen_three
+
+
+def test_stable_order_on_many_ties(cfg):
+    # D7: 동률이 많고 값이 섞여 있어도(400행 규모) 같은 코사인끼리는 행 인덱스 순.
+    # kind="stable"이 없으면 순서가 섞인다
+    texts = ["같은 문장이다", "같은 문장", "전혀 다른 질문"]  # 질의와의 코사인 내림차순
+    pick = random.Random(0)
+    rs = [_row(f"r{i:03d}", text=pick.choice(texts)) for i in range(300)]
+    want = [r.id for t in texts for r in rs if r.text == t]
+    assert [r.id for r in KnnIndex(rs, cfg).neighbors(texts[0], 300)] == want
+
+
+def test_no_shared_state_between_indexes(cfg):
+    # 요청 사이에 남는 상태(모듈 전역 캐시 등)가 있으면 다른 색인의 답이 섞인다
+    texts = ["반복문 설명 부탁", "저녁 메뉴 추천", "비밀번호 알려줘"]
+    a = KnnIndex([_row(f"a{i}", "normal", t) for i, t in enumerate(texts)], cfg)
+    b = KnnIndex([_row(f"b{i}", "off_topic", t) for i, t in enumerate(texts)], cfg)
+    for _ in range(2):
+        for t in texts:
+            assert a.majority(t) == "normal"
+            assert b.majority(t) == "off_topic"
+            assert a.fewshot(t)[-1].id.startswith("a")
+            assert b.neighbors(t, 1)[0].id.startswith("b")
+
+
+def test_generator_rows_are_read_once(cfg):
+    rs = [_row("a", text="반복문 설명"), _row("b", text="저녁 메뉴 추천")]
+    idx = KnnIndex((r for r in rs), cfg)
+    assert idx.rows == tuple(rs)
+    assert idx._matrix.shape[0] == 2
+    assert set(idx.clusters) == {"a", "b"}
+
+
+def test_knn_vote_k_below_one_fails_at_build():
+    with pytest.raises(ValueError):
+        KnnIndex([_row("a")], load_config(overrides={"input.knn_vote_k": 0}))
 
 
 def test_neighbors_k_bounds(cfg):

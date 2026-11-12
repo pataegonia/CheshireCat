@@ -23,11 +23,12 @@ class LrClassifier:
     __slots__ = ("_vec", "_model")
 
     def __init__(self, rows: Sequence[LabeledRow], cfg: GuardConfig) -> None:
+        rows = tuple(rows)  # 제너레이터도 한 번만 읽는다
         c = cfg.input.lr
         vec = TfidfVectorizer(analyzer=c.analyzer, ngram_range=tuple(c.ngram))
         model = LogisticRegression(C=c.C, max_iter=MAX_ITER)
         model.fit(vec.fit_transform([r.text for r in rows]), [r.category for r in rows])
-        for arr in (model.coef_, model.intercept_, vec.idf_):
+        for arr in (model.coef_, model.intercept_, model.classes_, vec.idf_):
             arr.flags.writeable = False
         object.__setattr__(self, "_vec", vec)
         object.__setattr__(self, "_model", model)

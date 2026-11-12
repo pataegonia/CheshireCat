@@ -55,6 +55,19 @@ def test_uses_lr_config_c(rows):
     assert b._model.C == 100.0
 
 
+def test_features_follow_config():
+    cfg = load_config(overrides={"input.lr.analyzer": "char", "input.lr.ngram": [2, 4]})
+    rs = [_row("a", "normal", "반복문 설명"), _row("b", "off_topic", "저녁 메뉴 추천")]
+    p = LrClassifier(rs, cfg)._vec.get_params()
+    assert (p["analyzer"], p["ngram_range"]) == ("char", (2, 4))
+
+
+def test_generator_rows_are_read_once(cfg):
+    rs = [_row("a", "normal", "반복문 설명"), _row("b", "off_topic", "저녁 메뉴 추천")]
+    clf = LrClassifier((r for r in rs), cfg)
+    assert set(clf._model.classes_) == {"normal", "off_topic"}
+
+
 def test_same_input_same_output(rows, cfg):
     a, b = LrClassifier(rows, cfg), LrClassifier(rows, cfg)
     assert [a.predict(r.text) for r in rows[::7]] == [b.predict(r.text) for r in rows[::7]]
@@ -97,13 +110,15 @@ def test_read_only_after_construction(clf):
     assert not clf._vec.idf_.flags.writeable
     assert not clf._model.coef_.flags.writeable
     assert not clf._model.intercept_.flags.writeable
+    assert not clf._model.classes_.flags.writeable
 
 
 def test_requests_do_not_change_model(rows, cfg):
     clf = LrClassifier(rows, cfg)
 
     def fingerprint():
-        arrays = (clf._model.coef_, clf._model.intercept_, clf._vec.idf_)
+        m = clf._model
+        arrays = (m.coef_, m.intercept_, m.classes_, clf._vec.idf_)
         return [a.tobytes() for a in arrays], sorted(clf._vec.vocabulary_.items())
 
     before = fingerprint()

@@ -308,6 +308,42 @@ def test_tutor_falls_back_without_openai_env(client, monkeypatch, caplog):
     _assert_logs_clean(caplog)
 
 
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_tutor_blank_base_url_builds_no_client(client, monkeypatch, value):
+    # 주소가 비면 SDK 기본(공개 OpenAI) 주소로 나간다. 만들지 않고 안내 문구 200
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5-nano")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    if value is None:
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_BASE_URL", value)
+    built = []
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: built.append(kw))
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200 and r.json()["answer"] == server.TUTOR_FALLBACK
+    assert built == []
+    assert getattr(client.app.state, "tutor_client", None) is None
+
+
+def test_tutor_client_uses_the_configured_base_url(client, monkeypatch):
+    for k, v in {"OPENAI_MODEL": "gpt-5-nano", "OPENAI_API_KEY": "k"}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("OPENAI_BASE_URL", " http://proxy.test/v1 ")
+    built = []
+    import openai
+
+    def fake(**kw):
+        built.append(kw)
+        return _FakeClient("답")
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", fake)
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.json()["answer"] == "답"
+    assert built[0]["base_url"] == "http://proxy.test/v1" and built[0]["api_key"] == "k"
+
+
 def test_tutor_answers_through_llm_slot(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL", "gpt-5-nano")
     llm = _SlotLLM()

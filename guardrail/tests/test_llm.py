@@ -179,6 +179,47 @@ async def test_start_without_env_is_a_config_error(monkeypatch):
         await LLM(BASE).start()
 
 
+ENV = {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "gpt-5-nano", "OPENAI_BASE_URL": "http://proxy.test/v1"}
+
+
+class _Built(Exception):
+    """AsyncOpenAI를 만들려 하면 던진다(만든 인자를 담는다)."""
+
+
+def _record_client(monkeypatch):
+    import openai
+
+    def fake(**kwargs):
+        raise _Built(kwargs)
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", fake)
+
+
+@pytest.mark.parametrize("name", list(ENV))
+@pytest.mark.parametrize("value", [None, "", "  "])
+async def test_start_blank_env_builds_no_client(monkeypatch, name, value):
+    # 주소가 비면 SDK가 공개 OpenAI 주소로 팀 키를 보낸다. 셋 중 하나라도 비면 만들지 않는다
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    if value is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, value)
+    _record_client(monkeypatch)
+    with pytest.raises(ValueError, match=name):
+        await LLM(BASE).start()
+
+
+async def test_start_passes_the_configured_base_url(monkeypatch):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, f" {v} ")
+    _record_client(monkeypatch)
+    with pytest.raises(_Built) as built:
+        await LLM(BASE).start()
+    assert built.value.args[0]["base_url"] == ENV["OPENAI_BASE_URL"]
+    assert built.value.args[0]["api_key"] == ENV["OPENAI_API_KEY"]
+
+
 async def test_complete_before_start_is_a_programming_error():
     with pytest.raises(RuntimeError):
         await call(LLM(BASE), FakeClock())

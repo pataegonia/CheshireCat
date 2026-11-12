@@ -458,6 +458,42 @@ def test_empty_answer_is_returned_as_is():
     assert out == TutorResult(answer="", action="abstain", citations=[])
 
 
+# ── 짧은 인용 문구는 근거로 치지 않음(min_quote_chars) ────────────────────
+
+
+def test_min_quote_chars_default_is_two():
+    assert CFG.min_quote_chars == 2
+
+
+@pytest.mark.parametrize("quote", ["는", "a", "3", " 다. "])
+def test_one_char_quote_is_not_verified(quote):
+    """한 글자는 어느 섹션에나 있다. 검증된 근거로 치지 않고, if_used면 인용이 비어야 한다."""
+    b = sec("PY-01-02", "변수는 값을 담는 이름이다. a = 3")
+    r = finalize([claim("달은 치즈로 만든다.", ("PY-01-02", quote))], OK, [A, b], ABSTAIN, CFG)
+    assert r.citations == []
+
+
+def test_one_char_quote_falls_back_to_top1_when_cite_is_always():
+    r = finalize([claim("변수는 이름이다.", ("PY-01-02", "는"))], OK, [A, B], NORMAL, CFG)
+    assert r.citations == ["PY-01-01"]
+    assert r.answer == "변수는 이름이다."
+
+
+def test_two_char_quote_is_still_verified():
+    r = finalize([claim("변수는 이름이다.", ("PY-01-02", "변수"))], OK, [A, B], NORMAL, CFG)
+    assert r.citations == ["PY-01-02"]
+
+
+def test_min_quote_chars_is_configurable():
+    s = [claim("변수는 이름이다.", ("PY-01-02", "변수"))]
+    three = FinalizeConfig(unverified_notice=NOTICE, refuse_text=REFUSE, min_quote_chars=3)
+    assert finalize(s, OK, [A, B], NORMAL, three).citations == ["PY-01-01"]
+    one = FinalizeConfig(unverified_notice=NOTICE, refuse_text=REFUSE, min_quote_chars=1)
+    assert finalize(
+        [claim("변수는 이름이다.", ("PY-01-02", "는"))], OK, [A, B], NORMAL, one
+    ).citations == ["PY-01-02"]
+
+
 # ── 짧은 unsupported 구간 무시(min_span_chars) ────────────────────────────
 
 
@@ -682,7 +718,13 @@ def test_same_input_gives_same_output():
 
 @pytest.mark.parametrize(
     "bad",
-    [{"max_citations": -1}, {"max_answer_chars": 0}, {"min_span_chars": 0}, {"extra": 1}],
+    [
+        {"max_citations": -1},
+        {"max_answer_chars": 0},
+        {"min_span_chars": 0},
+        {"min_quote_chars": 0},
+        {"extra": 1},
+    ],
 )
 def test_config_rejects_bad_values(bad):
     with pytest.raises(ValueError):

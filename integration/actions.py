@@ -157,6 +157,8 @@ class FinalizeConfig(BaseModel):
     max_answer_chars: int = Field(default=4000, ge=1)
     # 정규화한 길이가 이보다 짧은 unsupported 구간은 무시한다(한 글자가 답변 전체를 지우지 않게)
     min_span_chars: int = Field(default=2, ge=1)
+    # 정규화한 길이가 이보다 짧은 인용 문구는 검증된 근거로 치지 않는다(한 글자는 어디에나 있다)
+    min_quote_chars: int = Field(default=2, ge=1)
 
 
 def _normalize(text: str) -> str:
@@ -169,15 +171,18 @@ def _is_real_sid(sid: str) -> bool:
     return SID_PATTERN.fullmatch(sid) is not None and sid in SECTION_IDS
 
 
-def _verified_sids(sentence: Sentence, retrieved: Sequence[Section]) -> list[str]:
-    """인용 문구가 그 섹션 원문(본문 + 표)에 실제로 있는 evidence의 sid."""
+def _verified_sids(sentence: Sentence, retrieved: Sequence[Section], min_chars: int) -> list[str]:
+    """인용 문구가 그 섹션 원문(본문 + 표)에 실제로 있는 evidence의 sid.
+
+    정규화한 길이가 `min_chars`보다 짧은 문구는 보지 않는다.
+    """
     out: list[str] = []
     for ev in sentence.evidence:
         if not _is_real_sid(ev.sid):
             continue
         section = next((s for s in retrieved if s.id == ev.sid), None)
         quote = _normalize(ev.quote)
-        if section is None or not quote:
+        if section is None or len(quote) < min_chars:
             continue
         if quote in _normalize("\n".join([section.text, *section.tables])):
             out.append(ev.sid)
@@ -299,7 +304,9 @@ def finalize(
     citations: list[str] = []
     if policy != "never":
         sids = [
-            _verified_sids(sentences[i], retrieved) for i in kept if sentences[i].kind == "claim"
+            _verified_sids(sentences[i], retrieved, cfg.min_quote_chars)
+            for i in kept
+            if sentences[i].kind == "claim"
         ]
         citations = _rank_citations(sids, retrieved, fill=fill, limit=cfg.max_citations)
     return TutorResult(answer=answer[:limit], action=final, citations=citations)

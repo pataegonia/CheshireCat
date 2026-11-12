@@ -129,3 +129,40 @@ async def test_draft_sends_query_and_history(monkeypatch):
     )
     assert seen == {"query": "최소 금액은?", "history": ("새싹적금 문제요",), "k": 2}
     assert d.sections == ()
+
+
+@pytest.mark.anyio
+async def test_draft_passes_embedding_only_when_built(monkeypatch):
+    # #124 retrieve(…, embedding=)와 맞물린다. 없을 때는 키를 넘기지 않아 지금 retrieve와도 맞다
+    seen = []
+
+    async def fake_retrieve(query, history=(), *, k=5, **kw):
+        seen.append(kw)
+        return []
+
+    monkeypatch.setattr(draft_mod, "retrieve", fake_retrieve)
+    conv = tidy([u("What is a list?")])
+    kwargs = {
+        "prompt": MainCallPrompt.load(TABLE),
+        "complete": FakeComplete(Result(OUT, None)),
+        "deadline": 1e9,
+        "k": 3,
+    }
+    marker = object()
+    await draft_answer(conv, **kwargs)
+    await draft_answer(conv, **kwargs, embedding=marker)
+    assert seen == [{}, {"embedding": marker}]
+
+
+@pytest.mark.anyio
+async def test_draft_without_embedding_works_with_current_retrieve():
+    conv = tidy([u("What is a list?")])
+    d = await draft_answer(
+        conv,
+        prompt=MainCallPrompt.load(TABLE),
+        complete=FakeComplete(Result(OUT, None)),
+        deadline=1e9,
+        k=2,
+        embedding=None,
+    )
+    assert d.out == OUT

@@ -11,6 +11,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from tutor.judge.conversation import Conversation
 from tutor.judge.main_call import Complete, MainCallOut, MainCallPrompt, run_main_call
@@ -31,9 +32,15 @@ async def draft_answer(
     deadline: float,
     k: int,
     signals: Sequence[str] = (),
+    embedding: Any = None,
 ) -> Draft:
-    """검색 상위 k개를 근거 묶음으로 주 호출을 한 번 부른다."""
+    """검색 상위 k개를 근거 묶음으로 주 호출을 한 번 부른다.
+
+    `embedding`은 기동 때 만든 임베딩 검색(TU-11, `state.tutor_emb`, #124)이다. 있을 때만
+    `retrieve(…, embedding=)`로 넘기고, 없으면(토글 끔·기동 실패) BM25만 쓴다.
+    """
     query, history = conv.search_query()
-    sections = tuple(await retrieve(query, history, k=k))
+    extra = {"embedding": embedding} if embedding is not None else {}
+    sections = tuple(await retrieve(query, history, k=k, **extra))
     out = await run_main_call(complete, prompt, conv, sections, signals, deadline=deadline)
     return Draft(sections=sections, out=out)

@@ -138,6 +138,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         complete=_complete(state),
         deadline=deadline,
         k=cfg.retrieval.k,
+        embedding=getattr(
+            state, "tutor_emb", None
+        ),  # toggles.embedding이 켜져 만들어졌을 때만(TU-11)
     )
     if draft.out is None:
         return fallback_body()

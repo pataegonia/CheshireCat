@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from guardrail.config import GuardConfig, load_config
-from guardrail.guard import ConstantGuard, Judgement
+from guardrail.guard import ConstantGuard, Guard, Judgement
 from guardrail.llm import openai_env
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict, parse_request
 
@@ -54,7 +54,10 @@ GuardFactory = Callable[[GuardConfig], Awaitable[Judge]]
 
 
 async def constant_factory(cfg: GuardConfig) -> Judge:
-    """S1.2–S1.5 기준선. S2.8에서 Guard.build로 바뀐다."""
+    """상수 판정(S1.2–S1.5 기준선). `create_app`·`setup_guard`의 기본값으로 남긴다.
+
+    통합 `app.py`가 이 기본값을 쓴다. 실제 판정기는 `create_app(Guard.build)`로 고른다(S2.8).
+    """
     return ConstantGuard()
 
 
@@ -350,4 +353,5 @@ def create_app(
 
 
 _install_log_filters()  # import 때 한 번(uvicorn은 로그 설정 뒤에 앱을 불러온다)
-app = create_app()
+# 단독 서버(`uvicorn guardrail.server:app`)는 실제 판정기다. LLM 환경변수가 없으면 기동에서 실패한다
+app = create_app(Guard.build)

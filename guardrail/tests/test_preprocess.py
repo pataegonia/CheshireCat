@@ -12,6 +12,7 @@ from guardrail.preprocess import (
     _JONG,
     FLAG_SEQUENCE,
     _visible,
+    clip,
     decode_tags,
     normalize,
     reveal_hidden,
@@ -256,6 +257,68 @@ def test_strip_tags_does_not_compose_jamo():
     assert normalize("ㅇㅏ") == "아"
 
 
+def _is_tag(ch: str) -> bool:
+    return 0xE0000 <= ord(ch) <= 0xE007F
+
+
+def test_clip_removes_exactly_invisible_non_tag_chars():
+    """전 코드포인트: clip이 지우는 문자 = `_visible`이 False이고 태그 문자가 아닌 것."""
+    every = "".join(map(chr, range(0x110000)))
+    expected = "".join(c for c in every if _visible(c) or _is_tag(c))
+    assert clip(every, len(every)) == expected
+
+
+def test_clip_short_text_only_drops_invisible():
+    assert clip(f"a{ZWSP}b{VS17}{tag('x')}", 5) == f"ab{tag('x')}"
+
+
+def test_clip_long_text_keeps_head_and_tail():
+    body = "".join(chr(0xAC00 + i) for i in range(21))  # 줄일 공백·반복이 없는 글
+    assert clip(body, 10) == body[:5] + "\n…\n" + body[-5:]
+    assert clip(body[:11], 11) == body[:11]
+
+
+def test_clip_over_limit_collapses_space_runs_and_repeats_first():
+    """상한을 넘으면 공백류 연속은 첫 글자 하나, 같은 글자 4번 이상은 3개로 줄인 뒤 다시 잰다."""
+    assert clip("가" + " \n\u3000" * 10 + "나" * 20 + "다", 10) == "가 나나나다"
+
+
+@pytest.mark.parametrize(
+    ("text", "head"),
+    [
+        ("1000000원" + "x" * 2100, "1000000원xxx"),
+        ("점수 100000점 " + "가" * 2100, "점수 100000점 가가가"),
+    ],
+)
+def test_clip_over_limit_keeps_digit_runs(text, head):
+    assert clip(text, 2000).startswith(head)
+
+
+def test_clip_body_under_limit_is_untouched_even_if_tags_push_over():
+    code = ("def f(x):\n    if x:\n        return 1\n\n\n\n# ========\n    pass\n" * 30)[:1800]
+    out = clip(code + tag("a") * 300, 2000)
+    assert strip_tags(out) == code
+    assert decode_tags(out)[1] == "a" * 300
+
+
+def test_clip_under_limit_keeps_indent_and_repeats():
+    code = "def f():\n    if x:\n        return 1\n\n\n\n# ========\n"
+    assert clip(code, len(code)) == code
+
+
+def test_clip_tag_padding_cannot_push_out_visible_text():
+    """태그 문자로 양쪽을 채워도 보이는 글은 남고, 드러낼 태그 문자도 앞 + 뒤로 줄어든다."""
+    out = clip(tag("a") * 100_000 + "보이는 글" + tag("b") * 100_000, 20)
+    assert strip_tags(out) == "보이는 글"
+    view, decoded = decode_tags(out)
+    assert decoded == "a" * 10 + "b" * 10
+    assert view.startswith("보이는 글")
+
+
+def test_clip_long_text_keeps_flag_emoji_unrevealed():
+    assert "숨긴 문자" not in decode_tags(clip(ENGLAND + "가" * 50, 20))[0]
+
+
 _ANY = st.text(alphabet=st.characters(codec="utf-8"), max_size=60)
 _TAGGY = st.text(
     alphabet=st.one_of(
@@ -331,9 +394,74 @@ def test_p95_under_10ms_for_400_rows():
         ("IGNORE  previous", "ignoreprevious"),
         ("ＩＧＮＯＲＥ", "ignore"),
         ("ㅋㅋㅠㅠ", "ㅋ큐"),
+        ("ㄱㅗㅏㄴㅏ", "고ㅏ나"),  # 겹모음 조합은 normalize에만 있고 skeleton은 v4 그대로
         (f"{CONJ_SIOS}ㅣ발", "시발"),  # 조합형 낱자모
         (HALF_UNASSIGNED, ""),  # 오류 없이 기호로 보고 지운다
     ],
 )
 def test_skeleton(raw, expected):
     assert skeleton(raw) == expected
+
+
+# --- 자모 조합 결함(같은 자음 연속 뒤, 겹모음) -----------------------------------------
+# 규칙: 두벌식 입력기처럼 ㄱㄱ은 ㄲ로 합치지 않는다(된소리는 Shift 입력). 같은 자음 연속
+# 뒤에서 이모티콘으로 남기는 것은 ㅠ·ㅜ가 올 때뿐이다(ㅋㅋㅠ). 겹모음은 두벌식 조합표대로 합친다.
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("ㅋㅋㅋㅏㅋㅏ", "ㅋㅋ카카"),
+        ("ㄱㄱㅏㄱㅏ", "ㄱ가가"),
+        ("ㅈㅜㅓ", "줘"),
+        ("ㄱㅗㅏㄴ", "관"),
+        ("ㅇㅗㅐ", "왜"),
+        ("ㅎㅗㅣ", "회"),
+        ("ㄱㅜㅔ", "궤"),
+        ("ㅇㅜㅣ", "위"),
+        ("ㅇㅡㅣ", "의"),
+        ("ㅁㅜㅓㄹㄱㅏ", "뭘가"),
+        ("ㄱㅗㅏㄴㅏ", "과나"),
+        ("ㄱㅗㅏㄹㄱㅏ", "괄가"),
+        ("ㄱㅜㅓㄹㄱ", "궑"),
+        ("ㄱㅗㅏㅣ", "과ㅣ"),
+        ("ㅇㅗㅏㅏ", "와ㅏ"),
+        # 기존 이모티콘 예외는 그대로
+        ("ㅋㅋㅠ", "ㅋㅋㅠ"),
+        ("ㅋㅠㅠ", "ㅋㅠㅠ"),
+        ("ㅜㅜ", "ㅜㅜ"),
+        ("ㅋㅜㅜ", "ㅋㅜㅜ"),
+        ("ㅋㅋㅜ", "ㅋㅋㅜ"),
+        ("ㅋㅋㅋㅠ", "ㅋㅋㅋㅠ"),
+        # 이모티콘 예외는 ㅠ·ㅜ만
+        ("ㅋㅋㅡ", "ㅋ크"),
+    ],
+)
+def test_normalize_composes_after_repeat_and_compound_vowels(raw, expected):
+    assert normalize(raw) == expected
+
+
+def _to_compat_jamo(syllable: str) -> str:
+    """겹모음과 겹받침을 두 글쇠로 풀어 쓴다(normalize의 조합 경로를 탄다)."""
+    idx = ord(syllable) - 0xAC00
+    cho, jung, jong = idx // 588, idx % 588 // 28, idx % 28
+    vowel = chr(ord("ㅏ") + jung)
+    vowel = {
+        "ㅘ": "ㅗㅏ",
+        "ㅙ": "ㅗㅐ",
+        "ㅚ": "ㅗㅣ",
+        "ㅝ": "ㅜㅓ",
+        "ㅞ": "ㅜㅔ",
+        "ㅟ": "ㅜㅣ",
+        "ㅢ": "ㅡㅣ",
+    }.get(vowel, vowel)
+    final = _JONG[jong].strip()
+    final = {v: k[0] + k[1] for k, v in _DOUBLE_JONG.items()}.get(final, final)
+    return _CHO[cho] + vowel + final
+
+
+@given(st.text(st.characters(min_codepoint=0xAC00, max_codepoint=0xD7A3), min_size=1, max_size=12))
+def test_hypothesis_decomposed_syllables_recompose(text):
+    assert normalize("".join(map(_to_compat_jamo, text))) == text
+
+
+def test_skeleton_keeps_v4_compound_vowel_behavior():
+    assert skeleton("ㅈㅜㅓ") == "주ㅓ"

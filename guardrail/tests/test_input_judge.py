@@ -317,20 +317,20 @@ MIXED = {
     "braille_space": "⠀ ",
     "nul_del": "\x00\x7f",
     "c1": "\x80\x81",
-    "braille_pua": "⠀",
+    "braille_pua": "\u2800\ue000",
     "pua_a": "\U000f0000\U000f0001",
     "plane14_cn": "\U000e0080\U000e0081",
-    "braille3_pua": "⠀" * 3 + "",
+    "braille3_pua": "\u2800" * 3 + "\ue000",
     "space3_nul": "   \x00",
     "surrogates": "\ud800\ud801",
-    "space_mark": " ́",
-    "marks3": "̵́̀",
+    "space_mark": " \u0301",
+    "marks3": "\u0301\u0300\u0335",
 }
 
 
 @pytest.mark.parametrize(
     "pad",
-    [u * (N // len(u) + 50) for u in MIXED.values()] + ["a" + "́̀" * 1500],
+    [u * (N // len(u) + 50) for u in MIXED.values()] + ["a" + "\u0301\u0300" * 1500],
     ids=[*MIXED, "marks2_on_one_base"],
 )
 async def test_mixed_blank_or_mark_padding_cannot_hide_short_request(pad):

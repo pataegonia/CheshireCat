@@ -302,7 +302,7 @@ embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 �
 eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)
 ```
 
-- `extra="forbid"`로 오타를 로드에서 잡는다. 검증: `third_call`은 `knn_vote`·`lr`이 둘 다 켜졌을 때만, `nano_span`은 `nano_tier3`가 켜졌을 때만 허용한다(구간을 내는 자리가 ③이다. S2.8에서 `literal_rule` 조건을 이것으로 바꿨다).
+- `extra="forbid"`로 오타를 로드에서 잡는다. 검증: `third_call`은 `knn_vote`·`lr`이 둘 다 켜졌을 때만, `nano_span`에는 조합 검증이 없다(S2.9에서 기본이 켬이 되면서 뺐다. `nano_tier3`가 꺼지면 구간을 낼 자리가 없을 뿐이다. S2.8의 `nano_tier3` 조건과 그 앞의 `literal_rule` 조건은 기록).
 - 베이스라인(`baseline.yaml` = 토글 모두 false + `output.mode: baseline`): 입력은 `input_judge.md`에서 예시 블록만 비운 것(범주 정의·짝 대조 문구는 유지)을 쓴다(따로 파일을 두지 않는다). 실패하면 `normal`. 출력은 `output_judge_baseline.md`(reason → grounded → safe)의 nano 값을 grounded·safe에 바로 쓰고 `unsupported=[]`. decision은 그래도 범주에서 도출한다.
 - `configs/ablation/*.yaml`은 `default.yaml` 위에 덮어쓸 키만 담는다(깊은 병합). 이름은 `no_<토글>.yaml`(기본 켬을 끔), `with_<토글>.yaml`(기본 끔을 켬).
 - 키·주소는 설정 파일에 쓰지 않는다. 환경변수: `TEAM_TOKEN`, `OPENAI_BASE_URL`·`OPENAI_MODEL`·`OPENAI_API_KEY`, `EMBEDDING_BASE_URL`·`EMBEDDING_MODEL`·`EMBEDDING_API_KEY`(임베딩 ablation만), `GUARD_CONFIG`(설정 경로, 기본 `configs/default.yaml`), `GUARD_KB_DIR`·`GUARD_PUBLIC_DIR`·`GUARD_PROMPTS_DIR`(있으면 `paths.kb`·`paths.public`·`paths.prompts`를 검증 전에 덮어씀, 런박스 경로용). `GUARD_*`는 S1.1의 `load_config()`가 읽고 테스트한다. `${ENV}` 치환은 없다. 런박스는 `/home/elicer/competition/.env`를 셸에서 읽는다(`uvicorn --env-file`은 python-dotenv가 필요해 쓰지 않는다).

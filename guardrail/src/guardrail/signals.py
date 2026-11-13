@@ -48,9 +48,21 @@ _BLANK_CATEGORIES = frozenset({"Zs", "Zl", "Zp", "Cf", "Mn", "Me"})
 _SPELLED_SYLLABLES = 2
 
 
+def _is_letter_symbol(ch: str) -> bool:
+    """글자를 담은 So: 원문자·괄호·사각 라틴, 원문자 한글, 지역 표시 문자, 점자.
+
+    NFKC로 영숫자가 되거나(원문자·괄호·사각 라틴), 이름에 LETTER·BRAILLE이 든다(NFKC로 안 접힌다).
+    """
+    name = unicodedata.name(ch, "")
+    return unicodedata.normalize("NFKC", ch).isalnum() or "LETTER" in name or "BRAILLE" in name
+
+
 def _is_symbolic(ch: str) -> bool:
-    """자모·문장부호·이모티콘."""
-    return bool(_JAMO.match(ch)) or unicodedata.category(ch) in _SYMBOLIC_CATEGORIES
+    """자모·문장부호·이모티콘. 글자를 기호로 쓴 문자는 아니다."""
+    if _JAMO.match(ch):
+        return True
+    cat = unicodedata.category(ch)
+    return cat in _SYMBOLIC_CATEGORIES and not (cat == "So" and _is_letter_symbol(ch))
 
 
 def _is_blank(ch: str) -> bool:

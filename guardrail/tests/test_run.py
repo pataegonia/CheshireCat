@@ -330,3 +330,59 @@ async def test_unsupported_ablation_row_is_refused_before_any_call(tmp_path, cap
     assert await run.amain(argv, make_llm=make_llm) == run.EXIT_USAGE
     assert not made and "third_call" in capsys.readouterr().err
     assert not (tmp_path / "runs" / "t").exists()
+
+
+# --- 속도 제한이 이어지면 멈춘다(2026-11-13: 429 뒤에도 3,700회를 더 보냈다) ---
+
+
+async def test_consecutive_rate_limits_stop_the_run(tmp_path):
+    from fakes import RateLimited
+
+    from guardrail.llm import LLM
+
+    probes = run.probe_calls(load_config(DEFAULT).llm)
+    made = []
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        def respond(kw):
+            if len(fake.requests) <= probes:  # probe는 통과, 판정 호출은 전부 429
+                return Ok('{"evidence": "e", "category": "normal"}')
+            return RateLimited("0")
+
+        fake = FakeLLM(respond=respond)
+        made.append(fake)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    code = await run.amain(_args(tmp_path, "--repeat", "3", config=DEFAULT), make_llm=make_llm)
+    assert code == run.EXIT_RATE_LIMITED == 6
+    # 3회 × 약 375호출(재시도 포함 약 2,250회)을 다 보내지 않는다
+    assert len(made[0].requests) < probes + 150
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert "속도 제한" in summary["invalid"]
+    assert "# 무효 실행" in (out / "report.md").read_text(encoding="utf-8")
+
+
+async def test_scattered_rate_limits_do_not_stop_the_run(tmp_path):
+    from fakes import RateLimited
+
+    from guardrail.llm import LLM
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        def respond(kw):  # 열 번에 한 번만 429: 재시도로 풀린다
+            if len(fake.requests) % 10 == 0:
+                return RateLimited("0")
+            if "OutputBaselineOut" in json.dumps(kw.get("response_format", {})):
+                return Ok('{"reason": "r", "grounded": true, "safe": true}')
+            return Ok('{"evidence": "e", "category": "normal"}')
+
+        fake = FakeLLM(respond=respond)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    assert await run.amain(_args(tmp_path), make_llm=make_llm) == 0

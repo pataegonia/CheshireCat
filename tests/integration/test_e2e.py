@@ -32,6 +32,7 @@ from tests.integration.applib import (
     AUTH,
     GUARD_BUDGET_HINT,
     GUARD_RESPONSE_SCHEMA,
+    MAX_GUARD_LLM_CALLS_PER_REQUEST,
     MAX_LLM_CALLS_PER_REQUEST,
     ROOT,
     EvidenceLog,
@@ -173,8 +174,12 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
         for row in rows:
             raw = as_bytes(scorer_payload(row))
             calls_before = len(fake_send.evidence)
+            guard_before = fake_guard_send.count
             response = post(llm_client, path, raw)
             assert response.status_code == 200, (row["id"], response.status_code)
+            # 가드 nano 호출은 요청마다 그 경로의 상한 안이다(합계만 보면 서로 상쇄된다)
+            guard_used = fake_guard_send.count - guard_before
+            assert guard_used <= MAX_GUARD_LLM_CALLS_PER_REQUEST[path], GUARD_BUDGET_HINT
             body = response.json()
             if path == "/tutor":
                 assert_tutor_response(body)
@@ -213,7 +218,7 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
     if llm_mode == "baseline":
         assert fake_send.count == limit  # 행마다 빠짐없이 부른다
     assert dict(app.state.tutor_llm.blocked) == {}
-    # 가드 nano 호출 수(가드 LLM의 가짜 전송이 센다): 두 경로를 합쳐 상한 안이다
+    # 가드 nano 호출 수(가드 LLM의 가짜 전송이 센다): 요청마다(위 반복)와 합계 모두 상한 안이다
     guard_limit = guard_call_budget(tutor=len(TUTOR_ROWS), guard=len(GUARD_ROWS))
     assert fake_guard_send.count <= guard_limit, GUARD_BUDGET_HINT
 
@@ -250,8 +255,14 @@ FUZZ = {
 }
 
 
-def fuzz(strategy, client, path: str, examples: int = FUZZ_EXAMPLES) -> list[int]:
-    """전략의 예시를 `path`에 보내 하나씩 검사한다. 보낸 본문의 길이 목록을 돌려준다."""
+def fuzz(
+    strategy, client, path: str, examples: int = FUZZ_EXAMPLES, *, guard_send=None
+) -> list[int]:
+    """전략의 예시를 `path`에 보내 하나씩 검사한다. 보낸 본문의 길이 목록을 돌려준다.
+
+    `guard_send`(가드 LLM의 가짜 전송)를 주면 예시마다 가드 nano 호출 수가 그 경로의 상한 안인지도
+    본다. 예시는 하나씩 차례로 보내므로 앞뒤 차이가 그 요청 하나의 호출 수다.
+    """
     sent: list[int] = []
 
     @settings(
@@ -264,7 +275,11 @@ def fuzz(strategy, client, path: str, examples: int = FUZZ_EXAMPLES) -> list[int
     @given(raw=strategy)
     def run(raw: bytes) -> None:
         sent.append(len(raw))
+        before = guard_send.count if guard_send is not None else 0
         check(client, path, raw)
+        if guard_send is not None:
+            used = guard_send.count - before
+            assert used <= MAX_GUARD_LLM_CALLS_PER_REQUEST[path], GUARD_BUDGET_HINT
 
     run()
     assert len(sent) >= examples
@@ -290,7 +305,7 @@ def test_fuzzed_conversations_reach_the_llm_on_tutor(llm_client, llm_mode, fake_
 def test_fuzzed_bodies_get_200_in_contract_on_guard(client, fake_send, fake_guard_send, name):
     """`/guard`는 튜터 모드와 무관하다(튜터 설정만 다르다). 저장소 설정으로 한 번만 돈다."""
     fake_guard_send.vary = True
-    sent = fuzz(FUZZ[name], client, "/guard")
+    sent = fuzz(FUZZ[name], client, "/guard", guard_send=fake_guard_send)  # 예시마다 상한도 본다
     assert fake_send.count == 0  # 가드는 튜터 LLM을 부르지 않는다
     assert fake_guard_send.count <= guard_call_budget(guard=len(sent)), GUARD_BUDGET_HINT
 

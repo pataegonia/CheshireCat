@@ -19,8 +19,10 @@ _CLEARED_ENV = (
     "OPENAI_BASE_URL",
 )
 LLM_MODES = ("v2", "baseline")
-# 가드 LLM이 기동 때 읽는 API 설정의 가짜 값. 주소는 이 컴퓨터의 닫힌 포트라, 가짜 전송을 비켜 간
-# 코드가 있어도 밖으로 나가지 못한다.
+# 가드 LLM이 기동 때 읽는 API 설정의 가짜 값. 패치된 `guardrail.llm.openai_env`만 이 값을 돌려주고,
+# 환경변수에는 넣지 않는다. 주소가 이 컴퓨터의 닫힌 포트인 것은 "가드 LLM이 가짜(OpenAIShim) 대신
+# 진짜 클라이언트를 만든 경우"만 막는다. 그 밖의 코드(튜터 · 다른 모듈의 openai 사용)가 실제 API로
+# 나가지 못하는 것은 `app_env`가 OPENAI_API_KEY · OPENAI_BASE_URL 환경변수를 지우기 때문이다.
 GUARD_LLM_ENV = {
     "OPENAI_API_KEY": "fake-guard-key",
     "OPENAI_MODEL": "fake-model",
@@ -37,18 +39,13 @@ def fake_guard_send(monkeypatch):
     만든다. 그 두 이름을 `guardrail.llm` 모듈 안에서만 바꾼다(환경변수와 튜터가 쓰는 openai 모듈은
     그대로 둔다). 지금 루트 앱의 가드는 상수 판정기라 이 가짜는 불리지 않는다. 가드가 기본 판정기를
     실제 판정기로 바꾸면(S2.8) 그때부터 모든 통합 테스트의 가드 nano 호출이 여기로 온다.
-    """
-    from tests.integration.applib import FakeGuardSend, OpenAIShim
 
-    fake = FakeGuardSend()
-    llm_mod = importlib.import_module("guardrail.llm")
-    monkeypatch.setattr(llm_mod, "openai", OpenAIShim(fake))
-    monkeypatch.setattr(llm_mod, "openai_env", lambda: dict(GUARD_LLM_ENV))
-    yield fake
-    # 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼킨다. 가짜가 모르는 호출이 있었으면 여기서 드러낸다.
-    assert fake.unknown == [], (
-        "FakeGuardSend가 모르는 스키마로 가드 LLM을 불렀다(applib.FakeGuardSend를 고친다)"
-    )
+    패치와 끝날 때의 `unknown` 단언은 `applib.patched_guard_llm`에 있다(테스트가 그 단언을 직접
+    돌려 볼 수 있게 일반 제너레이터로 뺐다).
+    """
+    from tests.integration.applib import patched_guard_llm
+
+    yield from patched_guard_llm(monkeypatch, GUARD_LLM_ENV)
 
 
 @pytest.fixture

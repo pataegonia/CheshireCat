@@ -11,13 +11,15 @@
 """
 
 import asyncio
+import importlib
+import json
 import logging
 import time
 
 import pytest
 from guardrail.config import load_config
 from guardrail.judges.input_judge import judge_input
-from guardrail.judges.schemas import InputOut, OutputBaselineOut, OutputOut
+from guardrail.judges.schemas import InputOut, OutputBaselineOut, OutputOut, strict_schema
 from guardrail.llm import LLM
 from guardrail.schema import Message
 from pydantic import BaseModel
@@ -28,15 +30,19 @@ from tests.integration.applib import (
     CATEGORIES,
     GUARD_BUDGET_HINT,
     GUARD_WORD,
+    MAX_GUARD_LLM_CALLS_PER_REQUEST,
     MAX_LLM_CALLS_PER_REQUEST,
+    UNKNOWN_JSON_OBJECT,
     FakeGuardSend,
     UnknownSchema,
+    _guard_schema_name,
     as_bytes,
     assert_guard_contract,
     assert_tutor_contract,
     cache_sizes,
     find_text,
     guard_call_budget,
+    patched_guard_llm,
     state_roots,
     user,
 )
@@ -61,7 +67,7 @@ def guard_body(content: str, candidate: str | None = None) -> dict:
     return body
 
 
-def complete_once(llm_factory, schema, *, structured: str | None = None):
+def complete_once(llm_factory, schema, *, structured: str | None = None, prompt=PROMPT):
     """LLM을 만들고 start() 뒤 한 번 부른다. (llm, 결과)를 돌려준다."""
 
     async def run():
@@ -69,7 +75,7 @@ def complete_once(llm_factory, schema, *, structured: str | None = None):
         await llm.start()
         if structured is not None:
             llm.structured = structured
-        result = await llm.complete("input_judge", PROMPT, schema, deadline=time.monotonic() + 5)
+        result = await llm.complete("input_judge", prompt, schema, deadline=time.monotonic() + 5)
         return llm, result
 
     return asyncio.run(run())
@@ -144,6 +150,103 @@ def test_unknown_guard_schema_is_recorded(app_env):
     assert result.error == "server" and result.parsed is None
     assert fake.unknown == ["NewJudgeOut"]
     assert dict(llm.unexpected) == {UnknownSchema.__name__: 1}
+
+
+def test_json_object_output_judge_with_input_fields_in_its_prompt_is_still_output_out(app_env):
+    """json_object 방식: 출력 판정 프롬프트 본문에 입력 판정 스키마의 필드 이름이 나와도
+    (예시 JSON 등) 가짜는 끝에 붙은 스키마로 판단해 OutputOut으로 답한다."""
+    fake = FakeGuardSend()
+    prompt = [
+        {
+            "role": "system",
+            "content": '출력 판정. 입력 판정의 예: {"category": "...", "evidence": "..."}',
+        },
+        {"role": "user", "content": "리스트에 값을 넣는 방법이 뭐야?"},
+    ]
+    llm, result = complete_once(
+        lambda: LLM(load_config().llm, send=fake),
+        OutputOut,
+        structured="json_object",
+        prompt=prompt,
+    )
+    assert result.error is None and isinstance(result.parsed, OutputOut)
+    assert dict(fake.by_schema) == {"OutputOut": 1} and fake.unknown == []
+    assert dict(llm.unexpected) == {}
+
+
+class ReasonGroundedSpansOut(BaseModel):
+    """출력 판정 스키마와 필드가 겹치는 새 스키마(가짜가 모르는 것)."""
+
+    reason: str
+    grounded: bool
+    spans: list[str]
+
+
+def test_json_object_new_schema_overlapping_output_fields_is_recorded_as_unknown(app_env):
+    """json_object 방식: 필드가 겹친다고 아는 스키마(OutputOut)로 답하지 않는다. 모르는 스키마로
+    `unknown`에 남아(`fake_guard_send` 픽스처라면 끝날 때 실패) 조용한 bad_json이 되지 않는다."""
+    fake = FakeGuardSend()
+    llm, result = complete_once(
+        lambda: LLM(load_config().llm, send=fake),
+        ReasonGroundedSpansOut,
+        structured="json_object",
+    )
+    assert result.parsed is None
+    assert fake.unknown == [UNKNOWN_JSON_OBJECT]
+    assert dict(llm.unexpected) == {UnknownSchema.__name__: 1}
+
+
+def test_guard_schema_name_reads_only_the_appended_schema():
+    """json_object 방식의 스키마 판별: system 끝 표식 뒤의 JSON이 아는 strict 스키마와 정확히 같을
+    때만 그 이름이다. 표식이 없거나, JSON이 아니거나, 하나라도 다르면 모른다("")."""
+    note = "JSON 객체만 출력한다. 스키마:\n"
+    plain = {"response_format": {"type": "json_object"}}
+
+    def name(system: str) -> str:
+        return _guard_schema_name(plain, system)
+
+    for schema in (InputOut, OutputOut, OutputBaselineOut):
+        dumped = json.dumps(strict_schema(schema), ensure_ascii=False)
+        assert name(f"판정\n\n{note}{dumped}") == schema.__name__
+        # 본문에 다른 스키마(표식 포함)가 먼저 나와도 마지막 표식 뒤만 본다
+        other = json.dumps(strict_schema(InputOut), ensure_ascii=False)
+        assert name(f"예시 {note}{other}\n\n{note}{dumped}") == schema.__name__
+    assert name('{"category": "normal", "evidence": "x"}') == ""  # 표식 없음
+    assert name(f"판정\n\n{note}{{깨진 JSON") == ""
+    changed = strict_schema(OutputOut)
+    changed["properties"]["spans"] = {"type": "array", "items": {"type": "string"}}
+    assert name(f"{note}{json.dumps(changed, ensure_ascii=False)}") == ""  # 필드 하나 더
+    assert name(f"{note}{json.dumps(strict_schema(ReasonGroundedSpansOut))}") == ""
+    # json_schema 방식은 이름으로 본다
+    named = {"response_format": {"type": "json_schema", "json_schema": {"name": "OutputOut"}}}
+    assert _guard_schema_name(named, "아무 글") == "OutputOut"
+
+
+def test_fixture_teardown_fails_when_the_fake_saw_an_unknown_schema():
+    """`fake_guard_send` 픽스처의 정리 단계(`applib.patched_guard_llm`)가 `unknown`이 비지 않으면
+    실패를 낸다. 픽스처를 쓰는 테스트로는 정리 단계의 실패를 볼 수 없어 제너레이터를 직접 돌린다."""
+    env = {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "m", "OPENAI_BASE_URL": "http://127.0.0.1:9/v1"}
+    llm_mod = importlib.import_module("guardrail.llm")
+    real_openai, real_env = llm_mod.openai, llm_mod.openai_env
+
+    # unknown이 비어 있으면 정리 단계가 조용히 끝난다
+    with pytest.MonkeyPatch.context() as mp:
+        steps = patched_guard_llm(mp, env)
+        fake = next(steps)
+        assert isinstance(fake, FakeGuardSend) and llm_mod.openai_env() == env
+        with pytest.raises(StopIteration):
+            next(steps)
+
+    # unknown에 값이 있으면 정리 단계에서 AssertionError
+    with pytest.MonkeyPatch.context() as mp:
+        steps = patched_guard_llm(mp, env)
+        fake = next(steps)
+        fake.unknown.append("NewJudgeOut")
+        with pytest.raises(AssertionError, match="FakeGuardSend"):
+            next(steps)
+
+    # 패치는 MonkeyPatch 범위 안에서만 걸렸다
+    assert (llm_mod.openai, llm_mod.openai_env) == (real_openai, real_env)
 
 
 def test_fake_guard_verdicts_vary_with_the_prompt_and_repeat_for_the_same_prompt():
@@ -250,6 +353,10 @@ def test_root_app_guard_nano_calls_stay_within_the_budget(client, fake_send, fak
         guard_body(QUESTION, candidate=""),
     ]
     for sent, body in enumerate(bodies, start=1):
+        before = fake_guard_send.count
         assert post(client, "/guard", body).status_code == 200
+        # 요청마다 본다: 합계만 보면 한 요청이 넘어도 다른 요청이 적게 쓰면 통과한다
+        used = fake_guard_send.count - before
+        assert used <= MAX_GUARD_LLM_CALLS_PER_REQUEST["/guard"], GUARD_BUDGET_HINT
         assert fake_guard_send.count <= guard_call_budget(guard=sent), GUARD_BUDGET_HINT
     assert fake_send.count == 0  # 가드는 튜터 전송을 쓰지 않는다

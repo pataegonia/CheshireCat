@@ -10,12 +10,14 @@ import json
 import re
 import sys
 import types
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple, get_args
 
 import jsonschema
 import openai
+import pytest
+from guardrail.judges.schemas import InputOut, OutputBaselineOut, OutputOut, strict_schema
 from guardrail.schema import Category
 
 from integration.contracts import ACTIONS
@@ -196,19 +198,35 @@ def _completion(content: str) -> Any:
 
 
 _GUARD_PROBE = [{"role": "user", "content": "ping"}]  # guardrail.llm.LLM.probe()가 보내는 요청
+# json_object 방식에서 guardrail.llm.LLM._request가 system 끝에 붙이는 표식. 그 뒤가 스키마 JSON이다
+_GUARD_SCHEMA_NOTE = "JSON 객체만 출력한다. 스키마:\n"
+# 가짜가 아는 가드 판정 스키마: 이름 → LLM이 받는 strict 스키마(정확히 같은 것만 그 이름으로 본다)
+_GUARD_SCHEMAS = {
+    model.__name__: strict_schema(model) for model in (InputOut, OutputOut, OutputBaselineOut)
+}
+# json_object 방식에서 스키마를 알아보지 못했을 때 `FakeGuardSend.unknown`에 남기는 표시
+UNKNOWN_JSON_OBJECT = "json_object:알 수 없는 스키마"
 
 
 def _guard_schema_name(kwargs: dict[str, Any], system: str) -> str:
-    """가드 판정 스키마 이름(guardrail.judges.schemas). json_schema 방식이면 이름으로,
-    json_object 방식이면 system 끝에 붙은 스키마의 필드로 알아본다."""
+    """가드 판정 스키마 이름(guardrail.judges.schemas). 모르면 "".
+
+    json_schema 방식이면 `response_format`의 이름으로 본다. json_object 방식이면 system 끝의
+    마지막 표식 뒤를 JSON으로 읽어, 아는 스키마의 strict 스키마와 정확히 같을 때만 그 이름이다.
+    system 본문의 낱말(예시 JSON의 필드 이름 등)로는 추측하지 않는다: 본문에 다른 스키마의 필드
+    이름이 나오거나, 필드가 겹치는 새 스키마가 오면 엉뚱한 스키마로 답해 조용히 bad_json이 된다.
+    """
     spec = kwargs.get("response_format", {}).get("json_schema")
     if isinstance(spec, dict):
         return str(spec.get("name", ""))
-    if '"category"' in system and '"evidence"' in system:
-        return "InputOut"
-    if '"grounded"' in system and '"reason"' in system:
-        return "OutputBaselineOut" if '"safe"' in system else "OutputOut"
-    return ""
+    _, found, tail = system.rpartition(_GUARD_SCHEMA_NOTE)
+    if not found:
+        return ""
+    try:
+        schema = json.loads(tail)
+    except ValueError:
+        return ""
+    return next((name for name, known in _GUARD_SCHEMAS.items() if known == schema), "")
 
 
 class FakeGuardSend:
@@ -258,8 +276,10 @@ class FakeGuardSend:
             if name == "OutputBaselineOut":
                 reply["safe"] = bool(next(picks) % 4) if self.vary else True
         else:
-            self.unknown.append(name)
-            raise UnknownSchema(name)
+            # json_object 방식은 이름이 없다. 빈 문자열 대신 알아볼 수 있는 표시를 남긴다
+            # (요청 본문은 남기지 않는다)
+            self.unknown.append(name or UNKNOWN_JSON_OBJECT)
+            raise UnknownSchema(name or UNKNOWN_JSON_OBJECT)
         return _completion(json.dumps(reply, ensure_ascii=False))
 
 
@@ -286,6 +306,28 @@ class OpenAIShim:
 
         completions = types.SimpleNamespace(create=create)
         return types.SimpleNamespace(chat=types.SimpleNamespace(completions=completions))
+
+
+def patched_guard_llm(
+    monkeypatch: pytest.MonkeyPatch, env: Mapping[str, str]
+) -> Generator[FakeGuardSend, None, None]:
+    """가드 LLM의 전송을 가짜로 바꾸고 가짜를 내준 뒤, 끝날 때 모르는 호출이 없었는지 본다.
+
+    conftest의 `fake_guard_send` 픽스처가 `yield from`으로 쓴다. 픽스처가 아닌 일반 제너레이터로
+    빼 둔 것은 정리 단계의 단언을 테스트가 직접 돌려 볼 수 있게 하려는 것이다(픽스처의 정리 단계가
+    실패를 내는지는 그 픽스처를 쓰는 테스트로는 확인할 수 없다).
+
+    `env`는 패치된 `guardrail.llm.openai_env`가 돌려줄 값이다. 환경변수에는 넣지 않는다.
+    """
+    fake = FakeGuardSend()
+    llm_mod = importlib.import_module("guardrail.llm")
+    monkeypatch.setattr(llm_mod, "openai", OpenAIShim(fake))
+    monkeypatch.setattr(llm_mod, "openai_env", lambda: dict(env))
+    yield fake
+    # 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼킨다. 가짜가 모르는 호출이 있었으면 여기서 드러낸다.
+    assert fake.unknown == [], (
+        "FakeGuardSend가 모르는 스키마로 가드 LLM을 불렀다(applib.FakeGuardSend를 고친다)"
+    )
 
 
 def _plain_main(answer: str) -> dict[str, Any]:

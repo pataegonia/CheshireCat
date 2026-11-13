@@ -28,6 +28,7 @@ from guardrail.schema import OutputVerdict
 
 from integration.actions import action_for
 from integration.contracts import Action, Category
+from integration.runtime import load_runtime
 from tutor.answer.templates import Fixed, template_for
 
 # 가드 §3의 공격 4범주. classify가 이 중 하나일 때만 주 호출 결과를 덮을 수 있다(TU-10)
@@ -47,9 +48,9 @@ ACTION_PRIORITY: tuple[str, ...] = (
     "answer",
 )
 # 남은 시간이 이보다 적으면 judge_output을 건너뛴다. 공유 설정 `config/runtime.yaml`의
-# `judge_skip_s`(통합 소유, 잠정 4초)와 같은 값이다. 그 파일을 읽는 코드가 들어오면
-# `state.judge_skip_s`로 넘긴다
-JUDGE_SKIP_S = 4.0
+# `judge_skip_s`(통합 소유, 잠정 4초)를 기동(import) 때 한 번 읽는다(`FALLBACK_ACTION`과 같은 방식).
+# 파일이 없거나 틀리면 기본값으로 넘어가지 않고 실패한다
+JUDGE_SKIP_S: float = float(load_runtime().judge_skip_s)
 
 
 class GuardLike(Protocol):

@@ -406,6 +406,14 @@ def test_judge_skip_s_can_come_from_state():
     assert len(guard.judge_calls) == 1
 
 
+def test_judge_skip_s_default_is_read_from_shared_runtime_config():
+    # 통합 config/runtime.yaml의 judge_skip_s를 읽는다(코드에 값을 따로 두지 않는다)
+    from integration.runtime import load_runtime
+    from tutor.judge.guard_merge import JUDGE_SKIP_S
+
+    assert load_runtime().judge_skip_s == JUDGE_SKIP_S
+
+
 @pytest.mark.parametrize("mode", ["off", "self"])
 def test_verify_other_than_guard_never_calls_judge_output(mode):
     guard = FakeGuard("normal")

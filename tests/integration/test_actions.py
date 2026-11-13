@@ -178,24 +178,35 @@ def test_unknown_category_uses_fallback_action(unknown):
     assert rule.variants == ()
 
 
-def test_fallback_action_default_when_runtime_yaml_absent(tmp_path):
-    assert load_fallback_action(tmp_path / "runtime.yaml") == actions.DEFAULT_FALLBACK_ACTION
-    assert actions.DEFAULT_FALLBACK_ACTION in ACTIONS
+def test_fallback_action_fails_when_runtime_yaml_absent(tmp_path):
+    with pytest.raises(OSError):
+        load_fallback_action(tmp_path / "runtime.yaml")
+    assert not hasattr(actions, "DEFAULT_FALLBACK_ACTION")  # 코드에 숨은 기본값이 없다
 
 
 def test_fallback_action_read_from_runtime_yaml(tmp_path):
     p = tmp_path / "runtime.yaml"
-    p.write_text("budget_s: 20\nfallback_action: abstain\n", encoding="utf-8")
+    p.write_text("judge_skip_s: 4\nfallback_action: abstain\n", encoding="utf-8")
     assert load_fallback_action(p) == "abstain"
+    assert load_fallback_action() in ACTIONS  # 경로를 안 주면 config/runtime.yaml
 
 
-def test_fallback_action_key_absent_uses_default(tmp_path):
+def test_fallback_action_key_absent_fails(tmp_path):
     p = tmp_path / "runtime.yaml"
-    p.write_text("budget_s: 20\n", encoding="utf-8")
-    assert load_fallback_action(p) == actions.DEFAULT_FALLBACK_ACTION
+    p.write_text("judge_skip_s: 4\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_fallback_action(p)
 
 
-@pytest.mark.parametrize("body", ["fallback_action: allow\n", "- a\n"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "judge_skip_s: 4\nfallback_action: allow\n",  # action 7종이 아님
+        "budget_s: 20\njudge_skip_s: 4\nfallback_action: abstain\n",  # 모르는 키(가드 소유)
+        "fallback_action: abstain\n",  # judge_skip_s 빠짐
+        "- a\n",
+    ],
+)
 def test_fallback_action_invalid_fails(tmp_path, body):
     p = tmp_path / "runtime.yaml"
     p.write_text(body, encoding="utf-8")

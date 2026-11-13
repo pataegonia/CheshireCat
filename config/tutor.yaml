@@ -11,7 +11,7 @@ toggles:
   signals: true                # 결정적 신호 힌트(TU-05)
   verify: guard                # off | self | guard. 가드 judge_output 검증, v1 기본 켬(TU-09)
   guard_classify: parallel     # off | serial | parallel. 가드 classify 합치기, 기본 parallel(TU-10)
-  embedding: false             # 질의 임베딩(TU-11). 기본 0회
+  embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
   rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   scaffold_state_rule: true    # answer_seeking에서 기준은 밝히고 적용은 학습자에게(TU-06). 11/13 #75에서 정함
@@ -23,7 +23,7 @@ fewshot:                       # 판단 예시 고르기(TU-08). 가드 GR-05 in
   per_category: 2              # knn 범주당 상한
   with_answer: false           # 예시에 정답 답변도 붙이는가. 기본 끔(다른 섹션 사실이 섞이고 answer_seeking 숨김 방식과 충돌), ablation
 retrieval:
-  k: 5                         # 근거 묶음 섹션 수. 2·3·5·8 중 recall@5 0.958 기준(T1.2). 측정 뒤 정함
+  k: 5                         # 근거 묶음 섹션 수. recall@5 = @8 = 0.958(#81), 판정 3회 비교에서 3은 분산 안(11/13)
 answer:
   max_sentences: 3             # 1–3문장 기본(상한 아님, TU-06)
 llm:
@@ -31,7 +31,7 @@ llm:
   max_completion_tokens: 1600  # 주 호출 상한(추론 토큰 포함). 가드 판정 호출(800)과 따로, 주 호출 실측(finish_reason=length 비율) 뒤 정함. 운영진 프록시 상한 2000(넘기면 400, 로드에서 실패)
   timeout_s:                   # 호출당 시간 제한(TU-13). 주 호출은 T1 실측으로 정함
     main: 15                   # 주 호출. T1 실측으로 8초에서 올림(#73): 8초는 v2 출력이 길어 재시도 36%, 15초는 재시도 0·동시 8 지연 최대 14.45초. 보낸 시각부터 센다
-    classify: 5                # 가드 classify(주 호출과 병렬)
+    classify: 5                # 가드 classify(주 호출과 병렬). 부른 때부터 센다, 게이트 대기 포함
     verify: 5                  # 검증·judge_output
     embedding: 2
 eval:

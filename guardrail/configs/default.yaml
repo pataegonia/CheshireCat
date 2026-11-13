@@ -44,8 +44,8 @@ output:
   call_nano_when_unused: true      # nano_tier3가 꺼졌을 때 출력 nano를 그래도 부를지. 측정 때는 true(S3.1 정밀도 기록). nano_tier3: false로 동결하면 false로 낮춰 호출을 아낄 수 있다
   rule_min_margin: 3.5             # Ranking.margin(KbIndex.rank 한 번, 전체 순위, 섹션별 최고 점수) 기준. S3.1이 G∪T(가드 근거 있음 + 튜터 참조 답변) 오탐으로 정한다. 기본 3.5는 공개 세트에서 정한 잠정값(R13-A §6.2)
   rule_emit_spans: true            # true = 규칙 ② → false + 규칙 구간 | false = false/[]. S3.1이 규칙 정밀도 P로 정한다(P ≥ 1/(1+s) → true, 0.5 ≤ P < 1/(1+s) → false, P < 0.5 → literal_rule 끔)
-  rule_span: pm4                   # pm4(토큰 종류별 첫 등장 ±4자, 겹치는 창 병합·중복 제거, `merged_pm4_spans`, F1 0.651 측정값) | eojeol(어절 경계). S3.1이 비교
-  rule_extra_tokens: []            # ablation: value_norm(콤마·만·천·억) | units_extra(주·일·년·글자) | bare_numeral(단위 없는 한글 수사) | backtick_latin(백틱 안 영문만). 기본 [] = V2(NUM_RX + 인용 제거 + 수사 클래스 수정)
-  rule_require_same_kind: false    # ablation: 같은 종류(단위 숫자/한글 수사/백틱 코드/함수 호출/리스트 리터럴)의 다른 값이 섹션에 있을 때만 걸림
+  rule_span: pm4                   # pm4(서로 다른 토큰 문자열마다 첫 토큰 ±4자, 겹치는 창 병합·중복 제거, `merged_pm4_spans`, F1 0.651 측정값) | eojeol(어절 경계). S3.1이 비교
+  rule_extra_tokens: []            # ablation: value_norm(콤마·만·천·억) | units_extra(주·일·년·글자) | bare_numeral(단위 없는 한글 수사, 미구현: 설정하면 기동 실패) | backtick_latin(백틱 안 영문만). 기본 [] = V2(NUM_RX + 인용 제거 + 수사 클래스 수정)
+  rule_require_same_kind: false    # ablation(미구현: true면 기동 실패): 같은 종류(단위 숫자/한글 수사/백틱 코드/함수 호출/리스트 리터럴)의 다른 값이 섹션에 있을 때만 걸림
 embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 때만
 eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)

@@ -196,6 +196,28 @@ def test_forbidden_toggle_combinations(toggles):
         load_config(DEFAULT, overrides={f"toggles.{k}": v for k, v in toggles.items()})
 
 
+@pytest.mark.parametrize(
+    ("dotted", "bad", "msg"),
+    [
+        ("output.rule_extra_tokens", ["bare_numeral"], "bare_numeral"),
+        ("output.rule_extra_tokens", ["value_norm", "bare_numeral"], "bare_numeral"),
+        ("output.rule_require_same_kind", True, "rule_require_same_kind"),
+    ],
+)
+def test_unimplemented_output_options_rejected_at_load(dotted, bad, msg):
+    # rules.py는 요청 때 NotImplementedError를 내므로, 기동 때 막지 않으면 서버가 떠 있다가 깨진다
+    with pytest.raises(ValidationError, match=msg):
+        load_config(DEFAULT, overrides={dotted: bad})
+
+
+def test_implemented_output_options_still_load():
+    cfg = load_config(
+        DEFAULT,
+        overrides={"output.rule_extra_tokens": ["value_norm", "units_extra", "backtick_latin"]},
+    )
+    assert cfg.output.rule_extra_tokens == ["value_norm", "units_extra", "backtick_latin"]
+
+
 def test_allowed_toggle_combinations():
     cfg = load_config(
         DEFAULT,

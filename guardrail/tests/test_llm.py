@@ -179,6 +179,51 @@ async def test_start_without_env_is_a_config_error(monkeypatch):
         await LLM(BASE).start()
 
 
+ENV = {
+    "OPENAI_API_KEY": "k",
+    "OPENAI_MODEL": "gpt-5-nano",
+    "OPENAI_BASE_URL": "http://proxy.test/v1",
+}
+
+
+class _Built(Exception):
+    """AsyncOpenAI를 만들려 하면 던진다(만든 인자를 담는다)."""
+
+
+def _record_client(monkeypatch):
+    import openai
+
+    def fake(**kwargs):
+        raise _Built(kwargs)
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", fake)
+
+
+@pytest.mark.parametrize("name", list(ENV))
+@pytest.mark.parametrize("value", [None, "", "  "])
+async def test_start_blank_env_builds_no_client(monkeypatch, name, value):
+    # 주소가 비면 SDK가 공개 OpenAI 주소로 팀 키를 보낸다. 셋 중 하나라도 비면 만들지 않는다
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    if value is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, value)
+    _record_client(monkeypatch)
+    with pytest.raises(ValueError, match=name):
+        await LLM(BASE).start()
+
+
+async def test_start_passes_the_configured_base_url(monkeypatch):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, f" {v} ")
+    _record_client(monkeypatch)
+    with pytest.raises(_Built) as built:
+        await LLM(BASE).start()
+    assert built.value.args[0]["base_url"] == ENV["OPENAI_BASE_URL"]
+    assert built.value.args[0]["api_key"] == ENV["OPENAI_API_KEY"]
+
+
 async def test_complete_before_start_is_a_programming_error():
     with pytest.raises(RuntimeError):
         await call(LLM(BASE), FakeClock())
@@ -362,8 +407,8 @@ async def test_errors_carry_codes_not_messages():
 
 @pytest.mark.live
 async def test_live_probe_and_input_call():
-    if not (os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_MODEL")):
-        pytest.skip("OPENAI_API_KEY·OPENAI_MODEL 없음")
+    if not all(os.environ.get(k, "").strip() for k in ENV):
+        pytest.skip("OPENAI_API_KEY·OPENAI_MODEL·OPENAI_BASE_URL 없음")
     llm = LLM(BASE)
     await llm.start()
     msgs = [
@@ -423,3 +468,28 @@ async def test_retry_dropped_when_wait_overran_the_margin():
 async def test_result_repr_hides_parsed_text():
     llm, _, clock = make(Ok('{"evidence": "SECRET-TEXT", "category": "normal"}'))
     assert "SECRET-TEXT" not in repr(await call(llm, clock))
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"])
+def test_openai_env_error_never_contains_values(monkeypatch, name, blank):
+    from guardrail.llm import openai_env
+
+    values = {
+        "OPENAI_API_KEY": "SENTINEL-KEY-7f3",
+        "OPENAI_MODEL": "SENTINEL-MODEL-7f3",
+        "OPENAI_BASE_URL": "http://SENTINEL-URL-7f3/v1",
+    }
+    for k, v in values.items():
+        monkeypatch.setenv(k, v)
+    if blank is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, blank)
+    with pytest.raises(ValueError) as ei:
+        openai_env()
+    err = ei.value
+    assert name in str(err)
+    for k, v in values.items():
+        if k != name:
+            assert v not in str(err) and v not in repr(err) and v not in err.args

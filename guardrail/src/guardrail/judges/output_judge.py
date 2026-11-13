@@ -43,9 +43,11 @@ def output_context(ranking: Ranking, kb: KbIndex, cfg: GuardConfig) -> list[Hit]
 def quote_ok(quote: str, text: str, min_chars: int) -> bool:
     """인용이 text의 부분 문자열인가. 둘 다 채점 정규화(NFKC·소문자·공백·문장부호 제거) 뒤에 본다.
 
-    정규화 뒤 빈 인용과 `min_chars`자 미만 인용은 False다.
+    nano는 `html.escape`된 글을 보고 옮기므로 인용의 엔티티(`&gt;` 등)를 먼저 되돌린다. text는
+    이스케이프 전 원문(자른 답변, nano에 준 문맥)을 넘긴다. 정규화 뒤 빈 인용과 `min_chars`자
+    미만 인용은 False다.
     """
-    q = normalize(quote)
+    q = normalize(html.unescape(quote))
     return bool(q) and len(q) >= min_chars and q in normalize(text)
 
 

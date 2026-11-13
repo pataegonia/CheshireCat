@@ -4,15 +4,20 @@
 프로세스 안에서 띄운다. 가드 판정기만 가짜이고, create_app 호출 인자가 같은지는 테스트가 본다.
 튜터·가드 요청을 섞어 동시 64로 보낸다(SPEC §3 동시 최대 64). 네트워크도 쓰지 않는다.
 - 튜터 설정이 임베딩(toggles.embedding)을 켜면 돌지 않는다. 기동이 실제 임베딩 API로 KB 임베딩을
-  만들고 요청마다 질의를 임베딩하게 되는데, 가짜 임베딩은 아직 없다(켤 때 더한다)
+  만들고 요청마다 질의를 임베딩하게 되는데, 가짜 임베딩은 아직 없다(켤 때 더한다). 덮어쓰기로
+  켜도 멈춘다(기동은 파일 설정만 읽어 임베딩 없이 재게 된다)
 - 튜터 LLM은 전송만 가짜로 바꾼다. 파라미터는 서버와 같은 build_llm 값이다. 가짜 전송은 응답
   스키마 이름(REPLIES)에 맞는 최소 정상 JSON을 내므로, v2는 검색 → 주 호출 → 결정적 수정까지
   실제 흐름을 탄다. 답을 모르는 스키마는 JSON이 아닌 답이라 LLM 실패로 드러난다(#88 때 더한다)
 - 튜터 모드는 `mode`(기본 v2, 배포 설정과 같음)로 정한다. 지금 v2는 요청당 주 호출 1회다(저신호
   직접 판정 #98처럼 LLM 없이 끝나는 요청은 0회)
 - 가드 판정기는 가짜다. 가드 설계(master-plan §4)대로 후보 답이 있으면 nano `guard_calls`회
-  (기본 2: 입력·출력 판정)를 병렬로, 없으면 입력 판정 1회를 흉내 낸다. 튜터 LLM과 같은 게이트를
-  쥔다(서버에서는 튜터가 가드 LLM의 slot()을 같이 쓴다). 판정 자체는 상수다
+  (기본 2: 입력·출력 판정)를 병렬로, 없으면 입력 판정 1회를 흉내 낸다. 판정 자체는 상수다.
+  가드 설정의 호출당 읽기 제한(llm.timeout_s.read)과 게이트 대기를 포함한 마감(budget_s)을 넘으면
+  판정을 못 끝낸 것으로 센다
+- 가짜 가드는 튜터 LLM과 같은 게이트를 쥔다. 이는 가드에 LLM 판정기가 붙은 구성의 가정이다(그때
+  튜터가 가드 LLM의 slot()을 같이 쓴다). 지금 루트 app.py는 LLM이 없는 가드 기본 판정기라,
+  배포 서버에서는 튜터가 같은 크기(llm.gate)의 자기 게이트를 따로 쓰고 가드는 LLM을 부르지 않는다
 - 게이트 크기는 가드 설정 llm.gate이고 `gate`로 줄여 볼 수 있다. 경합은 게이트가 차 있어 줄을 선
   호출 수와 기다린 시간으로 잰다. 튜터 v2는 요청 하나가 한 번에 호출 하나지만, 후보 답이 있는 가드
   요청은 둘을 함께 쥐므로 동시 64·게이트 64에서도 줄이 생긴다(#88이 classify를 병렬로 붙이면
@@ -23,8 +28,8 @@
 - httpx ASGITransport로 앱을 바로 부른다. uvicorn·HTTP 파싱은 거치지 않는다
 - 합격선은 튜터 p50 ≤6초·p95 ≤12초(TU-13·TU-17)다. 그 밖에 실패로 보는 것: 튜터 요청 없음,
   형식·시간 초과·기본값, 튜터 LLM 오류, LLM을 부르지 않은 튜터 요청이 많음, 모드에 없는 응답
-  스키마, 가드 판정을 못 끝냄(가드 라우트가 예외를 기본값으로 바꿔도 센다), 게이트를 거치지 않은
-  호출, 게이트 크기 초과, 리다이렉트
+  스키마, 가드 판정을 못 끝냄(가드 라우트가 예외를 기본값으로 바꿔도 센다)·가드 시간 초과, 게이트를
+  거치지 않은 호출, 게이트 크기 초과, 리다이렉트, 전체 시간 초과(WALL_LIMIT_S, 배율 1·동시 64일 때)
 - 기준 조건에서 통과해야 실측 통과로 낸다. 기준은 SPEC §3 부하(튜터·가드 각 약 300, 동시 64)와
   기본 가정(가짜 지연, 가드 판정 최대 2회 병렬, 서버 게이트)이다. 배율이 1이 아니거나 기준보다 쉬운
   조건이면 "스모크"로 내고 까닭을 적는다. 게이트에 줄을 선 호출이 없으면 "게이트 경합 없음"을 적는다
@@ -60,6 +65,8 @@ P50_S, P95_S = 4.51, 6.62  # 가드 #105 런박스 실측(InputOut, 동시 64)
 Z95 = 1.6448536269514722  # 표준정규 95백분위
 GRADER_TIMEOUT_S = 30.0  # SPEC §3 요청당 30초
 CLIENT_TIMEOUT_S = 2 * GRADER_TIMEOUT_S  # 30초를 넘는 응답도 재되, 끝없이 기다리지는 않는다
+# SPEC §3: 5분을 기다린 채점은 실행 환경이 끊었고 한계는 더 짧을 수 있다. 채점기 판정 몫을 남겨 절반
+WALL_LIMIT_S = 150.0
 BASE_URL = "http://localhost"  # 프로세스 안 ASGI 호출(네트워크 없음)
 GUARD_CALLS = 2  # 후보 답이 있는 가드 요청의 nano 판정 호출 수(입력·출력, 병렬). 없으면 1회
 N_TUTOR = N_GUARD = 300  # SPEC §3: 한 제출은 튜터·가드 각 약 300 요청
@@ -171,29 +178,49 @@ class FakeGuard:
 
     판정 자체는 상수(ConstantGuard)다. judged는 판정을 끝낸 요청 수다. 가드 라우트는 판정기 예외와
     예산 초과를 200 기본값으로 바꾸므로, 응답 형식이 아니라 이 수로 가드 실패를 센다.
+    가드 LLM처럼 호출마다 read_s(보낸 뒤 기다리는 상한), 요청마다 budget_s(게이트 대기 포함 마감)를
+    넘으면 판정을 못 끝낸 것으로 보고 timeouts를 올린 뒤 예외를 낸다.
     """
 
-    def __init__(self, fake: FakeLLM, gate: TimedGate, calls: int) -> None:
+    def __init__(
+        self, fake: FakeLLM, gate: TimedGate, calls: int, *, read_s: float, budget_s: float
+    ) -> None:
         self.fake = fake
-        self.gate = gate  # 튜터 LLM도 이 게이트를 쓴다(서버에서는 가드 LLM의 slot())
+        self.gate = gate  # 튜터 LLM도 이 게이트를 쓴다(가드 LLM 판정기가 붙은 구성의 가정)
         self.calls = calls
+        self.read_s = read_s  # 가드 llm.timeout_s.read
+        self.budget_s = budget_s  # 가드 budget_s
         self.inner = ConstantGuard()
         self.judged = 0
+        self.timeouts = 0  # 읽기 제한·마감을 넘어 판정을 못 끝낸 요청 수
 
     async def judge(self, req: Any) -> Any:
         # 가드 설계(master-plan §4): 입력·출력 판정을 병렬로, 출력 판정은 후보 답이 있을 때만.
         # 가드 has_candidate는 키가 있는지로 보지만, 빈 답은 출력 판정을 부를 일이 없어
         # 내용으로 본다(모의 부하는 빈 답이면 키를 보내지 않아 공개 세트에서는 둘이 같다)
         n = calls_for(self.calls, bool(getattr(req, "candidate_answer", None)))
-        await asyncio.gather(*(self._call() for _ in range(n)))
+        try:
+            async with asyncio.timeout(self.budget_s):
+                done = await asyncio.gather(*(self._call() for _ in range(n)))
+        except TimeoutError:
+            done = [False]
+        if not all(done):
+            self.timeouts += 1
+            raise TimeoutError("가짜 가드 판정 시간 초과")  # 라우트가 200 기본값으로 바꾼다
         judgement = await self.inner.judge(req)
         self.judged += 1
         return judgement
 
-    async def _call(self) -> None:
+    async def _call(self) -> bool:
+        """판정 호출 하나. 읽기 제한 안에 끝나면 True."""
         async with self.gate.slot("guard"):
             self.fake.guard_calls += 1
-            await self.fake.hold()
+            try:
+                async with asyncio.timeout(self.read_s):
+                    await self.fake.hold()
+            except TimeoutError:
+                return False
+        return True
 
 
 def calls_for(per_request: int, has_candidate: bool) -> int:
@@ -247,6 +274,7 @@ class Report:
     guard_calls: int  # 가드 판정 호출 수
     guard_expected: int  # 가드 요청별 calls_for의 합(후보 답 있으면 요청당 판정 수, 없으면 1)
     guard_judged: int  # 판정을 끝낸 가드 요청 수
+    guard_timeouts: int  # 가드 읽기 제한·마감을 넘어 판정을 못 끝낸 가드 요청 수
     schemas: tuple[tuple[str, int], ...]  # 튜터 전송의 응답 스키마별 수
     gate_entries: tuple[tuple[str, int], ...]  # 게이트에 들어간 수(역할별)
     gate_queued: int  # 게이트가 차 있어 줄을 선 호출 수(0이면 경합 없음)
@@ -334,6 +362,7 @@ def _report(
     gate: TimedGate,
     llm: Any,  # CountingLLM(completes·failed·retried)
     guard_judged: int,
+    guard_timeouts: int,
     slash: int,
     mode: str,
     guard_per_request: int,
@@ -376,6 +405,7 @@ def _report(
             calls_for(guard_per_request, r.has_candidate) for r in results if r.endpoint != "tutor"
         ),
         guard_judged=guard_judged,
+        guard_timeouts=guard_timeouts,
         schemas=tuple(sorted(fake.schemas.items())),
         gate_entries=tuple(sorted(gate.entries.items())),
         gate_queued=gate.queued,
@@ -414,12 +444,15 @@ async def run_load(
     """
     if load_config().toggles.embedding:  # 기동은 덮어쓰기 없이 파일 설정(TUTOR_CONFIG)을 읽는다
         raise RuntimeError("임베딩이 켜진 튜터 설정이라 운영진 임베딩 API를 부르게 된다")
+    if load_config(overrides=tutor_overrides).toggles.embedding:
+        raise RuntimeError("덮어쓰기로 켠 임베딩은 기동이 만들지 않아 임베딩 없이 재게 된다")
     rng = random.Random(seed)  # noqa: S311 - 모의 지연·순서, 암호용 아님
     fake = FakeLLM(Latency.from_quantiles(*fake_quantiles), rng, scale=scale)
 
     async def guard_factory(cfg: Any) -> FakeGuard:
         size = gate if gate is not None else cfg.llm.gate
-        return FakeGuard(fake, TimedGate(size), guard_calls)
+        limits = {"read_s": cfg.llm.timeout_s.read, "budget_s": cfg.budget_s}
+        return FakeGuard(fake, TimedGate(size), guard_calls, **limits)
 
     app = create_app(
         guard_factory,
@@ -450,6 +483,7 @@ async def run_load(
         gate=guard.gate,
         llm=llm,
         guard_judged=guard.judged,
+        guard_timeouts=guard.timeouts,
         slash=slash,
         mode=used,
         guard_per_request=guard_calls,
@@ -482,6 +516,7 @@ def _failures(report: Report, bar: Bar, t50: float, t95: float) -> list[str]:
             "가드 판정",  # 판정기 예외·예산 초과는 라우트가 200 기본값으로 바꾼다
             report.guard_judged != n_guard or report.guard_calls != report.guard_expected,
         ),
+        ("가드 시간 초과", bool(report.guard_timeouts)),
         # 보낸 호출은 모두 게이트를 지난다. 들어간 뒤 시간이 모자라 보내지 않고 나오면 진입이
         # 더 많아지는데, 그 호출은 오류로 끝나 "LLM 실패"로 따로 걸린다(일부 우회가 가려져도
         # 통과하지 못한다)
@@ -494,6 +529,13 @@ def _failures(report: Report, bar: Bar, t50: float, t95: float) -> list[str]:
         ("리다이렉트", 300 <= report.slash_status < 400),
         (f"p50 기준 넘음({bar.p50_s:g}초)", t50 > bar.p50_s),
         (f"p95 기준 넘음({bar.p95_s:g}초)", t95 > bar.p95_s),
+        # 배율·낮은 동시는 전체 시간을 부풀리므로 실제 시간 부하(스모크 표시도 따로 붙음)에서만 본다
+        (
+            f"전체 {WALL_LIMIT_S:g}초 넘음",
+            report.scale == 1
+            and report.concurrency >= CONCURRENCY
+            and report.wall_s > WALL_LIMIT_S,
+        ),
     ]
     return [name for name, failed in checks if failed]
 
@@ -548,7 +590,8 @@ def show(report: Report, bar: Bar, out: TextIO | None = None) -> bool:
     )
     out.write(f"({schemas}, 재시도 {report.retried}) · 가드 {report.guard_calls}회\n")
     out.write(f"LLM을 부른 튜터 요청 {report.llm_requests}/{n_tutor}")
-    out.write(f", 판정을 끝낸 가드 요청 {report.guard_judged}/{n_guard}\n")
+    out.write(f", 판정을 끝낸 가드 요청 {report.guard_judged}/{n_guard}")
+    out.write(f"(시간 초과 {report.guard_timeouts})\n")
     out.write(f"게이트 줄 선 호출 {report.gate_queued}회 · 대기 p95 {report.gate_wait_p95:.2f}초")
     out.write(f" · 최대 {report.gate_wait_max:.2f}초")
     out.write(

@@ -58,6 +58,7 @@ def passed(**changes):
         guard_calls=2 * n_guard,
         guard_expected=2 * n_guard,
         guard_judged=n_guard,
+        guard_timeouts=0,
         schemas=(("MainCallOut", n_tutor),),
         gate_entries=(("guard", 2 * n_guard), ("tutor", n_tutor)),
         gate_queued=0,
@@ -165,11 +166,70 @@ def test_fake_guard_runs_its_judges_in_parallel_only_with_a_candidate():
         random.Random(0),  # noqa: S311
         scale=0.01,
     )
-    guard = mock_load.FakeGuard(fake, mock_load.TimedGate(4), calls=2)
+    guard = mock_load.FakeGuard(fake, mock_load.TimedGate(4), calls=2, read_s=12, budget_s=20)
     asyncio.run(guard.judge(SimpleNamespace(candidate_answer="답", has_candidate=True)))
     assert fake.guard_calls == 2 and fake.peak == 2  # 둘이 함께 게이트를 쥔다
     asyncio.run(guard.judge(SimpleNamespace(candidate_answer=None, has_candidate=False)))
     assert fake.guard_calls == 3 and guard.judged == 2  # 후보 답이 없으면 입력 판정 1회
+    assert guard.timeouts == 0
+
+
+def slow_guard(latency_s, gate, *, read_s, budget_s):
+    fake = mock_load.FakeLLM(
+        mock_load.Latency.from_quantiles(latency_s, latency_s),
+        random.Random(0),  # noqa: S311
+        scale=1.0,
+    )
+    guard = mock_load.FakeGuard(
+        fake, mock_load.TimedGate(gate), calls=2, read_s=read_s, budget_s=budget_s
+    )
+    return fake, guard
+
+
+def test_fake_guard_gives_up_on_a_call_past_the_read_limit():
+    """가드 LLM은 호출마다 읽기 제한(llm.timeout_s.read)을 넘으면 시간 초과로 끝낸다(#128 리뷰)."""
+    fake, guard = slow_guard(0.2, 4, read_s=0.02, budget_s=10)
+    with pytest.raises(TimeoutError):
+        asyncio.run(guard.judge(SimpleNamespace(candidate_answer="답", has_candidate=True)))
+    assert fake.guard_calls == 2 and guard.judged == 0 and guard.timeouts == 1
+
+
+def test_fake_guard_gives_up_when_the_gate_wait_eats_its_budget():
+    """가드 마감(budget_s)은 게이트 대기를 포함한다(가드 LLM.complete의 deadline)."""
+    fake, guard = slow_guard(0.05, 1, read_s=10, budget_s=0.07)  # 둘째 호출은 게이트에서 기다린다
+    with pytest.raises(TimeoutError):
+        asyncio.run(guard.judge(SimpleNamespace(candidate_answer="답", has_candidate=True)))
+    assert guard.judged == 0 and guard.timeouts == 1
+
+
+def test_fake_guard_uses_the_guard_config_limits(monkeypatch):
+    from guardrail.config import load_config as load_guard_config
+
+    seen = {}
+    real = mock_load.FakeGuard
+
+    def capture(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(mock_load, "FakeGuard", capture)
+    run(n_tutor=1, n_guard=1, scale=0.001, seed=23)
+    cfg = load_guard_config()
+    assert seen == {"read_s": cfg.llm.timeout_s.read, "budget_s": cfg.budget_s}
+
+
+def test_guard_timeouts_fail_the_run(monkeypatch, capsys):
+    real = mock_load.FakeGuard
+
+    def quick_limits(fake, gate, calls, **_limits):
+        return real(fake, gate, calls, read_s=0.01, budget_s=20)
+
+    monkeypatch.setattr(mock_load, "FakeGuard", quick_limits)
+    report = run(n_tutor=2, n_guard=5, scale=0.05, seed=24)  # 가짜 지연 약 0.2초 > 0.01초
+    assert report.guard_timeouts == 5 and report.guard_judged == 0
+    assert report.invalid == 0  # 라우트가 200 기본값으로 바꿔 형식 검사로는 안 잡힌다
+    ok, last = judged(report, capsys)
+    assert not ok and "가드 판정" in last and "가드 시간 초과" in last
 
 
 @pytest.mark.parametrize(
@@ -279,6 +339,12 @@ def test_refuses_a_config_that_would_call_the_embedding_api(monkeypatch):
     monkeypatch.setattr(mock_load, "load_config", embedding_on)
     with pytest.raises(RuntimeError, match="임베딩"):
         run(n_tutor=1, n_guard=0, scale=0.001, seed=22)
+
+
+def test_refuses_overrides_that_turn_on_embedding():
+    """덮어쓰기로 켠 임베딩은 기동이 만들지 않아 임베딩 없이 재게 된다(#128 리뷰 재현)."""
+    with pytest.raises(RuntimeError, match="임베딩"):
+        run(n_tutor=1, n_guard=0, scale=0.001, seed=22, tutor_overrides={"toggles.embedding": True})
 
 
 def test_tutor_overrides_cannot_change_the_mode():
@@ -396,6 +462,25 @@ def test_cli_passes_easy_inputs_only_as_a_smoke_run(capsys):
     )
 
 
+def test_a_run_longer_than_the_wall_limit_fails(capsys):
+    """SPEC §3: 5분을 기다린 채점은 끊겼고 한계는 더 짧을 수 있다. 채점기 판정 몫을 남긴다."""
+    limit = mock_load.WALL_LIMIT_S
+    assert limit <= 300 / 2
+    ok, last = judged(passed(wall_s=limit + 1), capsys)
+    assert not ok and last == f"실패: 전체 {limit:g}초 넘음"
+    ok, _last = judged(passed(wall_s=limit), capsys)
+    assert ok
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"scale": 2.0}, {"concurrency": 8}],  # 배율·낮은 동시는 전체 시간을 부풀린다(스모크)
+)
+def test_the_wall_limit_applies_only_to_real_time_load(capsys, changes):
+    ok, last = judged(passed(wall_s=mock_load.WALL_LIMIT_S * 3, **changes), capsys)
+    assert ok and last.startswith("통과(스모크")
+
+
 def test_default_bar_is_the_prd_latency_target():
     assert mock_load.Bar() == mock_load.Bar(p50_s=6.0, p95_s=12.0)  # TU-13·TU-17, 통합 v1.1
 
@@ -485,6 +570,7 @@ def test_missing_or_non_json_responses_count_as_failures(client, status, monkeyp
         gate=mock_load.TimedGate(64),
         llm=SimpleNamespace(completes=0, failed=0, retried=0),
         guard_judged=0,
+        guard_timeouts=0,
         slash=404,
         mode="v2",
         guard_per_request=2,

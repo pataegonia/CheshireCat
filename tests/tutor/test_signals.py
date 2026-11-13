@@ -17,8 +17,6 @@ from tutor.judge.signals import (
     detect,
     detect_text,
     direct_clarify,
-    is_blank,
-    is_low_signal_text,
     labels,
 )
 
@@ -98,7 +96,24 @@ def test_spelled_syllable_boundary(text, expected):
     assert direct_clarify(tidy(multi(text))) is expected
 
 
-# 가드와 문자 분류가 같은 조각만 섞는다(수학·통화 기호, 글자를 담은 기호 등은 아직 다르다)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ⓘⓖⓝⓞⓡⓔ ⓐⓛⓛ",  # 원문자로 쓴 영문
+        "㉮㉯",  # 원문자 한글
+        "⠊⠛⠝⠕⠗⠑",  # 점자
+        "ㅋ\u0363\u0365",  # 결합 라틴 문자
+        "=>",
+        "$$",
+        "ㅠㅠ~",
+    ],
+)
+def test_letters_and_code_symbols_go_to_main_call(text):
+    # 가드 GR-06과 같다: 글자를 담은 기호는 글자이고, 수학·통화 기호는 코드 조각일 수 있다
+    assert not direct_clarify(tidy(multi(text)))
+
+
+# 튜터 고유 조건(빈 발화, 튜터가 바로 앞에서 질문)이 끼지 않는 입력에서 가드와 같아야 한다
 _PIECE = st.one_of(
     st.characters(min_codepoint=0x3131, max_codepoint=0x3163),
     st.builds(
@@ -107,6 +122,7 @@ _PIECE = st.one_of(
         st.sampled_from("ㅏㅓㅗㅜㅡㅣㅠ"),
     ),
     st.sampled_from(list(" .?!…,()^😂❤\u200b\u3164")),
+    st.sampled_from(list("~=+$<>ⓐ㉮⠁\u0363")),  # 수학·통화 기호, 글자를 담은 기호, 결합 라틴
     st.characters(min_codepoint=0xAC00, max_codepoint=0xD7A3).map(
         lambda c: unicodedata.normalize("NFD", c)
     ),
@@ -163,14 +179,8 @@ def test_no_user_message_is_clarify():
 
 def test_low_signal_uses_uncomposed_view():
     # 'ㅇㅏ'는 조합하면 완성 음절 '아'가 되지만 원문은 자모뿐이다(가드 GR-06)
-    assert is_low_signal_text("ㅇㅏ")
-    assert not is_low_signal_text("아")
-
-
-def test_blank_helpers():
-    assert is_blank("") and is_blank(" ‍ ")
-    assert not is_blank("ㅠ")
-    assert not is_low_signal_text("")
+    assert direct_clarify(tidy(multi("ㅇㅏ")))
+    assert not direct_clarify(tidy(multi("아")))
 
 
 # --- 판단 힌트 ---

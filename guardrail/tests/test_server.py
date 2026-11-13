@@ -304,12 +304,48 @@ def test_tutor_falls_back_without_openai_env(client, monkeypatch, caplog):
     r = _post(client, {"messages": [{"role": "user", "content": MARK}]}, path="/tutor")
     assert r.status_code == 200
     assert r.json() == {"answer": server.TUTOR_FALLBACK, "action": "answer", "citations": []}
-    assert _access_lines(caplog)[-1].split(" ")[-1] == "KeyError"
+    assert _access_lines(caplog)[-1].split(" ")[-1] == "ValueError"
     _assert_logs_clean(caplog)
 
 
-def test_tutor_answers_through_llm_slot(monkeypatch):
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_tutor_blank_base_url_builds_no_client(client, monkeypatch, value):
+    # 주소가 비면 SDK 기본(공개 OpenAI) 주소로 나간다. 만들지 않고 안내 문구 200
     monkeypatch.setenv("OPENAI_MODEL", "gpt-5-nano")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    if value is None:
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_BASE_URL", value)
+    built = []
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: built.append(kw))
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200 and r.json()["answer"] == server.TUTOR_FALLBACK
+    assert built == []
+    assert getattr(client.app.state, "tutor_client", None) is None
+
+
+def test_tutor_client_uses_the_configured_base_url(client, monkeypatch):
+    for k, v in {"OPENAI_MODEL": "gpt-5-nano", "OPENAI_API_KEY": "k"}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("OPENAI_BASE_URL", " http://proxy.test/v1 ")
+    built = []
+    import openai
+
+    def fake(**kw):
+        built.append(kw)
+        return _FakeClient("답")
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", fake)
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.json()["answer"] == "답"
+    assert built[0]["base_url"] == "http://proxy.test/v1" and built[0]["api_key"] == "k"
+
+
+def test_tutor_answers_through_llm_slot(monkeypatch):
+    _sentinel_env(monkeypatch, OPENAI_MODEL="gpt-5-nano")
     llm = _SlotLLM()
     guard = ConstantGuard()
     guard.llm = llm
@@ -327,7 +363,7 @@ def test_tutor_answers_through_llm_slot(monkeypatch):
 
 
 def test_tutor_empty_answer_falls_back(client, monkeypatch):
-    monkeypatch.setenv("OPENAI_MODEL", "gpt-5-nano")
+    _sentinel_env(monkeypatch, OPENAI_MODEL="gpt-5-nano")
     client.app.state.tutor_client = _FakeClient(None)
     r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
     assert r.json()["answer"] == server.TUTOR_FALLBACK
@@ -526,3 +562,91 @@ def test_no_injection_keeps_starter_tutor(client, monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     r = _post(client, {"messages": []}, path="/tutor")
     assert r.json()["answer"] == server.TUTOR_FALLBACK
+
+
+SENT_KEY, SENT_MODEL, SENT_URL = (
+    "SENTINEL-KEY-7f3",
+    "SENTINEL-MODEL-7f3",
+    "http://SENTINEL-URL-7f3/v1",
+)
+
+
+def _sentinel_env(monkeypatch, **override):
+    base = {"OPENAI_API_KEY": SENT_KEY, "OPENAI_MODEL": SENT_MODEL, "OPENAI_BASE_URL": SENT_URL}
+    for k, v in {**base, **override}.items():
+        monkeypatch.setenv(k, v)
+
+
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL"])
+def test_tutor_blank_key_or_model_builds_no_client(client, monkeypatch, name):
+    _sentinel_env(monkeypatch, **{name: "  "})
+    built = []
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: built.append(kw))
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200 and r.json()["answer"] == server.TUTOR_FALLBACK
+    assert built == []
+    assert getattr(client.app.state, "tutor_client", None) is None
+
+
+def test_tutor_logs_and_errors_hide_env_values(client, monkeypatch, caplog):
+    import httpx2
+    import openai
+
+    _sentinel_env(monkeypatch)
+    caplog.set_level(logging.DEBUG)
+
+    class _Leaky:
+        def __init__(self, **kw):
+            self.chat = type("Chat", (), {"completions": self})
+
+        async def create(self, **kw):
+            # 실제 HTTP 클라이언트의 로그 경로(httpx2 로거)를 네트워크 없이 지나가게 한다
+            transport = httpx2.MockTransport(lambda request: httpx2.Response(200))
+            async with httpx2.AsyncClient(transport=transport) as http:
+                await http.post(SENT_URL + "/chat/completions")
+            raise RuntimeError(f"{SENT_KEY} {SENT_MODEL} {SENT_URL}")
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _Leaky)
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200 and r.json()["answer"] == server.TUTOR_FALLBACK
+    assert any(rec.name == "guardrail.access" for rec in caplog.records)
+    for sentinel in ("SENTINEL-KEY-7f3", "SENTINEL-MODEL-7f3", "SENTINEL-URL-7f3"):
+        # URL 호스트는 HTTP 클라이언트가 소문자로 바꿔 찍으므로 대소문자 없이 본다
+        assert sentinel.lower() not in r.text.lower()
+        assert sentinel.lower() not in caplog.text.lower()
+
+
+@pytest.fixture
+def root_debug():
+    root = logging.getLogger()
+    old = root.level
+    root.setLevel(logging.DEBUG)
+    yield
+    root.setLevel(old)
+
+
+@pytest.mark.parametrize("debug_root", [False, True])
+def test_http_client_loggers_stay_at_warning(debug_root, request):
+    if debug_root:
+        request.getfixturevalue("root_debug")
+    server._install_log_filters()
+    for name in ("httpx2", "httpcore2", "httpx"):
+        assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING
+
+
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"])
+def test_injected_tutor_client_still_needs_all_three_env(client, monkeypatch, caplog, name):
+    import openai
+
+    _sentinel_env(monkeypatch, **{name: "  "})
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: pytest.fail("client built"))
+    fake = _FakeClient("답")
+    client.app.state.tutor_client = fake
+    caplog.set_level(logging.DEBUG)
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200
+    assert r.json()["answer"] == server.TUTOR_FALLBACK
+    assert fake.chat.completions.calls == []
+    assert _access_lines(caplog)[-1].split(" ")[-1] == "ValueError"

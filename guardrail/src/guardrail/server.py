@@ -28,6 +28,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from guardrail.config import GuardConfig, load_config
 from guardrail.guard import ConstantGuard, Judgement
+from guardrail.llm import openai_env
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict, parse_request
 
 access_log = logging.getLogger("guardrail.access")
@@ -194,6 +195,8 @@ def _install_log_filters() -> None:
     if not any(isinstance(f, _ExceptionNameOnly) for f in uv.filters):
         uv.addFilter(_ExceptionNameOnly())
     access_log.setLevel(logging.INFO)
+    for name in ("httpx2", "httpcore2", "httpx"):  # 주소·호스트를 INFO·DEBUG로 남기지 않게
+        logging.getLogger(name).setLevel(logging.WARNING)
     # 루트에 핸들러가 없을 때만 직접 쓴다(있으면 전파로 한 번만 찍힌다)
     if not access_log.handlers and not logging.getLogger().handlers:
         access_log.addHandler(logging.StreamHandler())
@@ -250,11 +253,17 @@ def _tutor_body(answer: str) -> dict[str, Any]:
 
 
 async def _tutor_answer(state: Any, req: GuardRequest) -> str:
-    model = os.environ["OPENAI_MODEL"]
+    env = openai_env()  # 하나라도 비면 공개 OpenAI로 나가거나 인증이 깨지므로 만들지 않는다
+    model = env["OPENAI_MODEL"]
     if getattr(state, "tutor_client", None) is None:
-        from openai import AsyncOpenAI  # 첫 호출 때만 환경변수를 읽는다
+        from openai import AsyncOpenAI  # 첫 호출 때만 불러온다
 
-        state.tutor_client = AsyncOpenAI(timeout=TUTOR_TIMEOUT_S, max_retries=0)
+        state.tutor_client = AsyncOpenAI(
+            base_url=env["OPENAI_BASE_URL"],
+            api_key=env["OPENAI_API_KEY"],
+            timeout=TUTOR_TIMEOUT_S,
+            max_retries=0,
+        )
     llm = getattr(state.guard, "llm", None)
     gate = llm.slot() if llm is not None else contextlib.nullcontext()
     messages = [{"role": "system", "content": TUTOR_SYSTEM}]

@@ -146,7 +146,7 @@ def log_failures(lines: list[str], requests: int, with_candidate: int) -> dict:
     seen = 0
     for line in lines:
         f = line.split(" ")
-        if len(f) < 7 or f[-6] != "/guard":
+        if len(f) < 7 or f[-6] != "/guard" or f[-3] != "200":  # 401 같은 거절은 판정이 아니다
             continue
         seen += 1
         if f[-1] != "-":

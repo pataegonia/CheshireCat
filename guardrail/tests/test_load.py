@@ -102,6 +102,7 @@ def test_log_failures_counts_roles_once_per_request():
         "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 output_judge:TimeoutError",
         "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 input_judge,output_judge",
         "2026-11-13T00:00:00.0Z /tutor 10 20 200 1.0 ValueError",
+        "2026-11-13T00:00:00.0Z /guard 0 24 401 1.0 HTTPException",
         "INFO: uvicorn started",
     ]
     rep = load.log_failures(lines, requests=4, with_candidate=2)

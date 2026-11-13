@@ -6,7 +6,8 @@
   켜졌을 때만 붙인다(다른 섹션의 과목 사실이 섞이고, answer_seeking 정답 답변은 기준을 숨기는
   방식이라 `scaffold_state_rule`과 반대로 가르친다. 11/13 결정, ablation으로 잰다).
 - `toggles.fewshot`
-  - knn: 판단 대상과 문자 n-gram TF-IDF 코사인으로 가까운 행을 가드 GR-05 규칙으로 고른다.
+  - knn: 판단 대상과 문자 n-gram TF-IDF 코사인으로 가까운 행을 가드 GR-05 규칙
+    (`guardrail.knn.select_fewshot`)으로 고른다.
     ① 1위 이웃과 block/allow가 다른 최근접 예시 1개 ② 범주당 `per_category`개
     ③ 전체 `max_examples`개 ④ 고른 예시의 짝(같은 묶음)은 ②·③을 지킬 때만. 가장 비슷한 예시가
     마지막(질의 바로 앞)이다.
@@ -17,8 +18,7 @@
   TU-16). 서버는 200행 전부를 쓴다.
 """
 
-from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -26,17 +26,16 @@ from typing import Literal
 
 import numpy as np
 from guardrail.clusters import build_clusters
+from guardrail.config import GuardConfig, resolve_path
 from guardrail.config import load_config as load_guard_config
-from guardrail.config import resolve_path
 from guardrail.data import LabeledRow, PublicRow, load_public
+from guardrail.knn import select_fewshot
 from guardrail.preprocess import normalize
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from tutor.judge.main_call import defuse
 from tutor.runtime.config import Fewshot
 
-# 가드 retrieval.max_query_chars와 같은 상한. 넘으면 뒤쪽을 남긴다
-MAX_QUERY_CHARS = 4000
 ANALYZER = "char_wb"  # 가드 GR-05와 같다(음절 변형에 강하고 공백 경계를 지킨다)
 EXAMPLE_MAX_CHARS = 300  # 예시 발화·답변 하나의 상한(긴 과제 안내문만 잘린다)
 
@@ -80,18 +79,18 @@ def examples_from_public(rows: Iterable[PublicRow]) -> list[Example]:
     return out
 
 
-def default_public_dir() -> Path:
+def default_public_dir(guard: GuardConfig | None = None) -> Path:
     """가드와 같은 공개 세트 폴더: 가드 설정 `paths.public`(GUARD_PUBLIC_DIR로 덮어쓸 수 있다)."""
-    return resolve_path(load_guard_config().paths.public)
+    return resolve_path((guard or load_guard_config()).paths.public)
 
 
 def load_examples(public_dir: str | Path | None = None) -> list[Example]:
     return examples_from_public(load_public(public_dir or default_public_dir()))
 
 
-def default_block() -> frozenset[str]:
+def default_block(guard: GuardConfig | None = None) -> frozenset[str]:
     """block/allow 구분(GR-05 ①): 가드 설정 `block_categories`(공격 4범주)."""
-    return frozenset(load_guard_config().block_categories)
+    return frozenset((guard or load_guard_config()).block_categories)
 
 
 def _clusters(rows: Sequence[Example]) -> dict[str, str]:
@@ -100,53 +99,13 @@ def _clusters(rows: Sequence[Example]) -> dict[str, str]:
     return build_clusters(labeled)
 
 
-def select_knn(
-    ranked: Sequence[Example],
-    cluster: Mapping[str, str],
-    block: frozenset[str],
-    max_examples: int,
-    per_category: int,
-) -> list[Example]:
-    """코사인 순위(가까운 순) → 예시. 가장 비슷한 예시가 마지막(가드 GR-05 고르기와 같은 규칙)."""
-    if not ranked or max_examples < 1:
-        return []
-    rank = {r.id: i for i, r in enumerate(ranked)}
-    members: dict[str, list[Example]] = {}
-    for r in ranked:
-        members.setdefault(cluster[r.id], []).append(r)
-    picked: list[Example] = []
-    taken: set[str] = set()
-    per_cat: Counter[str] = Counter()
-
-    def fits(r: Example) -> bool:
-        return (
-            r.id not in taken and per_cat[r.category] < per_category and len(picked) < max_examples
-        )
-
-    def add(r: Example) -> None:
-        picked.append(r)
-        taken.add(r.id)
-        per_cat[r.category] += 1
-
-    top = ranked[0].category in block
-    opposite = next((r for r in ranked if (r.category in block) != top), None)
-    if opposite is not None:
-        add(opposite)  # ① ②·③보다 앞선다
-    for r in ranked:
-        if r is not opposite:
-            if not fits(r):
-                continue
-            add(r)
-        for m in members[cluster[r.id]]:  # ④ 짝은 ②·③을 지킬 때만
-            if fits(m):
-                add(m)
-    return sorted(picked, key=lambda r: rank[r.id], reverse=True)
-
-
 class ExampleIndex:
     """생성 뒤 읽기 전용. `pick`은 색인을 바꾸지 않는다(TU-18)."""
 
-    __slots__ = ("_rows", "_vec", "_matrix", "_clusters", "_block", "_max", "_per_cat", "_fixed")
+    __slots__ = (
+        "_rows", "_vec", "_matrix", "_clusters", "_block", "_max", "_per_cat", "_fixed",
+        "_max_query",
+    )  # fmt: skip
 
     def __init__(
         self,
@@ -156,12 +115,15 @@ class ExampleIndex:
         ngram: tuple[int, int],
         max_examples: int,
         per_category: int,
+        max_query_chars: int,
     ) -> None:
         rows = tuple(rows)
         if not rows:
             raise ValueError("예시 풀이 비었다")
         if max_examples < 1 or per_category < 1:
             raise ValueError("max_examples·per_category는 1 이상")
+        if max_query_chars < 1:
+            raise ValueError("max_query_chars는 1 이상")
         vec = TfidfVectorizer(analyzer=ANALYZER, ngram_range=ngram)
         matrix = vec.fit_transform([r.text for r in rows]).tocsr()  # 행마다 L2 정규화
         for arr in (matrix.data, matrix.indices, matrix.indptr, vec.idf_):
@@ -174,6 +136,7 @@ class ExampleIndex:
         init(self, "_block", block)
         init(self, "_max", max_examples)
         init(self, "_per_cat", per_category)
+        init(self, "_max_query", max_query_chars)
         init(self, "_fixed", tuple(self._representatives()))
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -200,7 +163,7 @@ class ExampleIndex:
 
     def ranked(self, text: str) -> list[Example]:
         """코사인 가까운 순(동점은 행 순서). 겹치는 n-gram이 없으면 빈 목록."""
-        query = text[-MAX_QUERY_CHARS:]
+        query = text[-self._max_query :]  # 가드 retrieval.max_query_chars. 넘으면 뒤쪽을 남긴다
         sims = (self._matrix @ self._vec.transform([query]).T).toarray().ravel()
         if not query.strip() or float(sims.max(initial=0.0)) <= 0.0:
             return []
@@ -211,9 +174,14 @@ class ExampleIndex:
         if mode == "fixed":
             return list(self._fixed)
         if mode == "knn":
-            return select_knn(
-                self.ranked(text), self._clusters, self._block, self._max, self._per_cat
-            )
+            # 가드 GR-05 고르기 규칙을 그대로 쓴다(id·category만 본다)
+            return select_fewshot(
+                self.ranked(text),  # type: ignore[arg-type]
+                self._clusters,
+                self._block,  # type: ignore[arg-type]
+                self._max,
+                self._per_cat,
+            )  # type: ignore[return-value]
         return []
 
 
@@ -253,10 +221,12 @@ def build_index(cfg: Fewshot, rows: Sequence[Example] | None = None) -> ExampleI
     lo, hi = cfg.ngram
     if lo > hi:
         raise ValueError("fewshot.ngram은 [최소, 최대]")
+    guard = load_guard_config()  # 기동 때 한 번
     return ExampleIndex(
-        load_examples() if rows is None else rows,
-        block=default_block(),
+        load_examples(default_public_dir(guard)) if rows is None else rows,
+        block=default_block(guard),
         ngram=(lo, hi),
         max_examples=cfg.max_examples,
         per_category=cfg.per_category,
+        max_query_chars=guard.retrieval.max_query_chars,
     )

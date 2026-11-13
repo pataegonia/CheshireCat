@@ -7,6 +7,8 @@ grader(scoring.normalize·span_f1)는 테스트에서만 import한다.
 
 import statistics
 import sys
+import time
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -127,16 +129,105 @@ def test_positions_map_back_to_raw_after_citation_removal():
     assert [t.value for t in toks] == ["5개", "12"]
 
 
-def test_tokens_match_v2_on_public_answers_and_kb(corpora, index):
+# V2와 토큰이 다른 곳은 수사 경계(ⓕ)가 뺀 이 다섯 매칭뿐이다(U 35·G 32·T 119 답변과 KB 48섹션)
+NUMERAL_BOUNDARY_DROPS = Counter(
+    {"한 개": 1, "세 개": 1, "한 단계": 1, "한 배": 1, "두 개": 1}
+)  # 불필요[한 개]인 · 두[세 개] 규칙 · 중요[한 단계]를 · 향[한 배]제 · [두 개]수를
+
+
+def test_tokens_match_v2_except_numeral_boundary_drops(corpora, index):
     texts = [a for rows in corpora.values() for _, _, a, _ in rows]
     texts += [text for _, text in index.chunks]
-    n = 0
+    n, dropped = 0, Counter()
     for text in texts:
         toks = extract_literals(text)
-        assert _texts(text, toks) == V2(text)
-        assert [t.value for t in toks] == [normalize(x) for x in V2(text)]
+        got, want = _texts(text, toks), V2(text)
+        dropped += Counter(want) - Counter(got)
+        assert not Counter(got) - Counter(want)
+        assert [t.value for t in toks] == [normalize(x) for x in got]
         n += len(toks)
+    assert dropped == NUMERAL_BOUNDARY_DROPS
     assert n > 1000
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "열두 번",
+        "중요한 개념",
+        "또한 번호",
+        "세 개념",
+        "두 배열",
+        "불필요한 개인 정보",
+        "두 개수를 더한",
+        "필요한 개발",
+        "한 개발",
+        "두 개발자",
+        "두 번호",
+        "두 배제",
+        "한 개체",
+        "두 번역",
+        "향한 배제",
+        "한 배치",
+        "두 배경",
+    ],
+)
+def test_numeral_boundary_rejects_word_fragments(text):
+    assert [t for t in extract_literals(text) if t.kind == "numeral"] == []
+
+
+@pytest.mark.parametrize(
+    ("text", "token"),
+    [
+        ("총 두 번", "두 번"),
+        ("딱 한 개", "한 개"),
+        ("세 개월", "세 개"),
+        ("두 번째", "두 번"),
+        ("한 개를", "한 개"),
+        ("네 단계로", "네 단계"),
+        ("두 배로", "두 배"),
+        ("원소가 두 개인 리스트를 만들어 보세요.", "두 개"),
+        ("답이 세 개인지 확인해요.", "세 개"),
+        ("길이가 한 개인 경우", "한 개"),
+        ("한 개인 정보", "한 개"),  # 서술격 조사 "인"과 구별할 수 없어 받아들인다
+        ("한 단계적 접근", "한 단계"),  # 단계·가지에는 예외가 없다
+        ("두 가지고 놀아요", "두 가지"),
+    ],
+)
+def test_numeral_boundary_keeps_real_numerals(text, token):
+    toks = [t for t in extract_literals(text) if t.kind == "numeral"]
+    assert _texts(text, toks) == [token]
+
+
+def test_numeral_class_is_exactly_han_du_se_ne_daseot():
+    # 클래스에 수사를 더하면 이 단언이 깨진다(값 대조 대상이 늘어난다)
+    assert [t for t in extract_literals("여섯 번") if t.kind == "numeral"] == []
+
+
+def test_cite_prefix_is_limited_to_subjects():
+    # 과목 접두를 [A-Z]+로 넓히면 다른 접두의 숫자가 인용으로 지워진다
+    toks = extract_literals("(AB-01-01)")
+    assert "01" in [t.value for t in toks]
+    assert extract_literals("(PY-01-01)") == []
+
+
+@pytest.mark.parametrize(
+    "text", ["FIN-01-02에 나와요.", "FIN-01-02에서 더 볼 수 있어요", "참고PY-01-01", "(FIN-01-02)"]
+)
+def test_citation_next_to_hangul_is_removed(text):
+    assert extract_literals(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("XPY-01-01 7개", ["XPY", "01", "01", "7개"]),
+        ("PY-01-012", ["PY", "01", "012"]),
+        ("SPR-12-34", ["SPR", "12", "34"]),
+    ],
+)
+def test_citation_needs_ascii_boundaries(text, want):
+    assert _texts(text, extract_literals(text)) == want
 
 
 def test_token_is_frozen():
@@ -231,7 +322,7 @@ def _tok(answer: str, text: str, nth: int = 0) -> LiteralToken:
 
 def test_pm4_uses_first_occurrence_only():
     a = "처음엔 3개를 썼고 한참 뒤에도 다시 3개를 썼어요"
-    assert rule_spans(a, [_tok(a, "3개", nth=1)]) == ("처음엔 3개를 썼고",)
+    assert rule_spans(a, [_tok(a, "3개"), _tok(a, "3개", nth=1)]) == ("처음엔 3개를 썼고",)
 
 
 def test_pm4_merges_overlapping_windows():
@@ -259,7 +350,7 @@ def test_pm4_matches_merged_pm4_spans(answer, picks):
     toks = [
         LiteralToken("latin", normalize(answer[s : s + n]), s, s + n)
         for s, n in picks
-        if s + n <= len(answer)
+        if s + n <= len(answer) and answer.find(answer[s : s + n]) == s  # 원본(find)과 같은 경우
     ]
     texts = [answer[t.start : t.end] for t in toks]
     want = [x for x in q6_rule_fp.merged_pm4_spans(answer, texts) if normalize(x)]
@@ -267,6 +358,45 @@ def test_pm4_matches_merged_pm4_spans(answer, picks):
     assert got == tuple(want)
     assert len(set(got)) == len(got)  # 같은 구간 한 번
     assert all(x in answer for x in got)
+
+
+def test_span_uses_first_token_with_that_text_not_a_find_hit_inside_another_token():
+    # 원본(ans.find)은 "13개" 안의 "3개"에 창을 놓는다. 여기서는 실제 "3개" 토큰 위치를 쓴다
+    a = "13개 총 3개"
+    toks = extract_literals(a)
+    assert _texts(a, toks) == ["13개", "3개"]
+    assert rule_spans(a, toks) == ("13개 총 3개",)
+    assert rule_spans(a, toks, "eojeol") == ("13개", "3개")
+
+
+def test_rule_spans_is_linear_in_answer_length():
+    a = " ".join(str(i) for i in range(100_000, 128_572))  # 서로 다른 6자리 수 약 20만 자
+    toks = extract_literals(a)
+    t0 = time.perf_counter()
+    for mode in ("pm4", "eojeol"):
+        assert rule_spans(a, toks, mode)
+    assert len(a) > 190_000
+    assert time.perf_counter() - t0 < 1.0
+
+
+def test_pm4_merges_touching_windows():
+    toks = [LiteralToken("latin", "1", 4, 5), LiteralToken("latin", "2", 13, 14)]
+    assert rule_spans("aaaa1bbbbbbbb2", toks, "pm4") == ("aaaa1bbbbbbbb2",)
+
+
+def test_eojeol_same_span_once():
+    toks = [LiteralToken("multi_digit", "12", 2, 4), LiteralToken("latin", "ab", 5, 7)]
+    assert rule_spans("ab12 ab12", toks, "eojeol") == ("ab12",)
+
+
+def test_rule_spans_is_linear_without_spaces():
+    a = "".join(f"{i}개" for i in range(10_000, 20_000))  # 공백 없는 한 어절 약 6만 자
+    toks = extract_literals(a)
+    assert len(a) > 59_000
+    for mode in ("pm4", "eojeol"):
+        t0 = time.perf_counter()
+        assert rule_spans(a, toks, mode)
+        assert time.perf_counter() - t0 < 1.0, mode
 
 
 def test_eojeol_expands_to_whitespace_boundaries():
@@ -331,7 +461,10 @@ def test_literal_rule_none_without_hits():
 def test_require_same_kind_not_implemented():
     kb = _tiny_kb()
     r = kb.rank("리스트 append 원소")
-    cfg = _cfg(rule_min_margin=0.0, rule_require_same_kind=True)
+    out = CFG.output.model_copy(update={"rule_min_margin": 0.0, "rule_require_same_kind": True})
+    cfg = CFG.model_copy(
+        update={"output": out}
+    )  # load_config는 이 값을 막는다. 직접 호출 방어만 본다
     with pytest.raises(NotImplementedError):
         literal_rule("원소 7개", r.hits, r.margin, kb, cfg)
 

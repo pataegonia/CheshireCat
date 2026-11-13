@@ -12,6 +12,7 @@ import re
 import time
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 import tutor
@@ -295,10 +296,13 @@ def test_generation_that_never_ends_gives_tutor_default_within_the_budget(
     open_app, llm_mode, monkeypatch, tmp_path
 ):
     """LLM 전송이 끝나지 않아도 예산 안에 200 + 튜터 기본값. 예산을 짧게 줘서 1초 안에 끝낸다."""
+    # 가드 설정의 budget_s 값이 무엇이든 그 한 줄만 0.05로 바꾼다(값은 읽어서 확인한다)
     guard_cfg = (ROOT / "guardrail" / "configs" / "default.yaml").read_text("utf-8")
-    assert "budget_s: 20" in guard_cfg
+    assert yaml.safe_load(guard_cfg)["budget_s"] > 1
+    changed, count = re.subn(r"^budget_s:[ 	]*[0-9.]+", "budget_s: 0.05", guard_cfg, flags=re.M)
+    assert count == 1 and yaml.safe_load(changed)["budget_s"] == 0.05
     short = tmp_path / "guard.yaml"
-    short.write_text(guard_cfg.replace("budget_s: 20", "budget_s: 0.05"), "utf-8")
+    short.write_text(changed, "utf-8")
     monkeypatch.setenv("GUARD_CONFIG", str(short))
     monkeypatch.setattr(budget_mod, "BACKSTOP_MARGIN_S", 0.0)
 

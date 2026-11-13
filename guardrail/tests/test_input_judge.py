@@ -311,6 +311,35 @@ async def test_blank_or_repeated_padding_cannot_hide_short_request(pad):
     assert ASK in html.unescape(block(user_text(fake), "message"))
 
 
+# 두 종류 이상을 섞은 채우기: 같은 글자 반복으로는 줄지 않는다(문자 부류 단위로 줄인다)
+MIXED = {
+    "space_nul": " \x00",
+    "braille_space": "⠀ ",
+    "nul_del": "\x00\x7f",
+    "c1": "\x80\x81",
+    "braille_pua": "⠀",
+    "pua_a": "\U000f0000\U000f0001",
+    "plane14_cn": "\U000e0080\U000e0081",
+    "braille3_pua": "⠀" * 3 + "",
+    "space3_nul": "   \x00",
+    "surrogates": "\ud800\ud801",
+    "space_mark": " ́",
+    "marks3": "̵́̀",
+}
+
+
+@pytest.mark.parametrize(
+    "pad",
+    [u * (N // len(u) + 50) for u in MIXED.values()] + ["a" + "́̀" * 1500],
+    ids=[*MIXED, "marks2_on_one_base"],
+)
+async def test_mixed_blank_or_mark_padding_cannot_hide_short_request(pad):
+    text = pad + ASK + pad
+    _, fake = await run([U(text)], text)
+    assert ASK in html.unescape(block(user_text(fake), "target"))
+    assert ASK in html.unescape(block(user_text(fake), "message"))
+
+
 def test_text_under_cap_keeps_indent_blank_lines_and_repeats():
     code = "def f():\n    if x:\n        return 1\n\n\n\n# ====\n    pass\n"
     assert _data(code, CFG) == html.escape(decode_tags(code)[0], quote=False)

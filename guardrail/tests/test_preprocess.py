@@ -283,6 +283,24 @@ def test_clip_over_limit_collapses_space_runs_and_repeats_first():
     assert clip("가" + " \n\u3000" * 10 + "나" * 20 + "다", 10) == "가 나나나다"
 
 
+@pytest.mark.parametrize(
+    ("text", "head"),
+    [
+        ("1000000원" + "x" * 2100, "1000000원xxx"),
+        ("점수 100000점 " + "가" * 2100, "점수 100000점 가가가"),
+    ],
+)
+def test_clip_over_limit_keeps_digit_runs(text, head):
+    assert clip(text, 2000).startswith(head)
+
+
+def test_clip_body_under_limit_is_untouched_even_if_tags_push_over():
+    code = ("def f(x):\n    if x:\n        return 1\n\n\n\n# ========\n    pass\n" * 30)[:1800]
+    out = clip(code + tag("a") * 300, 2000)
+    assert strip_tags(out) == code
+    assert decode_tags(out)[1] == "a" * 300
+
+
 def test_clip_under_limit_keeps_indent_and_repeats():
     code = "def f():\n    if x:\n        return 1\n\n\n\n# ========\n"
     assert clip(code, len(code)) == code

@@ -466,7 +466,7 @@ def test_per_request_nano_calls_stay_within_three():
 
 
 def test_tutor_never_calls_classify_or_judge_output_again_after_failure():
-    # 튜터 쪽 상한: 다시 부르는 것은 주 호출뿐이다. 가드 안 일시 오류 재시도는 가드 규칙(TU-13)
+    # 재시도는 주 호출만(TU-13, 통합 절대 4회). classify·judge_output은 실패해도 다시 안 부른다
     guard = FakeGuard("normal", classify_error=RuntimeError("x"), judge_error=RuntimeError("y"))
     run(build(guard))
     assert len(guard.classify_calls) == 1

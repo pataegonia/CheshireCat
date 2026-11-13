@@ -52,7 +52,7 @@ from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
-MAIN_RETRIES = 1  # 튜터가 하는 재시도는 주 호출만 1회(TU-13). 가드 안 재시도는 가드 규칙
+MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
 # safe=false일 때 답 전체를 대신하는 거절 문장(IN-04). 범주를 모르므로 일반 거절
 REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 

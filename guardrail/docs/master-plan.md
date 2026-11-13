@@ -159,6 +159,8 @@ class Judgement:                 # guard.py(S1.1이 dataclass를 먼저 둠). �
     input_source: Literal["low_signal", "nano", "third_call", "fallback", "default"]
     output_tier: Literal[1, 2, 3, 4] | None                      # GR-07 표의 ①–④
     nano_grounded: bool | None                                  # 출력 nano 원값. v6 모드에서는 후보 답변이 있으면 늘 기록(nano_tier3와 무관, S3.1 정밀도용. `output.call_nano_when_unused: false`로 건너뛰면 None)
+    answer_quote_ok: bool | None;  kb_quote_ok: bool | None      # 출력 nano의 인용이 답변·문맥의 부분 문자열인가(R14-D2). 인용 원문은 여기 두지 않는다(하네스 Tap이 runs/에만 저장)
+    nano_refuses: bool | None                                   # 출력 nano의 거절 판정 원값. 기록만 하고 safe에 쓰지 않는다(R14-D3)
     signals: Signals
     knn_major: Category | None;  lr_pred: Category | None
     calls: int;  errors: tuple[str, ...]                        # 오류 코드만
@@ -198,6 +200,7 @@ class Guard:
 4. ⑤·⑥을 태스크로 띄우고 마감까지 기다린다. ⑥은 후보 답변이 비어 있지 않으면 부른다(`nano_tier3: false`이고 `output.call_nano_when_unused: false`면 건너뜀. 기본 true라 측정 때는 늘 부른다). `output.mode: v6`이면 `output_judge.md`로 부르고 그 값은 ③(토글 `nano_tier3`가 켜졌을 때만)과 S3.1 정밀도 기록에 쓴다. `output.mode: baseline`이면 `output_judge_baseline.md`(reason → grounded → safe)로 부르고 그 값을 grounded·safe에 바로 쓴다(`unsupported=[]`).
 5. ⑦–⑨ `decide.py`. 마감을 넘기면 끝난 결과 + GR-09 기본값으로 바로 응답하고 남은 태스크는 취소한다.
 
+- 출력 nano의 문맥(R14-D4): 1위 섹션 전체(`section_text`, `output.context_max_chars`로 자름) + 상위 `kb.top_k` 조각 중 **다른 섹션**의 조각. 같은 `Ranking`에서 읽는다. 규칙 ②가 보는 범위(1위 섹션 전체)는 그대로다.
 - 후보 답변이 `""`이면 출력은 `true/[]`, `safe=true`다(응한 내용이 없다, §8 미결 2). 출력 nano를 부르지 않는다.
 - `candidate_answer`가 문자열이 아니면(`has_candidate=True`, `candidate_answer=None`) 출력에 한해 요청 파싱 실패로 본다: `output`은 `output.failure_default`, `safe`는 GR-08 그대로(읽을 답변이 없어 거절·숨긴 태그 없음). 입력은 정상 판정한다.
 - 요청 파싱 실패, 빈 `messages`: 범주 `normal`. `has_candidate`면 `output`은 `output.failure_default`(기본 `true/[]`), `safe=true`(GR-09. 출력 nano 실패와 같은 규칙 하나).
@@ -236,7 +239,7 @@ class LLM:
 - 예외를 밖으로 내지 않는다(`CancelledError`만 나간다). 로그·`error`에는 오류 코드와 예외 클래스 이름만 남긴다. 예외 메시지·`body`는 본문을 담을 수 있다(GR-12, S6).
 - 출력 스키마(pydantic, `extra="forbid"`). S1.3이 `judges/schemas.py`에 만들고 테스트한다. S2.6·S2.7은 이 스키마에 맞춰 프롬프트만 쓴다:
   - `InputOut{evidence: str (≤1문장), category: Category}` — 이 순서(GR-04)
-  - `OutputOut{reason: str (≤1문장), grounded: bool}` — 이 순서(GR-07). 베이스라인 전용 `OutputBaselineOut{reason, grounded, safe}`(§4.4 `output.mode: baseline`)
+  - `OutputOut{answer_quote: str, kb_quote: str, grounded: bool, refuses: bool}` — 이 순서(GR-07, R14-D2·D3. S1.3이 만든 `{reason, grounded}`를 S2.7이 바꾼다). `answer_quote` = 답변에서 틀렸거나 근거 없는 구절 그대로(80자 이하, 근거 있음이면 빈 문자열), `kb_quote` = 그 구절과 **어긋나는** 자료 구절 그대로(80자 이하, 자료에 관련 내용이 없으면 빈 문자열), `refuses` = 답변이 요청을 거절하는가(기록만). 베이스라인 전용 `OutputBaselineOut{reason, grounded, safe}`(§4.4 `output.mode: baseline`)
 - 테스트는 `tests/fakes.py`의 `FakeLLM`(호출마다 `Ok`·`Malformed`·`Timeout`·`RateLimited(retry_after)`·`ServerError`·`BadRequest`를 스크립트로)과 주입한 시계로 0ms에 돈다. 실제 API는 `-m live`에서만.
 
 ### 4.4 설정 (`configs/*.yaml`)
@@ -289,6 +292,9 @@ output:
   rule_span: pm4                   # pm4(토큰 종류별 첫 등장 ±4자, 겹치는 창 병합·중복 제거, `merged_pm4_spans`, F1 0.651 측정값) | eojeol(어절 경계). S3.1이 비교
   rule_extra_tokens: []            # ablation: value_norm(콤마·만·천·억) | units_extra(주·일·년·글자) | bare_numeral(단위 없는 한글 수사) | backtick_latin(백틱 안 영문만). 기본 [] = V2(NUM_RX + 인용 제거 + 수사 클래스 수정)
   rule_require_same_kind: false    # ablation: 같은 종류(단위 숫자/한글 수사/백틱 코드/함수 호출/리스트 리터럴)의 다른 값이 섹션에 있을 때만 걸림
+  tier3_trust: answer_quote        # all | answer_quote | both_quotes. nano "근거 없음" 가운데 ③에 쓰는 것(R14-D2). 조건에 못 미친 "근거 없음"은 ④의 output.failure_default. 잠정값이고 S3.1이 저장된 응답으로 정한다. S2.7·S2.8이 더한다
+  quote_min_chars: 8               # answer_quote 확인에서 정규화 뒤 최소 글자 수(잠정. "3개월" 같은 짧은 인용이 떨어진다. S3.1이 0과 비교)
+  context_max_chars: 4000          # 출력 nano에 주는 1위 섹션 전체의 길이 상한(R14-D4. 공개 KB 섹션은 CSV 포함 최대 약 2,700자라 기본값에서는 잘리지 않는다)
 embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 때만
 eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)
 ```
@@ -322,7 +328,7 @@ def labeled_rows(rows: Iterable[PublicRow]) -> list[LabeledRow]
 ```bash
 uv run python -m guardrail.eval.cv --write                      # 묶음·폴드·홀드아웃 파일(한 번)
 uv run python -m guardrail.eval.run --config configs/default.yaml --name v1 \
-    [--set toggles.lr=false ...] [--repeat 3] [--max-calls 5000] [--estimate] [--fake] [--holdout]
+    [--set toggles.lr=false ...] [--repeat 3] [--max-calls 5000] [--estimate] [--fake] [--holdout] [--input-only]
 uv run python -m guardrail.eval.run --ablation configs/ablation/ --name abl-1117 --repeat 3
 uv run python -m guardrail.eval.run --ablation configs/ablation/ --only no_literal_rule,no_nano_tier3 --name abl-1118a --repeat 3   # --only: 이름으로 부분 실행. 기준 행(baseline·default)은 --only와 무관하게 늘 포함
 uv run python -m guardrail.eval.load --url http://localhost:8000 --token "$TEAM_TOKEN" --concurrency 64 --n 600
@@ -333,6 +339,8 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 - 실행 전에 예상 호출 수를 찍고(probe 호출은 폴드 수와 무관하게 실행당 한 번으로 센다) `--max-calls`(기본은 설정 `eval.max_calls` = 5,000)를 넘으면 멈춘다. `--estimate`는 호출 0회, `--fake`는 `FakeLLM` 고정 응답(입력 `normal`, 출력 grounded)으로 API 0회.
 - 산출: `runs/<name>/responses.jsonl`(공개 세트 응답 + `Judgement` 요약, 배포 자료 분석이라 서버 밖에서 저장 가능), `summary.json`, `report.md`. `runs/`는 커밋하지 않는다. 남길 표는 `results/<날짜>-<이름>.md`로 옮겨 커밋한다.
 - `report.md` 내용: 가드 점수(3회 범위), block F1·정밀도·재현율, 짝 문항만의 block 정확도, 범주 정확도(non-normal)와 혼동행렬, 출력 평균·항목별·단별(①–④) 적중, kNN·LR 단독 점수, 튜터 200행 범주 정확도(따로), 호출 수와 요청당 호출 수, 역할별(입력·출력) 오류 코드 비율(`bad_json`·`timeout` 등)과 `finish_reason=length` 비율(실제 프롬프트로 `max_completion_tokens`를 다시 확인, S1.6 값은 잠정), 지연 p50·p95. 설정 비교는 묶음 단위 부트스트랩 95% 구간을 보고한다(채택 기준은 아님, PRD §7).
+- `--input-only`(R14-D1): `Guard`(S2.8) 없이 입력 판정만 잰다. 저신호 직접 판정 + kNN few-shot + `judge_input`으로 범주를 내고 출력은 상수다(행당 nano 0–1회, 실행당 약 320회). 입력 프롬프트 v1을 출력 판정·조립보다 먼저 재는 데 쓴다. S2.3·S2.5·S2.6이 머지되면 돌 수 있다.
+- 모든 실측 실행은 역할별 실패율(`finish_reason`이 `stop`이 아님·파싱 실패·시간 초과)을 report 맨 위에 낸다. 어느 역할이든 2%를 넘으면 프롬프트 문구보다 길이·문맥부터 고친다(R14-D8). 출력 쪽은 `kb_quote`를 먼저 빼고, 그다음 `output.context_max_chars`를 낮춘다.
 - `load`는 공개 세트의 가드·튜터 요청을 동시 64로 다시 보내 시간 초과·형식 오류·3xx·p50·p95를 낸다. 채점 수준(약 600요청)을 넘는 시험은 하지 않는다(GR-10).
 
 ### 4.7 의존성
@@ -366,15 +374,15 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.4** | 숫자·리터럴 규칙 ② | 06·07 / 0014·0010 | P0 | 5h | Opus | S2.2 | 정확한 이식 검증: `rule_min_margin` 0에서 U 18/35·G 0/32·T 6/119, 3.5에서 16/35·0/32·3/119, 구간은 `q6_rule_fp.py`의 `merged_pm4_spans` 출력과 같은 스팬이고 구간 F1은 ±0.005 안(BM25 1위 0.651 / 정답 섹션 0.638, R13-A §6). 기본 `rule_min_margin`은 3.5. U·G·T 탐지·오탐을 따로 보고(튜터 0건은 요구하지 않음), 구간 100% 원문 부분 문자열 |
 | **S2.5** | kNN·LR 보조 판정기 | 05·14 / 0013 | P0 | 5h | Sonnet | S1.4·S2.1 | 교차 검증 kNN 다수·LR 각각의 block F1·범주 정확도, 기동 학습 ≤10초, 요청당 p95 ≤20ms, 색인 불변 테스트 |
 | **S2.6** | 입력 판정 nano·프롬프트 v1 | 04 / 0012·0013 | P0 | 8h | Opus + santa | S1.3·S2.5 | `FakeLLM`으로 스키마·재시도·기본값 계약, 기본값을 쓰기 전 nano 응답 성공률 ≥98%(재시도 포함), 실패율은 오류 코드별 보고, 호출 p95 ≤5s |
-| **S2.7** | 출력 근거 판정 nano·프롬프트 v1 | 07 / 0014 | P0 | 5h | Opus + santa | S1.3·S2.2 | 입력 형식(발화·드러낸 답변·상위 3조각), 스키마 `reason → grounded`, 실패 시 `None` |
+| **S2.7** | 출력 근거 판정 nano·프롬프트 v1 | 07 / 0014 | P0 | 5h | Opus + santa | S1.3·S2.2 | 입력 형식(발화·드러낸 답변·1위 섹션 전체 + 다른 섹션 조각, R14-D4), 스키마 `answer_quote → kb_quote → grounded → refuses`(R14-D2·D3), 인용 확인 함수(정규화 뒤 부분 문자열, `quote_min_chars`), 실패 시 `None` |
 | **S2.8** | 판정 조립: decision·3단·safe·기본값·예산 | 07·08·09·01 / 0012·0014·0009 | P0 | 5h | Opus | S1.2·S2.3·S2.4·S2.6·S2.7 | GR-07 표 ①–④·GR-08·GR-09 표 전 행 테스트, 장애 주입에서 형식 오류 0·30초 안, 서버 연결 |
-| **S2.9** | 평가 하네스 v1·베이스라인 | 13·11 / 0006·0013 | P0 | 6h | Sonnet | S1.4·S2.8 | §4.6 `report.md` 전 항목, 3회 분산, nano 단독·kNN·LR 단독 점수(PRD §11-2-2), 설정만으로 ablation 실행 |
+| **S2.9** | 평가 하네스 v1·베이스라인 | 13·11 / 0006·0013 | P0 | 6h | Sonnet | S1.4·S2.8 | §4.6 `report.md` 전 항목, 3회 분산, nano 단독·kNN·LR 단독 점수(PRD §11-2-2), 설정만으로 ablation 실행. R14: `--input-only`로 입력 v1 단독 1회를 S2.8보다 먼저 잰다(D1), 역할별 실패율과 2% 관문(D8), nano 파싱 출력을 `runs/`에 저장, 저장된 두 실행을 호출 없이 비교하는 `--diff` |
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
 | **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output(messages, candidate_answer, category=None)`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
-| **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
-| **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과 |
+| **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`tier3_trust`(저장된 응답으로, R14-D2)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
+| **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과. 절차는 R14-D7: 변형마다 1회 선별 → 하나의 v2로 합쳐 3회 확정 1회 |
 | **S3.3** | OOM용 KB 조각 ablation | 04 / 0010 | P1 | 3h | Sonnet | S2.9 | `with_oom_kb_snippet` 순이득(3회 분산 밖에서 > 0이면 켬, 부트스트랩 구간은 보고)과 켜기 결정 |
-| **S3.4** | 3번째 호출 ablation | 05 / 0011·0013 | P2 | 4h | Sonnet → Opus 판정 | S2.9 | PRD §11-2-4 순이득이 3회 분산 밖에서 0보다 클 때만 켬, 호출 수·지연 증가 보고 |
+| **S3.4** | 3번째 호출 ablation | 05 / 0011·0013 | P2 | 4h | Sonnet → Opus 판정 | S2.9 | **동결 전 미실행(R14-D6).** v1 응답에서 "nano가 kNN·LR 둘 다와 엇갈린 행"의 nano 정답률만 호출 없이 계산해 남긴다. 0.5보다 낮을 때만 다시 올린다 |
 | **S3.5** | nano 구간·임베딩 ablation | 07·03·05 / 0014·0010 | P2 | 5h | Sonnet | S3.1 | 각 순이득과 켜기 결정, 임베딩은 기동 시간·호출 수 함께 |
 | **S3.6** | ablation 표·분산·지연 표 확정 | 11·13 / 0006 | P1 | 3h | Sonnet | S3.1–S3.5 | 베이스라인·전체·토글 하나씩, 3회 범위, 지연 표(GR-11·13 수용 기준). 모든 행(베이스라인 포함)을 S3.2 머지 뒤 동결 후보 프롬프트로 (다시) 잰다. 11/18 1차는 입력 프롬프트를 건드리지 않는 토글만이고, 프롬프트 버전이 다른 결과는 재사용하지 않는다 |
 | **S3.7** | 홀드아웃·기능 동결(11/20) | 13 / 0006 | P0 | 3h | Opus | S3.1·S3.2(S3.3–S3.5는 11/19 12:00까지 결정된 것만 반영, 나머지는 꺼짐) | 동결 설정 1회 홀드아웃, 열람 기록, 동결 커밋 SHA, 동결본 제출 |
@@ -460,7 +468,7 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - **santa**: `prompts/input_judge.md`·`output_judge.md`(와 베이스라인 변형)는 `ecc:santa-method`로 독립 리뷰어 2명(Opus)이 모두 통과해야 머지한다. 프롬프트를 고칠 때마다 다시 한다.
 - **로그 리뷰**: PR마다 로그·예외 처리 경로를 본다. 본문·판정 값·정규화본·예외 메시지가 로그로 가는 길이 없어야 한다(GR-12). `server.py`·`llm.py`를 건드린 PR은 `ecc:security-reviewer`를 돌린다.
 - **홀드아웃**은 S3.7 전에는 보지 않는다. 열람은 최대 3회이고 하네스가 센다. 기준값·프롬프트는 교차 검증으로만 정한다.
-- **개선 판정**: 같은 빌드 3회 분산 안의 차이는 개선으로 보지 않는다. 채택 기준은 하나다: 3회 분산 밖에서 순이득 > 0. 묶음 단위 부트스트랩 구간은 보고하되 채택 기준이 아니다(R13 D10, PRD §7).
+- **개선 판정**: 같은 빌드 3회 분산 안의 차이는 개선으로 보지 않는다. 채택 기준은 하나다: 3회 분산 밖에서 순이득 > 0. "분산 밖"은 후보의 3회 범위와 기준의 3회 범위가 **겹치지 않는다**는 뜻이다(차이가 없을 때 거짓 채택 5%, R14 §2 A1). 동결 전 3회 확정 실험은 입력 1회·출력 1회·예비 1회가 상한이고 시도한 변형 수를 `results/`에 적는다(R14-D7). 출력 ③의 켜기와 `tier3_trust`는 총점 범위가 아니라 저장된 응답의 정밀도와 건수로 정한다(GR-07, R14-D2). 묶음 단위 부트스트랩 구간은 보고하되 채택 기준이 아니다(R13 D10, PRD §7).
 - **하드코딩 금지**: 질문 → 답 표, 요청 내용 캐시, 채점 요청을 알아보는 분기를 두지 않는다. 색인·LR은 기동 때 배포 자료로만 만든다(GR-14).
 - **보안**: 키·토큰은 환경변수와 `.env`(git 제외). 테스트 픽스처는 공개 세트에서만 가져온다.
 - **결정이 갈리면** `/ecc:council`로 정리하고, 사용자 몫이면 묻는다. 설계가 바뀌면 ADR을 고친다.
@@ -507,3 +515,8 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - 추적: C1 에픽·이슈 #42–#51을 11/10에 만들고, v4 에픽 #2–#6과 이슈 #15–#21을 같은 날 닫았다(§11). 라벨에 공용 `enhancement`·`documentation`·`bug`·`question`과 `orchestrator`를 함께 쓴다.
 - santa 4라운드(같은 날): 규칙 ② 기본을 V2 + 점수 차 게이트로, 규칙 정밀도 P에 따른 `rule_emit_spans`, 신호별 뷰(붙인 뷰는 구현하지 않음), 파싱 실패 기본값 통일, `create_app()`의 `/tutor` 인증, 교차 검증 행 수(약 160 + 홀드아웃 약 40)를 반영했다(R13-A §6).
 - v1–v22의 기록(santa·council 반영 내역 포함)은 커밋 `50d6142`의 이 문서 §13에 있다.
+
+**v23 수정 (2026-11-13, R14 council 3라운드, 사용자 채택)**: [R14 §6](research/R14-prompt-uplift.md#6-council-2026-11-13-후보-선별)의 R14-D1–D8을 반영했다.
+- §4.1 `Judgement`에 `answer_quote_ok`·`kb_quote_ok`·`nano_refuses`. §4.3 `OutputOut`을 `answer_quote → kb_quote → grounded → refuses`로(`reason` 삭제). §4.4 `output.tier3_trust`·`quote_min_chars`·`context_max_chars`. §4.2 출력 nano 문맥을 1위 섹션 전체 + 다른 섹션 조각으로.
+- §4.6 `--input-only`와 역할별 실패율 2% 관문. §5 S2.7·S2.9·S3.1·S3.2 수용 기준, S3.4는 동결 전 미실행. §10 "분산 밖"의 뜻과 확정 실험 상한.
+- 바뀌지 않은 것: 입력 프롬프트 v1 문구, 범주 → decision(ADR-0012), safe 규칙(D6), 키워드 힌트 금지(GR-04).

@@ -2,6 +2,19 @@
 
 작성 2026-10-30 · 갱신 2026-11-10 · 담당 danielcho02 · `/ecc:skill-scout` 결과
 
+## 프롬프트·판정 고도화 (2026-11-13)
+
+계획: `.claude/plans/guardrail-prompt-uplift.plan.md`(로컬). 조사 결과는 [R14](research/R14-prompt-uplift.md). 로컬 ECC 2.2.1에서 골랐고, 원격 검색(GitHub `SKILL.md`, 프롬프트 최적화·평가)은 결과가 없었다. 새 스킬은 만들지 않는다.
+
+| 단계 | 스킬·에이전트(모델) | 쓰는 이유 |
+|---|---|---|
+| P0 기준선 | `ecc:tdd-workflow`, `ecc:verification-loop`, `ecc:eval-harness`, 에이전트 `ecc:python-reviewer`(Sonnet) | v1 그대로 머지, S2.9 첫 실측 |
+| P1 조사(R14) | `ecc:research-ops` → `ecc:deep-research`(Opus 2) + `ecc:search-first`(Sonnet), 1차 출처 대조(Sonnet 2) | 근거 종류 구분, 조사자와 다른 에이전트가 대조 |
+| P2 결정 | `ecc:council`(Opus), `ecc:architecture-decision-records` | 기존 결정(D1·D5·D6, ADR-0012, GR-04)을 건드리는 후보 판정 |
+| P3 실험 준비 | `ecc:tdd-workflow`, `ecc:python-testing`, `ecc:ai-regression-testing`, 에이전트 `ecc:python-reviewer`·`ecc:silent-failure-hunter`(Sonnet) | 변형 스위치, `--diff`, 회귀 사례 |
+| P4·P5 실험 | `ecc:eval-harness`, `ecc:benchmark-methodology`, `ecc:prompt-optimizer`(점검표로만), `ecc:regex-vs-llm-structured-text`, 에이전트 `ecc:mle-reviewer`(Opus) | 한 번에 변경 하나, 1회 선별 → 3회 확정 |
+| P6 채택 | `ecc:santa-method`(독립 리뷰어 2명, Opus), `ecc:living-docs-governance`, `humanize-korean` | 프롬프트 변경마다 santa, 문서 갱신 |
+
 ## v6 (PRD v6 전환, 2026-11-10)
 
 계획: `.claude/plans/guard-v6-prd-masterplan.plan.md`(로컬). 원격 검색(GitHub `SKILL.md`)에서 nemo-guardrails·rag-observability-evals·llm-as-judge·prompt-injection 탐지 스킬을 찾았으나 설치하지 않고 읽기만 했다([R13-B2](research/R13-B2-libraries.md)). 새 스킬은 만들지 않는다.

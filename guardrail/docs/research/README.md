@@ -22,9 +22,13 @@
 | [R13-public-set-analysis](R13-public-set-analysis.md) | 공개 세트 정밀 분석: 범주 짝 문항, 채점식 시뮬레이션, safe 전략, 점수 범위, 근거 없는 구간 역설계, BM25 recall (11/10, 스크립트 `guardrail/scripts/r13/`) |
 | [R13-B-external-research](R13-B-external-research.md) | 외부 조사: 구간 탐지, kNN few-shot, 한국어 탈옥, gpt-5-nano, 합성 데이터 (11/10, 출처 63개) |
 | [R13-B2-libraries](R13-B2-libraries.md) | 라이브러리 선정과 규칙 준수 판정 (11/10) |
+| [R14](R14-prompt-uplift.md) | **프롬프트·판정 고도화 조사 종합**: few-shot 예시 구성 측정, 후보 재평가, 실험 순서 초안 (11/13, 스크립트 `guardrail/scripts/r14/`) |
+| [R14-B1-input-prompting](R14-B1-input-prompting.md) | 외부 조사: 최소쌍 분류 프롬프트, GPT-5 계열 지침, 불확실성 신호, 지시 언어 (11/13, 출처 24개) |
+| [R14-B2-grounding-eval-injection](R14-B2-grounding-eval-injection.md) | 외부 조사: 근거 판정 정밀도, 작은 세트의 프롬프트 A/B 통계, 판정기 주입 방어, 거절 탐지 (11/13, 출처 31개) |
+| [R14-B3-eval-tools](R14-B3-eval-tools.md) | 개발 전용 평가 도구 검색: 채택 0건, 하네스에 더할 최소 변경 (11/13) |
 | `src/guardrail/preprocess.py` | 한국어 정규화 구현 (조사 단계 참고 코드를 옮겨 고침, ADR-0001) |
 
-조사 방법(R1–R11, 10/29–30): firecrawl·exa MCP가 없어 WebSearch·WebFetch로 진행. R12(11/09)는 Exa·WebFetch로 했다. R13(11/10)은 공개 세트 로컬 분석 + firecrawl·exa(deep-research)로 했고, 핵심 주장 12개를 1차 출처와 대조했다([verification.md](verification.md) §R13). openai.com, Khan Academy 도움말 일부는 접근이 막혀 2차 자료로 대신했다(메모마다 표시).
+조사 방법(R1–R11, 10/29–30): firecrawl·exa MCP가 없어 WebSearch·WebFetch로 진행. R12(11/09)는 Exa·WebFetch로 했다. R13(11/10)은 공개 세트 로컬 분석 + firecrawl·exa(deep-research)로 했고, 핵심 주장 12개를 1차 출처와 대조했다([verification.md](verification.md) §R13). openai.com, Khan Academy 도움말 일부는 접근이 막혀 2차 자료로 대신했다(메모마다 표시). R14(11/13)는 로컬 분석 + WebSearch·WebFetch(firecrawl·exa 없음)로 했고, 핵심 주장 23개를 다른 에이전트가 1차 출처와 대조했다([verification.md](verification.md) §R14: 확인 13, 부분 확인 9, 상충 1).
 
 ---
 

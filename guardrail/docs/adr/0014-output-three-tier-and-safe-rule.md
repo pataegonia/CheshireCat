@@ -6,6 +6,19 @@
 **PRD**: GR-06, GR-07, GR-08, GR-09
 **대체**: ADR-0005(구간 방식), ADR-0011 v5의 출력 필드(`safe` 판정, `grounded` 계산)
 
+## R14 수정 (2026-11-13, R14 council 3라운드)
+
+이 블록이 아래 본문보다 우선한다. 근거와 council 기록은 [R14 §6](../research/R14-prompt-uplift.md#6-council-2026-11-13-후보-선별)(결정 R14-D2·D3·D4·D8).
+- **출력 nano의 스키마**: `answer_quote` → `kb_quote` → `grounded` → `refuses`. 본문의 `reason`(≤1문장) → `grounded`를 바꾼다. `answer_quote`는 답변에서 틀렸거나 근거 없는 구절을 그대로 옮긴 것(80자 이하, 근거 있음이면 빈 문자열), `kb_quote`는 그 구절과 **어긋나는** 자료 구절을 그대로 옮긴 것(80자 이하, 자료에 관련 내용이 없으면 빈 문자열)이다. 베이스라인 스키마(`reason → grounded → safe`)는 그대로다.
+- **인용 확인**: 코드가 두 인용을 `scoring.normalize`와 같은 정규화(NFKC·소문자·공백·문장부호 제거) 뒤 부분 문자열로 확인해 `Judgement.answer_quote_ok`·`kb_quote_ok`에 남긴다. `answer_quote`는 답변(자른 것)에서 찾고 정규화 뒤 `output.quote_min_chars`(기본 8, 잠정)자 이상이어야 한다. `kb_quote`는 nano에 준 문맥에서 찾는다.
+- **③의 조건**: 표의 ③에 `output.tier3_trust`를 더한다. `all` = nano의 "근거 없음" 전부, `answer_quote` = `answer_quote_ok`인 것만(잠정 기본값), `both_quotes` = 두 인용이 모두 확인된 것만. 조건에 못 미친 "근거 없음"은 nano 판정을 쓰지 않는 경우로 보고 ④의 `output.failure_default`를 따른다. `nano_tier3`를 켤지와 `tier3_trust` 값은 S3.1이 저장된 응답(3회 합산)의 정밀도와 건수로 정한다. 기준은 본문과 같다: `false/[]`는 정밀도 ≥ 0.5.
+- **nano 구간**(본문의 ablation 조건을 바꿈): 확인된 `answer_quote`를 구간으로 낼지는 같은 저장 응답으로 S3.1·S3.5가 정한다. 기준은 정밀도 ≥ 1/(1+s)(s = 그 구간의 F1)이고 기본은 내지 않는다. 구간으로 낼 때의 최소 길이는 `quote_min_chars`를 유지한다.
+- **nano에 주는 문맥**: 본문의 "BM25 상위 3조각" 대신 1위 섹션 전체 + 상위 3조각 중 다른 섹션의 조각(ADR-0010 R14 수정).
+- **점검표**: 숫자, 이름·리터럴, 조건·규칙, 긍정↔부정, 순서, 자료에 없는 항목 추가를 모두 적는다(공개 근거 없음 35행의 유형 15·8·7·3·1·1, R13-A §5.1). 규칙 ②가 숫자를 본다는 이유로 nano에게 숫자를 건너뛰라고 하지 않는다. 규칙은 근거 없음의 절반만 잡는다.
+- **`refuses`는 기록만 한다**: `Judgement.nano_refuses`에 남기고 safe에는 쓰지 않는다(D6 유지). 거절 정규식이 놓친 거절을 잡고 순응 답변 오탐이 0이라는 수치가 나올 때만 다시 논의한다.
+- **길이 위험**: 출력 호출 가운데 `finish_reason`이 `stop`이 아닌 것이 2%를 넘으면 `kb_quote`를 먼저 빼고, 그다음 `output.context_max_chars`를 낮춘다(R14-D8). 프롬프트 문구는 그 뒤에 본다.
+- 검토했으나 채택하지 않은 것: 두 번 호출해 둘 다 근거 없음일 때만 쓰기(R13 D1 유지), 출력 호출만 `reasoning_effort: medium`(새 근거 없음).
+
 ## Context
 
 출력 문항 점수는 (grounded 정답 + 구간 F1 + safe 정답) / 3이다(SPEC §6, `scoring.py`). 채점은 세 항목을 따로 본다. `grounded`의 정답은 `label != 'ungrounded'`이고 두 필드의 일관성은 검사하지 않는다([R13 §1 S1](../research/R13-design-research.md#1-근거-정리-research-ops-형식)).

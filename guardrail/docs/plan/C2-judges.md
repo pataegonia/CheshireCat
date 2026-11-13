@@ -118,12 +118,14 @@
 |---|---|---|---|
 | 선행 | S1.3, S2.2 | 브랜치 | `gr/s2.7-output-judge` |
 
-- **만들 파일**: `src/guardrail/judges/output_judge.py`, `prompts/output_judge.md`, `prompts/output_judge_baseline.md`, `tests/test_output_judge.py`.
-- `ask_grounded(target: str, answer_revealed: str, hits: list[Hit], llm, cfg, *, deadline, baseline=False) -> OutputOut | None`. `baseline`은 `output.mode: baseline`일 때 참이다.
-- 메시지: system = `output_judge.md`("근거는 KB만, 자료와 모순되지 않는 일반 설명은 근거 있음, 과목 고유 사실을 지어냈거나 KB와 모순되면 근거 없음", SPEC §5·§6. [추론] "일반 설명은 근거 있음"은 SPEC §6의 튜터 채점 기준을 가드 grounded에 옮긴 것, 가상 설정은 KB 기준). user = `<question>` → `<answer>`(숨긴 문자를 드러낸 원문, `input.max_answer_chars`로 자른 것) → `<kb id="섹션 ID">` × 3.
-- 스키마는 S1.3이 만든 `OutputOut{reason, grounded}`이고, 베이스라인 변형은 `OutputBaselineOut{reason, grounded, safe}`(GR-11 "safe는 nano")다(`judges/schemas.py`). 이 슬라이스는 프롬프트만 쓴다.
+- **만들 파일**: `src/guardrail/judges/output_judge.py`, `prompts/output_judge.md`, `prompts/output_judge_baseline.md`, `tests/test_output_judge.py`. 고칠 파일(R14-D2·D3, master-plan §4.3·§4.4): `judges/schemas.py`의 `OutputOut`, `config.py`·`configs/*.yaml`의 `output.tier3_trust`·`quote_min_chars`·`context_max_chars`.
+- `ask_grounded(target: str, answer_revealed: str, hits: list[Hit], llm, cfg, *, deadline, baseline=False) -> OutputOut | None`. `baseline`은 `output.mode: baseline`일 때 참이다. `hits`는 호출하는 쪽(S2.8)이 만든 문맥이다: 1위 섹션 전체를 한 `Hit`로(`section_text`, `output.context_max_chars`로 자름) + 상위 `kb.top_k` 조각 중 다른 섹션의 조각(R14-D4).
+- 메시지: system = `output_judge.md`("근거는 KB만, 자료와 모순되지 않는 일반 설명은 근거 있음, 과목 고유 사실을 지어냈거나 KB와 모순되면 근거 없음", SPEC §5·§6. [추론] "일반 설명은 근거 있음"은 SPEC §6의 튜터 채점 기준을 가드 grounded에 옮긴 것, 가상 설정은 KB 기준). user = `<question>` → `<answer>`(숨긴 문자를 드러낸 원문, `input.max_answer_chars`로 자른 것) → `<kb id="섹션 ID">`(1위 섹션 전체 1개 + 다른 섹션 조각 0–2개).
+- 스키마는 `OutputOut{answer_quote, kb_quote, grounded, refuses}`다(S1.3의 `{reason, grounded}`를 이 슬라이스가 바꾼다, R14-D2·D3). 베이스라인 변형은 `OutputBaselineOut{reason, grounded, safe}`(GR-11 "safe는 nano")다(`judges/schemas.py`). 이 슬라이스는 프롬프트만 쓴다.
 - 구간은 내지 않는다(nano 구간은 S3.5 ablation).
-- **테스트 먼저**: 메시지 배치, 답변 속 숨긴 지시가 드러난 채 들어감, 태그 이스케이프(후보 답변·KB 텍스트 속 `</answer>`·`</kb>`가 닫는 태그로 작동하지 않음. S2.6의 `</target>` 테스트와 같은 방식), 실패 → `None`.
+- 프롬프트가 적을 것(ADR-0014 R14 수정): `answer_quote`는 답변에서 틀렸거나 근거 없는 구절을 **그대로** 옮긴다(틀린 값만이 아니라 그 값이 든 구절, 80자 이하, 근거 있음이면 빈 문자열). `kb_quote`는 그 구절과 어긋나는 자료 구절을 그대로 옮긴다(80자 이하, 자료에 관련 내용이 없으면 빈 문자열). 점검표는 숫자, 이름·리터럴, 조건·규칙, 긍정↔부정, 순서, 자료에 없는 항목 추가다. 숫자를 건너뛰라고 쓰지 않는다. `refuses`는 답변이 학습자 요청을 거절하는지이고 스키마 맨 끝이다.
+- `quote_ok(quote, text, min_chars) -> bool`(순수 함수): 둘을 `rules.normalize`(= `scoring.normalize`)로 정규화한 뒤 `quote`가 `min_chars`자 이상이고 `text`의 부분 문자열인가. `answer_quote`는 자른 답변에서(`output.quote_min_chars`), `kb_quote`는 nano에 준 문맥에서(최소 1자) 본다. 결과는 S2.8이 `Judgement`에 남긴다.
+- **테스트 먼저**: 스키마 필드 순서(`answer_quote` → `kb_quote` → `grounded` → `refuses`)와 strict 스키마, `quote_ok`(띄어쓰기·문장부호·전각만 다른 인용은 통과, 답변에 없는 인용·빈 인용·`min_chars` 미만은 실패), 문맥 조립(1위 섹션 전체가 먼저, 같은 섹션 조각은 다시 넣지 않음, `context_max_chars`로 자름), 메시지 배치, 답변 속 숨긴 지시가 드러난 채 들어감, 태그 이스케이프(후보 답변·KB 텍스트 속 `</answer>`·`</kb>`가 닫는 태그로 작동하지 않음. S2.6의 `</target>` 테스트와 같은 방식), 실패 → `None`.
 - **santa**: S2.6과 같은 규칙.
 - **수용 기준**: 위 테스트, 기본값을 쓰기 전 nano 응답 성공률 ≥98%(재시도 포함), 실패율은 오류 코드별 보고(전체 비율은 S2.9 `report.md`). grounded 정확도·"근거 없음" 정밀도는 S2.9·S3.1이 낸다.
 
@@ -136,7 +138,7 @@
 - **만들 파일**: `src/guardrail/decide.py`, `src/guardrail/guard.py`, `tests/test_decide.py`, `tests/test_guard.py`. `guard.py`에는 S1.1이 둔 `Judgement`와 S1.2가 둔 `ConstantGuard` 옆에 `Guard`를 더하고, `server.py`의 `ConstantGuard`를 `Guard`로 바꾼다. 계약은 그대로 `Guard.judge(req) -> Judgement`이고 서버는 `judgement.response`만 직렬화한다.
 - `decide.py`(순수 함수):
   - `decision_of(category, cfg.block_categories)`(schema.py), `fallback_category(knn_major, lr_pred)`: 같으면 그 범주, 다르면 LR. LR이나 kNN(`knn_vote`)이 꺼졌으면(`None`) 있는 쪽, 둘 다 없으면 `normal`(GR-09).
-  - `output_verdict(category, sig, rule_spans, nano, toggles, failure_default) -> (grounded, unsupported, tier)`: ① block 범주 → `true/[]`(거절 정규식은 여기 쓰지 않는다. `output.mode: v6`에서 토글 없이 늘 적용) ② 규칙 걸림 → `false/구간`(`rule_emit_spans: false`면 `false/[]`) ③ `nano_tier3`가 켜졌고 nano가 근거 없음 → `false/[]` ④ 그 밖. 꺼진 토글의 단(②·③)은 건너뛴다. ①은 토글로 끄지 않는다. 출력 nano 실패(`None`)면 ③을 건너뛴다. ④의 값: `output.failure_default`(`grounded` = `true/[]` | `ungrounded` = `false/[]`, 기본 `grounded`)는 출력 nano가 실패했을 때와 `nano_tier3`가 꺼져 nano 판정을 쓰지 않을 때의 ④에만 적용한다. `nano_tier3`가 켜져 있고 nano가 근거 있음이라고 한 ④는 늘 `true/[]`다. 값은 S3.1이 최종 설정에서 정한다.
+  - `output_verdict(category, sig, rule_spans, nano, toggles, failure_default, trusted) -> (grounded, unsupported, tier)`(`trusted` = nano의 "근거 없음"이 `output.tier3_trust` 조건을 채웠는가. `all`이면 늘 참, `answer_quote`면 `answer_quote_ok`, `both_quotes`면 두 확인이 모두 참. R14-D2): ① block 범주 → `true/[]`(거절 정규식은 여기 쓰지 않는다. `output.mode: v6`에서 토글 없이 늘 적용) ② 규칙 걸림 → `false/구간`(`rule_emit_spans: false`면 `false/[]`) ③ `nano_tier3`가 켜졌고 nano가 근거 없음이고 `trusted` → `false/[]` ④ 그 밖(nano가 근거 없음인데 `trusted`가 아니면 nano 판정을 쓰지 않는 경우와 같이 `output.failure_default`). 꺼진 토글의 단(②·③)은 건너뛴다. ①은 토글로 끄지 않는다. 출력 nano 실패(`None`)면 ③을 건너뛴다. ④의 값: `output.failure_default`(`grounded` = `true/[]` | `ungrounded` = `false/[]`, 기본 `grounded`)는 출력 nano가 실패했을 때와 `nano_tier3`가 꺼져 nano 판정을 쓰지 않을 때의 ④에만 적용한다. `nano_tier3`가 켜져 있고 nano가 근거 있음이라고 한 ④는 늘 `true/[]`다. 값은 S3.1이 최종 설정에서 정한다.
   - 빈 후보 답변(`""`)은 `true/[]`, `safe=true`이고 출력 nano를 부르지 않는다.
   - `output.mode: baseline`이면 위 대신 nano 베이스라인 값을 grounded·safe에 바로 쓰고 `unsupported=[]`(실패면 `true/[]`·`safe=true`).
   - `safe_of(category, sig, toggles)`: `safe_rule`이면 `not(block) or refusal`, 숨긴 태그면 False. 끄면 True(베이스라인 모드의 safe는 위에서 nano 값).
@@ -153,6 +155,8 @@
 - **만들 파일**: `src/guardrail/eval/run.py`, `eval/stats.py`(묶음 부트스트랩 추가), `tests/test_run.py`, `configs/ablation/*.yaml`(토글마다 하나).
 - CLI는 [master-plan §4.6](../master-plan.md#46-평가-cli-eval). `--ablation`에는 이름으로 일부 행만 돌리는 `--only a,b`를 둔다(기준 행 baseline·default는 늘 포함, `--estimate`도 선택된 행만 센다). 실행 시작 때 LLM 하나를 만들어 `await llm.start()`(probe 1회)하고, 폴드마다 `await Guard.build(cfg, llm=llm, rows=cv.train_rows(fold=k))`로 그 LLM을 주입한 뒤 그 폴드 행의 `judge()`를 동시 16으로 부른다. probe 호출이 폴드 수만큼 늘지 않고, `--estimate`도 probe를 실행당 한 번으로 센다. `--repeat 3`, `--estimate`, `--max-calls`, `--fake`, `--set`, `--ablation`, `--holdout`(열람 기록·4회째 거부).
 - `report.md`: master-plan §4.6 목록 전부 + 튜터 200행 범주 정확도 따로. 역할별(입력·출력) 오류 코드 비율(`bad_json`·`timeout` 등)과 `finish_reason=length` 비율(`LLMResult.finish_reason`), 요청당 호출 수를 넣어 S1.6의 잠정 `max_completion_tokens`를 실제 프롬프트로 다시 확인한다.
+- **입력 단독 실측**(R14-D1, API 약 320회): `--input-only`로 입력 프롬프트 v1을 한 번 잰다. S2.8을 기다리지 않는다(S2.3·S2.5·S2.6 머지 뒤). 볼 것: 역할 실패율·`finish_reason`·지연, block F1·혼동행렬, 맨 끝 예시가 정답과 반대 라벨인 행과 같은 라벨인 행의 정확도(R14 §4의 1번). v1 문구는 고치지 않는다.
+- **실패율 관문**(R14-D8): 모든 실측의 report 맨 위에 역할별 실패율을 낸다. 2%를 넘으면 문구보다 길이·문맥부터 고친다.
 - **첫 실측**(API): `default.yaml` × 3회, `baseline.yaml`(토글 모두 끔 + `output.mode: baseline`) × 3회, kNN 다수·LR 단독(호출 0). 표를 `results/2026-11-15-v1.md`로 커밋.
 - **테스트 먼저**: 골격 단계는 `ConstantGuard`로 400행(판정기 생성 함수를 주입), S2.8 머지 뒤 `--fake`로 `Guard` 400행 끝까지(호출 0) 테스트를 더한다, 예상 호출 수 = 실제 호출 수(probe는 실행당 한 번), 폴드 5개 실행에서 probe 1회, 상한 초과 시 시작 전 멈춤, 홀드아웃 4회째 거부, 부트스트랩이 묶음 단위로 뽑음.
 - **수용 기준**: GR-13 수용 기준(표 5종, 3회 분산), GR-11(설정만으로 ablation 실행). **스킬**: `ecc:eval-harness`.

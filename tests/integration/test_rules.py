@@ -24,6 +24,7 @@ import pytest
 from tests.integration.applib import (
     ANSWER_WORD,
     AUTH,
+    MAX_LLM_CALLS_PER_REQUEST,
     ROOT,
     as_bytes,
     cache_sizes,
@@ -46,13 +47,13 @@ def post(client, path: str, body: dict, headers=AUTH):
 
 # TutorLLM.calls에 세는 역할 이름(모드별). 요청 하나에 LLM 호출은 한 번이다(세어 본 값).
 LLM_ROLE = {"v2": "main", "baseline": "baseline"}
-CALLS_PER_REQUEST = 1
+CALLS_PER_REQUEST = MAX_LLM_CALLS_PER_REQUEST  # 모드 → 횟수. 값은 applib 한 곳에 둔다
 
 
 def test_same_request_twice_calls_the_llm_twice(llm_client, llm_mode, fake_send):
     first = post(llm_client, "/tutor", user(QUESTION_B))
     second = post(llm_client, "/tutor", user(QUESTION_B))
-    assert fake_send.count == 2 * CALLS_PER_REQUEST  # 캐시가 있으면 1이다
+    assert fake_send.count == 2 * CALLS_PER_REQUEST[llm_mode]  # 캐시가 있으면 1이다
     assert fake_send.digests[0] == fake_send.digests[1]  # LLM이 받은 내용도 같다
     assert first.json() == second.json()
     assert first.json()["answer"].startswith(ANSWER_WORD)
@@ -63,7 +64,7 @@ def test_one_request_makes_one_llm_call(llm_client, llm_mode, fake_send):
     for sent in range(1, 4):
         r = post(llm_client, "/tutor", user(f"{QUESTION_B} {sent}"))
         assert r.json()["answer"].startswith(ANSWER_WORD)  # 기본값이 아니라 LLM의 답이다
-        assert fake_send.count == sent * CALLS_PER_REQUEST
+        assert fake_send.count == sent * CALLS_PER_REQUEST[llm_mode]
     assert dict(llm_client.app.state.tutor_llm.calls) == {LLM_ROLE[llm_mode]: 3}
 
 

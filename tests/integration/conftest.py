@@ -2,6 +2,7 @@
 
 import contextlib
 import importlib
+import re
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ _CLEARED_ENV = (
     "OPENAI_BASE_URL",
 )
 LLM_MODES = ("v2", "baseline")
+_MODE_LINE = re.compile(r"^mode:[ \t]*v2(?P<rest>[ \t]*(?:#.*)?)$", re.M)
 
 
 @pytest.fixture
@@ -39,7 +41,9 @@ def fake_send(monkeypatch):
     fake = FakeSend()
     llm_mod = importlib.import_module("tutor.runtime.llm")
     monkeypatch.setattr(llm_mod, "_openai_send", lambda: fake)
-    return fake
+    yield fake
+    # 튜터는 전송 예외를 오류 코드로 바꿔 삼킨다. 가짜가 모르는 호출이 있었으면 여기서 드러낸다.
+    assert fake.unknown == [], "FakeSend가 모르는 스키마로 LLM을 불렀다(applib.FakeSend를 고친다)"
 
 
 @pytest.fixture(params=LLM_MODES)
@@ -50,10 +54,12 @@ def llm_mode(request, tmp_path, monkeypatch, app_env):
     baseline은 mode만 바꾼 복사본을 쓴다(검색 → 일반 프롬프트 1회).
     """
     text = (ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8")
-    assert "mode: v2" in text  # 기본값이 바뀌면 여기서 걸린다
+    # 줄 시작의 최상위 키만 바꾼다(주석 안의 같은 글자는 건드리지 않는다). 정확히 한 줄이어야 한다.
+    changed, count = _MODE_LINE.subn(r"mode: baseline\g<rest>", text)
+    assert count == 1  # 기본값이 v2가 아니게 되거나 키가 둘이면 여기서 걸린다
     if request.param == "baseline":
         path = tmp_path / "tutor.yaml"
-        path.write_text(text.replace("mode: v2", "mode: baseline", 1), encoding="utf-8")
+        path.write_text(changed, encoding="utf-8")
         monkeypatch.setenv("TUTOR_CONFIG", str(path))
     return request.param
 

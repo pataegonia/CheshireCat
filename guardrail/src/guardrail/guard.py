@@ -122,6 +122,20 @@ class Guard:
         knn: KnnIndex | None,
         lr: LrClassifier | None,
     ) -> None:
+        # 아직 없는 기능을 켠 설정은 여기서 막는다(조용히 무시하면 ablation이 "효과 없음"이 된다)
+        t = cfg.toggles
+        missing = [
+            name
+            for name, on in (
+                ("third_call", t.third_call),
+                ("oom_kb_snippet", t.oom_kb_snippet),
+                ("embedding", t.embedding),
+                ("rule_require_same_kind", cfg.output.rule_require_same_kind),
+            )
+            if on
+        ]
+        if missing:
+            raise NotImplementedError(f"Guard가 아직 지원하지 않는 설정: {', '.join(missing)}")
         self.cfg, self.llm, self.kb, self.knn, self.lr = cfg, llm, kb, knn, lr
         self.block = frozenset(cfg.block_categories)
 

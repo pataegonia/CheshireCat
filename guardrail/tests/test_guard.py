@@ -516,3 +516,20 @@ async def test_call_that_swallows_cancellation_cannot_hold_the_response(no_rule,
     j = await guard.judge(req(None, has=False))
     assert time.monotonic() - t0 < 0.2 + 1 and j.errors == ("input_judge",)
     release.set()
+
+
+# --- santa 2라운드 반영: 아직 없는 기능을 켜면 조용히 무시하지 않는다 ---
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"toggles__third_call": True},
+        {"toggles__oom_kb_snippet": True},
+        {"toggles__embedding": True},
+        {"output__rule_require_same_kind": True},
+    ],
+)
+async def test_unimplemented_switch_fails_at_build_not_per_request(override):
+    with pytest.raises(NotImplementedError, match=next(iter(override)).split("__")[1]):
+        await make(**override)

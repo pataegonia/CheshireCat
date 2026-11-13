@@ -50,8 +50,15 @@ class Ranking:
 
 
 def _load_sections(kb_dir: Path) -> dict[str, str]:
+    """SPEC §1의 세 과목 폴더만 읽는다. 다른 폴더(.ipynb_checkpoints 등)는 무시."""
     sections = {}
-    for md in sorted(kb_dir.glob("*/*.md")):
+    mds = []
+    for folder in sorted(FOLDER_PREFIX):  # finance, prompt, python (예전 정렬 순서와 같다)
+        found = sorted((kb_dir / folder).glob("*.md"))
+        if not found:
+            raise ValueError(f"KB 과목 폴더에 섹션 md가 없다: {folder}")
+        mds += found
+    for md in mds:
         if not SECTION_ID.fullmatch(
             md.stem
         ):  # README.md 같은 다른 md가 섞이면 순위·margin이 바뀐다

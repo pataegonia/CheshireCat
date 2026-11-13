@@ -388,9 +388,17 @@ async def test_lone_surrogate_is_sent_as_replacement_in_a_copy():
     assert r.error is None and r.parsed is not None
     assert len(bodies) == 1
     sent = json.loads(bodies[0].decode("utf-8"))["messages"]
-    assert sent[1]["content"] == "a�b"
+    assert sent[1]["content"] == "a\ufffdb"
     assert llm.unexpected == Counter()
     assert msgs == before
+
+
+@pytest.mark.parametrize("lone", ["\ud800", "\udbff", "\udc00", "\udfff"])
+async def test_both_halves_of_surrogate_range_are_replaced(lone):
+    llm, fake, clock = make(Ok(OK_IN))
+    msgs = [{"role": "user", "content": f"a{lone}b"}]
+    assert (await llm.complete("input_judge", msgs, InputOut, deadline=clock() + 20)).parsed
+    assert fake.requests[0]["messages"][-1]["content"] == "a�b"
 
 
 # --- live ---

@@ -273,8 +273,19 @@ def test_clip_short_text_only_drops_invisible():
 
 
 def test_clip_long_text_keeps_head_and_tail():
-    assert clip("가" * 10 + "나" * 11, 10) == "가" * 5 + "\n…\n" + "나" * 5
-    assert clip("가" * 11, 11) == "가" * 11
+    body = "".join(chr(0xAC00 + i) for i in range(21))  # 줄일 공백·반복이 없는 글
+    assert clip(body, 10) == body[:5] + "\n…\n" + body[-5:]
+    assert clip(body[:11], 11) == body[:11]
+
+
+def test_clip_over_limit_collapses_space_runs_and_repeats_first():
+    """상한을 넘으면 공백류 연속은 첫 글자 하나, 같은 글자 4번 이상은 3개로 줄인 뒤 다시 잰다."""
+    assert clip("가" + " \n\u3000" * 10 + "나" * 20 + "다", 10) == "가 나나나다"
+
+
+def test_clip_under_limit_keeps_indent_and_repeats():
+    code = "def f():\n    if x:\n        return 1\n\n\n\n# ========\n"
+    assert clip(code, len(code)) == code
 
 
 def test_clip_tag_padding_cannot_push_out_visible_text():

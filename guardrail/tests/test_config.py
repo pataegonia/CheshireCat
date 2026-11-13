@@ -271,12 +271,15 @@ def test_load_prompt_returns_version_and_body(monkeypatch):
         "본문만 있고 머리말이 없다\n",
         '---\nid: other\nversion: "1"\n---\n본문\n',
         "---\nid: fx\n---\n",
+        '---\nid: fx\nversion: "1"\n---\n',  # 머리말만
+        '---\nid: fx\nversion: "1"\n---\n  \n\t\n',  # 본문이 공백뿐
     ],
 )
 def test_load_prompt_rejects_bad_front_matter(monkeypatch, tmp_path, text):
     (tmp_path / "fx.md").write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="프롬프트 fx"):
+    with pytest.raises(ValueError, match="프롬프트 fx") as e:
         load_prompt(_with_prompt(monkeypatch, tmp_path), "fx")
+    assert str(tmp_path) not in str(e.value)  # 이름만, 경로 없이
 
 
 def test_load_prompt_rejects_unmapped_name():

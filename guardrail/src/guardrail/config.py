@@ -245,6 +245,20 @@ def load_config(
 _FRONT = re.compile(r"\A---\n(?P<head>.*?)\n---\n", re.S)
 
 
+def check_input_prompt_mode(body: str, label_mode: str, filename: str) -> None:
+    """입력 프롬프트의 "## 출력"이 label_mode가 요구하는 판별 필드를 묻는지 본다.
+
+    짝이 어긋나면 ~950회 선별 배치를 돌린 뒤에야 드러나므로 프롬프트를 읽는 자리에서 막는다.
+    """
+    output = body.split("## 출력")[-1].split("## 다시 확인할 규칙")[0]
+    has = {f: f"`{f}`" in output for f in ("mode", "act")}
+    if has != {"mode": label_mode == "mode", "act": label_mode == "act"}:
+        raise ValueError(
+            f"프롬프트 {filename}의 출력 절이 input.label_mode={label_mode}와 맞지 않다"
+            f" (`mode` {has['mode']}, `act` {has['act']})"
+        )
+
+
 def load_prompt(cfg: GuardConfig, name: str) -> tuple[str, str]:
     """설정 prompts[name] 파일의 머리말(--- / id / version / ---)을 읽어 (version, 본문)을 낸다."""
     if name not in cfg.prompts:
@@ -259,6 +273,8 @@ def load_prompt(cfg: GuardConfig, name: str) -> tuple[str, str]:
         raise ValueError(f"프롬프트 {name}: 머리말 id·version이 맞지 않다")
     if not text[m.end() :].strip():  # 빈 system 메시지로 판정이 나가 캐시되지 않게
         raise ValueError(f"프롬프트 {name}: 본문이 비었다")
+    if name == "input_judge":
+        check_input_prompt_mode(text[m.end() :], cfg.input.label_mode, cfg.prompts[name])
     return str(head["version"]), text[m.end() :]
 
 

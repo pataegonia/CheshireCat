@@ -111,7 +111,7 @@ cause = {}
 for i in bad:
     row = by[i]
     modal = Counter(
-        pred(run[i]) for run in runs["v1"] if (pred(run[i]) in B) != (row.category in B)
+        pred(run[i]) for run in runs["v1"] if i in run and (pred(run[i]) in B) != (row.category in B)
     ).most_common(1)[0][0]
     w = {g: wrong(g, i) for g in GROUPS}
     ex = [SHORT[s.category] for s in shots[i]]

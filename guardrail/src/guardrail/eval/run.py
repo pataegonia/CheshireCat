@@ -25,7 +25,7 @@ import yaml
 
 from guardrail import guard as guard_module
 from guardrail.classifier import LrClassifier
-from guardrail.config import ROOT, GuardConfig, Llm, config_hash, load_config
+from guardrail.config import ROOT, GuardConfig, Llm, config_hash, load_config, load_prompt
 from guardrail.data import LabeledRow, PublicRow, labeled_rows, load_public
 from guardrail.eval import cv
 from guardrail.eval.fake_llm import make_fake_llm
@@ -139,6 +139,7 @@ class InputOnlyGuard:
 
 
 async def input_only_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]) -> Judge:
+    load_prompt(cfg, "input_judge")  # 프롬프트·label_mode 짝이 어긋나면 첫 행 전에 멈춘다
     return InputOnlyGuard(cfg, llm, train)
 
 

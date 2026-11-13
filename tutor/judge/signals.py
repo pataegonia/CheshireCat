@@ -47,15 +47,13 @@ def direct_clarify(conv: Conversation) -> bool:
     """LLM 없이 clarify 고정 문장을 낼 입력인가(TU-05).
 
     - 숨긴 텍스트가 있으면 거짓이다.
-    - 빈 발화(보이지 않는 문자뿐 포함)는 1턴이어도 참이다.
+    - 빈 발화(보이지 않는 문자뿐 포함)는 1턴이어도 참이다(튜터 고유).
       판단은 `Conversation.is_empty` 하나로 한다.
-    - 그 밖은 가드 `is_low_signal`(GR-06)을 그대로 쓴다: 앞 대화가 있고, NFC만 건 원문(자모
-      조합 전)이 자모·문장부호·이모티콘만으로 되어 있으며(숫자·라틴·완성 음절·글자를 담은 기호·
-      수학·통화 기호 없음), 자모만 모아 조합해도 완성 음절이 2개 미만(풀어 쓴 문장 제외)이면 참이다.
+    - 그 밖은 가드 `is_low_signal`(GR-06) 그대로다. 조건은 그 docstring에 있다.
     - 다만 튜터가 바로 앞에서 질문했다면 짧은 대답("ㅇㅇ")일 수 있으니 주 호출로 보낸다(튜터 고유,
       공개 세트 저신호 8행은 모두 해당 없음).
     """
-    if conv.target_hidden:
+    if conv.target_hidden:  # 가드도 거짓을 내지만, 가드 기준이 바뀌어도 튜터는 지킨다
         return False
     if conv.is_empty:
         return True

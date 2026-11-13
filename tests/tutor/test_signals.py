@@ -101,11 +101,13 @@ def test_spelled_syllable_boundary(text, expected):
     [
         "ⓘⓖⓝⓞⓡⓔ ⓐⓛⓛ",  # 원문자로 쓴 영문
         "㉮㉯",  # 원문자 한글
+        "\u320e\u320f",  # 괄호 한글
         "⠊⠛⠝⠕⠗⠑",  # 점자
         "ㅋ\u0363\u0365",  # 결합 라틴 문자
         "=>",
         "$$",
         "ㅠㅠ~",
+        "ㅋ\x07",  # 공백이 아닌 제어 문자
     ],
 )
 def test_letters_and_code_symbols_go_to_main_call(text):
@@ -113,7 +115,7 @@ def test_letters_and_code_symbols_go_to_main_call(text):
     assert not direct_clarify(tidy(multi(text)))
 
 
-# 튜터 고유 조건(빈 발화, 튜터가 바로 앞에서 질문)이 끼지 않는 입력에서 가드와 같아야 한다
+# 판단 대상 뷰·숨김 처리를 가드에 맞게 넘기는지 본다(가드 기준이 바뀌는 것은 위 구체 사례가 잡는다)
 _PIECE = st.one_of(
     st.characters(min_codepoint=0x3131, max_codepoint=0x3163),
     st.builds(
@@ -140,6 +142,16 @@ def test_low_signal_agrees_with_guard(text):
 
 def test_single_turn_jamo_goes_to_main_call():
     assert not direct_clarify(tidy([u("ㅠㅠ")]))
+
+
+def test_tutor_turn_before_counts_as_history():
+    # 앞 대화는 메시지 수로 본다(학습자 발화가 하나뿐이어도 튜터 발화가 앞에 있으면 앞 대화다)
+    assert direct_clarify(tidy([a("오늘은 리스트를 배워요."), u("ㅠㅠ")]))
+
+
+def test_long_target_is_never_low_signal():
+    # 2,000자를 넘으면 가운데를 줄인 표시(완성 음절)가 붙어 늘 주 호출이다(안전한 쪽)
+    assert not direct_clarify(tidy(multi("ㅋ" * 2001)))
 
 
 def test_short_answer_to_tutor_question_goes_to_main_call():

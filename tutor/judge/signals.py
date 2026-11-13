@@ -36,14 +36,12 @@ _JAMO_RANGES = (
     (0xD7B0, 0xD7FF),  # 자모 확장 B
     (0xFFA0, 0xFFDC),  # 반각 자모
 )
+_SYLLABLE = re.compile("[가-힣]")  # 완성 음절
 
 
 def _is_jamo(ch: str) -> bool:
     cp = ord(ch)
     return any(lo <= cp <= hi for lo, hi in _JAMO_RANGES)
-
-
-_SYLLABLE = re.compile("[가-힣]")
 
 
 def _spelled_syllables(raw: str) -> int:

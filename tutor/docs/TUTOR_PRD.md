@@ -233,7 +233,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 
 ### TU-10 가드 범주 판정 병렬 합치기 (P0, v1 기본)
 - **11/15 v1의 범주 판정은 가드 `Guard.classify(messages)`(가드 §9 D1, 통합 I13 ⓐ)가 맡는다.** 단, 주 호출 앞에 줄 세우지 않고 **주 호출과 동시에** 돌린다(`guard_classify: parallel`). 직렬(ⓐ, 생성 경로 p50 약 9s)은 §6 지연 기준을 넘기 때문이다.
-- **합치기 규칙(⑤-2)**: classify가 공격 4범주(`jailbreak`·`harmful_content`·`off_topic`·`academic_dishonesty`)일 때만 본다. 그 밖에는 주 호출 결과를 쓴다. 주 호출이 공격으로 봤는데 classify가 normal이면 주 호출을 따른다.
+- **합치기 규칙(⑤-2)**: classify가 공격 4범주(`jailbreak`·`harmful_content`·`off_topic`·`academic_dishonesty`)일 때만 본다. 공격 범주는 코드에 적지 않고 기동 때 가드 설정 `block_categories`를 읽는다(`/guard`와 차단 기준이 같이 움직인다, #138 리뷰). 그 밖에는 주 호출 결과를 쓴다. 주 호출이 공격으로 봤는데 classify가 normal이면 주 호출을 따른다.
   1. 주 호출이 공격 범주의 표 action이나 out_of_material abstain으로 **표 고정 문장**을 냈으면 그대로 둔다. 둘 다 공격 내용에 응하지 않아 덮어도 안전 이득이 없고 점수만 잃는다(예: 주 호출 off_topic redirect를 classify jailbreak가 refuse로 덮으면 off_topic 문항 1→0, #138 리뷰 a·b).
   2. 주 호출 action이 classify 범주의 표 action(`config/actions.yaml`, harmful은 refuse·redirect 둘 다)과 **같으면**, 주 호출이 그 action을 자기 문장으로 쓰는 경로(예: answer_seeking scaffold)만 classify 범주의 고정 문장으로 바꾼다. 과제 대행 요청에 정답 사실이 나가지 않게 하기 위해서다(#138 리뷰 c, 손익은 11/18 하네스에서 확인).
   3. **다르면**, classify 범주의 표 action이 §3 우선순위(escalate → refuse → redirect → clarify → scaffold → abstain → answer)에서 주 호출 action보다 앞일 때만 고정 문장으로 바꾼다(harmful은 refuse 고정 문장 `[측정]`, academic_dishonesty는 과목 사실 없는 scaffold 고정 문장). 주 호출 escalate·refuse는 classify가 academic_dishonesty·off_topic이어도 그대로, 주 호출 clarify는 classify가 academic_dishonesty여도 그대로다(#88 검토).

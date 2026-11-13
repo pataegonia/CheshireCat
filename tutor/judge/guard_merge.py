@@ -31,6 +31,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, get_args
 
+from guardrail.config import load_config as load_guard_config
 from guardrail.schema import OutputVerdict
 
 from integration.actions import action_for
@@ -38,10 +39,10 @@ from integration.contracts import Action, Category
 from integration.runtime import load_runtime
 from tutor.answer.templates import Fixed, template_for
 
-# 가드 §3의 공격 4범주. classify가 이 중 하나일 때만 주 호출 결과를 덮을 수 있다(TU-10)
-ATTACK_CATEGORIES: frozenset[str] = frozenset(
-    {"jailbreak_injection", "harmful_content", "off_topic", "academic_dishonesty"}
-)
+# 공격 범주 = 가드 설정 `block_categories`(지금은 가드 §3의 공격 4범주). classify가 이 중 하나일
+# 때만 주 호출 결과를 덮을 수 있다(TU-10). 기동 때 가드 설정을 읽어 `/guard`와 차단 기준을 같이
+# 움직인다(가드는 공개 상수를 따로 내보내지 않는다, #138 리뷰)
+ATTACK_CATEGORIES: frozenset[str] = frozenset(load_guard_config().block_categories)
 # 주 호출이 이 범주의 표 고정 문장을 냈으면 classify가 덮지 않는다. 공격 범주의 표 action과
 # out_of_material abstain은 어느 쪽도 공격 내용에 응하지 않아 덮어도 안전 이득이 없고 점수만 잃는다
 # (예: off_topic redirect를 jailbreak refuse로 덮으면 off_topic 문항 1→0)

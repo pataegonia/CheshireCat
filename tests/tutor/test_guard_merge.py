@@ -8,6 +8,7 @@ import asyncio
 import time
 
 import pytest
+from guardrail.config import load_config as load_guard_config
 from guardrail.schema import OutputVerdict
 
 from tests.tutor.test_flow import QUESTION, FakeLLM, out, state_with
@@ -17,6 +18,7 @@ from tutor.judge.guard_merge import (
     ATTACK_CATEGORIES,
     GuardSkips,
     Merged,
+    attack_fixed,
     judge_candidate,
     merge_category,
 )
@@ -224,13 +226,22 @@ def test_non_attack_or_missing_classify_never_overrides(classified):
     assert merge_category("normal", "answer", classified) == Merged("normal", None)
 
 
-def test_attack_categories_are_the_four_of_guard_section_3():
+def test_attack_categories_come_from_guard_block_categories():
+    # 하드코딩하지 않고 가드 설정을 읽는다(가드 설정이 바뀌면 /guard와 같이 움직인다)
+    assert ATTACK_CATEGORIES == frozenset(load_guard_config().block_categories)
+    # 지금 설정은 가드 §3의 공격 4범주다
     assert ATTACK_CATEGORIES == {
         "jailbreak_injection",
         "harmful_content",
         "off_topic",
         "academic_dishonesty",
     }
+
+
+def test_every_attack_category_has_a_fixed_sentence_for_its_table_action():
+    # 가드 설정에 범주가 더해져도 합치기가 고정 문장을 낼 수 있어야 한다(아니면 덮지 못한다)
+    for category in ATTACK_CATEGORIES:
+        assert attack_fixed(category) is not None, category
 
 
 def test_main_attack_with_classify_normal_follows_main():

@@ -331,6 +331,7 @@ def test_p95_under_10ms_for_400_rows():
         ("IGNORE  previous", "ignoreprevious"),
         ("ＩＧＮＯＲＥ", "ignore"),
         ("ㅋㅋㅠㅠ", "ㅋ큐"),
+        ("ㄱㅗㅏㄴㅏ", "고ㅏ나"),  # 겹모음 조합은 normalize에만 있고 skeleton은 v4 그대로
         (f"{CONJ_SIOS}ㅣ발", "시발"),  # 조합형 낱자모
         (HALF_UNASSIGNED, ""),  # 오류 없이 기호로 보고 지운다
     ],
@@ -355,10 +356,20 @@ def test_skeleton(raw, expected):
         ("ㅇㅜㅣ", "위"),
         ("ㅇㅡㅣ", "의"),
         ("ㅁㅜㅓㄹㄱㅏ", "뭘가"),
+        ("ㄱㅗㅏㄴㅏ", "과나"),
+        ("ㄱㅗㅏㄹㄱㅏ", "괄가"),
+        ("ㄱㅜㅓㄹㄱ", "궑"),
+        ("ㄱㅗㅏㅣ", "과ㅣ"),
+        ("ㅇㅗㅏㅏ", "와ㅏ"),
         # 기존 이모티콘 예외는 그대로
         ("ㅋㅋㅠ", "ㅋㅋㅠ"),
         ("ㅋㅠㅠ", "ㅋㅠㅠ"),
         ("ㅜㅜ", "ㅜㅜ"),
+        ("ㅋㅜㅜ", "ㅋㅜㅜ"),
+        ("ㅋㅋㅜ", "ㅋㅋㅜ"),
+        ("ㅋㅋㅋㅠ", "ㅋㅋㅋㅠ"),
+        # 이모티콘 예외는 ㅠ·ㅜ만
+        ("ㅋㅋㅡ", "ㅋ크"),
     ],
 )
 def test_normalize_composes_after_repeat_and_compound_vowels(raw, expected):
@@ -366,16 +377,27 @@ def test_normalize_composes_after_repeat_and_compound_vowels(raw, expected):
 
 
 def _to_compat_jamo(syllable: str) -> str:
+    """겹모음과 겹받침을 두 글쇠로 풀어 쓴다(normalize의 조합 경로를 탄다)."""
     idx = ord(syllable) - 0xAC00
     cho, jung, jong = idx // 588, idx % 588 // 28, idx % 28
-    return _CHO[cho] + chr(ord("ㅏ") + jung) + _JONG[jong].strip()
+    vowel = chr(ord("ㅏ") + jung)
+    vowel = {
+        "ㅘ": "ㅗㅏ",
+        "ㅙ": "ㅗㅐ",
+        "ㅚ": "ㅗㅣ",
+        "ㅝ": "ㅜㅓ",
+        "ㅞ": "ㅜㅔ",
+        "ㅟ": "ㅜㅣ",
+        "ㅢ": "ㅡㅣ",
+    }.get(vowel, vowel)
+    final = _JONG[jong].strip()
+    final = {v: k[0] + k[1] for k, v in _DOUBLE_JONG.items()}.get(final, final)
+    return _CHO[cho] + vowel + final
 
 
 @given(st.text(st.characters(min_codepoint=0xAC00, max_codepoint=0xD7A3), min_size=1, max_size=12))
 def test_hypothesis_decomposed_syllables_recompose(text):
-    restored = normalize("".join(map(_to_compat_jamo, text)))
-    assert sum("가" <= c <= "힣" for c in restored) >= len(text)
-    assert restored == text
+    assert normalize("".join(map(_to_compat_jamo, text))) == text
 
 
 def test_skeleton_keeps_v4_compound_vowel_behavior():

@@ -345,7 +345,7 @@ def test_tutor_client_uses_the_configured_base_url(client, monkeypatch):
 
 
 def test_tutor_answers_through_llm_slot(monkeypatch):
-    monkeypatch.setenv("OPENAI_MODEL", "gpt-5-nano")
+    _sentinel_env(monkeypatch, OPENAI_MODEL="gpt-5-nano")
     llm = _SlotLLM()
     guard = ConstantGuard()
     guard.llm = llm
@@ -363,7 +363,7 @@ def test_tutor_answers_through_llm_slot(monkeypatch):
 
 
 def test_tutor_empty_answer_falls_back(client, monkeypatch):
-    monkeypatch.setenv("OPENAI_MODEL", "gpt-5-nano")
+    _sentinel_env(monkeypatch, OPENAI_MODEL="gpt-5-nano")
     client.app.state.tutor_client = _FakeClient(None)
     r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
     assert r.json()["answer"] == server.TUTOR_FALLBACK

@@ -117,4 +117,11 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
     assert all("InputOut" in json.dumps(c.get("response_format")) for c in calls)
     assert summary["judge_kind"] == "InputOnlyGuard" and summary["input_only"] is True
     assert all({"knn_major", "lr_pred"} <= r.keys() for r in recs)
+    # nano의 파싱 출력(판정 근거)을 행마다 남긴다. 직접 판정 행은 호출이 없어 빈 목록이다
+    nano = [r for r in recs if r["source"] == "nano"]
+    assert all(
+        r["llm"] == [{"role": "input_judge", "parsed": {"evidence": "e", "category": "normal"}}]
+        for r in nano
+    )
+    assert all(r["llm"] == [] for r in recs if r["source"] == "low_signal")
     assert "입력 단독" in (out / "report.md").read_text("utf-8").splitlines()[0]

@@ -172,8 +172,19 @@ def test_fake_guard_runs_its_judges_in_parallel_only_with_a_candidate():
     assert fake.guard_calls == 3 and guard.judged == 2  # 후보 답이 없으면 입력 판정 1회
 
 
-@pytest.mark.parametrize("flag", [["--gate", "0"], ["--gate", "-1"], ["--guard-calls", "-1"]])
-def test_cli_rejects_a_gate_below_one_and_negative_guard_calls(flag, capsys):
+@pytest.mark.parametrize(
+    "flag",
+    [
+        ["--gate", "0"],
+        ["--gate", "-1"],
+        ["--concurrency", "0"],
+        ["--guard-calls", "-1"],
+        ["--scale", "0"],
+        ["--fake-p50", "0"],
+        ["--fake-p50", "3", "--fake-p95", "2"],
+    ],
+)
+def test_cli_rejects_values_that_hang_or_break_the_run(flag, capsys):
     with pytest.raises(SystemExit) as stop:
         mock_load.main(["--tutor", "1", "--guard", "0", *flag])
     assert stop.value.code == 2

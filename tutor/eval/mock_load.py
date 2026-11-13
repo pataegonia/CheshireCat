@@ -181,7 +181,9 @@ class FakeGuard:
         self.judged = 0
 
     async def judge(self, req: Any) -> Any:
-        # 가드 설계(master-plan §4): 입력 판정과 출력 판정을 병렬로, 출력 판정은 후보 답이 있을 때만
+        # 가드 설계(master-plan §4): 입력·출력 판정을 병렬로, 출력 판정은 후보 답이 있을 때만.
+        # 가드 has_candidate는 키가 있는지로 보지만, 빈 답은 출력 판정을 부를 일이 없어
+        # 내용으로 본다(모의 부하는 빈 답이면 키를 보내지 않아 공개 세트에서는 둘이 같다)
         n = calls_for(self.calls, bool(getattr(req, "candidate_answer", None)))
         await asyncio.gather(*(self._call() for _ in range(n)))
         judgement = await self.inner.judge(req)
@@ -257,7 +259,7 @@ class Report:
     mode: str  # 튜터 모드
     fake: tuple[float, float]  # 가짜 LLM 지연 (p50, p95) 초(배율 전)
     scale: float  # 가짜 지연 배율. 1이 아니면 지연은 실측이 아니다
-    guard_per_request: int  # 가드 요청당 판정 호출 수(가정)
+    guard_per_request: int  # 후보 답이 있는 가드 요청의 판정 호출 수(가정, 없으면 1회)
     concurrency: int  # 동시에 보낸 요청 수 상한
 
 
@@ -586,8 +588,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.gate is not None and args.gate < 1:  # Semaphore(0)은 끝없이 기다린다
         ap.error("--gate는 1 이상이어야 한다")
+    if args.concurrency < 1:  # 같은 이유(요청 시간 제한은 이 세마포어 안쪽에 있다)
+        ap.error("--concurrency는 1 이상이어야 한다")
     if args.guard_calls < 0:
         ap.error("--guard-calls는 0 이상이어야 한다")
+    if args.scale <= 0 or args.fake_p50 <= 0 or args.fake_p95 < args.fake_p50:
+        ap.error("--scale·--fake-p50은 0보다 크고 --fake-p95는 --fake-p50 이상이어야 한다")
     os.environ.setdefault("TEAM_TOKEN", secrets.token_hex(16))  # 프로세스 안 앱과 요청이 같이 쓴다
     report = asyncio.run(
         run_load(

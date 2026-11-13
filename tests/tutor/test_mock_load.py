@@ -56,6 +56,7 @@ def passed(**changes):
         llm_requests=n_tutor,
         retried=0,
         guard_calls=2 * n_guard,
+        guard_expected=2 * n_guard,
         guard_judged=n_guard,
         schemas=(("MainCallOut", n_tutor),),
         gate_entries=(("guard", 2 * n_guard), ("tutor", n_tutor)),
@@ -90,10 +91,10 @@ def test_every_request_gets_200_in_contract():
     assert report.over_limit == 0 and report.defaults == 0 and report.llm_failed == 0
     assert report.slash_status not in range(300, 400)  # /tutor/ 리다이렉트 없음
     assert report.mode == "v2"  # 기본은 배포 설정과 같은 v2
-    assert report.guard_judged == 300 and report.guard_calls == 600
+    assert report.guard_judged == 300
+    assert report.guard_calls == report.guard_expected == guard_expected(300, 300, 1)
     assert report.fake == pytest.approx((mock_load.P50_S, mock_load.P95_S))
-    # 동시 64 ≤ 게이트 64이고 v2는 요청마다 한 번에 호출 하나라 게이트에 줄이 서지 않는다
-    assert report.gate_queued == 0 and report.server_gate == report.gate == 64
+    assert report.server_gate == report.gate == 64
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -144,9 +145,38 @@ def test_v2_runs_the_real_flow_on_schema_answers():
     assert report.llm_requests == 40 - direct_count(40, 11)
 
 
+def guard_expected(n_tutor, n_guard, seed, per_request=mock_load.GUARD_CALLS):
+    """plan()이 고른 가드 행의 판정 호출 수 합: 후보 답이 있으면 per_request, 없으면 1."""
+    work = mock_load.plan(n_tutor, n_guard, random.Random(seed))  # noqa: S311
+    rows = [row for endpoint, row in work if endpoint == "guard"]
+    return sum(per_request if row.get("candidate_answer") else 1 for row in rows)
+
+
 def test_guard_requests_make_their_judge_calls():
     report = run(n_tutor=0, n_guard=10, scale=0.001, seed=12, guard_calls=2)
-    assert report.guard_calls == 20 and report.guard_judged == 10 and report.llm_calls == 0
+    assert report.guard_calls == guard_expected(0, 10, 12) and report.guard_judged == 10
+    assert report.llm_calls == 0
+
+
+def test_fake_guard_runs_its_judges_in_parallel_only_with_a_candidate():
+    """가드 설계(master-plan §4): 입력·출력 판정을 병렬로, 출력 판정은 후보 답이 있을 때만."""
+    fake = mock_load.FakeLLM(
+        mock_load.Latency.from_quantiles(1.0, 1.0),
+        random.Random(0),  # noqa: S311
+        scale=0.01,
+    )
+    guard = mock_load.FakeGuard(fake, mock_load.TimedGate(4), calls=2)
+    asyncio.run(guard.judge(SimpleNamespace(candidate_answer="답", has_candidate=True)))
+    assert fake.guard_calls == 2 and fake.peak == 2  # 둘이 함께 게이트를 쥔다
+    asyncio.run(guard.judge(SimpleNamespace(candidate_answer=None, has_candidate=False)))
+    assert fake.guard_calls == 3 and guard.judged == 2  # 후보 답이 없으면 입력 판정 1회
+
+
+@pytest.mark.parametrize("flag", [["--gate", "0"], ["--gate", "-1"], ["--guard-calls", "-1"]])
+def test_cli_rejects_a_gate_below_one_and_negative_guard_calls(flag, capsys):
+    with pytest.raises(SystemExit) as stop:
+        mock_load.main(["--tutor", "1", "--guard", "0", *flag])
+    assert stop.value.code == 2
 
 
 def test_tutor_and_guard_calls_all_go_through_one_gate():
@@ -279,9 +309,10 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     assert ok and "튜터 p50" in out and "시간 초과(30초 이상) 0" in out
     assert (
         "가정: 튜터 모드 v2, 가짜 LLM 지연 p50 4.51초·p95 6.62초(배율 0.001)"
-        ", 가드 판정 요청당 2회, 게이트 64, 동시 64\n" in out
+        ", 가드 판정 최대 2회 병렬, 게이트 64, 동시 64\n" in out
     )
-    assert f"튜터 {report.llm_calls}회" in out and "가드 40회" in out  # 튜터는 직접 판정을 뺀 수
+    assert f"튜터 {report.llm_calls}회" in out  # 튜터는 직접 판정을 뺀 수
+    assert f"가드 {report.guard_calls}회" in out and report.guard_calls == report.guard_expected
     assert report.llm_calls >= mock_load.MIN_LLM_SHARE * 20  # 출력 숫자 자체도 하한을 지킨다
     assert "게이트 줄 선 호출 0회" in out
     assert out.splitlines()[-1] == (  # 배율·요청 수가 기준과 달라 실측이 아니다
@@ -305,11 +336,17 @@ def test_a_real_time_pass_names_the_bar_and_says_when_the_gate_never_filled(caps
         ({"scale": 0.5}, "배율 0.5"),
         ({"fake": (0.1, 0.2)}, "가짜 지연이 기본보다 짧음"),
         ({"fake": (mock_load.P50_S, 6.0)}, "가짜 지연이 기본보다 짧음"),
-        ({"guard_per_request": 1, "guard_calls": mock_load.N_GUARD}, "가드 판정 요청당 1회 < 2회"),
+        (
+            {"guard_per_request": 1, "guard_calls": 300, "guard_expected": 300},
+            "가드 판정 최대 1회 < 2회",
+        ),
         ({"gate": 128}, "게이트 128 > 서버 64"),
         ({"concurrency": 2}, "동시 2 < 64"),
         ({"tutor_s": (4.5,) * 5}, "튜터 요청 5 < 300"),
-        ({"guard_s": (), "guard_judged": 0, "guard_calls": 0}, "가드 요청 0 < 300"),
+        (
+            {"guard_s": (), "guard_judged": 0, "guard_calls": 0, "guard_expected": 0},
+            "가드 요청 0 < 300",
+        ),
     ],
 )
 def test_an_easier_run_passes_only_as_a_smoke_run(capsys, changes, reason):
@@ -327,6 +364,7 @@ def test_an_easier_run_passes_only_as_a_smoke_run(capsys, changes, reason):
         {
             "guard_per_request": 3,
             "guard_calls": 3 * mock_load.N_GUARD,
+            "guard_expected": 3 * mock_load.N_GUARD,
             "gate_entries": (("guard", 3 * mock_load.N_GUARD), ("tutor", mock_load.N_TUTOR)),
         },
     ],
@@ -342,7 +380,7 @@ def test_cli_passes_easy_inputs_only_as_a_smoke_run(capsys):
     argv += ["--fake-p50", "0.1", "--fake-p95", "0.2", "--guard-calls", "0"]
     assert mock_load.main(argv) == 0
     assert capsys.readouterr().out.splitlines()[-1] == (
-        "통과(스모크: 가짜 지연이 기본보다 짧음, 가드 판정 요청당 0회 < 2회, 동시 2 < 64"
+        "통과(스모크: 가짜 지연이 기본보다 짧음, 가드 판정 최대 0회 < 2회, 동시 2 < 64"
         ", 튜터 요청 5 < 300, 가드 요청 0 < 300, 실측 아님)"
     )
 

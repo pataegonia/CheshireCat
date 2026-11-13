@@ -10,11 +10,13 @@
   실제 흐름을 탄다. 답을 모르는 스키마는 JSON이 아닌 답이라 LLM 실패로 드러난다(#88 때 더한다)
 - 튜터 모드는 `mode`(기본 v2, 배포 설정과 같음)로 정한다. 지금 v2는 요청당 주 호출 1회다(저신호
   직접 판정 #98처럼 LLM 없이 끝나는 요청은 0회)
-- 가드 판정기는 가짜다. 가드 요청마다 nano `guard_calls`회(기본 2)를 차례로 흉내 내며, 튜터 LLM과
-  같은 게이트를 쥔다(서버에서는 튜터가 가드 LLM의 slot()을 같이 쓴다). 판정 자체는 상수다
+- 가드 판정기는 가짜다. 가드 설계(master-plan §4)대로 후보 답이 있으면 nano `guard_calls`회
+  (기본 2: 입력·출력 판정)를 병렬로, 없으면 입력 판정 1회를 흉내 낸다. 튜터 LLM과 같은 게이트를
+  쥔다(서버에서는 튜터가 가드 LLM의 slot()을 같이 쓴다). 판정 자체는 상수다
 - 게이트 크기는 가드 설정 llm.gate이고 `gate`로 줄여 볼 수 있다. 경합은 게이트가 차 있어 줄을 선
-  호출 수와 기다린 시간으로 잰다. 지금 v2는 요청 하나가 한 번에 호출 하나만 하므로, 동시 요청 수가
-  게이트 크기를 넘지 않으면 줄이 없다(#88이 classify를 주 호출과 병렬로 붙이면 생긴다)
+  호출 수와 기다린 시간으로 잰다. 튜터 v2는 요청 하나가 한 번에 호출 하나지만, 후보 답이 있는 가드
+  요청은 둘을 함께 쥐므로 동시 64·게이트 64에서도 줄이 생긴다(#88이 classify를 병렬로 붙이면
+  더 늘어난다)
 - 가짜 지연은 로그정규 분포다. 기본은 가드 #105 런박스 실측(가드 판정 호출, 동시 64, p50 4.51초·
   p95 6.62초)이고 튜터·가드 호출에 같이 쓴다. 튜터 주 호출은 출력이 길어 더 느릴 수 있으니,
   실측이 나오면 `--fake-p50`·`--fake-p95`로 바꿔 끼운다. 429·5xx 재시도는 없다
@@ -24,7 +26,7 @@
   스키마, 가드 판정을 못 끝냄(가드 라우트가 예외를 기본값으로 바꿔도 센다), 게이트를 거치지 않은
   호출, 게이트 크기 초과, 리다이렉트
 - 기준 조건에서 통과해야 실측 통과로 낸다. 기준은 SPEC §3 부하(튜터·가드 각 약 300, 동시 64)와
-  기본 가정(가짜 지연, 가드 판정 요청당 2회, 서버 게이트)이다. 배율이 1이 아니거나 기준보다 쉬운
+  기본 가정(가짜 지연, 가드 판정 최대 2회 병렬, 서버 게이트)이다. 배율이 1이 아니거나 기준보다 쉬운
   조건이면 "스모크"로 내고 까닭을 적는다. 게이트에 줄을 선 호출이 없으면 "게이트 경합 없음"을 적는다
 출력은 숫자만 낸다(질문·답변 본문 없음). 가드 접속 로그(본문 없음)는 요청마다 stderr로 나온다.
 """
@@ -59,7 +61,7 @@ Z95 = 1.6448536269514722  # 표준정규 95백분위
 GRADER_TIMEOUT_S = 30.0  # SPEC §3 요청당 30초
 CLIENT_TIMEOUT_S = 2 * GRADER_TIMEOUT_S  # 30초를 넘는 응답도 재되, 끝없이 기다리지는 않는다
 BASE_URL = "http://localhost"  # 프로세스 안 ASGI 호출(네트워크 없음)
-GUARD_CALLS = 2  # 가드 요청당 nano 판정 호출 수(입력·출력 판정)
+GUARD_CALLS = 2  # 후보 답이 있는 가드 요청의 nano 판정 호출 수(입력·출력, 병렬). 없으면 1회
 N_TUTOR = N_GUARD = 300  # SPEC §3: 한 제출은 튜터·가드 각 약 300 요청
 CONCURRENCY = 64  # SPEC §3: 채점기는 최대 64개 요청을 동시에 보낸다
 MIN_LLM_SHARE = 0.9  # LLM을 부른 튜터 요청의 최소 비율(고정 문장으로 바로 끝나는 경로는 적다)
@@ -165,7 +167,7 @@ class FakeLLM:
 
 
 class FakeGuard:
-    """가드 판정기 자리. 요청마다 nano 호출 calls회를 공유 게이트를 쥔 채 차례로 흉내 낸다.
+    """가드 판정기 자리. 요청마다 nano 호출을 공유 게이트를 쥔 채 병렬로 흉내 낸다(`calls_for`).
 
     판정 자체는 상수(ConstantGuard)다. judged는 판정을 끝낸 요청 수다. 가드 라우트는 판정기 예외와
     예산 초과를 200 기본값으로 바꾸므로, 응답 형식이 아니라 이 수로 가드 실패를 센다.
@@ -179,13 +181,22 @@ class FakeGuard:
         self.judged = 0
 
     async def judge(self, req: Any) -> Any:
-        for _ in range(self.calls):
-            async with self.gate.slot("guard"):
-                self.fake.guard_calls += 1
-                await self.fake.hold()
+        # 가드 설계(master-plan §4): 입력 판정과 출력 판정을 병렬로, 출력 판정은 후보 답이 있을 때만
+        n = calls_for(self.calls, bool(getattr(req, "candidate_answer", None)))
+        await asyncio.gather(*(self._call() for _ in range(n)))
         judgement = await self.inner.judge(req)
         self.judged += 1
         return judgement
+
+    async def _call(self) -> None:
+        async with self.gate.slot("guard"):
+            self.fake.guard_calls += 1
+            await self.fake.hold()
+
+
+def calls_for(per_request: int, has_candidate: bool) -> int:
+    """가드 요청 하나의 판정 호출 수: 후보 답이 있으면 per_request, 없으면 입력 판정 1회까지."""
+    return per_request if has_candidate else min(per_request, 1)
 
 
 class CountingLLM(TutorLLM):
@@ -232,6 +243,7 @@ class Report:
     llm_requests: int  # 튜터 LLM을 부른 횟수(complete). v2는 요청당 최대 1회(직접 판정은 0회)
     retried: int  # 다시 보낸 튜터 LLM 호출 수
     guard_calls: int  # 가드 판정 호출 수
+    guard_expected: int  # 가드 요청별 calls_for의 합(후보 답 있으면 요청당 판정 수, 없으면 1)
     guard_judged: int  # 판정을 끝낸 가드 요청 수
     schemas: tuple[tuple[str, int], ...]  # 튜터 전송의 응답 스키마별 수
     gate_entries: tuple[tuple[str, int], ...]  # 게이트에 들어간 수(역할별)
@@ -358,6 +370,9 @@ def _report(
         llm_requests=llm.completes,
         retried=llm.retried,
         guard_calls=fake.guard_calls,
+        guard_expected=sum(
+            calls_for(guard_per_request, r.has_candidate) for r in results if r.endpoint != "tutor"
+        ),
         guard_judged=guard_judged,
         schemas=tuple(sorted(fake.schemas.items())),
         gate_entries=tuple(sorted(gate.entries.items())),
@@ -392,7 +407,8 @@ async def run_load(
     """TEAM_TOKEN 환경변수가 있어야 한다(앱과 요청이 같은 값을 쓴다).
 
     fake_quantiles는 가짜 LLM 지연의 (p50, p95) 초다(기본은 가드 #105 실측). mode는 튜터 모드,
-    guard_calls는 가드 요청당 가짜 판정 호출 수, gate는 게이트 크기(없으면 가드 설정 llm.gate)다.
+    guard_calls는 후보 답이 있는 가드 요청의 가짜 판정 호출 수(없으면 1회), gate는 게이트 크기
+    (없으면 가드 설정 llm.gate)다.
     """
     if load_config().toggles.embedding:  # 기동은 덮어쓰기 없이 파일 설정(TUTOR_CONFIG)을 읽는다
         raise RuntimeError("임베딩이 켜진 튜터 설정이라 운영진 임베딩 API를 부르게 된다")
@@ -462,8 +478,7 @@ def _failures(report: Report, bar: Bar, t50: float, t95: float) -> list[str]:
         ("스키마", bool(set(dict(report.schemas)) - EXPECTED_SCHEMAS.get(report.mode, set()))),
         (
             "가드 판정",  # 판정기 예외·예산 초과는 라우트가 200 기본값으로 바꾼다
-            report.guard_judged != n_guard
-            or report.guard_calls != n_guard * report.guard_per_request,
+            report.guard_judged != n_guard or report.guard_calls != report.guard_expected,
         ),
         # 보낸 호출은 모두 게이트를 지난다. 들어간 뒤 시간이 모자라 보내지 않고 나오면 진입이
         # 더 많아지는데, 그 호출은 오류로 끝나 "LLM 실패"로 따로 걸린다(일부 우회가 가려져도
@@ -499,7 +514,7 @@ def _smoke_reasons(report: Report) -> list[str]:
     checks = [
         (f"배율 {report.scale:g}", report.scale != 1),
         ("가짜 지연이 기본보다 짧음", _shorter(f50, P50_S) or _shorter(f95, P95_S)),
-        (f"가드 판정 요청당 {per_request}회 < {GUARD_CALLS}회", per_request < GUARD_CALLS),
+        (f"가드 판정 최대 {per_request}회 < {GUARD_CALLS}회", per_request < GUARD_CALLS),
         (f"게이트 {report.gate} > 서버 {report.server_gate}", report.gate > report.server_gate),
         (f"동시 {report.concurrency} < {CONCURRENCY}", report.concurrency < CONCURRENCY),
         (f"튜터 요청 {n_tutor} < {N_TUTOR}", n_tutor < N_TUTOR),
@@ -516,7 +531,7 @@ def show(report: Report, bar: Bar, out: TextIO | None = None) -> bool:
     tmax, g95 = max(report.tutor_s, default=0.0), _pct(report.guard_s, 0.95)
     f50, f95 = report.fake
     out.write(f"가정: 튜터 모드 {report.mode}, 가짜 LLM 지연 p50 {f50:g}초·p95 {f95:g}초")
-    out.write(f"(배율 {report.scale:g}), 가드 판정 요청당 {report.guard_per_request}회")
+    out.write(f"(배율 {report.scale:g}), 가드 판정 최대 {report.guard_per_request}회 병렬")
     out.write(f", 게이트 {report.gate}, 동시 {report.concurrency}\n")
     out.write(
         f"요청 {report.requests}개(튜터 {n_tutor}·가드 {n_guard}), 전체 {report.wall_s:.1f}초\n"
@@ -562,10 +577,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--max-p95", type=float, default=Bar().p95_s, help="튜터 p95 합격선(초)")
     ap.add_argument("--mode", choices=("v2", "baseline"), default="v2", help="튜터 모드")
     ap.add_argument(
-        "--guard-calls", type=int, default=GUARD_CALLS, help="가드 요청당 가짜 판정 호출 수"
+        "--guard-calls",
+        type=int,
+        default=GUARD_CALLS,
+        help="후보 답이 있는 가드 요청의 가짜 판정 호출 수(병렬, 없으면 1회)",
     )
     ap.add_argument("--gate", type=int, help="게이트 크기(기본은 가드 설정 llm.gate)")
     args = ap.parse_args(argv)
+    if args.gate is not None and args.gate < 1:  # Semaphore(0)은 끝없이 기다린다
+        ap.error("--gate는 1 이상이어야 한다")
+    if args.guard_calls < 0:
+        ap.error("--guard-calls는 0 이상이어야 한다")
     os.environ.setdefault("TEAM_TOKEN", secrets.token_hex(16))  # 프로세스 안 앱과 요청이 같이 쓴다
     report = asyncio.run(
         run_load(

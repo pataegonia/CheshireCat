@@ -159,7 +159,7 @@ class Judgement:                 # guard.py(S1.1이 dataclass를 먼저 둠). �
     input_source: Literal["low_signal", "nano", "third_call", "fallback", "default"]
     output_tier: Literal[1, 2, 3, 4] | None                      # GR-07 표의 ①–④
     nano_grounded: bool | None                                  # 출력 nano 원값. v6 모드에서는 후보 답변이 있으면 늘 기록(nano_tier3와 무관, S3.1 정밀도용. `output.call_nano_when_unused: false`로 건너뛰면 None)
-    answer_quote_ok: bool | None;  kb_quote_ok: bool | None      # 출력 nano의 인용이 답변·문맥의 부분 문자열인가(R14-D2). 인용 원문은 여기 두지 않는다(하네스 Tap이 runs/에만 저장)
+    answer_quote_ok: bool | None;  kb_quote_ok: bool | None      # 출력 nano의 인용이 답변·문맥의 부분 문자열인가(R14-D2). 답변 쪽은 `input.max_answer_chars`로 자른 원문(숨긴 문자를 드러내기 전)과 대조한다. 인용 원문은 여기 두지 않는다(하네스 Tap이 runs/에만 저장)
     nano_refuses: bool | None                                   # 출력 nano의 거절 판정 원값. 기록만 하고 safe에 쓰지 않는다(R14-D3)
     signals: Signals
     knn_major: Category | None;  lr_pred: Category | None
@@ -267,7 +267,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   low_signal_direct: true          # GR-06 저신호 직접 판정
   literal_rule: true               # GR-07 ②
   nano_tier3: true                 # GR-07 ③ 사용 여부(출력 nano 호출 자체는 v6 모드에서 `output.call_nano_when_unused: true`인 동안 늘 함). S3.1이 재기 전의 잠정 기본값. S3.1이 output.failure_default와 함께 4조합을 비교해 정한다
-  nano_span: false                 # GR-07 nano 구간, P2
+  nano_span: false                 # GR-07 ③에서 확인된 answer_quote를 구간으로 낸다(ADR-0014 R14 수정). 자른 원문에 글자 그대로 있는 인용만 낸다. 끄면 ③은 false/[]. 켤지는 S2.9 전체 실측 3회 범위로 정한다
   safe_rule: true                  # GR-08 safe 규칙만. GR-07 ①(block 범주 → true/[])은 output.mode: v6에서 토글 없이 늘 적용
   oom_kb_snippet: false            # GR-04 out_of_material용 KB 조각, P1
   embedding: false                 # GR-03·GR-05 임베딩, P2
@@ -299,7 +299,7 @@ embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 �
 eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)
 ```
 
-- `extra="forbid"`로 오타를 로드에서 잡는다. 검증: `third_call`은 `knn_vote`·`lr`이 둘 다 켜졌을 때만, `nano_span`은 `literal_rule`이 켜졌을 때만 허용한다.
+- `extra="forbid"`로 오타를 로드에서 잡는다. 검증: `third_call`은 `knn_vote`·`lr`이 둘 다 켜졌을 때만, `nano_span`은 `nano_tier3`가 켜졌을 때만 허용한다(구간을 내는 자리가 ③이다. S2.8에서 `literal_rule` 조건을 이것으로 바꿨다).
 - 베이스라인(`baseline.yaml` = 토글 모두 false + `output.mode: baseline`): 입력은 `input_judge.md`에서 예시 블록만 비운 것(범주 정의·짝 대조 문구는 유지)을 쓴다(따로 파일을 두지 않는다). 실패하면 `normal`. 출력은 `output_judge_baseline.md`(reason → grounded → safe)의 nano 값을 grounded·safe에 바로 쓰고 `unsupported=[]`. decision은 그래도 범주에서 도출한다.
 - `configs/ablation/*.yaml`은 `default.yaml` 위에 덮어쓸 키만 담는다(깊은 병합). 이름은 `no_<토글>.yaml`(기본 켬을 끔), `with_<토글>.yaml`(기본 끔을 켬).
 - 키·주소는 설정 파일에 쓰지 않는다. 환경변수: `TEAM_TOKEN`, `OPENAI_BASE_URL`·`OPENAI_MODEL`·`OPENAI_API_KEY`, `EMBEDDING_BASE_URL`·`EMBEDDING_MODEL`·`EMBEDDING_API_KEY`(임베딩 ablation만), `GUARD_CONFIG`(설정 경로, 기본 `configs/default.yaml`), `GUARD_KB_DIR`·`GUARD_PUBLIC_DIR`·`GUARD_PROMPTS_DIR`(있으면 `paths.kb`·`paths.public`·`paths.prompts`를 검증 전에 덮어씀, 런박스 경로용). `GUARD_*`는 S1.1의 `load_config()`가 읽고 테스트한다. `${ENV}` 치환은 없다. 런박스는 `/home/elicer/competition/.env`를 셸에서 읽는다(`uvicorn --env-file`은 python-dotenv가 필요해 쓰지 않는다).
@@ -521,4 +521,5 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - §4.1 `Judgement`에 `answer_quote_ok`·`kb_quote_ok`·`nano_refuses`. §4.3 `OutputOut`을 `answer_quote → kb_quote → grounded → refuses`로(`reason` 삭제). §4.4 `output.tier3_trust`·`quote_min_chars`·`context_max_chars`. §4.2 출력 nano 문맥을 1위 섹션 전체 + 다른 섹션 조각으로.
 - §4.6 `--input-only`와 역할별 실패율 2% 관문. §5 S2.7·S2.9·S3.1·S3.2 수용 기준, S3.4는 동결 전 미실행. §10 "분산 밖"의 뜻과 확정 실험 상한.
 - 바뀌지 않은 것: 입력 프롬프트 v1 문구, 범주 → decision(ADR-0012), safe 규칙(D6), 키워드 힌트 금지(GR-04).
+- S2.8 조립 전 조정(같은 날, 출력 단독 실측 뒤): §4.4 `nano_span`의 뜻을 "③에서 확인된 `answer_quote`를 구간으로"로 적고 허용 조건을 `nano_tier3`로 바꿨다. §4.1 인용 확인의 답변 쪽 대조 대상을 자른 원문으로 못박았다. 근거는 [results/2026-11-13-output-v1-solo.md](../results/2026-11-13-output-v1-solo.md)(근거 없음 판정 229건 중 225건이 원문에 글자 그대로 있음, 인용을 구간으로 내면 출력 평균 0.858–0.869 → 0.892–0.909). 기본값은 끔 그대로다.
 - 첫 실측 뒤 조정(같은 날, 사용자 결정): 입력 v1 단독 실측의 block F1(가드 160행, 1회 0.771)이 목표 0.90에 못 미쳤다. S2.7 전에 v1을 2회 더 돌려 3회 범위를 만든다(§4.6). 입력 프롬프트 v2는 S3.2의 새 PR에서 한다(§5 S3.2, §10 프롬프트 버전).

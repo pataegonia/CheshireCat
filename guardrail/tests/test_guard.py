@@ -472,7 +472,8 @@ async def test_output_assembly_failure_keeps_the_judged_category(no_rule, monkey
     guard, _ = await make(responder("harmful_content"))
     j = await guard.judge(req())
     # 입력 판정은 살린다(block이 allow로 바뀌지 않는다). 출력만 기본값
-    assert j.response == GuardResponse("harmful_content", OutputVerdict(True, (), True))
+    # 출력 기본값에서도 safe는 GR-08 그대로다(block에 응한 답변)
+    assert j.response == GuardResponse("harmful_content", OutputVerdict(True, (), False))
     assert j.errors == ("output:RuntimeError",) and MARK not in repr(j)
 
 
@@ -528,8 +529,50 @@ async def test_call_that_swallows_cancellation_cannot_hold_the_response(no_rule,
         {"toggles__oom_kb_snippet": True},
         {"toggles__embedding": True},
         {"output__rule_require_same_kind": True},
+        {"output__rule_extra_tokens": ["bare_numeral"]},
     ],
 )
 async def test_unimplemented_switch_fails_at_build_not_per_request(override):
     with pytest.raises(NotImplementedError, match=next(iter(override)).split("__")[1]):
         await make(**override)
+
+
+# --- santa 3라운드 반영 ---
+
+
+async def test_output_side_prepare_failure_keeps_the_input_judgement(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError(MARK)
+
+    monkeypatch.setattr(guard_module, "literal_rule", boom)  # KB 검색·규칙은 출력 쪽 준비다
+    guard, fake = await make(responder("harmful_content"))
+    j = await guard.judge(req())
+    assert j.response == GuardResponse("harmful_content", OutputVerdict(True, (), False))
+    assert (j.input_source, j.errors) == ("nano", ("output:RuntimeError",))
+    assert len(calls(fake, "input")) == 1 and not calls(fake, "output") and MARK not in repr(j)
+
+
+async def test_output_fallback_still_reports_hidden_tags(no_rule, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError(MARK)
+
+    monkeypatch.setattr(guard_module, "output_verdict", boom)
+    guard, _ = await make()
+    j = await guard.judge(req(ANSWER + TAG))
+    assert j.response.output == OutputVerdict(True, (), False)
+
+
+async def test_missing_prompt_fails_at_build_not_per_request(tmp_path):
+    with pytest.raises(OSError):  # noqa: PT011 - 경로가 든 메시지는 보지 않는다
+        await make(paths__prompts=str(tmp_path / "none"))
+
+
+async def test_both_quotes_trust_uses_the_verified_kb_quote(no_rule):
+    guard, _ = await make(output__tier3_trust="both_quotes")
+    kb_text = guard.kb.rank(MSGS[0].content + chr(10) + ANSWER).hits[0].text
+    both = {**UNGROUNDED, "kb_quote": kb_text[:20]}
+    guard, _ = await make(responder(output=both), output__tier3_trust="both_quotes")
+    j = await guard.judge(req())
+    assert (j.kb_quote_ok, j.output_tier) == (True, 3)
+    guard, _ = await make(responder(output=UNGROUNDED), output__tier3_trust="both_quotes")
+    assert (await guard.judge(req())).output_tier == 4  # kb_quote가 비면 ③에 쓰지 않는다

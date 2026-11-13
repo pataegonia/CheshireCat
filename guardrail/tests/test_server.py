@@ -726,9 +726,9 @@ def test_default_factory_without_a_key_is_constant_and_says_so(monkeypatch, capl
         assert _post(c, b'{"candidate_answer": ""}').json() == DEFAULT_WITH_OUTPUT
     (line,) = _startup_lines(caplog)
     assert line == "guard judge=constant reason=no_api_key"
-    assert caplog.records[-1].levelno >= logging.ERROR or any(
-        r.levelno == logging.ERROR for r in caplog.records if r.name == "guardrail.access.startup"
-    )
+    assert [r.levelno for r in caplog.records if r.name == "guardrail.access.startup"] == [
+        logging.ERROR
+    ]
 
 
 def test_default_factory_falls_back_when_the_real_guard_cannot_start(monkeypatch, caplog):
@@ -744,3 +744,30 @@ def test_default_factory_falls_back_when_the_real_guard_cannot_start(monkeypatch
         assert _post(c, BLOCK_BODY).json()["input"] == {"decision": "allow", "category": "normal"}
     assert _startup_lines(caplog) == ["guard judge=constant reason=RuntimeError"]
     _assert_logs_clean(caplog)
+
+
+def test_default_factory_reports_a_guard_that_cannot_be_built(monkeypatch, caplog, tmp_path):
+    # 프롬프트 경로가 틀리면 "실제 판정기"로 뜨지 않는다(모든 요청이 기본값이 되는 것을 로그로 남긴다)
+    _fake_guard_llm(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setenv("GUARD_PROMPTS_DIR", str(tmp_path / "none"))
+    with caplog.at_level(logging.INFO), TestClient(create_app()) as c:
+        assert _post(c, BLOCK_BODY).status_code == 200
+    assert _startup_lines(caplog) == ["guard judge=constant reason=FileNotFoundError"]
+
+
+def test_default_factory_reports_a_failed_probe(monkeypatch, caplog):
+    from fakes import FakeLLM, Timeout
+
+    from guardrail import guard as guard_module
+    from guardrail.llm import LLM
+
+    fake = FakeLLM(respond=lambda kw: Timeout())
+    monkeypatch.setattr(guard_module, "LLM", lambda c: LLM(c, send=fake.send))
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    with caplog.at_level(logging.INFO), TestClient(create_app()):
+        pass
+    records = [r for r in caplog.records if r.name == "guardrail.access.startup"]
+    assert [(r.getMessage(), r.levelno) for r in records] == [
+        ("guard judge=real probe=timeout", logging.ERROR)
+    ]

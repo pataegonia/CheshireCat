@@ -316,3 +316,17 @@ async def test_fake_run_drives_the_real_guard_end_to_end(tmp_path, capsys):
         assert all(
             (r[k] is not None) == has for k in ("answer_quote_ok", "kb_quote_ok", "nano_refuses")
         )
+
+
+async def test_unsupported_ablation_row_is_refused_before_any_call(tmp_path, capsys):
+    made = []
+
+    def make_llm(cfg_llm):
+        made.append(cfg_llm)
+        raise AssertionError("LLM을 만들면 안 된다")
+
+    argv = ["--ablation", str(ROOT / "configs/ablation"), "--only", "no_lr,with_third_call",
+            "--name", "t", "--out", str(tmp_path / "runs")]  # fmt: skip
+    assert await run.amain(argv, make_llm=make_llm) == run.EXIT_USAGE
+    assert not made and "third_call" in capsys.readouterr().err
+    assert not (tmp_path / "runs" / "t").exists()

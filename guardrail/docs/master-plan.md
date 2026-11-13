@@ -244,7 +244,7 @@ class LLM:
 ### 4.4 설정 (`configs/*.yaml`)
 
 ```yaml
-version: "6.0.0"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.1"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
 prompts: {}                        # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.6·S2.7이 input_judge·output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
@@ -276,7 +276,7 @@ input:
   max_answer_chars: 8000           # 후보 답변의 원문 길이 상한(전처리 전에 자름. SPEC §4 답변 최대 4000자). 출력 nano·규칙 ②·거절 정규식이 자른 답변을 본다. has_hidden_tags는 자르기 전 전체
   knn: {analyzer: char_wb, ngram: [1, 3], max_examples: 8, per_category: 2}
   knn_vote_k: 7                    # kNN 다수결 이웃 수(실패 기본값·3번째 호출)
-  lr: {analyzer: char_wb, ngram: [1, 3], C: 1.0}
+  lr: {analyzer: char_wb, ngram: [1, 3], C: 100}
   oom_snippet_chars: 400
 kb: {top_k: 3, ngram: 2, k1: 1.2, b: 0.75}
 retrieval: {max_query_chars: 4000}   # BM25 질의(학습자 부분·답변 부분 각 //2)·kNN·LR 입력(발화 하나) 상한(긴 이력 대비, 뒤쪽을 남김)

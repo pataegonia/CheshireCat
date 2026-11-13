@@ -18,7 +18,7 @@ toggles:
   inline_cite: false           # 답변 끝 (섹션 ID) 표기
   max_citations: 1             # 1 | 2. 2는 "두 대상 비교" 문항 수를 센 뒤 ablation(TU-07)
 retrieval:
-  k: 5                         # 근거 묶음 섹션 수. recall@5 = @8 = 0.958이라 5(#81). 끝까지 비교는 3·5만(통합 ablation)
+  k: 5                         # 근거 묶음 섹션 수. recall@5 = @8 = 0.958(#81), 판정 3회 비교에서 3은 분산 안(11/13)
 answer:
   max_sentences: 3             # 1–3문장 기본(상한 아님, TU-06)
 llm:

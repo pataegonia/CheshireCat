@@ -30,7 +30,7 @@ def normalize(s: str) -> str:
     return "".join(ch for ch in s if not ch.isspace() and ch not in PUNCT)
 
 
-# 는 숫자와 한글 사이에서 성립하지 않아("FIN-01-02에") ASCII 기준 경계를 쓴다
+# \b는 숫자와 한글 사이에서 성립하지 않아("FIN-01-02에") ASCII 기준 경계를 쓴다
 CITE_RX = re.compile(r"\(?(?<![A-Za-z0-9])(?:PY|PR|FIN)-\d{2}-\d{2}(?![0-9])\)?")
 _UNITS = r"만\s?원|천\s?원|원|%|세|개월|점|번|개|씩|배|단계|권|명|회|줄"
 _UNITS_EXTRA = r"|주|일|년|글자"

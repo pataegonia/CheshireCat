@@ -9,8 +9,9 @@
    (`toggles.signals`)와 실패 기본값(위기 → escalate, 지시 무력화 → refuse)에 쓴다
 
 ⑤-2 가드 classify 병렬 합치기(TU-10, `tutor.judge.guard_merge`): classify를 주 호출과 동시에 돌려
-   공격 4범주에서 주 호출 action이 표와 다르면 그 범주의 고정 문장으로 바꾼다
-   (`toggles.guard_classify`)
+   공격 4범주이면 주 호출이 이미 표 고정 문장을 냈거나 더 강한 action을 낸 경우를 빼고 그 범주의
+   고정 문장으로 바꾼다(`toggles.guard_classify`). serial(ⓐ)은 classify를 먼저 기다려 템플릿 범주면
+   주 호출 없이 고정 문장을 낸다
 ⑥ 가드 judge_output 검증(TU-09 ②): 주 호출 문장이 그대로 나가는 경로에만, 합친 범주를 넘겨 부른다
    (`toggles.verify: guard`). 시간 부족·실패면 판정만 건너뛴다
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
@@ -41,10 +42,13 @@ from tutor.judge.conversation import Conversation, tidy
 from tutor.judge.draft import draft_answer
 from tutor.judge.guard_merge import (
     JUDGE_SKIP_S,
+    GuardSkips,
     attack_fixed,
     judge_candidate,
     merge_category,
+    serial_fixed,
     start_classify,
+    wait_classify,
 )
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
@@ -58,10 +62,11 @@ REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
 
 def prepare_judge(app_state: Any) -> None:
-    """기동 때 한 번: 범주 → action 표로 주 호출 프롬프트를 만든다.
+    """기동 때 한 번: 범주 → action 표로 주 호출 프롬프트를 만들고, 가드 단계 건너뜀 횟수를 0으로.
 
     `tutor.startup.prepare`가 부른다."""
     app_state.tutor_prompt = MainCallPrompt.from_rules()
+    app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
 
 
 def _messages(req: TutorRequest) -> list[dict[str, str]]:
@@ -92,11 +97,12 @@ def choose_action(out: MainCallOut, *, from_category: bool) -> Action:
 def fallback_body(signals: Sequence[Signal] = (), classified: str | None = None) -> dict[str, Any]:
     """주 호출 실패(재시도 후)·예산 초과의 기본 응답(TU-12).
 
-    신호가 위기면 escalate, 지시 무력화면 refuse 고정 문장. 그다음 가드 classify가 공격 4범주였으면
-    그 범주의 고정 문장(TU-10, 공격 재현율은 classify 단독 이상). 그 밖에는 공유 설정
+    신호가 위기거나 가드 classify가 emotional_distress면 escalate, 지시 무력화면 refuse 고정 문장.
+    그다음 classify가 공격 4범주였으면 그 범주의 고정 문장(TU-10, 공격 재현율은 classify 단독 이상).
+    주 호출 결과가 없으니 classify를 쓰지 않을 이유가 없다. 그 밖에는 공유 설정
     `fallback_action`(잠정 clarify)의 고정 문장. 위기가 먼저다(PRD §3 우선순위).
     """
-    if Signal.CRISIS in signals:
+    if Signal.CRISIS in signals or classified == "emotional_distress":
         return fixed_body(Fixed.ESCALATE)
     if Signal.OVERRIDE in signals:
         return fixed_body(Fixed.REFUSE_JAILBREAK)
@@ -170,12 +176,6 @@ def _candidate(out: MainCallOut) -> str:
     return " ".join(s.text for s in out.sentences if s.text)
 
 
-def _judge_skip_s(state: Any) -> float:
-    """공유 설정 `judge_skip_s`(통합 `config/runtime.yaml`). state에 값이 있으면 그것을 쓴다."""
-    value = getattr(state, "judge_skip_s", None)
-    return float(value) if isinstance(value, int | float) and value >= 0 else JUDGE_SKIP_S
-
-
 async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
     """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
@@ -188,22 +188,28 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     cfg = state.tutor_cfg
     signals = detect(conv)  # 기본값 선택에는 토글과 상관없이 쓴다(TU-12)
     guard = getattr(state, "guard", None)
+    skips: GuardSkips | None = getattr(state, "guard_skips", None)
     messages = _messages(req)
+    serial = cfg.toggles.guard_classify == "serial"
     classify = start_classify(
         guard,
         messages,
         mode=cfg.toggles.guard_classify,
         timeout_s=cfg.llm.timeout_s.classify,
         deadline=deadline,
+        skips=skips,
     )
     try:
         classified: str | None = None
         if classify is not None:
-            await asyncio.sleep(
-                0
-            )  # classify 요청이 주 호출보다 먼저 나가도록 한 번 양보한다(TU-10)
-        if classify is not None and cfg.toggles.guard_classify == "serial":
-            classified = await classify  # ⓐ: 주 호출 앞에서 끝까지 기다린다(#83 비교용)
+            # classify 요청이 주 호출보다 먼저 나가도록 한 번 양보한다(TU-10)
+            await asyncio.sleep(0)
+        if classify is not None and serial:
+            classified = await wait_classify(classify, skips)  # ⓐ: 주 호출 앞에서 끝까지 기다린다
+            fixed = serial_fixed(classified)
+            if fixed is not None and Signal.CRISIS not in signals:
+                # ⓐ: classify가 템플릿 범주면 주 호출 없이 고정 문장(통합 I13 ⓐ, #83 비교용)
+                return tutor_post(fixed_body(fixed), classified)
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,
@@ -213,21 +219,18 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             signals=labels(signals) if cfg.toggles.signals else (),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
         )
+        if classify is not None and not serial:
+            classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다
         if draft.out is None:
-            if classify is not None and classified is None:
-                classified = await classify  # 자기 시간 제한 안에서 끝난다(실패면 None)
             return tutor_post(fallback_body(signals, classified))
-        if classify is not None and classified is None:
-            classified = await classify  # classify는 자기 시간 제한 안에서 끝난다(실패면 None)
     finally:
-        if classify is not None and not classify.done():
-            classify.cancel()
+        if classify is not None:
+            classify.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
     out = draft.out
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
     merged = merge_category(out.category, action, classified)
-    if (
-        merged.fixed is not None
-    ):  # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다
+    if merged.fixed is not None:
+        # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다
         return tutor_post(fixed_body(merged.fixed), merged.category)
     verdict = None
     # 주 호출 문장이 그대로 나가는 경로만 검증한다(고정 문장에는 판정할 주장이 없다, TU-09)
@@ -239,8 +242,13 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             merged.category,
             timeout_s=cfg.llm.timeout_s.verify,
             deadline=deadline,
-            skip_s=_judge_skip_s(state),
+            skip_s=JUDGE_SKIP_S,
+            skips=skips,
         )
+    unsafe = attack_fixed(merged.category) if verdict is not None and not verdict.safe else None
+    if unsafe is not None:
+        # safe=false인데 범주가 공격이면 일반 거절 대신 그 범주의 고정 문장(IN-04 거절의 범주판)
+        return tutor_post(fixed_body(unsafe), merged.category)
     body = assemble(
         out,
         draft.sections,

@@ -5,14 +5,21 @@
 """
 
 import asyncio
+import time
 
 import pytest
 from guardrail.schema import OutputVerdict
 
 from tests.tutor.test_flow import QUESTION, FakeLLM, out, state_with
 from tutor.answer.templates import TEXT, Fixed
-from tutor.judge import flow
-from tutor.judge.guard_merge import ATTACK_CATEGORIES, Merged, merge_category
+from tutor.judge import flow, guard_merge
+from tutor.judge.guard_merge import (
+    ATTACK_CATEGORIES,
+    GuardSkips,
+    Merged,
+    judge_candidate,
+    merge_category,
+)
 from tutor.judge.main_call import EvidenceOut, SentenceOut
 from tutor.request import parse_request
 
@@ -99,11 +106,21 @@ def run(state, text=QUESTION, *, deadline=1e12):
 
 def run_soon(state, seconds, text=QUESTION):
     """요청 마감이 `seconds`초 뒤인 호출(남은 시간이 judge_skip_s보다 적은 경우)."""
+    return run_timed(state, seconds, text)[0]
+
+
+def run_timed(state, seconds, text=QUESTION):
+    """마감이 `seconds`초 뒤인 호출. (응답, 흐름이 돌려줄 때까지 걸린 초).
+
+    시간은 루프 안에서 잰다: `asyncio.run`이 끝날 때 남은 태스크를 기다리는 시간은 넣지 않는다.
+    """
 
     async def go():
-        deadline = asyncio.get_running_loop().time() + seconds
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
         body = {"messages": [{"role": "user", "content": text}]}
-        return await flow.answer_v2(parse_request(body), state, deadline=deadline)
+        resp = await flow.answer_v2(parse_request(body), state, deadline=t0 + seconds)
+        return resp, loop.time() - t0
 
     return asyncio.run(go())
 
@@ -129,17 +146,44 @@ def test_attack_category_overrides_different_action(classified, main_action, kin
 
 
 @pytest.mark.parametrize(
-    ("classified", "main_action"),
+    ("main_category", "main_action", "classified"),
     [
-        ("jailbreak_injection", "refuse"),
-        ("harmful_content", "refuse"),
-        ("harmful_content", "redirect"),  # harmful은 refuse·redirect 둘 다 표 action
-        ("off_topic", "redirect"),
-        ("academic_dishonesty", "scaffold"),
+        # 주 호출이 같은 범주의 표 고정 문장을 냈다
+        ("jailbreak_injection", "refuse", "jailbreak_injection"),
+        ("harmful_content", "redirect", "harmful_content"),  # harmful은 refuse·redirect 둘 다
+        ("off_topic", "redirect", "off_topic"),
+        ("academic_dishonesty", "scaffold", "academic_dishonesty"),
+        # a: 주 호출이 다른 공격 범주의 표 고정 문장을 냈다(둘 다 거절 계열, 응함 차이 없음)
+        ("off_topic", "redirect", "jailbreak_injection"),
+        ("harmful_content", "redirect", "jailbreak_injection"),
+        ("academic_dishonesty", "scaffold", "jailbreak_injection"),
+        ("academic_dishonesty", "scaffold", "off_topic"),
+        # b: out_of_material abstain 고정 문장은 무엇에도 응하지 않는다
+        ("out_of_material", "abstain", "off_topic"),
+        ("out_of_material", "abstain", "academic_dishonesty"),
+        ("out_of_material", "abstain", "jailbreak_injection"),
     ],
 )
-def test_attack_category_keeps_main_when_action_matches_table(classified, main_action):
-    assert merge_category("normal", main_action, classified) == Merged("normal", None)
+def test_main_fixed_table_sentence_is_kept(main_category, main_action, classified):
+    assert merge_category(main_category, main_action, classified) == Merged(main_category, None)
+
+
+@pytest.mark.parametrize(
+    ("main_category", "main_action", "classified", "kind"),
+    [
+        # c: 같은 action이라도 주 호출이 자기 문장을 쓰면 classify 범주의 고정 문장
+        ("answer_seeking", "scaffold", "academic_dishonesty", Fixed.SCAFFOLD_ACADEMIC),
+        ("normal", "scaffold", "academic_dishonesty", Fixed.SCAFFOLD_ACADEMIC),
+        ("normal", "refuse", "jailbreak_injection", Fixed.REFUSE_JAILBREAK),
+        ("normal", "refuse", "harmful_content", Fixed.REFUSE_HARMFUL),
+        ("normal", "redirect", "harmful_content", Fixed.REDIRECT_HARMFUL),
+        ("normal", "redirect", "off_topic", Fixed.REDIRECT_OFF_TOPIC),
+    ],
+)
+def test_same_action_written_by_main_call_becomes_fixed_sentence(
+    main_category, main_action, classified, kind
+):
+    assert merge_category(main_category, main_action, classified) == Merged(classified, kind)
 
 
 @pytest.mark.parametrize(
@@ -153,6 +197,8 @@ def test_attack_category_keeps_main_when_action_matches_table(classified, main_a
         ("jailbreak_injection", "refuse", "academic_dishonesty"),
         ("harmful_content", "redirect", "academic_dishonesty"),
         ("low_signal_input", "clarify", "academic_dishonesty"),
+        ("normal", "clarify", "academic_dishonesty"),  # clarify가 scaffold보다 앞(§3)
+        ("normal", "refuse", "off_topic"),
     ],
 )
 def test_attack_category_never_weakens_a_stronger_main_action(
@@ -223,6 +269,27 @@ def test_classify_cannot_turn_main_escalate_into_a_weaker_fixed_sentence():
     assert resp["action"] == "escalate"
 
 
+def test_answer_seeking_scaffold_with_classify_academic_does_not_leak_main_text():
+    # 과제 대행 요청에 주 호출 문장(정답 사실)이 나가지 않는다(PR #138 리뷰 c)
+    guard = FakeGuard("academic_dishonesty")
+    resp = run(build(guard, out(category="answer_seeking", action="scaffold", sentences=[GOOD])))
+    assert resp == {
+        "answer": TEXT[Fixed.SCAFFOLD_ACADEMIC],
+        "action": "scaffold",
+        "citations": [],
+    }
+
+
+@pytest.mark.parametrize("value", ["?", "Normal", 3, None, ["jailbreak_injection"]])
+def test_classify_value_outside_category_is_dropped(value):
+    guard = FakeGuard(value)
+    state = build(guard)
+    resp = run(state)
+    assert resp["action"] == "answer"  # 주 호출 결과만 쓴다
+    assert len(guard.judge_calls) == 1
+    assert state.guard_skips == GuardSkips({("classify", "invalid"): 1})
+
+
 def test_classify_receives_the_request_messages_once():
     guard = FakeGuard("normal")
     run(build(guard))
@@ -250,10 +317,51 @@ def test_serial_mode_waits_for_classify_before_main_call():
     assert log.index("classify:end") < log.index("main:call")
 
 
-def test_serial_mode_merges_the_same_way():
-    guard = FakeGuard("harmful_content")
-    resp = run(build(guard, **{"toggles.guard_classify": "serial"}))
-    assert resp["answer"] == TEXT[Fixed.REFUSE_HARMFUL]
+@pytest.mark.parametrize(
+    ("classified", "kind"),
+    [
+        ("harmful_content", Fixed.REFUSE_HARMFUL),
+        ("jailbreak_injection", Fixed.REFUSE_JAILBREAK),
+        ("out_of_material", Fixed.ABSTAIN),
+        ("emotional_distress", Fixed.ESCALATE),
+        ("low_signal_input", Fixed.CLARIFY),
+    ],
+)
+def test_serial_template_category_skips_main_call(classified, kind):
+    # ⓐ(통합 I13): classify가 범주를 정하고, 템플릿 범주면 주 호출 없이 고정 문장(nano 1회)
+    guard = FakeGuard(classified)
+    llm = FakeLLM(out(sentences=[GOOD]))
+    resp = run(build(guard, llm=llm, **{"toggles.guard_classify": "serial"}))
+    assert resp["answer"] == TEXT[kind]
+    assert llm.calls == []
+    assert guard.judge_calls == []
+
+
+def test_serial_generated_category_still_calls_main_and_judge():
+    guard = FakeGuard("normal")
+    llm = FakeLLM(out(sentences=[GOOD]))
+    resp = run(build(guard, llm=llm, **{"toggles.guard_classify": "serial"}))
+    assert resp["action"] == "answer"
+    assert len(llm.calls) == 1
+    assert len(guard.judge_calls) == 1
+
+
+def test_serial_differs_from_parallel_when_main_call_disagrees():
+    # parallel은 주 호출이 표 고정 문장(off_topic redirect)을 냈으면 따르지만, ⓐ는 classify를 따른다
+    main = out(category="off_topic", action="redirect", sentences=[])
+    guard = FakeGuard("jailbreak_injection")
+    assert run(build(guard, main))["action"] == "redirect"
+    serial = build(guard, main, **{"toggles.guard_classify": "serial"})
+    assert run(serial)["action"] == "refuse"
+
+
+def test_serial_crisis_signal_still_goes_to_main_call():
+    guard = FakeGuard("off_topic")
+    llm = FakeLLM(out(category="emotional_distress", action="escalate", sentences=[]))
+    text = "몇 주째 너무 힘들고 혼자 버티기 힘들어요 아무것도 하기 싫어요"
+    resp = run(build(guard, llm=llm, **{"toggles.guard_classify": "serial"}), text)
+    assert len(llm.calls) == 1
+    assert resp["action"] == "escalate"
 
 
 def test_classify_off_never_calls_guard_classify():
@@ -265,14 +373,86 @@ def test_classify_off_never_calls_guard_classify():
 
 def test_classify_error_falls_back_to_main_result():
     guard = FakeGuard("jailbreak_injection", classify_error=RuntimeError("x"))
-    resp = run(build(guard))
+    state = build(guard)
+    resp = run(state)
     assert resp["action"] == "answer"
     assert len(guard.judge_calls) == 1  # 검증은 계속 돈다
+    assert state.guard_skips == GuardSkips({("classify", "error"): 1})
+
+
+def test_cancelled_error_raised_inside_guard_classify_is_a_guard_failure():
+    # 요청이 취소되지 않았는데 가드 안에서 난 취소는 요청을 끊지 않는다(SPEC 언제나 200)
+    guard = FakeGuard("jailbreak_injection", classify_error=asyncio.CancelledError())
+    state = build(guard)
+    resp = run(state)
+    assert resp["action"] == "answer"
+    assert state.guard_skips == GuardSkips({("classify", "error"): 1})
+
+
+def test_cancelled_error_raised_inside_guard_judge_skips_judgement_only():
+    guard = FakeGuard("normal", judge_error=asyncio.CancelledError())
+    state = build(guard)
+    resp = run(state)
+    assert resp["action"] == "answer"
+    assert resp["answer"] == GOOD.text
+    assert state.guard_skips == GuardSkips({("judge", "error"): 1})
+
+
+def _cancel_after(state, seconds):
+    """흐름을 `seconds`초 뒤 바깥에서 취소한다(라우터 시간 상한). 취소가 올라왔으면 True."""
+
+    async def go():
+        body = {"messages": [{"role": "user", "content": QUESTION}]}
+        task = asyncio.ensure_future(flow.answer_v2(parse_request(body), state, deadline=1e12))
+        await asyncio.sleep(seconds)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            raised = True
+        else:
+            raised = False
+        await asyncio.sleep(0.01)  # 흐름의 finally가 건 취소가 classify에 닿을 때까지
+        return raised
+
+    return asyncio.run(go())
+
+
+def test_request_cancellation_during_classify_wait_propagates_and_cancels_classify():
+    guard = FakeGuard("normal", classify_delay=5.0)
+    assert _cancel_after(build(guard), 0.05)
+    assert guard.cancelled
+
+
+def test_request_cancellation_during_judge_propagates():
+    guard = FakeGuard("normal", judge_delay=5.0)
+    assert _cancel_after(build(guard), 0.05)
+    assert len(guard.judge_calls) == 1
+
+
+class SwallowingGuard(FakeGuard):
+    """시간 제한의 취소를 삼키고 더 도는 가드(가드 구현이 취소를 잘못 다룰 때)."""
+
+    async def classify(self, messages):
+        self.classify_calls.append(messages)
+        for _ in range(3):
+            try:
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                self.cancelled = True
+        return "jailbreak_injection"
+
+
+def test_guard_swallowing_cancellation_does_not_hold_the_request():
+    guard = SwallowingGuard()
+    state = build(guard, **{"llm.timeout_s.classify": 0.1})
+    resp, elapsed = run_timed(state, 30.0)
+    assert elapsed < 0.5  # classify 제한(0.1초) + 여유 뒤에는 기다리지 않는다
+    assert resp["action"] == "answer"
+    assert guard.cancelled
 
 
 def test_classify_time_limit_stops_the_wait_and_keeps_main_result():
-    import time
-
     guard = FakeGuard("jailbreak_injection", classify_delay=5.0)
     state = build(guard, **{"llm.timeout_s.classify": 0.1})
     t0 = time.perf_counter()
@@ -280,6 +460,16 @@ def test_classify_time_limit_stops_the_wait_and_keeps_main_result():
     assert time.perf_counter() - t0 < 2.0  # 5초를 기다리지 않는다
     assert resp["action"] == "answer"  # 시간 초과면 주 호출 결과만 쓴다(ⓑ)
     assert guard.cancelled
+    assert state.guard_skips == GuardSkips({("classify", "timeout"): 1})
+
+
+def test_classify_time_limit_is_cut_to_the_request_deadline():
+    # 제한 5초여도 마감까지 0.3초면 0.3초에서 멈춘다(min(제한, 남은 시간))
+    guard = FakeGuard("jailbreak_injection", classify_delay=30.0)
+    resp, elapsed = run_timed(build(guard), 0.3)
+    assert elapsed < 0.6
+    assert guard.cancelled
+    assert resp["action"] == "answer"
 
 
 def test_guard_without_classify_is_skipped_silently():
@@ -288,9 +478,29 @@ def test_guard_without_classify_is_skipped_silently():
         async def judge(self, req):  # 가드 골격의 판정 함수만 있는 판정기
             raise AssertionError("튜터가 부를 함수가 아니다")
 
-    resp = run(build(OnlyJudge()))
+    state = build(OnlyJudge())
+    resp = run(state)
     assert resp["action"] == "answer"
     assert resp["citations"] == ["PY-01-01"]
+    # 내용 없이 횟수만 센다: 가드가 붙은 뒤 missing이 0인지 E2E에서 볼 수 있다
+    assert state.guard_skips == GuardSkips({("classify", "missing"): 1, ("judge", "missing"): 1})
+
+
+def test_guard_with_classify_only_skips_judgement():
+    class OnlyClassify:
+        async def classify(self, messages):
+            return "normal"
+
+    state = build(OnlyClassify())
+    resp = run(state)
+    assert resp["answer"] == GOOD.text
+    assert state.guard_skips == GuardSkips({("judge", "missing"): 1})
+
+
+def test_classify_off_is_not_counted_as_a_skip():
+    state = build(FakeGuard("normal"), **{"toggles.guard_classify": "off"})
+    run(state)
+    assert state.guard_skips == GuardSkips()
 
 
 def test_no_guard_on_state_is_main_call_only():
@@ -315,7 +525,15 @@ def test_main_call_failure_uses_classify_attack_fixed_sentence(classified, kind)
     assert resp["citations"] == []
 
 
-@pytest.mark.parametrize("classified", ["normal", "answer_seeking", "emotional_distress"])
+def test_main_call_failure_with_classify_emotional_distress_escalates():
+    # 주 호출 결과가 없으니 classify의 위기 판정을 쓴다(normal 문항은 clarify·escalate 같은 점수)
+    guard = FakeGuard("emotional_distress")
+    resp = run(build(guard, llm=FakeLLM(error="timeout")))
+    assert resp["answer"] == TEXT[Fixed.ESCALATE]
+    assert resp["action"] == "escalate"
+
+
+@pytest.mark.parametrize("classified", ["normal", "answer_seeking", "out_of_material"])
 def test_main_call_failure_with_non_attack_classify_uses_tu12_default(classified):
     guard = FakeGuard(classified)
     resp = run(build(guard, llm=FakeLLM(error="timeout")))
@@ -339,9 +557,16 @@ def test_main_call_failure_crisis_signal_beats_classify_attack():
 def test_pending_classify_is_cancelled_when_flow_raises():
     guard = FakeGuard("normal", classify_delay=5.0)
     state = build(guard, llm=RaisingLLM())
-    with pytest.raises(RuntimeError):
-        run(state)
-    assert guard.cancelled  # 요청이 끝난 뒤 남는 작업이 없다(TU-18)
+
+    async def go():
+        body = {"messages": [{"role": "user", "content": QUESTION}]}
+        with pytest.raises(RuntimeError):
+            await flow.answer_v2(parse_request(body), state, deadline=1e12)
+        await asyncio.sleep(0.01)
+        # asyncio.run이 끝나며 남은 태스크를 취소하기 전에 흐름이 직접 취소했어야 한다
+        return guard.cancelled
+
+    assert asyncio.run(go())  # 요청이 끝난 뒤 남는 작업이 없다(TU-18)
 
 
 # --- 흐름: judge_output ---
@@ -374,7 +599,38 @@ def test_unsafe_verdict_replaces_answer_with_refuse():
     guard = FakeGuard("normal", OutputVerdict(True, (), False))
     resp = run(build(guard))
     assert resp["action"] == "refuse"
+    assert resp["answer"] == TEXT[Fixed.REFUSE_JAILBREAK]
     assert resp["citations"] == []
+
+
+@pytest.mark.parametrize(
+    ("category", "kind"),
+    [
+        ("academic_dishonesty", Fixed.SCAFFOLD_ACADEMIC),
+        ("off_topic", Fixed.REDIRECT_OFF_TOPIC),
+        ("harmful_content", Fixed.REFUSE_HARMFUL),
+    ],
+)
+def test_unsafe_verdict_on_attack_category_uses_that_category_fixed_sentence(category, kind):
+    # 범주가 공격이면 일반 거절(jailbreak 문장) 대신 그 범주 표 action의 고정 문장
+    guard = FakeGuard("normal", OutputVerdict(True, (), False))
+    resp = run(
+        build(
+            guard,
+            out(category=category, action="answer", sentences=[GOOD]),
+            **{"toggles.action_from_category": False},
+        )
+    )
+    assert resp["answer"] == TEXT[kind]
+    assert resp["citations"] == []
+
+
+def test_judge_value_that_is_not_an_output_verdict_is_dropped():
+    guard = FakeGuard("normal", {"safe": False})
+    state = build(guard)
+    resp = run(state)
+    assert resp["answer"] == GOOD.text
+    assert state.guard_skips == GuardSkips({("judge", "invalid"): 1})
 
 
 def test_judge_failure_skips_judgement_only():
@@ -386,22 +642,50 @@ def test_judge_failure_skips_judgement_only():
 
 def test_judge_timeout_skips_judgement_only():
     guard = FakeGuard("normal", judge_delay=5.0)
-    resp = run(build(guard, **{"llm.timeout_s.verify": 0.05}))
+    state = build(guard, **{"llm.timeout_s.verify": 0.05})
+    resp, elapsed = run_timed(state, 30.0)
+    assert elapsed < 1.0  # 5초를 기다리지 않는다
     assert resp["action"] == "answer"
+    assert state.guard_skips == GuardSkips({("judge", "timeout"): 1})
+
+
+def test_judge_time_limit_is_cut_to_the_request_deadline(monkeypatch):
+    monkeypatch.setattr(flow, "JUDGE_SKIP_S", 0.0)
+    guard = FakeGuard("normal", judge_delay=30.0)
+    resp, elapsed = run_timed(build(guard), 0.3)  # 제한 5초, 마감 0.3초
+    assert elapsed < 0.6
+    assert len(guard.judge_calls) == 1
+    assert resp["answer"] == GOOD.text
+
+
+@pytest.mark.parametrize("remaining", [0.0, -0.001])
+def test_judge_is_not_called_with_no_time_left_even_when_skip_s_is_zero(monkeypatch, remaining):
+    # 남은 시간이 정확히 0이어도 시간 제한 0으로 부르지 않는다
+    monkeypatch.setattr(guard_merge, "_remaining", lambda deadline: remaining)
+    guard = FakeGuard("normal")
+    verdict = asyncio.run(
+        judge_candidate(guard, [], "답", "normal", timeout_s=5.0, deadline=0.0, skip_s=0.0)
+    )
+    assert verdict is None
+    assert guard.judge_calls == []
 
 
 def test_judge_is_skipped_when_remaining_time_is_below_judge_skip_s():
     guard = FakeGuard("normal")
-    resp = run_soon(build(guard), 2.0)  # 남은 2초 < judge_skip_s(잠정 4초)
+    state = build(guard)
+    resp = run_soon(state, 2.0)  # 남은 2초 < judge_skip_s(잠정 4초)
     assert guard.judge_calls == []
+    assert state.guard_skips == GuardSkips({("judge", "no_time"): 1})
     assert resp["action"] == "answer"
     assert resp["answer"] == GOOD.text
 
 
-def test_judge_skip_s_can_come_from_state():
+def test_judge_skip_s_is_the_shared_value_used_by_the_flow(monkeypatch):
+    # 흐름은 검증을 거친 공유 설정 값만 쓴다(state로 덮지 않는다)
+    monkeypatch.setattr(flow, "JUDGE_SKIP_S", 0.5)
     guard = FakeGuard("normal")
     state = build(guard)
-    state.judge_skip_s = 0.5
+    state.judge_skip_s = 10.0  # 무시된다
     run_soon(state, 2.0)
     assert len(guard.judge_calls) == 1
 

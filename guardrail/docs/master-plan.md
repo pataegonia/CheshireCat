@@ -477,7 +477,7 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 | 라벨 | 가드 트랙: `guardrail`(전부) · `guardrail:epic` · `guardrail:P0`/`P1`/`P2` · `guardrail:blocked`(주최측·팀 답 대기). 공용: `enhancement`(기능 슬라이스), `documentation`(문서 PR), `bug`(동결 뒤 수정), `question`(§8 미결). 팀 서버·제출에 닿는 슬라이스(S1.5·S2.10·S2.11·S4.2)는 `orchestrator`도 단다 |
 | 번호(11/10 생성) | 에픽 C1 #42 · C2 #43 · C3 #44 · C4 #45. C1 슬라이스 #46–#51(S1.1–S1.6, #42의 하위 이슈). C2–C4 슬라이스는 Phase 시작 때 |
 | v4 정리(11/10 완료) | v4 에픽 #2–#6(GP0–GP4)과 슬라이스 이슈 #15–#21을 "v6 계획으로 대체" 댓글과 새 에픽 링크를 달아 닫았다(not planned) |
-| CI | 기존 `.github/workflows/guardrail-ci.yml` 그대로: `uv sync --locked` → `ruff check` → `ruff format --check` → `pytest --cov --cov-fail-under=80`, gitleaks. `live` 테스트는 CI에서 돌지 않는다 |
+| CI | `.github/workflows/guardrail-ci.yml`은 작업 하나 `guardrail / gate`: `uv sync --locked` → `ruff check` → `ruff format --check` → `pytest --cov --cov-fail-under=80`. gitleaks는 `integration / gate`에서 저장소 전체를 돈다. `live` 테스트는 CI에서 돌지 않는다 |
 | 담당 | danielcho02 |
 
 ## 12. 리스크

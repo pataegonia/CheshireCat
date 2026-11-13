@@ -12,6 +12,7 @@ from guardrail.preprocess import (
     _JONG,
     FLAG_SEQUENCE,
     _visible,
+    clip,
     decode_tags,
     normalize,
     reveal_hidden,
@@ -254,6 +255,68 @@ def test_strip_tags_removes_only_tag_block():
 def test_strip_tags_does_not_compose_jamo():
     assert strip_tags("ㅇㅏ") == "ㅇㅏ"
     assert normalize("ㅇㅏ") == "아"
+
+
+def _is_tag(ch: str) -> bool:
+    return 0xE0000 <= ord(ch) <= 0xE007F
+
+
+def test_clip_removes_exactly_invisible_non_tag_chars():
+    """전 코드포인트: clip이 지우는 문자 = `_visible`이 False이고 태그 문자가 아닌 것."""
+    every = "".join(map(chr, range(0x110000)))
+    expected = "".join(c for c in every if _visible(c) or _is_tag(c))
+    assert clip(every, len(every)) == expected
+
+
+def test_clip_short_text_only_drops_invisible():
+    assert clip(f"a{ZWSP}b{VS17}{tag('x')}", 5) == f"ab{tag('x')}"
+
+
+def test_clip_long_text_keeps_head_and_tail():
+    body = "".join(chr(0xAC00 + i) for i in range(21))  # 줄일 공백·반복이 없는 글
+    assert clip(body, 10) == body[:5] + "\n…\n" + body[-5:]
+    assert clip(body[:11], 11) == body[:11]
+
+
+def test_clip_over_limit_collapses_space_runs_and_repeats_first():
+    """상한을 넘으면 공백류 연속은 첫 글자 하나, 같은 글자 4번 이상은 3개로 줄인 뒤 다시 잰다."""
+    assert clip("가" + " \n\u3000" * 10 + "나" * 20 + "다", 10) == "가 나나나다"
+
+
+@pytest.mark.parametrize(
+    ("text", "head"),
+    [
+        ("1000000원" + "x" * 2100, "1000000원xxx"),
+        ("점수 100000점 " + "가" * 2100, "점수 100000점 가가가"),
+    ],
+)
+def test_clip_over_limit_keeps_digit_runs(text, head):
+    assert clip(text, 2000).startswith(head)
+
+
+def test_clip_body_under_limit_is_untouched_even_if_tags_push_over():
+    code = ("def f(x):\n    if x:\n        return 1\n\n\n\n# ========\n    pass\n" * 30)[:1800]
+    out = clip(code + tag("a") * 300, 2000)
+    assert strip_tags(out) == code
+    assert decode_tags(out)[1] == "a" * 300
+
+
+def test_clip_under_limit_keeps_indent_and_repeats():
+    code = "def f():\n    if x:\n        return 1\n\n\n\n# ========\n"
+    assert clip(code, len(code)) == code
+
+
+def test_clip_tag_padding_cannot_push_out_visible_text():
+    """태그 문자로 양쪽을 채워도 보이는 글은 남고, 드러낼 태그 문자도 앞 + 뒤로 줄어든다."""
+    out = clip(tag("a") * 100_000 + "보이는 글" + tag("b") * 100_000, 20)
+    assert strip_tags(out) == "보이는 글"
+    view, decoded = decode_tags(out)
+    assert decoded == "a" * 10 + "b" * 10
+    assert view.startswith("보이는 글")
+
+
+def test_clip_long_text_keeps_flag_emoji_unrevealed():
+    assert "숨긴 문자" not in decode_tags(clip(ENGLAND + "가" * 50, 20))[0]
 
 
 _ANY = st.text(alphabet=st.characters(codec="utf-8"), max_size=60)

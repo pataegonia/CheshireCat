@@ -61,6 +61,65 @@ def _visible(ch: str) -> bool:
     return not any(lo <= cp <= hi for lo, hi in _INVISIBLE_RANGES)
 
 
+def _invisible_class() -> str:
+    """`_visible`이 False인 문자에서 태그 문자를 뺀 집합의 정규식 문자 클래스(임포트 때 1회).
+
+    전 코드포인트에 `_visible`을 부르면 0.8초라 후보(Cf + `_INVISIBLE_RANGES`)에만 부른다.
+    전 코드포인트 대조는 tests/test_preprocess.py가 한다.
+    """
+    cand = {cp for cp in range(0x110000) if unicodedata.category(chr(cp)) == "Cf"}
+    cand |= {cp for lo, hi in _INVISIBLE_RANGES for cp in range(lo, hi + 1)}
+    runs: list[list[int]] = []  # 범위로 묶어야 C 매칭이 빠르다(낱자 나열은 1MB에 0.2초)
+    for cp in sorted(cp for cp in cand if not 0xE0000 <= cp <= 0xE007F and not _visible(chr(cp))):
+        if runs and runs[-1][1] == cp - 1:
+            runs[-1][1] = cp
+        else:
+            runs.append([cp, cp])
+    return "[" + "".join(f"{re.escape(chr(lo))}-{re.escape(chr(hi))}" for lo, hi in runs) + "]"
+
+
+_INVISIBLE = re.compile(_invisible_class() + "+")  # 연속 구간을 한 번에(1MB U+200B 47ms → 2ms)
+_NOT_TAG = re.compile("[^\U000e0020-\U000e007e]+")  # decode_tags가 푸는 범위만 남긴다
+# 상한을 넘을 때만 쓰는 문자 부류. 나열식이라 목록에 없는 문자(BMP의 흩어진 미할당 문자, 보이는
+# 글자)로 채우는 것은 못 막는다. 범주 전체로 만든 클래스는 BMP 밖 범위가 수백 개라 1MB에 0.3–0.9초
+# 빈칸류: 공백, 제어, 점자 빈칸, surrogate·BMP 사용자 영역, 비문자, plane 14–16 꼬리(미할당·사용자)
+_B = r"\s\x00-\x1f\x7f-\x9f\u2800\ud800-\uf8ff\ufdd0-\ufdef\ufffe\uffff\U000e0080-\U0010ffff"
+_M = r"\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f"  # BMP 결합 부호 블록
+_MARK_RUN = re.compile(rf"([{_M}][{_M}])[{_M}]+")
+_MARK_ON_BLANK = re.compile(rf"([{_B}])[{_M}]+")  # 빈칸 위에 얹은 결합 문자는 내용이 아니다
+_BLANK_RUN = re.compile(rf"[{_B}]{{2,}}")
+_REPEAT = re.compile(r"(\D)\1{3,}+", re.S)  # 숫자는 줄이지 않는다(1000000원). 역추적 없음
+_CUT = "\n…\n"
+
+
+def _ends(s: str, n: int, mark: str) -> str:
+    if len(s) <= n:
+        return s
+    head = n // 2
+    return s[:head] + mark + s[len(s) - (n - head) :]
+
+
+def clip(text: str, n: int) -> str:
+    """보이지 않는 문자(태그 문자 빼고)를 지우고 `n`자를 넘으면 앞 + 뒤만 남긴다. 정규식이라 선형.
+
+    무거운 정규화(`normalize`) 전에 부른다. 태그를 뺀 본문이 넘을 때는 결합 문자 연속을 2개로,
+    빈칸류 뒤의 결합 문자를 지우고, 빈칸류 연속을 스페이스 하나로, 같은 글자(숫자 빼고) 4번 이상을
+    3개로 줄인 뒤 다시 잰다(빈칸처럼 보이는 문자로 양쪽을 채워 밀어내지 못하게). 줄인 글은 원문과
+    다르다(들여쓰기·빈 줄이 사라짐).
+    풀 수 있는 태그 문자는 따로 앞 + 뒤로 줄여 맨 앞에 둔다(`decode_tags`는 위치를 쓰지 않는다).
+    한계: 보이는 글자(`ab`, `. ` 반복)나 `_B`·`_M`에 없는 문자로 양쪽을 채우면 가운데는 빠진다.
+    """
+    s = _INVISIBLE.sub("", text)
+    if len(s) <= n:
+        return s
+    body = strip_tags(s)
+    if len(body) > n:  # 본문이 상한 이하면 태그 때문에 넘어도 본문은 그대로
+        body = _MARK_ON_BLANK.sub(r"\1", _MARK_RUN.sub(r"\1", body))
+        body = _REPEAT.sub(r"\1\1\1", _BLANK_RUN.sub(" ", body))
+    hidden = _NOT_TAG.sub("", FLAG_SEQUENCE.sub("", s))  # 깃발 이모지의 태그는 숨긴 것이 아니다
+    return _ends(hidden, n, "") + _ends(body, n, _CUT)
+
+
 def _fold_width(ch: str) -> str:
     """전각·반각 문자만 기본 문자로 접는다(ｓ→s, 반각 자모 → 호환 자모). 미할당 문자는 그대로."""
     decomposition = unicodedata.decomposition(ch)

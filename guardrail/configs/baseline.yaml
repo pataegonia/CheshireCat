@@ -4,7 +4,7 @@
 # output.failure_default는 토글이 아니다.
 version: "6.0.1"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
-prompts: {}                        # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.6·S2.7이 input_judge·output_judge·output_judge_baseline을 더한다
+prompts: {input_judge: input_judge.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
 block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, off_topic]   # 범주 → decision 표(ADR-0012)
 llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다
@@ -30,7 +30,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   embedding: false                 # GR-03·GR-05 임베딩, P2
 input:
   window_last: 6
-  max_chars: 2000                  # 메시지 하나의 원문 길이 상한(전처리 전에 자름. 판정 대상 <target>에도 적용, 긴 이력 대비)
+  max_chars: 2000                  # 메시지 하나의 길이 상한(보이지 않는 문자만 지우고 넘으면 공백·반복을 줄인 뒤 앞 + 뒤, 무거운 정규화는 그 뒤. 판정 대상 <target>에도 적용, 긴 이력 대비)
   max_answer_chars: 8000           # 후보 답변의 원문 길이 상한(전처리 전에 자름. SPEC §4 답변 최대 4000자). 출력 nano·규칙 ②·거절 정규식이 자른 답변을 본다. has_hidden_tags는 자르기 전 전체
   knn: {analyzer: char_wb, ngram: [1, 3], max_examples: 8, per_category: 2}
   knn_vote_k: 7                    # kNN 다수결 이웃 수(실패 기본값·3번째 호출)

@@ -79,6 +79,18 @@ def block_openai(monkeypatch) -> list[dict]:
     return _fake_send(monkeypatch, refuse)
 
 
+def rate_limit_openai(monkeypatch) -> list[dict]:
+    """block_openai와 같되, 보내지 않고 429(속도 제한)로 답한다. 튜터 LLM은 다시 보낸다."""
+    import httpx
+    import openai
+
+    def limited(_kwargs):
+        request = httpx.Request("POST", FAKE_OPENAI_ENV["OPENAI_BASE_URL"])
+        raise openai.RateLimitError("x", response=httpx.Response(429, request=request), body=None)
+
+    return _fake_send(monkeypatch, limited)
+
+
 # 응답 스키마 이름별 최소 정상 답(주 호출 MainCallOut, 베이스라인 BaselineOut). 과목 사실은 없다
 OK_REPLIES = {
     "MainCallOut": {

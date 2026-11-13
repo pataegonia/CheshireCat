@@ -16,6 +16,8 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 `--max-calls`(기본은 config/tutor.yaml의 eval.max_calls, TU-14)를 넘으면
 아무것도 부르지 않고 멈춘다. 실행 중에는 판정 몫(예상 판정 호출)을 뺀 나머지를 튜터 LLM 호출
 상한으로 건다.
+튜터 LLM·판정 호출이 연달아 RATE_LIMIT_STREAK회 429로 끝나면 뒤의 호출을 보내지 않고, 결과를
+무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드 하네스와 같은 규칙).
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 """
 
@@ -25,6 +27,7 @@ import json
 import math
 import secrets
 import sys
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -59,6 +62,10 @@ RUNS_DIR = Path(__file__).resolve().parent / "runs"
 TUTOR_CALLS = 3
 CALLS_PER_REQUEST = {"v2": TUTOR_CALLS, "baseline": 1}  # 모드별 요청당 nano 호출(재시도 제외)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
+# 운영진 API 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속
+# 보내면 어뷰징으로 보일 수 있다(SPEC §7.1). 값과 종료 코드는 가드 하네스(#151)와 같다
+RATE_LIMIT_STREAK = 20
+EXIT_RATE_LIMITED = 6
 
 
 def public_tutor_rows() -> list[dict[str, Any]]:
@@ -197,6 +204,68 @@ def expected_calls(
     return (per_run * runs * 11 + 9) // 10  # 정수로 1.1배 올림(가드 하네스와 같음)
 
 
+class RateLimitStop:
+    """운영진 API 호출이 RATE_LIMIT_STREAK회 연달아 429로 끝나면 뒤의 호출을 보내지 않는다.
+
+    가드 하네스(#151)와 같은 규칙이다: 호출 하나의 최종 오류(재시도 포함)가 rate_limit이면 연속
+    수 +1, budget(상한에 막혀 보내지 않음)이면 그대로, 그 밖(성공 포함)이면 0이다. 튜터 LLM과
+    판정은 같은 팀 키를 쓰므로 하나로 센다. 판정은 스레드에서 돌아 잠금 안에서 센다.
+    """
+
+    def __init__(self) -> None:
+        self.streak = 0
+        self.tripped = False
+        self._lock = threading.Lock()
+
+    def record(self, error: str | None) -> bool:
+        """호출 하나의 최종 오류 코드를 센다. 이번 호출로 멈췄으면 True."""
+        with self._lock:
+            if error == "rate_limit":
+                self.streak += 1
+            elif error != "budget":
+                self.streak = 0
+            if self.streak < RATE_LIMIT_STREAK or self.tripped:
+                return False
+            self.tripped = True
+            return True
+
+    def watch_llm(self, llm: Any) -> None:
+        """튜터 LLM의 complete를 감싼다(서버 코드는 그대로다).
+
+        멈추면 max_calls를 0으로 내린다. 뒤의 호출과 진행 중인 재시도는 보내지 않고 budget이 된다.
+        """
+        inner = llm.complete
+
+        async def complete(*args: Any, **kwargs: Any) -> Any:
+            result = await inner(*args, **kwargs)
+            if self.record(result.error):
+                llm.max_calls = 0
+            return result
+
+        llm.complete = complete
+
+    def watch_judge(self, judge: metrics.Judge) -> metrics.Judge:
+        """판정기를 감싼다. 멈춘 뒤에는 부르지 않고 판정 오류로 둔다.
+
+        운영진 판정기(judge.py)는 예외를 삼키고 JudgeError만 내서 429를 다른 실패와 가르지 못한다.
+        그래서 판정의 최종 실패(판정기 재시도 포함)를 429로 센다. 막힌 키에서는 판정이 모두
+        실패하고, 그렇지 않아도 연달아 실패한 판정 결과는 쓰지 않는다.
+        """
+
+        def watched(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if self.tripped:
+                raise scoring.JudgeError("속도 제한으로 멈췄다")
+            try:
+                verdict = judge(kind, payload)
+            except Exception:
+                self.record("rate_limit")
+                raise
+            self.record(None)
+            return verdict
+
+        return watched
+
+
 def _write(
     report: metrics.Report,
     *,
@@ -205,12 +274,18 @@ def _write(
     out_dir: Path,
     tainted: bool,
     embedding: "EmbeddingUse | None",
+    invalid: str | None,
 ) -> Path:
-    """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다."""
+    """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
+
+    invalid는 실행을 멈춘 사유다(속도 제한). 있으면 tainted도 참이다.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = out_dir / f"{name}-{stamp}.json"
     data: dict[str, Any] = {"preset": name, "judge": judge, "created": stamp, "tainted": tainted}
+    if invalid is not None:
+        data["invalid"] = invalid
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
     data["report"] = asdict(report)
@@ -446,9 +521,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
+    stop = RateLimitStop()  # 튜터 LLM·판정이 같이 쓴다(같은 팀 키)
     state, counted, built = None, None, (0, 0)
     if args.preset == "tutor":
         state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
+        stop.watch_llm(state.tutor_llm)
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
     latency: list[float] = []
@@ -458,36 +535,53 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         all_responses = [fixed] * args.runs
     kb = score_local.load_kb_dir(KB_DIR)
+    scorer = stop.watch_judge(judge) if judge is not None else None
     report = metrics.build_report(
-        [metrics.score_run(rows, responses, judge=judge, kb=kb) for responses in all_responses]
+        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses]
     )
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
-    tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok)
+    tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
+    invalid = f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다" if stop.tripped else None
     name = args.preset or args.responses.stem
     path = _write(
-        report, name=name, judge=judge is not None, out_dir=args.out, tainted=tainted, embedding=use
+        report,
+        name=name,
+        judge=judge is not None,
+        out_dir=args.out,
+        tainted=tainted,
+        embedding=use,
+        invalid=invalid,
     )
     _show(report, sys.stdout)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
-        _show_tutor_calls(state, blocked, latency, cap=cap)
+        _show_tutor_calls(state, blocked, latency, cap=cap, stopped=stop.tripped)
     if use is not None:
         embedding_summary(use, sys.stdout)
     if previous is not None:
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
     sys.stdout.write(f"저장: {path}\n")
+    if invalid is not None:
+        sys.stderr.write(f"{invalid}. 결과는 무효다\n")
+        return EXIT_RATE_LIMITED
     return 1 if tainted else 0
 
 
 def _show_tutor_calls(
-    state: Any, blocked: int, latency: Sequence[float], *, cap: tuple[int, int, int, int]
+    state: Any,
+    blocked: int,
+    latency: Sequence[float],
+    *,
+    cap: tuple[int, int, int, int],
+    stopped: bool,
 ) -> None:
     """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 실패한 호출, 상한에 막힌 호출 수.
 
-    cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다.
+    cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다. stopped면 속도 제한으로 멈춘 실행이라
+    막힌 호출을 상한이 아니라 속도 제한 몫으로 낸다(멈출 때 상한을 0으로 내린다).
     """
     calls = state.tutor_llm.calls
     shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
@@ -498,7 +592,10 @@ def _show_tutor_calls(
         # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다
         failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
         sys.stdout.write(f"튜터 LLM 최종 실패: {failed}: 기본값이 섞인 결과다\n")
-    if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
+    if blocked and stopped:
+        sys.stdout.write(f"속도 제한(429)으로 멈춰 보내지 못한 튜터 호출 {blocked}회")
+        sys.stdout.write(": 기본값이 섞인 결과다\n")
+    elif blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
         tutor_cap, max_calls, reserve, embedding = cap
         sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")
         sys.stdout.write(f" = --max-calls {max_calls} - 판정 몫 {reserve}")

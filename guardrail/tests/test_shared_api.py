@@ -19,6 +19,7 @@ from guardrail.data import LabeledRow, PublicRow, load_public
 from guardrail.eval.cv import load_splits
 from guardrail.guard import ConstantGuard
 from guardrail.judges.schemas import strict_schema
+from guardrail.knn import select_fewshot
 from guardrail.llm import LLM, ErrorCode
 from guardrail.preprocess import normalize, skeleton
 from guardrail.schema import Category, OutputVerdict
@@ -127,6 +128,7 @@ def test_default_config_exposes_public_path_and_attack_categories():
     for name in ("reasoning_effort", "verbosity", "max_completion_tokens"):
         assert hasattr(llm, name)
     assert isinstance(llm.timeout_s.read, int | float)
+    assert isinstance(cfg.retrieval.max_query_chars, int)  # examples.py(#141)
     assert isinstance(cfg.budget_s, int | float)
     assert load_config(DEFAULT_CONFIG).block_categories == cfg.block_categories
 
@@ -165,6 +167,21 @@ def test_build_clusters_maps_row_id_to_cluster_id():
     out = build_clusters(rows)
     assert set(out) == {"a", "b", "c"}
     assert out["a"] == out["b"] != out["c"]
+
+
+def test_select_fewshot_takes_five_positional_args_and_reads_only_id_category():
+    """tutor/judge/examples.py(#141): select_fewshot(ranked, cluster, block, max, per_cat)에
+    id·category만 가진 자기 Example을 넘긴다."""
+
+    @dataclasses.dataclass(frozen=True)
+    class Row:
+        id: str
+        category: str
+
+    ranked = [Row("a", "normal"), Row("b", "jailbreak_injection"), Row("c", "normal")]
+    out = select_fewshot(ranked, {"a": "a", "b": "b", "c": "c"}, frozenset(ATTACKS), 8, 2)
+    assert {r.id for r in out} == {"a", "b", "c"}
+    assert all(isinstance(r, Row) for r in out)
 
 
 def test_load_splits_cluster_fold_holdout_shapes():

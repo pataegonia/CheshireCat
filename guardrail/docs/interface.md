@@ -62,17 +62,17 @@ Content-Type: application/json
 | `guardrail.server` | `create_app`(인자 없는 `guard_factory` 기본값, `tutor_router`·`defaults`·`startups` 키워드). 기동 때 `app.state.cfg`(설정)·`app.state.guard`(`await guard_factory(cfg)`)를 두고 `startups`를 `await fn(app.state)`로 부른다 | `app.py`, `tutor/startup.py`, `tutor/runtime/budget.py`, `tutor/runtime/llm.py`, `tutor/eval/mock_load.py` |
 | `guardrail.guard` | `ConstantGuard` | `tutor/eval/mock_load.py` |
 | `guardrail.schema` | `Category`, `OutputVerdict` | `integration/contracts.py`, `integration/actions.py`, `tutor/judge/guard_merge.py`(#138) |
-| `guardrail.config` | `load_config`, `resolve_path`, `DEFAULT_CONFIG`, 설정의 `paths.public`·`paths.kb`·`block_categories`·`budget_s`·`llm.gate`·`llm.timeout_s.read`·`llm.structured_output`·`llm.reasoning_effort`·`llm.verbosity`·`llm.max_completion_tokens` | `tutor/retrieval/search.py`, `tutor/runtime/llm.py`, `tutor/eval/mock_load.py`, `tutor/judge/examples.py`(#141) |
+| `guardrail.config` | `load_config`, `resolve_path`, `DEFAULT_CONFIG`, `GuardConfig`(타입), 설정의 `paths.public`·`paths.kb`·`block_categories`·`retrieval.max_query_chars`·`budget_s`·`llm.gate`·`llm.timeout_s.read`·`llm.structured_output`·`llm.reasoning_effort`·`llm.verbosity`·`llm.max_completion_tokens` | `tutor/retrieval/search.py`, `tutor/runtime/llm.py`, `tutor/eval/mock_load.py`, `tutor/judge/examples.py`(#141) |
 | `guardrail.preprocess` | `normalize`, `skeleton` | `tutor/judge/conversation.py`, `tutor/judge/signals.py`, `tutor/answer/postprocess.py`, `tutor/judge/examples.py`(#141) |
 | `guardrail.llm` | `ErrorCode`, `LLM`의 `slot()`·`params`·`structured`(`app.state.guard.llm`으로 접근) | `tutor/runtime/llm.py` |
 | `guardrail.judges.schemas` | `strict_schema` | `tutor/runtime/llm.py` |
 | `guardrail.data` | `PublicRow`, `LabeledRow`, `load_public` | `tutor/judge/examples.py`(#141) |
 | `guardrail.clusters` | `build_clusters` | `tutor/judge/examples.py`(#141) |
+| `guardrail.knn` | `select_fewshot(ranked, cluster, block, max_examples, per_category)`. 위치 인자 다섯 개, 행은 `id`·`category`만 읽는다(튜터는 자기 `Example`을 넘긴다) | `tutor/judge/examples.py`(#141) |
 | `guardrail.eval.cv` | `load_splits` | `tutor/eval/recall.py`, `tutor/eval/run_local.py`(#141). 평가 도구 전용 |
 
 - 공격 범주 목록은 따로 상수로 내보내지 않는다. 설정 `block_categories`를 `load_config()`로 읽는다(#141과 같은 방식).
 - `normalize`의 출력이 바뀌면(예: #140 자모 조합) 튜터 판단 예시의 발화와 kNN 순위도 바뀐다. 그런 PR은 본문에 적는다.
-- GR-05 고르기 규칙(`guardrail.knn.select_fewshot`, #132)은 #132가 머지되면 이 표에 올린다.
 
 ## 3. 요청(리더 결정)과 결정 전 기본값
 

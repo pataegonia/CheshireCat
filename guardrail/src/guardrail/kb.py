@@ -21,7 +21,8 @@ from types import MappingProxyType
 from guardrail.config import resolve_path
 
 # competition/grader/scoring.py의 PUNCT·normalize 복사(런타임에 grader를 import하지 않음)
-SECTION_ID = re.compile(r"[A-Z]+-\d{2}-\d{2}")  # SPEC §1 형식(PY-01-02). 과목은 가정하지 않음
+SECTION_ID = re.compile(r"(PY|PR|FIN)-\d{2}-\d{2}")  # SPEC §1의 세 과목(PY·PR·FIN)
+FOLDER_PREFIX = {"python": "PY", "prompt": "PR", "finance": "FIN"}
 PUNCT = frozenset(".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
 
 
@@ -55,12 +56,12 @@ def _load_sections(kb_dir: Path) -> dict[str, str]:
             md.stem
         ):  # README.md 같은 다른 md가 섞이면 순위·margin이 바뀐다
             raise ValueError(f"KB에 섹션 ID 형식이 아닌 md가 있다: {md.parent.name}/{md.name}")
+        if md.stem.split("-")[0] != FOLDER_PREFIX.get(md.parent.name):
+            raise ValueError(f"KB 폴더와 섹션 ID 과목이 맞지 않는다: {md.parent.name}/{md.name}")
         tables = sorted(md.parent.glob(f"{md.stem}-table*.csv"))
         parts = [md.read_text(encoding="utf-8"), *(t.read_text(encoding="utf-8") for t in tables)]
         if not parts[0].strip():
             raise ValueError(f"KB 섹션 md가 비었다: {md.stem}")
-        if md.stem in sections:  # 다른 과목 폴더에 같은 섹션 ID가 있으면 한쪽이 사라진다
-            raise ValueError(f"KB 섹션 ID가 겹친다: {md.stem}")
         sections[md.stem] = "\n\n".join(parts)
     return sections
 
@@ -131,6 +132,8 @@ class KbIndex:
         return s
 
     def rank(self, query: str) -> Ranking:
+        """질의에 2-gram이 없으면 모든 조각이 0점이고 hits는 조각 순서, margin은 0이다.
+        이때 hits[0]은 의미 없는 첫 조각이므로 호출자는 score > 0인 조각만 쓴다."""
         s = self.scores(query)
         order = sorted(range(len(s)), key=lambda i: -s[i])
         hits = tuple(Hit(self.chunks[i][0], self.chunks[i][1], s[i]) for i in order)
@@ -142,6 +145,7 @@ class KbIndex:
         return Ranking(hits, best[top] - other)
 
     def search(self, query: str, k: int = 3) -> list[Hit]:
+        """섹션이 아니라 조각 상위 k개. 같은 섹션이 여러 번 나올 수 있다."""
         if k < 1:
             raise ValueError("k는 1 이상이어야 한다")
         return list(self.rank(query).hits[:k])

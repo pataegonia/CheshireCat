@@ -298,14 +298,6 @@ def test_rejects_bad_params(params):
         KbIndex({"A-01-01": "## a\n사과"}, **params)
 
 
-def test_load_rejects_duplicate_section_id(tmp_path):
-    for subject in ("a", "b"):
-        (tmp_path / subject).mkdir()
-        (tmp_path / subject / "X-01-01.md").write_text("## x\n사과", encoding="utf-8")
-    with pytest.raises(ValueError, match="X-01-01"):
-        KbIndex.load(tmp_path)
-
-
 def test_load_rejects_non_section_md(tmp_path):
     (tmp_path / "python").mkdir()
     (tmp_path / "python" / "PY-01-01.md").write_text("## x\n사과", encoding="utf-8")

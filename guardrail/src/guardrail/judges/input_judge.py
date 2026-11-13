@@ -48,7 +48,10 @@ def _data(text: str, cfg: GuardConfig) -> str:
 
 
 def _examples(examples: Sequence[LabeledRow], cfg: GuardConfig) -> str:
-    # LabeledRow.text는 이미 정규화본이다. 순서는 kNN이 정한 그대로(가장 비슷한 것 마지막)
+    # LabeledRow.text는 이미 정규화본이다. 순서는 kNN이 정한 그대로(가장 비슷한 것 마지막).
+    # input.knn.order가 nearest_first면 뒤집는다(S3.2 선별용 변형)
+    if cfg.input.knn.order == "nearest_first":
+        examples = list(reversed(examples))
     lines = [
         f'<example category="{ex.category}">'
         f"{html.escape(ex.text[: cfg.input.max_chars], quote=False)}</example>"

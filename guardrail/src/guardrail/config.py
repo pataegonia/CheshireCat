@@ -81,6 +81,9 @@ class Vectorizer(_Strict):
 class KnnCfg(Vectorizer):
     max_examples: int
     per_category: int
+    # S3.2 선별용 변형(R14 B4·B5). yaml의 값이 v1 동작이다. 채택하면 master-plan §4.4에 올린다
+    order: Literal["nearest_last", "nearest_first"]  # few-shot 제시 순서
+    sublinear_tf: bool  # TF-IDF의 tf를 1 + log(tf)로
 
 
 class LrCfg(Vectorizer):

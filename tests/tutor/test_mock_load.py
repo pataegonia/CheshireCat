@@ -59,6 +59,7 @@ def passed(**changes):
         guard_expected=2 * n_guard,
         guard_judged=n_guard,
         guard_timeouts=0,
+        guard_limits=mock_load.base_guard_limits(),
         schemas=(("MainCallOut", n_tutor),),
         gate_entries=(("guard", 2 * n_guard), ("tutor", n_tutor)),
         gate_queued=0,
@@ -202,6 +203,21 @@ def test_fake_guard_gives_up_when_the_gate_wait_eats_its_budget():
     assert guard.judged == 0 and guard.timeouts == 1
 
 
+def test_a_judge_cancelled_from_outside_counts_as_a_guard_timeout():
+    """라우트 안전망(budget_s + 5초)이 먼저 끊어도 판정을 못 끝낸 것으로 센다(#128 리뷰)."""
+    _fake, guard = slow_guard(1.0, 4, read_s=10, budget_s=10)
+
+    async def cut_short():
+        task = asyncio.create_task(guard.judge(SimpleNamespace(candidate_answer="답")))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cut_short())
+    assert guard.timeouts == 1 and guard.judged == 0
+
+
 def test_fake_guard_uses_the_guard_config_limits(monkeypatch):
     from guardrail.config import load_config as load_guard_config
 
@@ -213,9 +229,20 @@ def test_fake_guard_uses_the_guard_config_limits(monkeypatch):
         return real(*args, **kwargs)
 
     monkeypatch.setattr(mock_load, "FakeGuard", capture)
-    run(n_tutor=1, n_guard=1, scale=0.001, seed=23)
+    report = run(n_tutor=1, n_guard=1, scale=0.001, seed=23)
     cfg = load_guard_config()
     assert seen == {"read_s": cfg.llm.timeout_s.read, "budget_s": cfg.budget_s}
+    assert report.guard_limits == (cfg.llm.timeout_s.read, cfg.budget_s)
+
+
+def test_base_guard_limits_are_the_default_guard_config(monkeypatch, tmp_path):
+    """GUARD_CONFIG로 다른 설정을 줘도 기준은 가드 기본 설정이다."""
+    from guardrail.config import DEFAULT_CONFIG
+    from guardrail.config import load_config as load_guard_config
+
+    base = load_guard_config(DEFAULT_CONFIG)
+    monkeypatch.setenv("GUARD_CONFIG", str(tmp_path / "없는 파일.yaml"))
+    assert mock_load.base_guard_limits() == (base.llm.timeout_s.read, base.budget_s)
 
 
 def test_guard_timeouts_fail_the_run(monkeypatch, capsys):
@@ -386,7 +413,7 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     assert ok and "튜터 p50" in out and "시간 초과(30초 이상) 0" in out
     assert (
         "가정: 튜터 모드 v2, 가짜 LLM 지연 p50 4.51초·p95 6.62초(배율 0.001)"
-        ", 가드 판정 최대 2회 병렬, 게이트 64, 동시 64\n" in out
+        ", 가드 판정 최대 2회 병렬(읽기 제한 12초·마감 20초), 게이트 64, 동시 64\n" in out
     )
     assert f"튜터 {report.llm_calls}회" in out  # 튜터는 직접 판정을 뺀 수
     assert f"가드 {report.guard_calls}회" in out and report.guard_calls == report.guard_expected
@@ -418,6 +445,8 @@ def test_a_real_time_pass_names_the_bar_and_says_when_the_gate_never_filled(caps
             "가드 판정 최대 1회 < 2회",
         ),
         ({"gate": 128}, "게이트 128 > 서버 64"),
+        ({"guard_limits": (1000.0, 20.0)}, "가드 시간 제한이 기본보다 김"),
+        ({"guard_limits": (12.0, 1000.0)}, "가드 시간 제한이 기본보다 김"),
         ({"concurrency": 2}, "동시 2 < 64"),
         ({"tutor_s": (4.5,) * 5}, "튜터 요청 5 < 300"),
         (
@@ -438,6 +467,7 @@ def test_an_easier_run_passes_only_as_a_smoke_run(capsys, changes, reason):
         {"fake": (8.0, 14.0)},  # 튜터 주 호출 실측이 더 느리면 바꿔 끼운다
         {"gate": 32, "llm_peak": 32, "gate_queued": 100},
         {"concurrency": 128},
+        {"guard_limits": (6.0, 10.0)},  # 가드 제한이 더 짧으면 더 어렵다
         {
             "guard_per_request": 3,
             "guard_calls": 3 * mock_load.N_GUARD,
@@ -571,6 +601,7 @@ def test_missing_or_non_json_responses_count_as_failures(client, status, monkeyp
         llm=SimpleNamespace(completes=0, failed=0, retried=0),
         guard_judged=0,
         guard_timeouts=0,
+        guard_limits=(12.0, 20.0),
         slash=404,
         mode="v2",
         guard_per_request=2,

@@ -616,3 +616,37 @@ def test_tutor_logs_and_errors_hide_env_values(client, monkeypatch, caplog):
         # URL 호스트는 HTTP 클라이언트가 소문자로 바꿔 찍으므로 대소문자 없이 본다
         assert sentinel.lower() not in r.text.lower()
         assert sentinel.lower() not in caplog.text.lower()
+
+
+@pytest.fixture
+def root_debug():
+    root = logging.getLogger()
+    old = root.level
+    root.setLevel(logging.DEBUG)
+    yield
+    root.setLevel(old)
+
+
+@pytest.mark.parametrize("debug_root", [False, True])
+def test_http_client_loggers_stay_at_warning(debug_root, request):
+    if debug_root:
+        request.getfixturevalue("root_debug")
+    server._install_log_filters()
+    for name in ("httpx2", "httpcore2", "httpx"):
+        assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING
+
+
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"])
+def test_injected_tutor_client_still_needs_all_three_env(client, monkeypatch, caplog, name):
+    import openai
+
+    _sentinel_env(monkeypatch, **{name: "  "})
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: pytest.fail("client built"))
+    fake = _FakeClient("답")
+    client.app.state.tutor_client = fake
+    caplog.set_level(logging.DEBUG)
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200
+    assert r.json()["answer"] == server.TUTOR_FALLBACK
+    assert fake.chat.completions.calls == []
+    assert _access_lines(caplog)[-1].split(" ")[-1] == "ValueError"

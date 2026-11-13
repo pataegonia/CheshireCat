@@ -696,7 +696,49 @@ def test_standalone_app_does_not_start_without_llm_env(monkeypatch):
         pass
 
 
-def test_create_app_default_is_still_the_constant_guard():
-    # 통합 app.py가 이 기본값을 쓴다. 실제 판정기는 create_app(Guard.build)로 고른다
-    with TestClient(create_app()) as c:
+def _startup_lines(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "guardrail.access.startup"]
+
+
+BLOCK_BODY = {"messages": [{"role": "user", "content": "리스트에 값을 더하려면 어떻게 해요?"}]}
+
+
+def test_default_factory_uses_the_real_guard_when_the_key_is_set(monkeypatch, caplog):
+    # 통합 app.py는 판정기를 넘기지 않는다. 키가 있으면 실제 판정기가 붙는다(council 2026-11-13)
+    _fake_guard_llm(monkeypatch, "harmful_content")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    with caplog.at_level(logging.INFO), TestClient(create_app()) as c:
+        assert _post(c, BLOCK_BODY).json()["input"] == {
+            "decision": "block",
+            "category": "harmful_content",
+        }
+    assert _startup_lines(caplog) == ["guard judge=real"]
+
+
+@pytest.mark.parametrize("key", [None, "", "  "])
+def test_default_factory_without_a_key_is_constant_and_says_so(monkeypatch, caplog, key):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    if key is not None:
+        monkeypatch.setenv("OPENAI_API_KEY", key)
+    with caplog.at_level(logging.INFO), TestClient(create_app()) as c:
         assert _post(c, b'{"candidate_answer": ""}').json() == DEFAULT_WITH_OUTPUT
+    (line,) = _startup_lines(caplog)
+    assert line == "guard judge=constant reason=no_api_key"
+    assert caplog.records[-1].levelno >= logging.ERROR or any(
+        r.levelno == logging.ERROR for r in caplog.records if r.name == "guardrail.access.startup"
+    )
+
+
+def test_default_factory_falls_back_when_the_real_guard_cannot_start(monkeypatch, caplog):
+    # 키가 있는데 기동이 실패하면 앱을 죽이지 않는다(/tutor까지 0점이 되지 않게). 종류 이름만 남긴다
+    from guardrail import guard as guard_module
+
+    async def boom(cfg, **kw):
+        raise RuntimeError(MARK)
+
+    monkeypatch.setattr(guard_module.Guard, "build", boom)
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    with caplog.at_level(logging.INFO), TestClient(create_app()) as c:
+        assert _post(c, BLOCK_BODY).json()["input"] == {"decision": "allow", "category": "normal"}
+    assert _startup_lines(caplog) == ["guard judge=constant reason=RuntimeError"]
+    _assert_logs_clean(caplog)

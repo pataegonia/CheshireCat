@@ -114,3 +114,19 @@ def test_log_failures_counts_roles_once_per_request():
 def test_kb_bench_runs_without_api():
     rep = load.kb_bench()
     assert rep["queries"] > 200 and 0 < rep["p50_ms"] <= rep["p95_ms"]
+
+
+def _main_out(monkeypatch, capsys, argv):
+    monkeypatch.setattr(load, "http_sender", lambda url, token: lambda p: (200, OK))
+    load.main(["--n", "3", "--concurrency", "2", *argv])
+    return capsys.readouterr()
+
+
+def test_main_warns_without_access_log(monkeypatch, capsys):
+    assert "--access-log" in _main_out(monkeypatch, capsys, []).err
+
+
+def test_main_no_warning_with_access_log(monkeypatch, capsys, tmp_path):
+    log = tmp_path / "access.log"
+    log.write_text("", "utf-8")
+    assert _main_out(monkeypatch, capsys, ["--access-log", str(log)]).err == ""

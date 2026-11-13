@@ -4,6 +4,8 @@
 실행(guardrail/에서, 서버는 따로 띄운다. 토큰은 환경변수 TEAM_TOKEN):
 `uv run python -X utf8 -m guardrail.eval.load --url http://127.0.0.1:8000/guard --out r.json`
 `--access-log 파일`을 주면 서버 접근 로그의 오류 칸에서 기본값으로 떨어진 판정을 역할별로 센다.
+접근 로그 없이는 모두 ok여도 모델 호출이 성공 여부를 알 수 없다(실패해도 서버는 200+기본값).
+먼저 `--n 20`으로 짧게 돌려 접근 로그의 오류 칸을 확인한 뒤 전체를 돌린다.
 `--kb-bench`는 서버 없이 KB 검색 시간만 잰다(API 0회).
 """
 
@@ -28,7 +30,13 @@ from guardrail.kb import KbIndex
 
 SPEC_TIMEOUT_S = 30.0  # 규격의 요청당 제한(SPEC §3)
 MAX_RESPONSE_BYTES = 256 * 1024  # 채점기가 읽는 응답 상한
-BIG_BYTES = 1024 * 1024  # --big 요청의 본문 크기(약)
+# --big 요청의 글자 수(UTF-8 기준 약 1.06MB). 전송은 ensure_ascii 이스케이프로 약 2.1MB다
+BIG_BYTES = 1024 * 1024
+WARN_NO_LOG = (
+    "경고: --access-log 없이는 모두 ok여도 모델 호출이 성공했는지 알 수 없다"
+    "(실패해도 서버는 200과 기본값을 준다).\n"
+    "먼저 --n 20으로 짧게 돌려 접근 로그의 오류 칸을 확인한 뒤 전체를 돌려라.\n"
+)
 Send = Callable[[dict], tuple[int, bytes]]
 
 
@@ -41,7 +49,10 @@ def guard_rows() -> list[PublicRow]:
 
 
 def build_payloads(rows: list[PublicRow], n: int, big: int = 0, seed: int = 13) -> list[dict]:
-    """행을 돌려 n개. 앞의 big개는 이력을 약 1MB로 부풀린 뒤 전체를 섞는다."""
+    """행을 돌려 n개. 앞의 big개는 이력을 부풀린 뒤 전체를 섞는다.
+
+    크기: 글자 수로 UTF-8 약 1.06MB, 전송은 \\uXXXX 이스케이프로 약 2.1MB.
+    """
     out = []
     for i in range(n):
         r = rows[i % len(rows)]
@@ -182,7 +193,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--url", default="http://127.0.0.1:8000/guard")
     ap.add_argument("--n", type=int, default=600)
     ap.add_argument("--concurrency", type=int, default=64)
-    ap.add_argument("--big", type=int, default=0, help="이력을 약 1MB로 부풀릴 요청 수")
+    ap.add_argument(
+        "--big",
+        type=int,
+        default=0,
+        help="이력을 부풀릴 요청 수(글자 수로 약 1MB, \\uXXXX 이스케이프로 전송은 약 2.1MB)",
+    )
     ap.add_argument("--access-log", help="서버 접근 로그 파일(오류 칸 집계)")
     ap.add_argument("--kb-bench", action="store_true")
     ap.add_argument("--out")
@@ -190,6 +206,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.kb_bench:
         report = {"kb": kb_bench()}
     else:
+        if not args.access_log:
+            sys.stderr.write(WARN_NO_LOG)
         payloads = build_payloads(guard_rows(), args.n, args.big)
         report = run_load(
             http_sender(args.url, os.environ["TEAM_TOKEN"]), payloads, args.concurrency

@@ -62,6 +62,14 @@ class InputActOut(_Out):
     act: Act
 
 
+class InputModeOut(_Out):
+    """S3.2 v2 후보 C2: 범주 앞에 판별 속성 하나. 범주는 nano가 고른다(mode는 기록만)."""
+
+    evidence: str  # 한 문장
+    mode: Literal["use", "mention", "none"]  # 문제 될 내용을 시키는가·다루는가·없는가
+    category: Category
+
+
 class OutputOut(_Out):
     """출력 근거 판정(ADR-0014 R14 수정). 인용은 호출하는 쪽이 quote_ok로 확인한다."""
 

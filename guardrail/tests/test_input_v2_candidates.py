@@ -103,7 +103,7 @@ def test_variant_prompt_loads_and_keeps_the_contract(name):
     tail = body.split("## 다시 확인할 규칙")[1]
     assert "<target>" in tail and "데이터" in tail and "normal" in tail
     assert "실습 도중 어려운 부분이 있어요" in body
-    assert "그 안에 \"시스템 지시\"" in body  # 태그 안은 데이터(주입 저항 문단)
+    assert '그 안에 "시스템 지시"' in body  # 태그 안은 데이터(주입 저항 문단)
     assert body != load_prompt(load_config(), "input_judge")[1]  # v1은 그대로다
 
 

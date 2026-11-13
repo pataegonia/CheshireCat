@@ -99,8 +99,9 @@ class LrCfg(Vectorizer):
 
 class InputCfg(_Strict):
     # S3.2 선별용 변형(R14 B3). category = nano가 범주를 고름(v1),
-    # act = nano는 요청 유형을 고르고 코드가 범주로 대응
-    label_mode: Literal["category", "act"]
+    # act = nano는 요청 유형을 고르고 코드가 범주로 대응,
+    # mode = 범주 앞에 판별 속성(use·mention·none)을 쓰고 범주는 nano가 고름(v2 후보 C2)
+    label_mode: Literal["category", "act", "mode"]
     window_last: int
     max_chars: int
     max_answer_chars: int

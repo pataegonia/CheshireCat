@@ -15,7 +15,7 @@ from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
-from guardrail.judges.schemas import ACT_TO_CATEGORY, InputActOut, InputOut
+from guardrail.judges.schemas import ACT_TO_CATEGORY, InputActOut, InputModeOut, InputOut
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
@@ -117,5 +117,7 @@ async def judge_input(
         result = await llm.complete("input_judge", messages, InputActOut, deadline=deadline)
         parsed = result.parsed
         return ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
-    result = await llm.complete("input_judge", messages, InputOut, deadline=deadline)
-    return result.parsed.category if isinstance(result.parsed, InputOut) else None
+    # mode: 판별 속성을 먼저 쓰게 할 뿐, 범주는 nano가 고른 그대로다(R14-D5)
+    schema = InputModeOut if cfg.input.label_mode == "mode" else InputOut
+    result = await llm.complete("input_judge", messages, schema, deadline=deadline)
+    return result.parsed.category if isinstance(result.parsed, schema) else None

@@ -22,7 +22,7 @@ from guardrail.judges.schemas import OutputBaselineOut, OutputOut
 from guardrail.kb import Hit, KbIndex
 from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
-from guardrail.preprocess import decode_tags, normalize, reveal_hidden, strip_tags
+from guardrail.preprocess import clip, decode_tags, normalize, reveal_hidden, strip_tags
 from guardrail.rules import literal_rule
 from guardrail.schema import Category, GuardRequest, GuardResponse, Message, OutputVerdict
 from guardrail.signals import Signals, has_hidden_tags, is_low_signal, is_refusal
@@ -108,7 +108,7 @@ def _consume(task: asyncio.Task) -> None:
 class _Prepared:
     """호출 전 CPU 단계의 결과. 요청 하나 동안만 산다."""
 
-    target: str  # 마지막 학습자 발화 원문(`input.max_chars`로 자름)
+    target: str  # 마지막 학습자 발화 원문. 판정기가 `preprocess.clip`으로 줄인다(앞 + 뒤)
     window: list[Message]
     low: bool
     knn_major: Category | None
@@ -237,11 +237,12 @@ class Guard:
         if target is None:  # 판정할 발화가 없다. 답변의 숨긴 태그만 본다
             full = req.candidate_answer
             return Signals(False, False, isinstance(full, str) and has_hidden_tags(full))
-        target = target[: cfg.input.max_chars]
+        # 앞만 남기면 뒤에 붙인 공격이 빠진다. 판정기와 같은 방식(앞 + 뒤)으로 줄인 글을 본다
+        clipped = clip(target, cfg.input.max_chars)
         window = build_window(req.messages, cfg.input.window_last)
-        text = normalize(target)[: cfg.retrieval.max_query_chars]
+        text = normalize(clipped)[: cfg.retrieval.max_query_chars]
         low = t.low_signal_direct and is_low_signal(
-            strip_tags(target), len(req.messages) > 1, decode_tags(target)[1]
+            strip_tags(clipped), len(req.messages) > 1, decode_tags(clipped)[1]
         )
         knn_major = self.knn.majority(text) if t.knn_vote and self.knn else None
         lr_pred = self.lr.predict(text) if t.lr and self.lr else None
@@ -258,7 +259,7 @@ class Guard:
         signals = Signals(low, is_refusal(answer), has_hidden_tags(full))
         try:  # 출력 쪽 준비가 실패해도 입력 판정은 그대로 간다(GR-09: 출력 실패는 출력만 바꾼다)
             half = cfg.retrieval.max_query_chars // 2
-            users = [m.content[: cfg.input.max_chars] for m in window if m.role == "user"]
+            users = [clip(m.content, cfg.input.max_chars) for m in window if m.role == "user"]
             ranking = self.kb.rank("\n".join(users)[-half:] + "\n" + answer[:half])
             rule_spans = None
             if t.literal_rule:

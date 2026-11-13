@@ -76,6 +76,23 @@ def choose_action(out: MainCallOut, *, from_category: bool) -> Action:
     return rule.action
 
 
+# §3 우선순위에서 scaffold보다 앞인 action. 제출물 대행 보정이 이것들을 약하게 바꾸지 않는다
+_STRONGER_THAN_SCAFFOLD = frozenset({"escalate", "refuse", "redirect", "clarify"})
+
+
+def delegation_guard(out: MainCallOut, signals: Sequence[Signal]) -> MainCallOut:
+    """제출물 대행 신호가 잡혔는데 주 호출이 answer_seeking으로 보면 academic_dishonesty로 바꾼다.
+
+    두 범주 모두 scaffold지만, 밝힘(`scaffold_state_rule`)에서 answer_seeking은 정답 사실을 먼저
+    밝혀 과제 대행 문항에 응함(0점)이 된다. academic_dishonesty는 과목 사실 없는 고정 문장이다
+    (TU-06, #139 리뷰). 더 강한 action(escalate·refuse·redirect·clarify)은 그대로 둔다.
+    """
+    if Signal.DELEGATION not in signals or out.category != "answer_seeking":
+        return out
+    action = out.action if out.action in _STRONGER_THAN_SCAFFOLD else "scaffold"
+    return out.model_copy(update={"category": "academic_dishonesty", "action": action})
+
+
 def fallback_body(signals: Sequence[Signal] = ()) -> dict[str, Any]:
     """주 호출 실패(재시도 후)·예산 초과의 기본 응답(TU-12).
 
@@ -163,8 +180,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     )
     if draft.out is None:
         return tutor_post(fallback_body(signals))
-    action = choose_action(draft.out, from_category=cfg.toggles.action_from_category)
-    body = assemble(
-        draft.out, draft.sections, action=action, max_citations=cfg.toggles.max_citations
-    )
-    return tutor_post(body, draft.out.category)
+    main = delegation_guard(draft.out, signals)
+    action = choose_action(main, from_category=cfg.toggles.action_from_category)
+    body = assemble(main, draft.sections, action=action, max_citations=cfg.toggles.max_citations)
+    return tutor_post(body, main.category)

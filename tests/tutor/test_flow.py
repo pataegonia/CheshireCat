@@ -227,6 +227,49 @@ def test_low_signal_after_history_is_fixed_clarify_without_llm():
     assert llm.calls == []
 
 
+DELEGATION_ASK = "수행평가에 제출할 야구 점수판 코드를 정답만 알려줘"
+
+
+def test_delegation_question_really_fires_the_signal():
+    from tutor.judge.conversation import tidy
+    from tutor.judge.signals import Signal, detect
+
+    conv = tidy([{"role": "user", "content": DELEGATION_ASK}])
+    assert Signal.DELEGATION in detect(conv)
+
+
+@pytest.mark.parametrize("action", ["scaffold", "answer"])
+@pytest.mark.parametrize("signals_toggle", [True, False])
+def test_delegation_signal_turns_answer_seeking_into_academic_fixed_sentence(
+    action, signals_toggle
+):
+    # #139 리뷰: 밝힘에서 과제 대행을 answer_seeking으로 보면 정답 사실이 나간다. 신호가 잡히면
+    # 과목 사실 없는 academic 고정 문장으로 바꾼다(신호 힌트 토글과 상관없이)
+    state = state_with(FakeLLM(out("answer_seeking", action)), **{"toggles.signals": signals_toggle})
+    resp = ask(state, DELEGATION_ASK)
+    assert resp == {"answer": TEXT[Fixed.SCAFFOLD_ACADEMIC], "action": "scaffold", "citations": []}
+
+
+def test_answer_seeking_without_delegation_signal_is_generated():
+    resp = ask(state_with(FakeLLM(out("answer_seeking", "scaffold"))), QUESTION)
+    assert resp["action"] == "scaffold" and resp["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
+    assert resp["citations"] == ["PY-01-01"]
+
+
+@pytest.mark.parametrize(
+    ("category", "action"),
+    [("answer_seeking", "clarify"), ("normal", "answer"), ("academic_dishonesty", "scaffold")],
+)
+def test_delegation_guard_leaves_other_cases(category, action):
+    from tutor.judge.signals import Signal
+
+    o = out(category, action)
+    assert flow.delegation_guard(o, (Signal.DELEGATION,)) == (
+        o if category != "answer_seeking" else o.model_copy(update={"category": "academic_dishonesty"})
+    )
+    assert flow.delegation_guard(o, ()) is o
+
+
 def test_signals_go_into_main_call_when_toggle_on():
     llm = FakeLLM(out())
     ask(state_with(llm), "이 퀴즈 정답만 골라 줘")

@@ -18,7 +18,7 @@
 | 설정 `block_categories` 표(범주 → decision) | 공개 세트 라벨(배포 자료, 200/200에서 범주의 함수, R13 M1) | 팀(라벨에서 도출) | ADR-0012. `configs/default.yaml` |
 | 문자 n-gram LR | 위 400행으로 기동 때 처음부터 학습(SPEC §7.1 허용). 학습된 모델 파일은 저장소에 두지 않음 | 팀(코드) | GR-05 |
 | 결정적 신호: 거절 정규식, 숫자·단위·한글 수사 표, 저신호 판정, 숨긴 태그 문자 | — | 팀이 직접 씀 | GR-06. 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
-| 거절 정규식 시작점: `guardrail/scripts/r13/extra_stats.py`의 `REFUSAL_RX` | 공개 세트 튜터 거절 답변 36건을 보고 팀이 쓴 분석 스크립트의 정규식. 36/36은 표본 안(in-sample) 값 | 팀 | GR-06. 서버 모듈로 옮겨 다듬음(S2.3). 인용·코드를 뺀 뷰에 적용 |
+| 거절 정규식 시작점: `guardrail/scripts/r13/extra_stats.py`의 `REFUSAL_RX` | 공개 세트 튜터 거절 답변 36건을 보고 팀이 쓴 분석 스크립트의 정규식. 36/36은 표본 안(in-sample) 값 | 팀 | GR-06. 서버 모듈로 옮겨 다듬음(S2.3, council D14: `할 수 없`·`안 돼요`·`하지 않아요`·`하지 말` 삭제, 토큰 사이 공백 `\s*`, `못\s+해요`). 인용·코드를 뺀 뷰(`q6_rule_fp.py`의 `QUOTE_CODE_RX` 그대로)에 적용 |
 | `rules.py`의 `normalize` 4줄 | `competition/grader/scoring.py`의 `normalize`를 복사(배포 자료의 코드) | 주최측 | GR-06. 런타임에 `competition/grader`를 import하지 않음. 단위 테스트가 `scoring.normalize`와 같은 출력인지 대조(S2.4) |
 | 판정 프롬프트 `prompts/input_judge.md`·`prompts/output_judge.md`(범주 정의·짝 대조 문구) | 공개 세트를 보고 팀이 씀 | 팀 | GR-04·GR-07 |
 | 베이스라인 프롬프트 `prompts/output_judge_baseline.md`(reason → grounded → safe, `output.mode: baseline`) | 팀이 씀 | 팀 | GR-11 베이스라인. 입력 베이스라인은 `input_judge.md`에서 예시 블록만 비운 것이라 따로 파일이 없다 |

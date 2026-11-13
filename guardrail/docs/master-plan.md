@@ -172,7 +172,7 @@ class Judgement:                 # guard.py(S1.1이 dataclass를 먼저 둠). �
 - `literal_rule`은 점수 차를 인자로 받는다: `literal_rule(answer_raw, hits, margin, kb, cfg)`. `hits`·`margin`은 같은 `Ranking`(`KbIndex.rank(query)` 한 번)의 `hits`·`margin`이고 `margin < cfg.output.rule_min_margin`(기본 3.5)이면 `None`이다.
 - `rules.py`는 런타임에 `competition/grader`를 import하지 않는다. `scoring.normalize` 4줄 함수와 그것이 쓰는 `PUNCT` 상수를 함께 복사해 두고, 단위 테스트가 `scoring.normalize`와 출력이 같은지 대조한다(provenance 기록).
 - 응답 직렬화는 `GuardResponse.to_json(block)`(block = 설정 `block_categories`) 하나다. `has_candidate`면 `output`을 반드시 넣는다(GR-01).
-- 뷰(GR-02): 정규화본 = `normalize()`(NFKC 안 씀, LLM·kNN·LR용). 신호별 뷰는 측정한 뷰 그대로다. 거절 정규식 = 후보 답변 원문에서 인용(“” "" ‘’ '' 「」 『』)·백틱·코드 블록을 뺀 것(튜터 거절 36/36, 순응 답변 오감지 0/19, R13-A §6.4) / 숫자·리터럴 = 원문 / 저신호 = 조합 전 텍스트(`strip_tags(원문)`: 태그 문자만 지운 원문). 붙인 뷰 = `joined(정규화본)`(한 음절짜리 한글 토큰이 공백 하나를 사이에 두고 2개 이상 이어진 구간의 공백만 지움, "광 고" → "광고")는 **구현하지 않는다**(필요하면 ablation으로 추가). 어떤 기본 신호도 읽지 않고 토글도 없다(거절 정규식에 걸면 "알려 줄 수 없어요"가 붙어 거절 33/36). NFKC는 `rules.py`의 숫자·리터럴 비교(양쪽 `scoring.normalize`)와 BM25 토큰에서만 쓴다.
+- 뷰(GR-02): 정규화본 = `normalize()`(NFKC 안 씀, LLM·kNN·LR용). 신호별 뷰는 측정한 뷰 그대로다. 거절 정규식 = 후보 답변 원문에서 인용(“” "" ‘’ '' 「」 『』)·백틱·코드 블록을 뺀 것(튜터 거절 36/36, 순응 답변 오감지 0/19, R13-A §6.4. S2.3에서 다듬음(council D14): 거절에 단독으로 걸리지 않던 4갈래 삭제, 토큰 사이 공백 `\s*`. 다듬은 뒤에도 36/36·0/19, 거절이 아닌 튜터 답변 오탐 11 → 4, 두 칸·NBSP·줄바꿈·붙여쓰기 변형 36/36) / 숫자·리터럴 = 원문 / 저신호 = 조합 전 텍스트(`strip_tags(원문)`: 태그 문자만 지운 원문). 붙인 뷰 = `joined(정규화본)`(한 음절짜리 한글 토큰이 공백 하나를 사이에 두고 2개 이상 이어진 구간의 공백만 지움, "광 고" → "광고")는 **구현하지 않는다**(필요하면 ablation으로 추가). 어떤 기본 신호도 읽지 않고 토글도 없다(다듬기 전 거절 정규식에 걸면 "알려 줄 수 없어요"가 붙어 거절 33/36이었다. `\s*`로 다듬은 뒤로는 붙여쓰기도 잡는다). NFKC는 `rules.py`의 숫자·리터럴 비교(양쪽 `scoring.normalize`)와 BM25 토큰에서만 쓴다.
 
 ### 4.2 판정 흐름 (`guard.py`)
 

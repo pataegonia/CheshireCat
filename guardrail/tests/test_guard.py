@@ -1,26 +1,442 @@
-"""S1.2 ConstantGuard: 상수 판정 (C1 §S1.2, master-plan §4.1)."""
+"""판정기: S1.2 ConstantGuard와 S2.8 Guard (master-plan §4.1·§4.2, PRD GR-07·GR-08·GR-09)."""
+
+import functools
+import itertools
+import json
+import time
+from pathlib import Path
 
 import anyio
+import jsonschema
+import pytest
+from fakes import Boom, FakeLLM, Hang, Malformed, Ok, RateLimited, ServerError, Timeout
 
-from guardrail.guard import ConstantGuard, Judgement
+from guardrail import guard as guard_module
+from guardrail.config import load_config
+from guardrail.data import labeled_rows, load_public
+from guardrail.eval.run import probe_calls
+from guardrail.guard import ConstantGuard, Guard, Judgement, build_indexes
+from guardrail.llm import LLM
 from guardrail.schema import GuardRequest, GuardResponse, Message, OutputVerdict
 from guardrail.signals import Signals
 
+pytestmark = pytest.mark.anyio
 
-def _judge(req: GuardRequest) -> Judgement:
+ROOT = Path(__file__).parents[1]
+DEFAULT = str(ROOT / "configs/default.yaml")
+BASELINE = str(ROOT / "configs/baseline.yaml")
+CONTRACT = json.loads((ROOT / "docs" / "contract" / "guard.schema.json").read_text("utf-8"))
+RESPONSE_SCHEMA = {**CONTRACT, "$ref": "#/$defs/response"}
+PING = [{"role": "user", "content": "ping"}]
+MARK = "MARKER-7f3a9c"
+
+MSGS = (Message("user", "리스트에 값을 더하려면 어떻게 해요?"),)
+ANSWER = "append를 쓰면 리스트 끝에 값이 붙어요."
+QUOTE = "리스트 끝에 값이 붙어요"  # ANSWER의 부분 문자열, 정규화 뒤 8자 이상
+REFUSAL = "그건 도와줄 수 없어요. 대신 개념을 함께 살펴봐요."
+TAG = chr(0xE0041)  # 이모지 밖 태그 문자
+GROUNDED = {"answer_quote": "", "kb_quote": "", "grounded": True, "refuses": False}
+UNGROUNDED = {"answer_quote": QUOTE, "kb_quote": "", "grounded": False, "refuses": True}
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
+def no_rule(monkeypatch):
+    """규칙 ②가 안 걸린 것으로 둔다(규칙 자체는 test_rules가 본다)."""
+    monkeypatch.setattr(guard_module, "literal_rule", lambda *a, **k: None)
+
+
+# --- S1.2 ConstantGuard ---
+
+
+def _constant(req: GuardRequest) -> Judgement:
     return anyio.run(ConstantGuard().judge, req)
 
 
 def test_constant_without_candidate():
-    j = _judge(GuardRequest((Message("user", "q"),), None, False))
+    j = _constant(GuardRequest((Message("user", "q"),), None, False))
     assert j.response == GuardResponse("normal", None)
     assert j.input_source == "default" and j.calls == 0 and j.errors == ()
     assert j.signals == Signals(False, False, False)
     assert (j.output_tier, j.nano_grounded, j.knn_major, j.lr_pred) == (None,) * 4
+    assert (j.answer_quote_ok, j.kb_quote_ok, j.nano_refuses) == (None,) * 3
     assert dict(j.latency_ms) == {}
 
 
 def test_constant_with_candidate_even_if_unreadable():
     for answer in ("", "답", None):
-        j = _judge(GuardRequest((), answer, True))
+        j = _constant(GuardRequest((), answer, True))
         assert j.response.output == OutputVerdict(True, (), True)
+
+
+# --- S2.8 Guard: 도구 ---
+
+
+async def _nosleep(seconds: float) -> None:
+    return None
+
+
+@functools.cache
+def _public():
+    return load_public(load_config(DEFAULT).paths.public)
+
+
+@functools.cache
+def _indexes():
+    return build_indexes(load_config(DEFAULT), labeled_rows(_public()))
+
+
+def _role(kw) -> str:
+    return "input" if kw["response_format"]["json_schema"]["name"].startswith("Input") else "output"
+
+
+def responder(category="normal", output=GROUNDED, input_step=None, output_step=None):
+    def respond(kw):
+        if kw["messages"] == PING:
+            return Ok()
+        if _role(kw) == "input":
+            return input_step or Ok(json.dumps({"evidence": "e", "category": category}))
+        return output_step or Ok(json.dumps(output, ensure_ascii=False))
+
+    return respond
+
+
+async def make(respond=None, config=DEFAULT, indexes=None, **overrides):
+    """(Guard, FakeLLM). overrides 키는 점 대신 `__`를 쓴다(toggles__nano_tier3=False)."""
+    cfg = load_config(config, overrides={k.replace("__", "."): v for k, v in overrides.items()})
+    fake = FakeLLM(respond=respond or responder())
+    llm = LLM(cfg.llm, send=fake.send, sleep=_nosleep)
+    await llm.start()
+    return Guard(cfg, llm, *(indexes or _indexes())), fake
+
+
+def calls(fake, role):
+    return [r for r in fake.requests if r["messages"] != PING and _role(r) == role]
+
+
+def req(answer=ANSWER, messages=MSGS, has=True):
+    return GuardRequest(messages, answer, has)
+
+
+# --- 흐름 ---
+
+
+async def test_normal_request_makes_two_calls_and_records_the_run(no_rule):
+    guard, fake = await make(responder("answer_seeking"))
+    j = await guard.judge(req())
+    assert j.response == GuardResponse("answer_seeking", OutputVerdict(True, (), True))
+    assert (j.input_source, j.output_tier, j.nano_grounded) == ("nano", 4, True)
+    assert (j.calls, j.errors) == (2, ())
+    assert (j.answer_quote_ok, j.kb_quote_ok, j.nano_refuses) == (False, False, False)
+    assert j.knn_major is not None and j.lr_pred is not None
+    assert len(calls(fake, "input")) == len(calls(fake, "output")) == 1
+    assert {"prepare", "llm", "total"} <= set(j.latency_ms)
+
+
+async def test_no_candidate_makes_no_output_call(no_rule):
+    guard, fake = await make()
+    j = await guard.judge(req(None, has=False))
+    assert j.response.output is None and j.output_tier is None and j.calls == 1
+    assert not calls(fake, "output")
+
+
+async def test_empty_candidate_is_grounded_and_safe_without_output_call(no_rule):
+    guard, fake = await make(responder("harmful_content"))  # block 범주여도 응한 내용이 없다
+    j = await guard.judge(req(""))
+    assert j.response.output == OutputVerdict(True, (), True)
+    assert not calls(fake, "output")
+
+
+async def test_low_signal_target_skips_input_call(no_rule):
+    msgs = (Message("user", "안녕"), Message("assistant", "네"), Message("user", "ㅋㅋㅋ"))
+    guard, fake = await make()
+    j = await guard.judge(req(None, msgs, has=False))
+    assert (j.response.category, j.input_source, j.signals.low_signal) == (
+        "low_signal_input",
+        "low_signal",
+        True,
+    )
+    assert not calls(fake, "input") and j.calls == 0
+
+
+# --- GR-07 ①–④ ---
+
+
+async def test_tier1_block_category_is_grounded_and_unsafe(no_rule):
+    guard, _ = await make(responder("harmful_content", UNGROUNDED))
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(True, (), False) and j.output_tier == 1
+    assert j.nano_grounded is False  # 원값은 남긴다
+
+
+async def test_block_category_with_refusal_answer_is_safe(no_rule):
+    guard, _ = await make(responder("harmful_content"))
+    j = await guard.judge(req(REFUSAL))
+    assert j.response.output == OutputVerdict(True, (), True) and j.signals.refusal
+
+
+async def test_tier2_rule_spans_win_over_nano(monkeypatch):
+    monkeypatch.setattr(guard_module, "literal_rule", lambda *a, **k: ("append를",))
+    guard, _ = await make(responder(output=UNGROUNDED), toggles__nano_span=True)
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(False, ("append를",), True) and j.output_tier == 2
+
+
+async def test_tier3_verified_quote_is_ungrounded_without_span(no_rule):
+    guard, _ = await make(responder(output=UNGROUNDED))
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(False, (), True) and j.output_tier == 3
+    assert (j.nano_grounded, j.answer_quote_ok, j.kb_quote_ok, j.nano_refuses) == (
+        False,
+        True,
+        False,
+        True,
+    )
+
+
+async def test_tier3_emits_the_quote_when_nano_span_is_on(no_rule):
+    guard, _ = await make(responder(output=UNGROUNDED), toggles__nano_span=True)
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(False, (QUOTE,), True)
+
+
+async def test_quote_that_differs_from_the_answer_only_by_spacing_is_not_emitted(no_rule):
+    spaced = {**UNGROUNDED, "answer_quote": "리스트  끝에 값이 붙어요"}  # 정규화 뒤에만 같다
+    guard, _ = await make(responder(output=spaced), toggles__nano_span=True)
+    j = await guard.judge(req())
+    assert j.answer_quote_ok and j.response.output == OutputVerdict(False, (), True)
+
+
+async def test_unverified_quote_falls_to_tier4_default(no_rule):
+    made_up = {**UNGROUNDED, "answer_quote": "답변에 없는 구절을 지어냈어요"}
+    guard, _ = await make(responder(output=made_up))
+    j = await guard.judge(req())
+    assert (j.answer_quote_ok, j.output_tier) == (False, 4)
+    assert j.response.output == OutputVerdict(True, (), True)
+    guard, _ = await make(responder(output=made_up), output__tier3_trust="all")
+    assert (await guard.judge(req())).output_tier == 3
+
+
+@pytest.mark.parametrize(("default", "grounded"), [("grounded", True), ("ungrounded", False)])
+async def test_output_failure_uses_failure_default(no_rule, default, grounded):
+    guard, fake = await make(responder(output_step=Malformed()), output__failure_default=default)
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(grounded, (), True) and j.output_tier == 4
+    assert (j.nano_grounded, j.errors) == (None, ("output_judge",))
+    assert len(calls(fake, "output")) == 2  # 재시도 1회
+
+
+@pytest.mark.parametrize(("default", "grounded"), [("grounded", True), ("ungrounded", False)])
+async def test_tier3_off_uses_failure_default_but_still_records_nano(no_rule, default, grounded):
+    guard, fake = await make(
+        responder(output=UNGROUNDED), toggles__nano_tier3=False, output__failure_default=default
+    )
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(grounded, (), True)
+    assert j.nano_grounded is False and len(calls(fake, "output")) == 1
+
+
+async def test_tier3_off_can_skip_the_output_call(no_rule):
+    guard, fake = await make(toggles__nano_tier3=False, output__call_nano_when_unused=False)
+    j = await guard.judge(req())
+    assert j.nano_grounded is None and not calls(fake, "output") and j.errors == ()
+
+
+async def test_baseline_mode_uses_nano_grounded_and_safe():
+    out = {"reason": "r", "grounded": False, "safe": False}
+    guard, _ = await make(responder(output=out), config=BASELINE)
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(False, (), False) and j.output_tier is None
+    guard, _ = await make(responder(output_step=Malformed()), config=BASELINE)
+    assert (await guard.judge(req())).response.output == OutputVerdict(True, (), True)
+
+
+# --- GR-08 safe ---
+
+
+async def test_hidden_tag_at_the_end_of_a_long_answer_is_unsafe(no_rule):
+    guard, _ = await make()
+    j = await guard.judge(req("가" * 3000 + TAG))
+    assert j.response.output.safe is False and j.signals.hidden_tags
+
+
+async def test_hidden_tag_past_the_answer_cap_is_still_seen(no_rule):
+    guard, _ = await make()
+    cap = guard.cfg.input.max_answer_chars
+    j = await guard.judge(req("가" * (cap + 100) + TAG))
+    assert j.response.output.safe is False
+
+
+# --- GR-09 기본값 ---
+
+
+async def test_input_failure_falls_back_to_knn_and_lr(no_rule):
+    guard, _ = await make(responder(input_step=ServerError()))
+    j = await guard.judge(req())
+    want = j.lr_pred  # 같으면 그 범주, 다르면 LR
+    assert (j.response.category, j.input_source, j.errors) == (want, "fallback", ("input_judge",))
+
+
+async def test_input_failure_with_one_helper_off_uses_the_other(no_rule):
+    guard, _ = await make(responder(input_step=Timeout()), toggles__lr=False)
+    j = await guard.judge(req())
+    assert j.lr_pred is None and j.response.category == j.knn_major
+    guard, _ = await make(
+        responder(input_step=Timeout()), toggles__lr=False, toggles__knn_vote=False
+    )
+    j = await guard.judge(req())
+    assert (j.response.category, j.input_source) == ("normal", "default")
+
+
+async def test_non_string_candidate_gets_failure_default_and_input_is_judged(no_rule):
+    guard, fake = await make(responder("answer_seeking"), output__failure_default="ungrounded")
+    j = await guard.judge(req(None, has=True))
+    assert j.response == GuardResponse("answer_seeking", OutputVerdict(False, (), True))
+    assert not calls(fake, "output")
+
+
+async def test_no_user_message_is_normal_with_default_output(no_rule):
+    guard, fake = await make()
+    for messages in ((), (Message("assistant", "안녕"),)):
+        j = await guard.judge(req(ANSWER, messages))
+        assert j.response == GuardResponse("normal", OutputVerdict(True, (), True))
+        assert (j.input_source, j.calls) == ("default", 0)
+    assert len(fake.requests) == probe_calls(guard.cfg.llm)
+
+
+async def test_deadline_cuts_hanging_calls_and_answers_with_defaults(no_rule):
+    guard, _ = await make(responder(input_step=Hang(), output_step=Hang()), budget_s=0.3)
+    t0 = time.monotonic()
+    j = await guard.judge(req())
+    assert time.monotonic() - t0 < 0.3 + 1
+    assert j.response.output == OutputVerdict(True, (), True)
+    assert set(j.errors) == {"input_judge", "output_judge"}
+
+
+async def test_unexpected_exception_becomes_a_default_response(no_rule, monkeypatch):
+    guard, _ = await make()
+
+    def boom(self, request):
+        raise RuntimeError(MARK)
+
+    monkeypatch.setattr(Guard, "_prepare", boom)
+    j = await guard.judge(req())
+    assert j.response == GuardResponse("normal", OutputVerdict(True, (), True))
+    assert j.errors == ("guard:RuntimeError",) and MARK not in repr(j)
+
+
+async def test_exception_inside_a_call_is_a_failure_of_that_role(no_rule, monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError(MARK)
+
+    monkeypatch.setattr(guard_module, "judge_input", boom)
+    guard, _ = await make(responder(output=UNGROUNDED))
+    j = await guard.judge(req())
+    assert j.errors == ("input_judge:RuntimeError",) and j.input_source == "fallback"
+    assert j.output_tier in (1, 3) and MARK not in repr(j)  # 출력 쪽 결과는 살린다
+
+
+async def test_fault_injection_over_public_rows_always_answers_in_spec():
+    faults = itertools.cycle([Timeout(), ServerError(), RateLimited(), Malformed(), Boom()])
+
+    def respond(kw):
+        return Ok() if kw["messages"] == PING else next(faults)
+
+    guard, _ = await make(respond)
+    block = frozenset(guard.cfg.block_categories)
+    rows = _public()
+    for row in rows:
+        has = row.candidate_answer is not None
+        t0 = time.monotonic()
+        j = await guard.judge(GuardRequest(row.messages, row.candidate_answer, has))
+        assert time.monotonic() - t0 < guard.cfg.budget_s + 1
+        body = j.response.to_json(block)
+        jsonschema.validate(body, RESPONSE_SCHEMA)
+        assert ("output" in body) == has
+        assert j.calls == 0 or j.errors
+    assert len(rows) == 400
+
+
+# --- 길이 상한 ---
+
+
+class Spy:
+    """부른 인자를 기록하고 원래 객체로 넘긴다."""
+
+    def __init__(self, target, *names):
+        self._target, self.seen = target, []
+        for name in names:
+            setattr(self, name, self._wrap(name))
+
+    def _wrap(self, name):
+        def call(*args, **kwargs):
+            self.seen.append(args[0])
+            return getattr(self._target, name)(*args, **kwargs)
+
+        return call
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+
+def _between(text: str, tag: str) -> str:
+    return text.split(f"<{tag}>", 1)[1].rsplit(f"</{tag}>", 1)[0]
+
+
+async def test_huge_request_is_cut_before_every_stage(monkeypatch):
+    kb, knn, lr = _indexes()
+    kb_spy, knn_spy, lr_spy = Spy(kb, "rank"), Spy(knn, "majority", "fewshot"), Spy(lr, "predict")
+    rule_answers = []
+    monkeypatch.setattr(
+        guard_module, "literal_rule", lambda answer, *a, **k: rule_answers.append(answer)
+    )
+    guard, fake = await make(indexes=(kb_spy, knn_spy, lr_spy))
+    cfg = guard.cfg
+    history = tuple(Message("user" if i % 2 == 0 else "assistant", "가" * 1700) for i in range(600))
+    last = Message("user", "나" * 1_000_000)
+    answer = "다" * (cfg.input.max_answer_chars - 10) + "append_x" + "라" * 5000
+
+    t0 = time.monotonic()
+    j = await guard.judge(req(answer, (*history, last)))
+    assert time.monotonic() - t0 < cfg.budget_s and j.errors == ()
+
+    half = cfg.retrieval.max_query_chars // 2
+    (query,) = kb_spy.seen
+    learner, _, from_answer = query.rpartition("\n")
+    assert len(learner) <= half and from_answer == answer[:half]
+    assert all(len(t) <= cfg.retrieval.max_query_chars for t in knn_spy.seen + lr_spy.seen)
+    assert knn_spy.seen and lr_spy.seen
+    # 규칙 ②는 상한 안의 끝부분 리터럴까지 본다(더 일찍 자르지 않는다)
+    assert rule_answers == [answer[: cfg.input.max_answer_chars]]
+    assert rule_answers[0].endswith("append_x")
+    (out_call,) = calls(fake, "output")
+    assert len(_between(out_call["messages"][1]["content"], "answer")) <= cfg.input.max_answer_chars
+    (in_call,) = calls(fake, "input")
+    assert len(_between(in_call["messages"][1]["content"], "target")) <= cfg.input.max_chars
+
+
+# --- Guard.build ---
+
+
+async def test_build_with_injected_llm_does_not_probe_again():
+    cfg = load_config(DEFAULT)
+    fake = FakeLLM(respond=responder())
+    llm = LLM(cfg.llm, send=fake.send)
+    await llm.start()
+    before = len(fake.requests)
+    guard = await Guard.build(cfg, llm=llm, rows=labeled_rows(_public()))
+    assert len(fake.requests) == before == probe_calls(cfg.llm)
+    assert (await guard.judge(req())).calls == 2
+
+
+async def test_build_without_llm_creates_one_and_probes_once(monkeypatch):
+    cfg = load_config(DEFAULT)
+    fake = FakeLLM(respond=responder())
+    monkeypatch.setattr(guard_module, "LLM", lambda c: LLM(c, send=fake.send))
+    guard = await Guard.build(cfg)  # rows=None → 공개 400행
+    assert len(fake.requests) == probe_calls(cfg.llm)
+    assert (await guard.judge(req(None, has=False))).response.category == "normal"

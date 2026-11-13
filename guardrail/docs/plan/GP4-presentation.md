@@ -507,7 +507,7 @@ uv run python -m guardrail.eval.figures --sources results/figures/sources.yaml -
 - [ ] `report-guard.md`: santa 2명 PASS, GR-16 문장 또는 확장 평가 표, 금지 주장 0건.
 - [ ] `ops-spec.md` 1쪽, 실측값 포함.
 - [ ] 넘긴 자료(데모 명령·녹화본, `results/figures/`, `ops-spec.md`, `report-guard.md`)의 경로를 리더에게 정보로 공유했다.
-- [ ] `runs/`, 키, NC 라이선스 원문, 공격·위기 원문의 커밋 0건(`data/dev/demo_items.jsonl` 포함). `results/demo-replay.jsonl`은 원문 확인 기록이 있다. 발표 장비의 `demo_items.jsonl`을 지웠다. CI(`guardrail / secret scan`) green.
+- [ ] `runs/`, 키, NC 라이선스 원문, 공격·위기 원문의 커밋 0건(`data/dev/demo_items.jsonl` 포함). `results/demo-replay.jsonl`은 원문 확인 기록이 있다. 발표 장비의 `demo_items.jsonl`을 지웠다. CI(`integration / gate`의 저장소 전체 비밀 키 검사) green.
 - [ ] ADR-0006 Status를 accepted로 바꾸고, S4.5를 했으면 Consequences에 한 줄 더한다.
 - [ ] 계약 대조 15분([master-plan §10](https://github.com/pataegonia/CheshireCat/blob/429e9fb/guardrail/docs/master-plan.md#10-개발-규칙)): §4 계약과 실제 코드(서명·설정 키·종료 코드·trace 필드)를 맞춰 봤고, 다르면 master-plan을 먼저 고쳤다. GP4에서 바뀐 코드(`demo.py`·`figures.py`, S4.5를 했으면 `run.py --system nemo`)도 본다.
 - [ ] 이 문서의 체크박스와 에픽 체크리스트를 닫는다.

@@ -64,6 +64,7 @@ Content-Type: application/json
 | `guardrail.schema` | `Category`, `OutputVerdict` | `integration/contracts.py`, `integration/actions.py`, `tutor/judge/guard_merge.py`(#138) |
 | `guardrail.config` | `load_config`, `resolve_path`, `DEFAULT_CONFIG`, `GuardConfig`(타입), 설정의 `paths.public`·`paths.kb`·`block_categories`·`retrieval.max_query_chars`·`budget_s`·`llm.gate`·`llm.timeout_s.read`·`llm.structured_output`·`llm.reasoning_effort`·`llm.verbosity`·`llm.max_completion_tokens` | `tutor/retrieval/search.py`, `tutor/runtime/llm.py`, `tutor/eval/mock_load.py`, `tutor/judge/examples.py`(#141) |
 | `guardrail.preprocess` | `normalize`, `skeleton` | `tutor/judge/conversation.py`, `tutor/judge/signals.py`, `tutor/answer/postprocess.py`, `tutor/judge/examples.py`(#141) |
+| `guardrail.signals` | `is_low_signal(target_pre, has_history, hidden)`. 위치 인자 셋, `hidden`은 str(없으면 `""`), 반환 bool. 1턴이거나 숨긴 텍스트가 있으면 거짓 | `tutor/judge/signals.py`(#156) |
 | `guardrail.llm` | `ErrorCode`, `LLM`의 `slot()`·`params`·`structured`(`app.state.guard.llm`으로 접근) | `tutor/runtime/llm.py` |
 | `guardrail.judges.schemas` | `strict_schema` | `tutor/runtime/llm.py` |
 | `guardrail.data` | `PublicRow`, `LabeledRow`, `load_public` | `tutor/judge/examples.py`(#141) |
@@ -73,6 +74,7 @@ Content-Type: application/json
 
 - 공격 범주 목록은 따로 상수로 내보내지 않는다. 설정 `block_categories`를 `load_config()`로 읽는다(#141과 같은 방식).
 - `normalize`의 출력이 바뀌면(예: #140 자모 조합) 튜터 판단 예시의 발화와 kNN 순위도 바뀐다. 그런 PR은 본문에 적는다.
+- `is_low_signal`의 문자 기준이 바뀌면 튜터의 저신호 직접 clarify(TU-05)도 함께 바뀐다(#156). 그런 PR은 본문에 적는다. 튜터 쪽 구체 사례는 `integration / gate`에서 걸린다.
 
 ## 3. 요청(리더 결정)과 결정 전 기본값
 

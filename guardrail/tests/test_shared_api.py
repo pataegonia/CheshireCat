@@ -24,6 +24,7 @@ from guardrail.llm import LLM, ErrorCode
 from guardrail.preprocess import normalize, skeleton
 from guardrail.schema import Category, OutputVerdict
 from guardrail.server import create_app
+from guardrail.signals import is_low_signal
 
 ATTACKS = {"jailbreak_injection", "harmful_content", "academic_dishonesty", "off_topic"}
 
@@ -199,6 +200,19 @@ def test_normalize_and_skeleton_take_str_return_str():
     출력 내용은 고정하지 않는다(test_preprocess.py가 본다. 바뀌면 PR 본문에 적는다)."""
     assert isinstance(normalize("ＡＢＣ 시ㅣ발"), str)
     assert isinstance(skeleton("시 스 템 프롬프트 1"), str)
+
+
+def test_is_low_signal_takes_three_positional_args_returns_bool():
+    """tutor/judge/signals.py(#156): is_low_signal(target_raw, has_history, target_hidden)을
+    위치 인자로 부른다. hidden은 str(없으면 ""). 1턴(has_history=False)은 거짓이라 튜터가 1턴
+    자모 입력을 주 호출로 보낸다. 숨긴 텍스트가 있어도 거짓이다.
+    스펙 예시 "ㅋㅋ" 밖의 문자 기준은 고정하지 않는다(test_signals.py가 본다)."""
+    p = inspect.signature(is_low_signal).parameters
+    positional = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    assert len(p) == 3 and all(v.kind in positional for v in p.values())
+    assert is_low_signal("ㅋㅋ", True, "") is True  # 스펙 예시(앞 대화 + 자모뿐)
+    assert is_low_signal("ㅋㅋ", False, "") is False
+    assert is_low_signal("ㅋㅋ", True, "hidden") is False
 
 
 def test_strict_schema_returns_closed_object_schema():

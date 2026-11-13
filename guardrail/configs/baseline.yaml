@@ -30,7 +30,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   embedding: false                 # GR-03·GR-05 임베딩, P2
 input:
   window_last: 6
-  max_chars: 2000                  # 메시지 하나의 길이 상한(보이지 않는 문자만 지운 뒤 앞 + 뒤를 남김, 무거운 정규화는 그 뒤. 판정 대상 <target>에도 적용, 긴 이력 대비)
+  max_chars: 2000                  # 메시지 하나의 길이 상한(보이지 않는 문자만 지우고 넘으면 공백·반복을 줄인 뒤 앞 + 뒤, 무거운 정규화는 그 뒤. 판정 대상 <target>에도 적용, 긴 이력 대비)
   max_answer_chars: 8000           # 후보 답변의 원문 길이 상한(전처리 전에 자름. SPEC §4 답변 최대 4000자). 출력 nano·규칙 ②·거절 정규식이 자른 답변을 본다. has_hidden_tags는 자르기 전 전체
   knn: {analyzer: char_wb, ngram: [1, 3], max_examples: 8, per_category: 2}
   knn_vote_k: 7                    # kNN 다수결 이웃 수(실패 기본값·3번째 호출)

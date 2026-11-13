@@ -34,7 +34,7 @@ from guardrail.guard import ConstantGuard, Judgement
 from guardrail.judges.input_judge import judge_input
 from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
-from guardrail.preprocess import decode_tags, normalize, strip_tags
+from guardrail.preprocess import clip, decode_tags, normalize, strip_tags
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict
 from guardrail.signals import Signals, is_low_signal
 
@@ -70,7 +70,16 @@ class InputOnlyGuard:
     쓰지 않고 normal로 두고 오류로 센다(재려는 것이 프롬프트라서다).
     """
 
+    UNSUPPORTED = ("third_call", "oom_kb_snippet", "embedding")  # 구현하지 않은 스위치
+
+    @classmethod
+    def check(cls, cfg: GuardConfig) -> None:
+        """구현하지 않은 스위치가 켜져 있으면 거부한다(조용히 무시하면 다른 것을 잰다)."""
+        if on := [f"toggles.{k}" for k in cls.UNSUPPORTED if getattr(cfg.toggles, k)]:
+            raise ValueError(f"--input-only는 {', '.join(on)}을 지원하지 않는다")
+
     def __init__(self, cfg: GuardConfig, llm: LLM, train: Sequence[LabeledRow]) -> None:
+        self.check(cfg)
         self.cfg, self.llm = cfg, llm
         self.knn = KnnIndex(train, cfg)
         self.lr = LrClassifier(train, cfg)
@@ -80,7 +89,7 @@ class InputOnlyGuard:
         raw = next((m.content for m in reversed(req.messages) if m.role == "user"), None)
         if raw is None:
             return self._result(req, "normal", "default")
-        raw = raw[: cfg.input.max_chars]  # 원문 길이 상한을 전처리 전에 건다(master-plan §4.2)
+        raw = clip(raw, cfg.input.max_chars)  # 서버처럼 전처리 전에 앞 + 뒤로 자른다(§4.2)
         text = normalize(raw)[: cfg.retrieval.max_query_chars]
         side = {
             "knn_major": self.knn.majority(text) if cfg.toggles.knn_vote else None,
@@ -685,6 +694,8 @@ def _usage_error(args: argparse.Namespace) -> str | None:
         )
     if args.holdout and (args.ablation or args.repeat > 1):
         return "--holdout은 단일 설정·--repeat 1에서만 쓴다(설정 비교에 홀드아웃을 쓰지 않는다)"
+    if args.holdout and args.input_only:
+        return "--input-only와 --holdout은 함께 쓰지 않는다(홀드아웃 열람은 전체 판정기에만 쓴다)"
     if not re.fullmatch(r"[\w.-]+", args.name) or args.name in {".", ".."}:
         return "--name은 영문·숫자·_.-만 쓴다"
     return None
@@ -694,6 +705,9 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     overrides = parse_sets(args.sets)
     base = load_config(args.config, overrides)
     configs = select_rows(base, args, overrides)
+    if args.input_only:  # 못 쓰는 스위치는 호출 전에 거부한다
+        for cfg in configs.values():
+            InputOnlyGuard.check(cfg)
     public = load_public(base.paths.public)
     split = cv.load_splits()
     if missing := {r.id for r in public} - split.cluster.keys():

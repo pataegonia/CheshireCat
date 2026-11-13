@@ -63,8 +63,12 @@ class InputActOut(_Out):
 
 
 class OutputOut(_Out):
-    reason: str  # 한 문장
+    """출력 근거 판정(ADR-0014 R14 수정). 인용은 호출하는 쪽이 quote_ok로 확인한다."""
+
+    answer_quote: str  # 답변에서 틀렸거나 근거 없는 구절 그대로(근거 있음이면 빈 문자열)
+    kb_quote: str  # 그 구절과 어긋나는 자료 구절 그대로(없으면 빈 문자열)
     grounded: bool
+    refuses: bool  # 답변이 요청을 거절하는가. 기록만 하고 safe에 쓰지 않는다(R14-D3)
 
 
 class OutputBaselineOut(_Out):

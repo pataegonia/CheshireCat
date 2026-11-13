@@ -194,7 +194,7 @@ def test_paths_from_file_when_env_unset():
     [
         {"third_call": True, "knn_vote": False},
         {"third_call": True, "lr": False},
-        {"nano_span": True, "literal_rule": False},
+        {"nano_span": True, "nano_tier3": False},  # 구간을 내는 자리가 ③이다(S2.8)
     ],
 )
 def test_forbidden_toggle_combinations(toggles):
@@ -208,6 +208,9 @@ def test_allowed_toggle_combinations():
         overrides={"toggles.third_call": True, "toggles.nano_span": True},
     )
     assert cfg.toggles.third_call and cfg.toggles.nano_span
+    # nano 구간은 규칙 ②와 무관하다(확인된 answer_quote를 ③에서 낸다)
+    cfg = load_config(DEFAULT, overrides={"toggles.nano_span": True, "toggles.literal_rule": False})
+    assert cfg.toggles.nano_span and not cfg.toggles.literal_rule
 
 
 # --- ablation ---

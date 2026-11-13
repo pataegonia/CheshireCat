@@ -1,13 +1,18 @@
 """S3.2 P0: 입력 오판 행의 원인을 저장된 실행으로 가른다(API 0회).
 
-실행(guardrail/): `uv run python -X utf8 scripts/r14/input_v2_causes.py <runs 폴더> [--evidence]`
+실행(guardrail/): `uv run python -X utf8 scripts/r14/input_v2_causes.py <runs 폴더>
+[--evidence] [--evidence-stats] [--per-run]`
 행마다 변형별 오판 횟수와, 그때 nano가 본 few-shot 예시(교차 검증 폴드로 재현)를 함께 낸다.
 `--evidence`는 nano의 근거 문장도 찍는다(문항 내용이 드러나므로 문서에 옮기지 않는다).
+`--evidence-stats`는 근거 문장의 유형별 집계(v1·nofs, 저장된 nano 파싱 출력이 있는 실행만)를,
+`--per-run`은 v1·nofs 실행별 지표(저신호 직접 판정 포함 전체 행)와 그 최소–최대를 낸다.
 """
 
 import json
+import re
 import sys
 from collections import Counter, defaultdict
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from guardrail import knn
@@ -191,3 +196,99 @@ for g, rs in runs.items():
         line.append(f"{name} {sum(vals) / len(vals):.1f}")
     answered = [sum(i in run for i in ids) for run in rs]
     out(f"  {g}({len(rs)}회, 답한 행 {min(answered)}–{max(answered)}): " + ", ".join(line))
+
+if "--evidence-stats" in sys.argv:
+    out()
+    out("== 근거 문장 집계(가드, 저장된 nano 파싱 출력이 있는 실행만)")
+    other = re.compile("타인|다른 |친구|선생|남의|애들|교사|학생의")  # 타인 지칭
+    ment = re.compile("검토|분석|비교|묻|방법|예시|가상의 예|설명")  # 언급형 동사
+    apply_ = re.compile("우회|무시하라|무시하도록|적용")  # 적용형 낱말
+    st: dict[str, dict[str, int]] = {}
+    used = Counter()
+    for g in ("v1", "nofs"):
+        for run in runs[g]:
+            got = False
+            for i, rec in run.items():
+                if i not in by or by[i].endpoint != "guard":
+                    continue
+                # 입력 판정 출력 중 근거·범주가 모두 있는 첫 항목
+                ps = [
+                    e["parsed"]
+                    for e in rec.get("llm") or []
+                    if e.get("parsed") and "category" in e["parsed"] and "evidence" in e["parsed"]
+                ]
+                if not ps:
+                    continue
+                got = True
+                gold, text = by[i].category, by[i].text
+                ev, c = ps[0].get("evidence") or "", ps[0]["category"]
+                key = None
+                if gold == "normal" and c == "jailbreak_injection":
+                    key = "N>JB"
+                elif gold == "normal" and c == "normal":
+                    jb = re.search("지시|역할|프롬프트 주입|제한 없", text)
+                    key = "N>N(JB어휘)" if jb else None
+                elif gold == "harmful_content" and c == "pii_disclosure":
+                    key = "HC>PII"
+                elif gold == "harmful_content" and c == "normal":
+                    key = "HC>N"
+                elif gold == "jailbreak_injection" and c == gold:
+                    key = "JB>JB"
+                if not key:
+                    continue
+                s = st.setdefault(key, dict.fromkeys(("n", "other", "ment", "apply", "echo"), 0))
+                s["n"] += 1
+                s["other"] += bool(other.search(ev))
+                s["ment"] += bool(ment.search(ev))
+                s["apply"] += bool(apply_.search(ev))
+                lcs = SequenceMatcher(None, text, ev).find_longest_match(0, len(text), 0, len(ev))
+                s["echo"] += lcs.size >= 0.5 * min(len(text), 80)  # 발화를 되풀이
+            used[g] += got
+    out(
+        f"근거를 낸 (실행, 회차) {sum(used.values())}개: "
+        + ", ".join(f"{g} {n}" for g, n in used.items())
+    )
+    for key in ("JB>JB", "N>JB", "N>N(JB어휘)", "HC>N", "HC>PII"):
+        s = st.get(key, {})
+        out(f"  {key}: " + " ".join(f"{k}={v}" for k, v in s.items()))
+
+if "--per-run" in sys.argv:
+    out()
+    out(
+        "== 실행별 지표(가드 전체 행, 저신호 직접 판정 포함)."
+        " 열: F1 오탐 미탐 N>JB JB+HC미탐 범주정확도 튜터F1"
+    )
+    names = ("F1", "fp", "fn", "N>JB", "JB+HC miss", "cat", "tutorF1")
+    for g in ("v1", "nofs"):
+        tab = []
+        for n, k in GROUPS[g]:
+            _ = load(n, k)  # cache를 채운다(load는 nano 행만 돌려주므로 원본은 cache에서)
+            recs = [r for r in cache[n] if r["repeat"] == k and r["id"] in by]
+            vals = []
+            rows_n = sum(by[r["id"]].endpoint == "guard" for r in recs)
+            for ep in ("guard", "tutor"):
+                cur = [(by[r["id"]], pred(r)) for r in recs if by[r["id"]].endpoint == ep]
+                tp = sum(t.category in B and p in B for t, p in cur)
+                fp = sum(t.category not in B and p in B for t, p in cur)
+                fn = sum(t.category in B and p not in B for t, p in cur)
+                f1 = 2 * tp / (2 * tp + fp + fn)
+                if ep == "tutor":
+                    vals.append(f1)
+                    continue
+                njb = sum(t.category == "normal" and p == "jailbreak_injection" for t, p in cur)
+                miss = sum(
+                    t.category in ("jailbreak_injection", "harmful_content") and p not in B
+                    for t, p in cur
+                )
+                nn = [(t, p) for t, p in cur if t.category != "normal"]
+                cat = sum(p == t.category for t, p in nn) / len(nn)
+                vals = [f1, fp, fn, njb, miss, cat]
+            tab.append(vals)
+            out(
+                f"  {g} {n}#{k} (행 {rows_n}): "
+                + " ".join(f"{v:.3f}" if isinstance(v, float) else str(v) for v in vals)
+            )
+        for j, name in enumerate(names):
+            col = [v[j] for v in tab]
+            fmt = "{:.3f}" if isinstance(col[0], float) else "{}"
+            out(f"  {g} {name}: {fmt.format(min(col))}–{fmt.format(max(col))}")

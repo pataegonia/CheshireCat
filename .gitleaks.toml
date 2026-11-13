@@ -1,4 +1,4 @@
-# gitleaks 설정 (server-ci / secret scan (repo))
+# gitleaks 설정 (integration / gate 의 비밀 키 검사 단계)
 # 기본 규칙을 쓰되, 대회 배포 자료의 PII 예시 문항과 교재 본문은 검사에서 뺀다.
 # 실제 키·토큰은 .env와 런박스에만 있고 커밋하지 않는다(SPEC §7.1·§9).
 [extend]

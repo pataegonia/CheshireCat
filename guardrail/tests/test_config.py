@@ -33,7 +33,8 @@ def _leaves(d: dict, prefix: str = "") -> dict:
     out = {}
     for k, v in d.items():
         key = f"{prefix}{k}"
-        if isinstance(v, dict) and v:
+        # prompts는 이름 → 파일 매핑이라 항목이 몇 개든 된다. 매핑 자체만 필수 키로 본다
+        if isinstance(v, dict) and v and key != "prompts":
             out |= _leaves(v, key + ".")
         else:
             out[key] = v
@@ -59,7 +60,7 @@ def test_default_loads_section_4_4_model():
         "academic_dishonesty",
         "off_topic",
     ]
-    assert cfg.prompts == {}
+    assert cfg.prompts == {"input_judge": "input_judge.md"}  # S2.6
     assert cfg.toggles.knn_vote and not cfg.toggles.third_call
     assert cfg.output.mode == "v6" and cfg.output.rule_min_margin == 3.5
 
@@ -280,4 +281,4 @@ def test_load_prompt_rejects_bad_front_matter(monkeypatch, tmp_path, text):
 
 def test_load_prompt_rejects_unmapped_name():
     with pytest.raises(ValueError, match="prompts"):
-        load_prompt(load_config(DEFAULT), "input_judge")
+        load_prompt(load_config(DEFAULT), "not_registered")

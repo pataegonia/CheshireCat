@@ -256,6 +256,80 @@ def test_cli_writes_a_report_and_compares(monkeypatch, tmp_path, capsys):
     assert "예상 호출" in out
 
 
+def test_cli_summarizes_tokens_per_main_call(monkeypatch, tmp_path, capsys):
+    """지연 진단(TU-13): 주 호출마다 입력·추론·출력 토큰과 잘림을 숫자로만 모아 한 줄로 낸다."""
+    import types
+
+    from tests.tutor.tutor_testlib import OK_REPLIES, _fake_send
+
+    def reply(kwargs):
+        content = json.dumps(OK_REPLIES[kwargs["response_format"]["json_schema"]["name"]])
+        choice = types.SimpleNamespace(
+            message=types.SimpleNamespace(content=content), finish_reason="stop"
+        )
+        usage = types.SimpleNamespace(
+            prompt_tokens=4000,
+            completion_tokens=300,
+            completion_tokens_details=types.SimpleNamespace(reasoning_tokens=200),
+        )
+        return types.SimpleNamespace(choices=[choice], usage=usage)
+
+    _fake_send(monkeypatch, reply)
+    assert run_local.main(["--preset", "tutor", "--out", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    line = next(x for x in out.splitlines() if x.startswith("주 호출 토큰"))
+    assert "입력 p50 4000" in line and "추론 p50 200" in line and "답 p50 100" in line
+    assert "잘림(length) 0회" in line
+    calls = int(re.search(r"튜터 LLM 호출: main (\d+)회", out).group(1))
+    assert f"(보낸 호출 {calls}개" in line  # 주 호출마다 하나씩 모은다
+    assert OK_REPLIES["MainCallOut"]["sentences"][0]["text"] not in out  # 본문은 내지 않는다
+
+
+def test_record_calls_skips_calls_that_were_never_sent():
+    """상한에 막혀 보내지 못한 호출은 지연 통계에서 뺀다. 잘림(length)은 센다."""
+    import types
+
+    def result(attempts, ms, finish, tokens):
+        return types.SimpleNamespace(
+            attempts=attempts,
+            latency_ms=ms,
+            prompt_tokens=tokens,
+            completion_tokens=tokens,
+            reasoning_tokens=None if tokens is None else 0,
+            finish_reason=finish,
+        )
+
+    replies = iter([result(0, 0.0, None, None), result(1, 4200.0, "length", 1600)])
+
+    class Fake:
+        async def complete(self, *args, **kwargs):
+            return next(replies)
+
+    llm = Fake()
+    seen = run_local.record_calls(llm)
+    asyncio.run(llm.complete())
+    asyncio.run(llm.complete())
+    line = run_local._token_line(seen)
+    assert len(seen) == 1 and "(보낸 호출 1개" in line
+    assert "잘림(length) 1회" in line and "호출 지연 p50 4.20" in line
+
+
+def test_token_line_counts_length_and_skips_missing_numbers():
+    n = run_local.CallNumbers
+    line = run_local._token_line(
+        [n(1500.0, None, None, None, "length"), n(500.0, 4000, 300, 200, "stop")]
+    )
+    assert "(보낸 호출 2개" in line
+    assert "입력 p50 4000" in line and "추론 p50 200" in line and "답 p50 100" in line
+    assert "호출 지연 p50 0.50 · p95 1.50초" in line  # ms → 초, p95
+    assert "잘림(length) 1회" in line
+
+
+def test_token_line_shows_dash_when_no_numbers():
+    line = run_local._token_line([run_local.CallNumbers(1500.0, None, None, None, None)])
+    assert "입력 - / 추론 - / 답 -" in line
+
+
 ORDER = ("튜터 LLM 호출", "튜터 요청 지연", "튜터 LLM 최종 실패")
 
 

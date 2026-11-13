@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TextIO
+from typing import Any, NamedTuple, TextIO
 
 import yaml
 
@@ -237,6 +237,67 @@ def _latency_line(latency: Sequence[float]) -> str:
     return (
         f"튜터 요청 지연(초, 동시 {metrics.WORKERS}): p50 {p50:.2f} · p95 {p95:.2f}"
         f" · 최대 {top:.2f} (요청 {len(latency)}개)\n"
+    )
+
+
+class CallNumbers(NamedTuple):
+    """주 호출 하나의 숫자(마지막 시도 기준). 답변 본문은 담지 않는다."""
+
+    latency_ms: float
+    prompt_tokens: int | None
+    completion_tokens: int | None  # 추론 토큰 포함
+    reasoning_tokens: int | None
+    finish_reason: str | None
+
+
+def record_calls(llm: Any) -> list[CallNumbers]:
+    """튜터 LLM 호출마다 숫자만 모은다(지연 진단, TU-13). 결과는 그대로 돌려준다.
+
+    한 번도 보내지 못한 호출(상한·게이트에 막힘)은 지연을 왜곡하니 뺀다. main 한 번에 한 번 부른다.
+    """
+    seen: list[CallNumbers] = []
+    complete = llm.complete
+
+    async def recorded(*args: Any, **kwargs: Any) -> Any:
+        r = await complete(*args, **kwargs)
+        if r.attempts > 0:
+            seen.append(
+                CallNumbers(
+                    r.latency_ms,
+                    r.prompt_tokens,
+                    r.completion_tokens,
+                    r.reasoning_tokens,
+                    r.finish_reason,
+                )
+            )
+        return r
+
+    llm.complete = recorded
+    return seen
+
+
+def _token_line(calls: Sequence[CallNumbers]) -> str:
+    """입력·추론·답 토큰과 호출 지연, 잘림 수 한 줄. 숫자가 없는 호출은 그 칸에서 뺀다."""
+
+    def pair(values: Sequence[float]) -> str:
+        if not values:
+            return "-"
+        return f"p50 {_pct(values, 0.5):.0f} · p95 {_pct(values, 0.95):.0f}"
+
+    prompt = [c.prompt_tokens for c in calls if c.prompt_tokens is not None]
+    reasoning = [c.reasoning_tokens for c in calls if c.reasoning_tokens is not None]
+    answer = [
+        c.completion_tokens - c.reasoning_tokens
+        for c in calls
+        if c.completion_tokens is not None and c.reasoning_tokens is not None
+    ]
+    seconds = [c.latency_ms / 1000 for c in calls]
+    cut = sum(c.finish_reason == "length" for c in calls)
+    return (
+        f"주 호출 토큰(보낸 호출 {len(calls)}개, 실패 포함, 마지막 시도 기준): 입력 {pair(prompt)}"
+        f" / 추론 {pair(reasoning)} / 답 {pair(answer)}"
+        f" / 호출 지연 p50 {_pct(seconds, 0.5):.2f} · p95 {_pct(seconds, 0.95):.2f}초"
+        f" / 잘림(length) {cut}회\n"
     )
 
 
@@ -447,8 +508,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
     state, counted, built = None, None, (0, 0)
+    numbers: list[CallNumbers] = []
     if args.preset == "tutor":
         state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
+        numbers = record_calls(state.tutor_llm)
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
     latency: list[float] = []
@@ -472,7 +535,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _show(report, sys.stdout)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
-        _show_tutor_calls(state, blocked, latency, cap=cap)
+        _show_tutor_calls(state, blocked, latency, cap=cap, numbers=numbers)
     if use is not None:
         embedding_summary(use, sys.stdout)
     if previous is not None:
@@ -483,9 +546,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _show_tutor_calls(
-    state: Any, blocked: int, latency: Sequence[float], *, cap: tuple[int, int, int, int]
+    state: Any,
+    blocked: int,
+    latency: Sequence[float],
+    *,
+    cap: tuple[int, int, int, int],
+    numbers: Sequence[CallNumbers] = (),
 ) -> None:
-    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 실패한 호출, 상한에 막힌 호출 수.
+    """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 주 호출 토큰, 실패, 상한에 막힌 수.
 
     cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다.
     """
@@ -493,6 +561,8 @@ def _show_tutor_calls(
     shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
     sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
     sys.stdout.write(_latency_line(latency))
+    if numbers:
+        sys.stdout.write(_token_line(numbers))
     failures = state.tutor_llm.failures
     if failures:  # 최종 실패한 호출의 답은 기본값이다(연결 안 됨·키 거절·시간 초과 등)
         # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다

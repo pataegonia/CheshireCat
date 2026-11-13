@@ -95,6 +95,33 @@ def run(llm, clock, **kw):
     return asyncio.run(call(llm, clock, **kw))
 
 
+def test_result_carries_input_and_reasoning_token_counts():
+    """지연 진단용 숫자만 옮긴다(TU-13). 본문은 보지 않는다."""
+    resp = ok(tokens=300)
+    resp.usage.prompt_tokens = 4200
+    resp.usage.completion_tokens_details = types.SimpleNamespace(reasoning_tokens=192)
+    llm, clock = make(Send(resp))
+    result = run(llm, clock)
+    assert (result.prompt_tokens, result.completion_tokens, result.reasoning_tokens) == (
+        4200,
+        300,
+        192,
+    )
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [None, types.SimpleNamespace(prompt_tokens="x"), types.SimpleNamespace(prompt_tokens=True)],
+)
+def test_missing_or_odd_usage_gives_no_token_counts(usage):
+    resp = ok()
+    resp.usage = usage
+    llm, clock = make(Send(resp))
+    result = run(llm, clock)
+    assert result.parsed is not None
+    assert (result.prompt_tokens, result.reasoning_tokens) == (None, None)
+
+
 def test_ok_sends_fixed_params_and_a_strict_schema():
     send = Send(ok())
     llm, clock = make(send)

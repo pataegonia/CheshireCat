@@ -47,7 +47,10 @@ class Result:
     attempts: int  # 보낸 횟수(0이면 보내지 못함)
     latency_ms: float
     finish_reason: str | None  # 마지막 시도의(length면 잘림). 응답이 없으면 None
-    completion_tokens: int | None  # 마지막 시도의 usage.completion_tokens
+    completion_tokens: int | None  # 마지막 시도의 usage.completion_tokens(추론 토큰 포함)
+    # 지연 진단용 숫자(TU-13). 마지막 시도의 usage.prompt_tokens와 추론 토큰. 없으면 None
+    prompt_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,13 @@ class _Attempt:
     headers: Mapping[str, str] | None = None
     finish_reason: str | None = None
     completion_tokens: int | None = None
+    prompt_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+
+def _count(value: Any) -> int | None:
+    """usage 숫자만 받는다(정수가 아니면 None)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _status_code(status: int) -> tuple[ErrorCode, bool]:
@@ -242,8 +252,13 @@ class TutorLLM:
 
     @staticmethod
     def _parse(resp: Any, schema: type[BaseModel]) -> _Attempt:
-        tokens = getattr(getattr(resp, "usage", None), "completion_tokens", None)
-        meta: dict[str, Any] = {"completion_tokens": tokens if isinstance(tokens, int) else None}
+        usage = getattr(resp, "usage", None)
+        details = getattr(usage, "completion_tokens_details", None)
+        meta: dict[str, Any] = {
+            "completion_tokens": _count(getattr(usage, "completion_tokens", None)),
+            "prompt_tokens": _count(getattr(usage, "prompt_tokens", None)),
+            "reasoning_tokens": _count(getattr(details, "reasoning_tokens", None)),
+        }
         try:
             choice = resp.choices[0]
             meta["finish_reason"] = getattr(choice, "finish_reason", None)
@@ -280,6 +295,8 @@ class TutorLLM:
             latency_ms=(self._now() - t0) * 1000,
             finish_reason=a.finish_reason,
             completion_tokens=a.completion_tokens,
+            prompt_tokens=a.prompt_tokens,
+            reasoning_tokens=a.reasoning_tokens,
         )
 
 

@@ -250,7 +250,7 @@ class LLM:
 ### 4.4 설정 (`configs/*.yaml`)
 
 ```yaml
-version: "6.0.1"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.2"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
 prompts: {}                        # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.6·S2.7이 input_judge·output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초

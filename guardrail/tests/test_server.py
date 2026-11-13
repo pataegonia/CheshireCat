@@ -1,8 +1,8 @@
 """S1.2 서버: 인증·기동·200 보장·반사 0·로그 규칙 (C1 §S1.2, GR-01·09·12, ADR-0009)."""
 
-import dataclasses
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 

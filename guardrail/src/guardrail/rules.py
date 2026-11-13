@@ -1,9 +1,12 @@
 """S2.4 숫자·리터럴 규칙 ② (GR-06 추출, GR-07 ②, ADR-0014, master-plan §4.1).
 
 이식 원본: scripts/r13/q5_ungrounded.py의 NUM_RX, scripts/r13/q6_rule_fp.py의 V2·merged_pm4_spans
-(import하지 않음). V2 = NUM_RX에서 두 곳만 고친 것:
+(import하지 않음). V2 = NUM_RX에서 세 곳을 고친 것:
 - 추출 전에 섹션 ID 인용(CITE_RX)을 지운다. 토큰의 start·end는 원문 위치로 되돌린다.
 - ⓕ의 글자 클래스 [한두세네다섯]("다 번"에도 걸림)을 (?:한|두|세|네|다섯)으로 바꾼다.
+- ⓕ에 경계를 둔다: 앞 글자가 한글이면("열두 번"의 "두 번") 안 잡고, 단위가 다른 단어의 첫 글자인
+  "두 개념"·"두 배열" 같은 흔한 경우도 뺀다. 공개 답변·KB에서 사라지는 매칭은 오탐 다섯 건뿐이다.
+rule_spans의 창 위치는 원본 ans.find 대신 그 문자열을 가진 첫 토큰의 start다(선형, 아래).
 비교 = 토큰과 섹션 양쪽에 scoring.normalize(NFKC는 여기서만) 뒤 부분 문자열 포함.
 """
 
@@ -31,9 +34,11 @@ _UNITS_EXTRA = r"|주|일|년|글자"
 _REST = (
     r"|(?P<decimal>\d+(?:[.,]\d+)+)|(?P<multi_digit>\d{2,})|(?P<num_list>\[[\d, ]+\])"
     r"|(?P<latin>[A-Za-z_][A-Za-z_0-9.()]*(?:\s[A-Za-z_]+)*)"
-    r"|(?P<numeral>(?:한|두|세|네|다섯)\s?(?:번|개|단계|가지|배))"
+    # 나열식 예외라 목록에 없는 단어는 못 막는다. 조사가 붙는 "세 개월"·"두 번째"·"한 개를"은 잡는다
+    r"|(?P<numeral>(?<![가-힣])(?:한|두|세|네|다섯)\s?"
+    r"(?:개(?!념|인|수|발|체)|번(?!호|역)|단계|가지|배(?!열|제|치|경)))"
 )
-# 그룹 이름 = LiteralToken.kind(ⓐ unit_number … ⓕ numeral). 매칭은 NUM_RX V2와 같다(테스트)
+# 그룹 이름 = LiteralToken.kind(ⓐ unit_number … ⓕ numeral). NUM_RX V2와 같다(ⓕ 경계 5건 제외)
 _TOKEN_RX = re.compile(rf"(?P<unit_number>\d+(?:[.,]\d+)*\s?(?:{_UNITS}))" + _REST)
 _TOKEN_RX_UNITS_EXTRA = re.compile(
     rf"(?P<unit_number>\d+(?:[.,]\d+)*\s?(?:{_UNITS}{_UNITS_EXTRA}))" + _REST
@@ -133,17 +138,20 @@ def rule_spans(
 ) -> tuple[str, ...]:
     """걸린 토큰 → 원문 부분 문자열 구간.
 
-    서로 다른 토큰 문자열마다 답변에서 처음 나온 위치 하나에 창(pm4: ±k자, eojeol: 어절)을 만들고,
-    겹치거나 맞닿은 창은 합치고, 같은 구간은 한 번만, normalize 뒤 빈 구간은 버린다.
+    서로 다른 토큰 문자열마다 그 문자열을 가진 첫 토큰의 위치 하나에 창(pm4: ±k자, eojeol: 어절)을
+    만들고, 겹치거나 맞닿은 창은 합치고, 같은 구간은 한 번만, normalize 뒤 빈 구간은 버린다.
+    원본 merged_pm4_spans는 ans.find(문자열)이라 "13개 총 3개"의 "3개"를 "13개" 안에서 찾는다
+    (find는 20만 자에 1.5초 이상). 여기서는 실제 "3개" 토큰 위치를 쓴다.
     """
     if mode not in ("pm4", "eojeol"):
         raise ValueError(f"모르는 rule_span: {mode}")
+    first: dict[str, int] = {}  # 같은 문자열이 여러 번 나와도 첫 토큰 하나
+    for t in tokens:
+        first.setdefault(answer_raw[t.start : t.end], t.start)
     wins = set()
-    for text in dict.fromkeys(answer_raw[t.start : t.end] for t in tokens):
+    for text, i in first.items():
         if not text:
             continue
-        # 첫 위치(같은 토큰이 여러 번 나와도 창 하나). 원본처럼 "13개" 안의 "3개"도 첫 위치로 친다
-        i = answer_raw.find(text)
         j = i + len(text)
         wins.add((max(0, i - k), j + k) if mode == "pm4" else _eojeol(answer_raw, i, j))
     merged: list[tuple[int, int]] = []

@@ -293,7 +293,7 @@ def _tok(answer: str, text: str, nth: int = 0) -> LiteralToken:
 
 def test_pm4_uses_first_occurrence_only():
     a = "처음엔 3개를 썼고 한참 뒤에도 다시 3개를 썼어요"
-    assert rule_spans(a, [_tok(a, "3개", nth=1)]) == ("처음엔 3개를 썼고",)
+    assert rule_spans(a, [_tok(a, "3개"), _tok(a, "3개", nth=1)]) == ("처음엔 3개를 썼고",)
 
 
 def test_pm4_merges_overlapping_windows():

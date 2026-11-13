@@ -465,6 +465,14 @@ def test_per_request_nano_calls_stay_within_three():
     assert len(llm.calls) + len(guard.classify_calls) + len(guard.judge_calls) == 3
 
 
+def test_tutor_never_calls_classify_or_judge_output_again_after_failure():
+    # 튜터 쪽 상한: 다시 부르는 것은 주 호출뿐이다. 가드 안 일시 오류 재시도는 가드 규칙(TU-13)
+    guard = FakeGuard("normal", classify_error=RuntimeError("x"), judge_error=RuntimeError("y"))
+    run(build(guard))
+    assert len(guard.classify_calls) == 1
+    assert len(guard.judge_calls) == 1
+
+
 def test_no_state_between_requests():
     guard = FakeGuard("jailbreak_injection")
     state = build(guard)

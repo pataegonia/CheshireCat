@@ -114,7 +114,7 @@
 
 ## 미정 (사실처럼 쓰지 말 것 — 정해지면 이 절에서 위로 옮긴다)
 - 동결본의 범주 판정 방식(직렬 / 주 호출 단독 / 병렬 합치기): TU-10, 통합 I13
-- v1 judge_output 기본값(TU-09는 켬. 병렬 classify와 합치면 정상 nano 3회, 주 호출 재시도 포함 절대 4회: TU-13)
+- v1 judge_output 기본값(TU-09는 켬. 병렬 classify와 합치면 정상 nano 3회, 주 호출 재시도 포함 4회. 가드 안 일시 오류 재시도로 드물게 더 많을 수 있다: TU-13)
 - 생성 실패 시 기본 action 값(`fallback_action`, 잠정 clarify): TU-12
 - CSV 표현(원문 CSV / "열: 값" 문장): TU-03, 통합 I4
 - 생성에 넣는 섹션 수 K(`retrieval.k`): TU-03, 통합 I5

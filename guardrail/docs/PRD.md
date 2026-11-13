@@ -198,7 +198,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓴다(SPEC §7.1).
 ### GR-10 동시성·지연·LLM 게이트 (P0)
 - `/tutor`와 같은 팀 키를 쓰고, 같은 프로세스로 두면 **전역 LLM 게이트 하나**(세마포어 + 지터 재시도)를 둘이 함께 쓰게 제안한다(§9 T4). 게이트 크기는 실측(§11-2 1번) 뒤 정한다(가드는 요청당 2회 병렬). 가드 쪽은 게이트를 통해서만 부른다.
 - `AsyncOpenAI`: 시간 제한을 직접 지정(연결 3초·읽기 12초 수준), SDK 재시도 0, 수동 재시도는 호출마다 1회이고 요청 예산 안에서만. `Retry-After`가 예산을 넘으면 기다리지 않고 기본값으로(S6).
-- `gpt-5-nano` 파라미터: `reasoning_effort="low"`(minimal 금지, S3), `verbosity="low"`, json_schema strict, `max_completion_tokens` ≥800. `temperature`·`max_tokens`·`logprobs`는 보내지 않는다. 기동 시 시험 호출로 파라미터(`reasoning_effort`·`verbosity`·`max_completion_tokens`·`response_format` json_schema)를 **하나씩** 시험해 거부된 것만 끈다(json_schema가 거부되면 JSON 모드). 설정의 각 파라미터는 생략(null)할 수 있고, 시험 결과는 오류 코드로만 남긴다. `max_completion_tokens`는 1600이다(S2.9: 800에서 출력 판정 호출의 6.2–9.4%가 잘렸고 1600에서 0/192).
+- `gpt-5-nano` 파라미터: `reasoning_effort="low"`(minimal 금지, S3), `verbosity="low"`, json_schema strict, `max_completion_tokens` ≥800. `temperature`·`max_tokens`·`logprobs`는 보내지 않는다. 기동 시 시험 호출로 파라미터(`reasoning_effort`·`verbosity`·`max_completion_tokens`·`response_format` json_schema)를 **하나씩** 시험해 거부된 것만 끈다(json_schema가 거부되면 JSON 모드). 설정의 각 파라미터는 생략(null)할 수 있고, 시험 결과는 오류 코드로만 남긴다. `max_completion_tokens`는 1600이다(S2.9: 800에서 출력 판정 호출의 6.2–9.4%가 잘렸고 1600에서 잘림 0/192. `read` 12초 시간 초과는 유효 6회에서 8/384로 2%를 넘었다, 조치는 ADR-0014 "S2.9 수정").
 - 프롬프트는 고정 부분(정의·지시)을 앞에, 요청별 부분(예시·대화·답변)을 뒤에 둔다(프롬프트 캐시 접두 일치, R13-B Q9).
 - 요청당 호출: nano 2회(입력·출력 병렬) + 조건부 입력 1회(ablation) + 호출마다 재시도 1회. 임베딩 0회.
 - 부하 시험은 채점 수준(동시 64, 가드·튜터 합쳐 약 600요청)까지만 한다. 더 센 시험은 과한 호출로 볼 수 있다(SPEC §7.1).

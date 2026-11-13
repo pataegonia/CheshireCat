@@ -468,3 +468,28 @@ async def test_retry_dropped_when_wait_overran_the_margin():
 async def test_result_repr_hides_parsed_text():
     llm, _, clock = make(Ok('{"evidence": "SECRET-TEXT", "category": "normal"}'))
     assert "SECRET-TEXT" not in repr(await call(llm, clock))
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"])
+def test_openai_env_error_never_contains_values(monkeypatch, name, blank):
+    from guardrail.llm import openai_env
+
+    values = {
+        "OPENAI_API_KEY": "SENTINEL-KEY-7f3",
+        "OPENAI_MODEL": "SENTINEL-MODEL-7f3",
+        "OPENAI_BASE_URL": "http://SENTINEL-URL-7f3/v1",
+    }
+    for k, v in values.items():
+        monkeypatch.setenv(k, v)
+    if blank is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, blank)
+    with pytest.raises(ValueError) as ei:
+        openai_env()
+    err = ei.value
+    assert name in str(err)
+    for k, v in values.items():
+        if k != name:
+            assert v not in str(err) and v not in repr(err) and v not in err.args

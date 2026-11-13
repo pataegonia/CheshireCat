@@ -304,7 +304,7 @@ def test_tutor_falls_back_without_openai_env(client, monkeypatch, caplog):
     r = _post(client, {"messages": [{"role": "user", "content": MARK}]}, path="/tutor")
     assert r.status_code == 200
     assert r.json() == {"answer": server.TUTOR_FALLBACK, "action": "answer", "citations": []}
-    assert _access_lines(caplog)[-1].split(" ")[-1] == "KeyError"
+    assert _access_lines(caplog)[-1].split(" ")[-1] == "ValueError"
     _assert_logs_clean(caplog)
 
 
@@ -562,3 +562,57 @@ def test_no_injection_keeps_starter_tutor(client, monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     r = _post(client, {"messages": []}, path="/tutor")
     assert r.json()["answer"] == server.TUTOR_FALLBACK
+
+
+SENT_KEY, SENT_MODEL, SENT_URL = (
+    "SENTINEL-KEY-7f3",
+    "SENTINEL-MODEL-7f3",
+    "http://SENTINEL-URL-7f3/v1",
+)
+
+
+def _sentinel_env(monkeypatch, **override):
+    base = {"OPENAI_API_KEY": SENT_KEY, "OPENAI_MODEL": SENT_MODEL, "OPENAI_BASE_URL": SENT_URL}
+    for k, v in {**base, **override}.items():
+        monkeypatch.setenv(k, v)
+
+
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL"])
+def test_tutor_blank_key_or_model_builds_no_client(client, monkeypatch, name):
+    _sentinel_env(monkeypatch, **{name: "  "})
+    built = []
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: built.append(kw))
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200 and r.json()["answer"] == server.TUTOR_FALLBACK
+    assert built == []
+    assert getattr(client.app.state, "tutor_client", None) is None
+
+
+def test_tutor_logs_and_errors_hide_env_values(client, monkeypatch, caplog):
+    import httpx2
+    import openai
+
+    _sentinel_env(monkeypatch)
+    caplog.set_level(logging.DEBUG)
+
+    class _Leaky:
+        def __init__(self, **kw):
+            self.chat = type("Chat", (), {"completions": self})
+
+        async def create(self, **kw):
+            # 실제 HTTP 클라이언트의 로그 경로(httpx2 로거)를 네트워크 없이 지나가게 한다
+            transport = httpx2.MockTransport(lambda request: httpx2.Response(200))
+            async with httpx2.AsyncClient(transport=transport) as http:
+                await http.post(SENT_URL + "/chat/completions")
+            raise RuntimeError(f"{SENT_KEY} {SENT_MODEL} {SENT_URL}")
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _Leaky)
+    r = _post(client, {"messages": [{"role": "user", "content": "q"}]}, path="/tutor")
+    assert r.status_code == 200 and r.json()["answer"] == server.TUTOR_FALLBACK
+    assert any(rec.name == "guardrail.access" for rec in caplog.records)
+    for sentinel in ("SENTINEL-KEY-7f3", "SENTINEL-MODEL-7f3", "SENTINEL-URL-7f3"):
+        # URL 호스트는 HTTP 클라이언트가 소문자로 바꿔 찍으므로 대소문자 없이 본다
+        assert sentinel.lower() not in r.text.lower()
+        assert sentinel.lower() not in caplog.text.lower()

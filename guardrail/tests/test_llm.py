@@ -398,7 +398,7 @@ async def test_both_halves_of_surrogate_range_are_replaced(lone):
     llm, fake, clock = make(Ok(OK_IN))
     msgs = [{"role": "user", "content": f"a{lone}b"}]
     assert (await llm.complete("input_judge", msgs, InputOut, deadline=clock() + 20)).parsed
-    assert fake.requests[0]["messages"][-1]["content"] == "a�b"
+    assert fake.requests[0]["messages"][-1]["content"] == "a\ufffdb"
 
 
 # --- live ---

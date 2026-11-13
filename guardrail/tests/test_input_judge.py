@@ -314,7 +314,7 @@ async def test_blank_or_repeated_padding_cannot_hide_short_request(pad):
 # 두 종류 이상을 섞은 채우기: 같은 글자 반복으로는 줄지 않는다(문자 부류 단위로 줄인다)
 MIXED = {
     "space_nul": " \x00",
-    "braille_space": "⠀ ",
+    "braille_space": "\u2800 ",
     "nul_del": "\x00\x7f",
     "c1": "\x80\x81",
     "braille_pua": "\u2800\ue000",

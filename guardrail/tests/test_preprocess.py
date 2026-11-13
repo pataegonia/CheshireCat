@@ -337,3 +337,46 @@ def test_p95_under_10ms_for_400_rows():
 )
 def test_skeleton(raw, expected):
     assert skeleton(raw) == expected
+
+
+# --- 자모 조합 결함(같은 자음 연속 뒤, 겹모음) -----------------------------------------
+# 규칙: 두벌식 입력기처럼 ㄱㄱ은 ㄲ로 합치지 않는다(된소리는 Shift 입력). 같은 자음 연속
+# 뒤에서 이모티콘으로 남기는 것은 ㅠ·ㅜ가 올 때뿐이다(ㅋㅋㅠ). 겹모음은 두벌식 조합표대로 합친다.
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("ㅋㅋㅋㅏㅋㅏ", "ㅋㅋ카카"),
+        ("ㄱㄱㅏㄱㅏ", "ㄱ가가"),
+        ("ㅈㅜㅓ", "줘"),
+        ("ㄱㅗㅏㄴ", "관"),
+        ("ㅇㅗㅐ", "왜"),
+        ("ㅎㅗㅣ", "회"),
+        ("ㄱㅜㅔ", "궤"),
+        ("ㅇㅜㅣ", "위"),
+        ("ㅇㅡㅣ", "의"),
+        ("ㅁㅜㅓㄹㄱㅏ", "뭘가"),
+        # 기존 이모티콘 예외는 그대로
+        ("ㅋㅋㅠ", "ㅋㅋㅠ"),
+        ("ㅋㅠㅠ", "ㅋㅠㅠ"),
+        ("ㅜㅜ", "ㅜㅜ"),
+    ],
+)
+def test_normalize_composes_after_repeat_and_compound_vowels(raw, expected):
+    assert normalize(raw) == expected
+
+
+def _to_compat_jamo(syllable: str) -> str:
+    idx = ord(syllable) - 0xAC00
+    cho, jung, jong = idx // 588, idx % 588 // 28, idx % 28
+    return _CHO[cho] + chr(ord("ㅏ") + jung) + _JONG[jong].strip()
+
+
+@given(st.text(st.characters(min_codepoint=0xAC00, max_codepoint=0xD7A3), min_size=1, max_size=12))
+def test_hypothesis_decomposed_syllables_recompose(text):
+    restored = normalize("".join(map(_to_compat_jamo, text)))
+    assert sum("가" <= c <= "힣" for c in restored) >= len(text)
+    assert restored == text
+
+
+def test_skeleton_keeps_v4_compound_vowel_behavior():
+    assert skeleton("ㅈㅜㅓ") == "주ㅓ"

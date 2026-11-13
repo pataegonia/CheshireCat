@@ -97,6 +97,9 @@ def test_every_key_is_required(tmp_path, dotted):
         ("output.rule_extra_tokens", ["nope"]),
         ("llm.structured_output", "prompt"),
         ("input.knn.analyzer", "bytes"),
+        # label_mode·order는 Literal이라 모르는 값·대소문자 오류를 로드에서 막는다
+        *[("input.label_mode", v) for v in ("foo", "ACT")],
+        *[("input.knn.order", v) for v in ("foo", "NEAREST_FIRST")],
         ("embedding.targets", ["web"]),
         ("llm.gate", 0),
         ("budget_s", 0),

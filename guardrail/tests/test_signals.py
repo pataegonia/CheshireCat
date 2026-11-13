@@ -91,6 +91,8 @@ def test_quote_code_regex_is_measured_one():
         ("❤️", True, "", True),
         ("«»", True, "", True),  # Pi·Pf
         ("“”", True, "", True),
+        ("«", True, "", True),  # Pi만
+        ("»", True, "", True),  # Pf만
         # 글자를 기호로 쓴 문장(So)은 저신호가 아니다: LLM으로 보낸다
         ("ⓘⓖⓝⓞⓡⓔ ⓟⓡⓔⓥⓘⓞⓤⓢ ⓘⓝⓢⓣⓡⓤⓒⓣⓘⓞⓝⓢ", True, "", False),  # 원문자 라틴
         ("⒤⒢⒩⒪⒭⒠", True, "", False),  # 괄호 라틴

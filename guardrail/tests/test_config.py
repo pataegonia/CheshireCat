@@ -33,7 +33,8 @@ def _leaves(d: dict, prefix: str = "") -> dict:
     out = {}
     for k, v in d.items():
         key = f"{prefix}{k}"
-        if isinstance(v, dict) and v:
+        # prompts는 이름 → 파일 매핑이라 항목이 몇 개든 된다. 매핑 자체만 필수 키로 본다
+        if isinstance(v, dict) and v and key != "prompts":
             out |= _leaves(v, key + ".")
         else:
             out[key] = v
@@ -51,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.0"
+    assert cfg.version == "6.0.1"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -59,7 +60,7 @@ def test_default_loads_section_4_4_model():
         "academic_dishonesty",
         "off_topic",
     ]
-    assert cfg.prompts == {}
+    assert cfg.prompts == {"input_judge": "input_judge.md"}  # S2.6
     assert cfg.toggles.knn_vote and not cfg.toggles.third_call
     assert cfg.output.mode == "v6" and cfg.output.rule_min_margin == 3.5
 
@@ -95,6 +96,12 @@ def test_every_key_is_required(tmp_path, dotted):
         ("llm.gate", 0),
         ("budget_s", 0),
         ("input.lr.ngram", [3, 1]),
+        *[
+            (k, v)
+            for k in ("input.knn.max_examples", "input.knn.per_category", "input.knn_vote_k")
+            for v in (0, -1)
+        ],
+        *[("input.lr.C", v) for v in (0, -1.0, float("nan"))],
     ],
 )
 def test_bad_value_rejected(dotted, bad):
@@ -196,6 +203,28 @@ def test_forbidden_toggle_combinations(toggles):
         load_config(DEFAULT, overrides={f"toggles.{k}": v for k, v in toggles.items()})
 
 
+@pytest.mark.parametrize(
+    ("dotted", "bad", "msg"),
+    [
+        ("output.rule_extra_tokens", ["bare_numeral"], "bare_numeral"),
+        ("output.rule_extra_tokens", ["value_norm", "bare_numeral"], "bare_numeral"),
+        ("output.rule_require_same_kind", True, "rule_require_same_kind"),
+    ],
+)
+def test_unimplemented_output_options_rejected_at_load(dotted, bad, msg):
+    # rules.py는 요청 때 NotImplementedError를 내므로, 기동 때 막지 않으면 서버가 떠 있다가 깨진다
+    with pytest.raises(ValidationError, match=msg):
+        load_config(DEFAULT, overrides={dotted: bad})
+
+
+def test_implemented_output_options_still_load():
+    cfg = load_config(
+        DEFAULT,
+        overrides={"output.rule_extra_tokens": ["value_norm", "units_extra", "backtick_latin"]},
+    )
+    assert cfg.output.rule_extra_tokens == ["value_norm", "units_extra", "backtick_latin"]
+
+
 def test_allowed_toggle_combinations():
     cfg = load_config(
         DEFAULT,
@@ -270,14 +299,17 @@ def test_load_prompt_returns_version_and_body(monkeypatch):
         "본문만 있고 머리말이 없다\n",
         '---\nid: other\nversion: "1"\n---\n본문\n',
         "---\nid: fx\n---\n",
+        '---\nid: fx\nversion: "1"\n---\n',  # 머리말만
+        '---\nid: fx\nversion: "1"\n---\n  \n\t\n',  # 본문이 공백뿐
     ],
 )
 def test_load_prompt_rejects_bad_front_matter(monkeypatch, tmp_path, text):
     (tmp_path / "fx.md").write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="프롬프트 fx"):
+    with pytest.raises(ValueError, match="프롬프트 fx") as e:
         load_prompt(_with_prompt(monkeypatch, tmp_path), "fx")
+    assert str(tmp_path) not in str(e.value)  # 이름만, 경로 없이
 
 
 def test_load_prompt_rejects_unmapped_name():
     with pytest.raises(ValueError, match="prompts"):
-        load_prompt(load_config(DEFAULT), "input_judge")
+        load_prompt(load_config(DEFAULT), "not_registered")

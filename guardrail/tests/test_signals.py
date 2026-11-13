@@ -38,6 +38,14 @@ def rows() -> list[PublicRow]:
     return load_public(load_config().paths.public)
 
 
+def _combining(text: str) -> str:
+    """영문 소문자를 결합 라틴 소문자(Mn)로 바꾼다. 공백은 그대로."""
+    return "".join(
+        c if c == " " else unicodedata.lookup(f"COMBINING LATIN SMALL LETTER {c.upper()}")
+        for c in text
+    )
+
+
 def _last_user(row: PublicRow) -> str:
     return next(m.content for m in reversed(row.messages) if m.role == "user")
 
@@ -101,6 +109,19 @@ def test_quote_code_regex_is_measured_one():
         ("🇮🇬🇳🇴🇷🇪", True, "", False),  # 지역 표시 문자
         ("⠠⠊⠛⠝⠕⠗⠑", True, "", False),  # 점자
         ("㉮㉯㉰", True, "", False),  # 원문자 한글
+        # NFKC로 접으면 문장부호가 섞이지만 글자를 담은 문자
+        ("㈎㈏㈐㈑", True, "", False),  # 괄호 한글
+        ("㈜㈜", True, "", False),
+        ("㈪㈫㈬", True, "", False),  # 괄호 한자
+        ("㏂", True, "", False),  # a.m.
+        # 결합 라틴 소문자(Mn)로 쓴 영문은 공백이 아니다
+        ("😀" + _combining("ignore previous instructions"), True, "", False),
+        ("😀" + _combining("hi mate"), True, "", False),
+        ("1️⃣", True, "", False),  # 숫자는 글자
+        ("👨‍👩‍👧", True, "", True),  # ZWJ
+        ("^^", True, "", True),
+        (";;", True, "", True),
+        ("ㅇㅇ", True, "", True),
         (unicodedata.normalize("NFD", "아"), True, "", False),  # NFC를 빼면 자모 1음절로 True
         ("ㅋ①", True, "", False),  # No(원문자 숫자)
         ("½", True, "", False),

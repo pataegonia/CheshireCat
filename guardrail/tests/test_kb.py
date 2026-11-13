@@ -471,3 +471,44 @@ def test_index_time_and_memory_report(capsys):
         f" 조각 {len(idx.chunks)}",
     )
     assert secs < 10
+
+
+# --- 리뷰 반영: 섹션 ID 과목 접두어·폴더 대조 ---
+
+
+@pytest.mark.parametrize(
+    ("folder", "name"),
+    [("python", "XX-01-01.md"), ("python", "FIN-01-01.md"), ("history", "PY-01-01.md")],
+)
+def test_load_rejects_bad_prefix_or_folder(tmp_path, folder, name):
+    (tmp_path / folder).mkdir()
+    (tmp_path / folder / name).write_text("## x\n사과", encoding="utf-8")
+    with pytest.raises(ValueError) as e:
+        KbIndex.load(tmp_path)
+    msg = str(e.value)
+    assert name in msg
+    assert str(tmp_path.parent) not in msg  # 파일·폴더 이름만 노출
+
+
+def test_real_kb_has_48_sections_with_folder_prefix(index):
+    ids = {sid for sid, _ in index.chunks}
+    assert len(ids) == 48
+    prefix = {"python": "PY", "prompt": "PR", "finance": "FIN"}
+    for md in KB_DIR.glob("*/*.md"):
+        assert md.stem.split("-")[0] == prefix[md.parent.name]
+
+
+# --- 리뷰 반영: 0점 질의·search 조각 단위 고정 ---
+
+
+@pytest.mark.parametrize("q", ["", "?", "왜"])
+def test_no_gram_query_scores_zero_in_chunk_order(index, q):
+    assert set(index.scores(q)) == {0.0}
+    r = index.rank(q)
+    assert [(h.section_id, h.text) for h in r.hits] == list(index.chunks)
+    assert r.margin == 0.0
+
+
+def test_search_returns_chunks_not_sections(index):
+    ids = [h.section_id for h in index.search("함수", k=3)]
+    assert len(ids) > len(set(ids))  # 같은 섹션이 여러 번

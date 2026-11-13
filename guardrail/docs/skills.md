@@ -2,6 +2,21 @@
 
 작성 2026-10-30 · 갱신 2026-11-10 · 담당 danielcho02 · `/ecc:skill-scout` 결과
 
+## S2.8 판정 조립 (2026-11-13)
+
+계획: `.claude/plans/s2.8-assemble.plan.md`(로컬). 로컬 ECC 2.2.1에서 골랐고 새 스킬은 만들지 않았다.
+
+| 단계 | 스킬·에이전트(모델) | 쓴 이유 |
+|---|---|---|
+| P0 확인·조사 | `ecc:research-ops`(로컬 근거 먼저), 파이썬 공식 문서 직접 확인(`ecc:documentation-lookup`은 Context7 도구가 없어 못 씀) | 문서 대조, asyncio 마감·취소 |
+| P1 문서 먼저 | `ecc:living-docs-governance` | master-plan·C2·PRD를 코드보다 먼저 |
+| P2·P3 구현 | `ecc:tdd-workflow`, `ecc:python-testing`(hypothesis), `ecc:error-handling`, `ecc:latency-critical-systems` | 순수 함수, 병렬 호출·마감·기본값 |
+| P4 연결 | `ecc:fastapi-patterns`, `ecc:verification-loop` | 서버 기본 판정기, 하네스 |
+| P5 리뷰 | `ecc:santa-method` 4라운드, 에이전트 `ecc:silent-failure-hunter`(Opus)·`ecc:python-reviewer`(Sonnet), `ecc:council` 2라운드(서버 기본 판정기) | 라운드마다 새 리뷰어, 둘 다 통과가 조건 |
+| P6 런박스 스모크 | `ecc:eval-harness` | 조립본 1회 |
+
+쓰지 않은 것: `humanize-korean`·`ecc:python-patterns`·`ecc:architecture-decision-records`·`ecc:ai-regression-testing`·`ecc:benchmark-methodology`·에이전트 `ecc:mle-reviewer`(문서 수정이 작았고, ADR-0014 R14 블록이 결정을 이미 담고 있었고, 스모크는 1회라 해석할 비교가 없었다).
+
 ## 프롬프트·판정 고도화 (2026-11-13)
 
 계획: `.claude/plans/guardrail-prompt-uplift.plan.md`(로컬). 조사 결과는 [R14](research/R14-prompt-uplift.md). 로컬 ECC 2.2.1에서 골랐고, 원격 검색(GitHub `SKILL.md`, 프롬프트 최적화·평가)은 결과가 없었다. 새 스킬은 만들지 않는다.

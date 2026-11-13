@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -398,6 +399,8 @@ def test_cli_stops_calling_after_a_streak_of_rate_limits(monkeypatch, tmp_path, 
     code = run_local.main(["--preset", "tutor", "--judge", "--out", str(tmp_path)])
     assert code == run_local.EXIT_RATE_LIMITED == 6  # 가드 하네스와 같은 값
     assert len(sent) <= 2 * (run_local.RATE_LIMIT_STREAK + metrics.WORKERS)  # 다 돌면 약 400회
+    # 호출 단위로 센다: 최종 429 20회(각 1회 재전송) 전에는 멈추지 않는다(#153 리뷰)
+    assert len(sent) >= 2 * run_local.RATE_LIMIT_STREAK
     assert judged == []
     captured = capsys.readouterr()
     assert "속도 제한(429)" in captured.err
@@ -476,12 +479,43 @@ def test_judge_stage_starts_a_new_streak():
     stop.next_stage()
     stop.record("rate_limit", "judge")
     assert stop.streak == 1 and not stop.tripped
+    for _ in range(run_local.RATE_LIMIT_STREAK):
+        stop.record("rate_limit")
+    stop.next_stage()  # 이미 멈췄으면 멈춘 상태와 사유는 그대로다
+    assert stop.tripped and stop.by == "llm"
+
+
+def test_cli_judge_stage_does_not_continue_the_tutor_streak(monkeypatch, tmp_path):
+    """main이 튜터 단계 뒤 연속 수를 새로 센다(튜터가 429 19회로 끝나도 판정 실패 1회로 안 멈춤)."""
+
+    class Carried(run_local.RateLimitStop):
+        def __init__(self):
+            super().__init__()
+            self.streak = run_local.RATE_LIMIT_STREAK - 1  # 튜터 단계가 429 19회로 끝났다
+
+    lock, failed = threading.Lock(), []
+
+    def judge(kind, payload):
+        with lock:
+            first = not failed
+            failed.append(kind)
+        if first:
+            raise RuntimeError("판정 실패")
+        return fake_judge(kind, payload)
+
+    monkeypatch.setattr(run_local, "RateLimitStop", Carried)
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    code = run_local.main(["--preset", "reference", "--judge", "--out", str(tmp_path)])
+    assert code != run_local.EXIT_RATE_LIMITED
+    data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
+    assert "invalid" not in data
 
 
 def test_cli_keeps_going_on_scattered_rate_limits(monkeypatch, tmp_path):
-    """흩어진 429로는 멈추지 않는다(가드 #151의 같은 이름 테스트와 같은 뜻).
+    """흩어진 429로는 멈추지 않는다.
 
-    5번째 전송마다 429면 재시도로 대부분 성공하고, 최종 실패도 연달아 20회가 되지 않는다.
+    가드 #151의 test_scattered_rate_limits_do_not_stop_the_run과 같은 뜻이다. 5번째 전송마다
+    429면 재시도로 대부분 성공하고, 최종 실패도 연달아 20회가 되지 않는다.
     """
     limited = scattered_rate_limit_openai(monkeypatch, every=5)
     code = run_local.main(["--preset", "tutor", "--out", str(tmp_path)])

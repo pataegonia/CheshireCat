@@ -104,7 +104,6 @@ OK_REPLIES = {
 
 def _ok_reply(kwargs):
     """응답 스키마 이름에 맞는 최소 정상 JSON 응답(json_schema 모드만)."""
-    import json
     import types
 
     name = kwargs["response_format"]["json_schema"]["name"]

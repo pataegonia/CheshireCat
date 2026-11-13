@@ -210,7 +210,8 @@ class RateLimitStop:
 
     가드 하네스(#151)와 같은 규칙이다: 호출 하나의 최종 오류(재시도 포함)가 rate_limit이면 연속
     수 +1, budget(상한에 막혀 보내지 않음)이면 그대로, 그 밖(성공 포함)이면 0이다. 튜터 LLM과
-    판정은 같은 팀 키를 쓰므로 하나로 센다. 판정은 스레드에서 돌아 잠금 안에서 센다.
+    판정은 같은 팀 키라 한 객체가 세되, 단계가 바뀌면 연속 수를 새로 센다(next_stage). 판정은
+    스레드에서 돌아 잠금 안에서 센다.
     """
 
     def __init__(self) -> None:
@@ -492,7 +493,7 @@ def embedding_summary(use: EmbeddingUse, out: TextIO) -> None:
         out.write(": 이 결과는 BM25 수치다\n")
     elif 0 < use.calls < use.queries:
         out.write(f"영어 질의 {use.queries}회 중 {use.calls}회만 임베딩을 썼다")
-        out.write("(검색 전에 끝난 행이 있을 수 있다)\n")
+        out.write("(검색 전에 끝난 행이나 멈춘 뒤 막은 질의가 있을 수 있다)\n")
     elif use.calls > use.queries:
         out.write(f"질의 임베딩이 예상({use.queries}회)보다 많다: 예상 호출 수 계산을 다시 본다\n")
 

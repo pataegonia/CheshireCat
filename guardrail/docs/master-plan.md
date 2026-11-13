@@ -205,7 +205,7 @@ class Guard:
 
 - 출력 nano의 문맥(R14-D4): 1위 섹션 전체(`section_text`, `output.context_max_chars`로 자름) + 상위 `kb.top_k` 조각 중 **다른 섹션**의 조각. 같은 `Ranking`에서 읽는다. 규칙 ②가 보는 범위(1위 섹션 전체)는 그대로다.
 - 후보 답변이 `""`이면 출력은 `true/[]`, `safe=true`다(응한 내용이 없다, §8 미결 2). 출력 nano를 부르지 않는다.
-- `candidate_answer`가 문자열이 아니면(`has_candidate=True`, `candidate_answer=None`) 출력에 한해 요청 파싱 실패로 본다: `output`은 `output.failure_default`, `safe`는 GR-08 그대로(읽을 답변이 없어 거절·숨긴 태그 없음). 입력은 정상 판정한다.
+- `candidate_answer`가 문자열이 아니면(`has_candidate=True`, `candidate_answer=None`) 출력에 한해 요청 파싱 실패로 본다: 출력 nano 실패와 같이 GR-07 표를 nano 없이 탄다(block 범주면 ① `true/[]`, 그 밖은 `output.failure_default`), `safe`는 GR-08 그대로(읽을 답변이 없어 거절·숨긴 태그 없음). 입력은 정상 판정한다.
 - 요청 파싱 실패, 빈 `messages`, 학습자 발화가 하나도 없는 요청: 범주 `normal`, 오류 코드 `no_user_message`. `has_candidate`면 `output`은 `output.failure_default`(기본 `true/[]`), `safe=true`. 단 답변이 문자열이고 숨긴 태그가 있으면 `safe=false`다(GR-08은 발화가 없어도 본다)(GR-09. 출력 nano 실패와 같은 규칙 하나).
 
 ### 4.3 LLM 호출 (`llm.py`)
@@ -524,6 +524,7 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - §4.1 `Judgement`에 `answer_quote_ok`·`kb_quote_ok`·`nano_refuses`. §4.3 `OutputOut`을 `answer_quote → kb_quote → grounded → refuses`로(`reason` 삭제). §4.4 `output.tier3_trust`·`quote_min_chars`·`context_max_chars`. §4.2 출력 nano 문맥을 1위 섹션 전체 + 다른 섹션 조각으로.
 - §4.6 `--input-only`와 역할별 실패율 2% 관문. §5 S2.7·S2.9·S3.1·S3.2 수용 기준, S3.4는 동결 전 미실행. §10 "분산 밖"의 뜻과 확정 실험 상한.
 - 바뀌지 않은 것: 입력 프롬프트 v1 문구, 범주 → decision(ADR-0012), safe 규칙(D6), 키워드 힌트 금지(GR-04).
+- S2.8 santa 2라운드(같은 날): 아직 구현하지 않은 설정(`third_call`·`oom_kb_snippet`·`embedding`·`output.rule_require_same_kind`)을 켜면 `Guard`가 만들어질 때 `NotImplementedError`로 실패한다(조용히 무시하지 않는다. 하네스는 멈추고, 서버 기본 판정기는 상수 판정기 + `reason=NotImplementedError` 로그로 내린다). 하네스의 예상 호출 수는 상한이다(저신호 직접 판정 행만큼 덜 부른다).
 - S2.8 조립 중 조정(같은 날, santa 1라운드와 council 2라운드): 서버 기본 판정기를 키 기준(`default_factory`)으로 정했다. 키가 있으면 `Guard.build`, 없거나 기동이 실패하면 상수 판정기 + 기동 로그 한 줄이다. 무조건 `Guard.build`로 바꾸면 통합 테스트 464개 중 154개가 깨지고, 상수로 두면 통합 앱의 `/guard`가 상수 판정으로 제출된다. `candidate_answer`가 문자열이 아닐 때는 GR-07 표를 그대로 탄다(block 범주면 ①). 학습자 발화가 없어도 숨긴 태그는 본다. `Judgement.errors` 코드 목록을 §4.1에 적었다.
 - S2.8 조립 전 조정(같은 날, 출력 단독 실측 뒤): §4.4 `nano_span`의 뜻을 "③에서 확인된 `answer_quote`를 구간으로"로 적고 허용 조건을 `nano_tier3`로 바꿨다. §4.1 인용 확인의 답변 쪽 대조 대상을 자른 원문으로 못박았다. 근거는 [results/2026-11-13-output-v1-solo.md](../results/2026-11-13-output-v1-solo.md)(근거 없음 판정 229건 중 225건이 원문에 글자 그대로 있음, 인용을 구간으로 내면 출력 평균 0.858–0.869 → 0.892–0.909). 기본값은 끔 그대로다.
 - 첫 실측 뒤 조정(같은 날, 사용자 결정): 입력 v1 단독 실측의 block F1(가드 160행, 1회 0.771)이 목표 0.90에 못 미쳤다. S2.7 전에 v1을 2회 더 돌려 3회 범위를 만든다(§4.6). 입력 프롬프트 v2는 S3.2의 새 PR에서 한다(§5 S3.2, §10 프롬프트 버전).

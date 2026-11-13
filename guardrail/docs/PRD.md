@@ -191,7 +191,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓴다(SPEC §7.1).
 | 입력 판정 nano 실패(재시도 후) | kNN 다수 범주와 LR 범주가 같으면 그 범주, 다르면 LR 범주. 한쪽만 켜져 있으면(`lr`·`knn_vote` 토글) 그쪽, 둘 다 없으면 `normal`. decision은 §3 |
 | 출력 판정 nano 실패 | GR-07에서 nano만 빼고 계산(①·②, 그 밖은 `output.failure_default`, 기본 `grounded` = `true/[]`, 근거는 GR-07). safe는 GR-08 그대로 |
 | 요청 예산 약 20초 초과 | 그때까지의 결과 + 위 기본값으로 즉시 응답 |
-| 요청 파싱 실패 | 읽을 수 있는 만큼 판정. 못 읽으면 `allow`·`normal`. 본문에 `candidate_answer` 키가 있으면 `output`은 `output.failure_default`(기본 `grounded` = `true/[]`)·safe=true. 출력 판정 실패와 같은 규칙 하나. `candidate_answer` 값이 문자열이 아니고 `messages`는 읽히면 입력은 정상 판정하고 `output`만 `output.failure_default`, safe는 GR-08 그대로(읽을 답변이 없어 거절·숨긴 태그 없음) |
+| 요청 파싱 실패 | 읽을 수 있는 만큼 판정. 못 읽으면 `allow`·`normal`. 본문에 `candidate_answer` 키가 있으면 `output`은 `output.failure_default`(기본 `grounded` = `true/[]`)·safe=true(단 답변이 문자열이고 숨긴 태그가 있으면 safe=false, GR-08). 출력 판정 실패와 같은 규칙 하나. `candidate_answer` 값이 문자열이 아니고 `messages`는 읽히면 입력은 정상 판정하고 출력은 nano 실패와 같이 GR-07 표를 nano 없이 탄다: block 범주면 ①(`true/[]`), 그 밖은 `output.failure_default`. safe는 GR-08 그대로(읽을 답변이 없어 거절·숨긴 태그 없음) |
 
 - **수용 기준**: 장애 주입(타임아웃·5xx·429·잘못된 JSON)에서 형식 오류 0건, 모든 응답 30초 안.
 

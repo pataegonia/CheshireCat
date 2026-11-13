@@ -39,6 +39,10 @@
 - `uv sync --locked` · `uv run pytest tests/integration` · `uv run ruff check .` · `uv run ruff format .`
 - 루트 `pyproject.toml`(workspace)이 생기기 전에는 `python -m pytest tests/integration`으로 돌린다(guardrail 패키지가 설치돼 있어야 한다. 테스트가 경로를 대신 잡아 주지 않는다). Python 3.12 기준(3.13 전용 기능 금지).
 - 테스트 폴더는 `tests/__init__.py` + `tests/integration/__init__.py`를 둘 다 둔다. `tests/__init__.py`가 없으면 pytest가 `tests/`를 경로 앞에 넣어 `import integration`이 테스트 폴더를 가리킨다(튜터 `tests/tutor`도 같은 이유).
+- 통합 테스트는 루트 `app.py`를 그대로 띄우고 LLM의 **전송만** 가짜로 바꾼다(`tests/integration/conftest.py`). 튜터는 `tutor.runtime.llm._openai_send`(`fake_send`), 가드는 `guardrail.llm` 모듈 안의 `openai_env` · `openai.AsyncOpenAI`(`fake_guard_send`, 앱을 띄우는 테스트가 모두 지나는 `app_env`에 묶여 있다). 가드가 클라이언트를 만드는 자리를 옮기면 `test_guard_llm.py`의 첫 테스트가 알려 준다.
+- 요청당 nano 호출 상한은 `tests/integration/applib.py` 한 곳에 둔다: `MAX_LLM_CALLS_PER_REQUEST`(튜터 전송, 모드별) + `MAX_GUARD_LLM_CALLS_PER_REQUEST`(가드 LLM, 경로별. probe 제외). 지금 가드는 상수 판정기라 0이다. 가드가 기본 판정기를 실제 판정기로 바꾸면(S2.8) 뒤의 표를 고친다: 고치지 않으면 호출 수 단언이 그 표를 가리키는 문구와 함께 실패한다.
+- `tests/integration/llm_guard.py`는 실제 판정기의 대역이다(가드의 진짜 `LLM`으로 nano를 부르는 최소 판정기). 실제 판정기가 main에 들어오기 전에 기동 · 호출 수 · 요청 내용 미보존을 확인하는 용도이고, 들어오면 지운다.
+- 루트 `pyproject.toml`의 pytest 설정은 `-m 'not live'`다. 루트에서 `guardrail/tests`를 같이 돌려도 실제 API 테스트는 고르지 않는다.
 - 하네스: `uv run python -m harness.run_public --preset v1_parallel`(실행 전 예상 호출 수를 출력하고 상한을 넘으면 멈춘다). 실제 API 부하(600요청 · 64동시)는 대회 기간 2회만.
 
 ## 작업 방식

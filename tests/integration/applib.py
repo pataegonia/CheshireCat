@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, get_args
 
 import jsonschema
+import openai
 from guardrail.schema import Category
 
 from integration.contracts import ACTIONS
@@ -30,6 +31,8 @@ _GUARD_CONTRACT = json.loads(
 GUARD_RESPONSE_SCHEMA = {"$ref": "#/$defs/response", "$defs": _GUARD_CONTRACT["$defs"]}
 
 ANSWER_WORD = "가짜답변표식"  # 가짜 LLM이 답변에 넣는 단어(로그에 나오면 답변 본문이 샌 것)
+# 가짜 가드 LLM이 판정 글(evidence · reason)에 넣는 단어(응답 · 로그에 나오면 판정 글이 샌 것)
+GUARD_WORD = "가짜판정표식"
 
 
 def _load_scoring():
@@ -67,9 +70,27 @@ def user(content: str) -> dict[str, Any]:
     }
 
 
-# 요청 하나에 튜터가 LLM을 부르는 횟수의 상한(모드별). 튜터가 판정 호출을 붙이면(#88) 여기 한
-# 곳과 FakeSend의 응답(스키마 이름별 분기)을 고친다. 가드(지금은 상수 판정기)는 부르지 않는다.
+# 요청 하나에 튜터가 **자기 전송 함수로** LLM을 부르는 횟수의 상한(모드별). 튜터가 자기 호출을
+# 늘리면 여기 한 곳과 FakeSend의 응답(스키마 이름별 분기)을 고친다. 튜터가 가드에 맡기는 판정
+# (classify · judge_output, #88)은 튜터 전송 함수를 지나지 않는다: 아래 가드 쪽 상한에서 센다.
 MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
+
+# 요청 하나에 가드 LLM(`guardrail.llm.LLM`)이 nano를 부르는 횟수의 상한(경로별). probe는 세지
+# 않는다(기동 때 한 번). 지금 루트 앱의 가드는 상수 판정기라 0이다. 가드가 기본 판정기를 실제
+# 판정기로 바꾸면(S2.8) 여기 한 곳을 고친다: `/guard`는 입력 판정 + 출력 판정(+ 재시도),
+# `/tutor`는 튜터가 맡기는 classify · judge_output. 요청당 전체 nano 호출 상한은 두 표의 합이다.
+MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 0, "/guard": 0}
+GUARD_BUDGET_HINT = (
+    "가드 nano 호출이 상한을 넘었다. 판정기를 바꿨으면 "
+    "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST를 고친다"
+)
+
+
+def guard_call_budget(*, tutor: int = 0, guard: int = 0) -> int:
+    """`/tutor` 요청 tutor개와 `/guard` 요청 guard개에 허용되는 가드 nano 호출 수."""
+    limits = MAX_GUARD_LLM_CALLS_PER_REQUEST
+    return tutor * limits["/tutor"] + guard * limits["/guard"]
+
 
 CATEGORIES: tuple[str, ...] = get_args(Category)
 LONG_TAIL = " " + "길게 이어지는 문장이에요. " * 400  # 5,600자: 답변 상한 4,000자를 넘긴다
@@ -163,13 +184,108 @@ class FakeSend:
             self.evidence.append(log)
             raise UnknownSchema(name)
         self.evidence.append(log)
-        content = json.dumps(reply, ensure_ascii=False)
-        choice = types.SimpleNamespace(
-            message=types.SimpleNamespace(content=content), finish_reason="stop"
+        return _completion(json.dumps(reply, ensure_ascii=False))
+
+
+def _completion(content: str) -> Any:
+    """chat.completions.create 응답에서 서버가 읽는 부분만 가진 객체."""
+    choice = types.SimpleNamespace(
+        message=types.SimpleNamespace(content=content), finish_reason="stop"
+    )
+    return types.SimpleNamespace(choices=[choice], usage=types.SimpleNamespace(completion_tokens=5))
+
+
+_GUARD_PROBE = [{"role": "user", "content": "ping"}]  # guardrail.llm.LLM.probe()가 보내는 요청
+
+
+def _guard_schema_name(kwargs: dict[str, Any], system: str) -> str:
+    """가드 판정 스키마 이름(guardrail.judges.schemas). json_schema 방식이면 이름으로,
+    json_object 방식이면 system 끝에 붙은 스키마의 필드로 알아본다."""
+    spec = kwargs.get("response_format", {}).get("json_schema")
+    if isinstance(spec, dict):
+        return str(spec.get("name", ""))
+    if '"category"' in system and '"evidence"' in system:
+        return "InputOut"
+    if '"grounded"' in system and '"reason"' in system:
+        return "OutputBaselineOut" if '"safe"' in system else "OutputOut"
+    return ""
+
+
+class FakeGuardSend:
+    """가드 LLM(`guardrail.llm.LLM`)의 chat.completions.create 자리에 넣는 가짜 전송.
+
+    `FakeSend`의 가드 쪽 짝이다. 실제 API를 부르지 않고, 받은 내용은 저장하지 않는다(횟수 · 해시 ·
+    스키마 이름만).
+
+    - `count`는 판정 호출 수다. `LLM.start()`의 probe(요청이 "ping" 하나)는 `probes`에 따로 센다.
+    - 기본: 입력 판정은 normal, 출력 판정은 grounded(· safe) true. 튜터 답을 건드리지 않는 값이다.
+    - `vary=True`: 범주 10종과 grounded · safe를 프롬프트 해시로 고른다(무작위 없음).
+    - 모르는 스키마로 부르면 `UnknownSchema`를 던지고 `unknown`에 이름을 남긴다. 가드 LLM은 전송
+      예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send` 픽스처가 끝날 때 `unknown`을 본다.
+    """
+
+    def __init__(self, *, vary: bool = False) -> None:
+        self.vary = vary
+        self.count = 0
+        self.probes = 0
+        self.clients = 0  # AsyncOpenAI 자리(OpenAIShim)에서 클라이언트를 만든 횟수
+        self.by_schema: collections.Counter[str] = collections.Counter()
+        self.digests: list[str] = []
+        self.unknown: list[str] = []
+
+    async def __call__(self, kwargs: dict[str, Any]) -> Any:
+        messages = kwargs["messages"]
+        if messages == _GUARD_PROBE:
+            self.probes += 1
+            return _completion("{}")
+        self.count += 1
+        payload = json.dumps(messages, ensure_ascii=False, sort_keys=True).encode(
+            "utf-8", "surrogatepass"
         )
-        return types.SimpleNamespace(
-            choices=[choice], usage=types.SimpleNamespace(completion_tokens=5)
-        )
+        full = hashlib.sha256(payload)
+        digest = full.hexdigest()[:16]
+        self.digests.append(digest)
+        system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+        name = _guard_schema_name(kwargs, system)
+        self.by_schema[name] += 1
+        picks = itertools.cycle(full.digest())
+        note = f"{GUARD_WORD} {digest}"
+        if name == "InputOut":
+            category = CATEGORIES[next(picks) % len(CATEGORIES)] if self.vary else "normal"
+            reply: dict[str, Any] = {"evidence": note, "category": category}
+        elif name in ("OutputOut", "OutputBaselineOut"):
+            reply = {"reason": note, "grounded": bool(next(picks) % 2) if self.vary else True}
+            if name == "OutputBaselineOut":
+                reply["safe"] = bool(next(picks) % 4) if self.vary else True
+        else:
+            self.unknown.append(name)
+            raise UnknownSchema(name)
+        return _completion(json.dumps(reply, ensure_ascii=False))
+
+
+class OpenAIShim:
+    """`guardrail.llm` 모듈의 `openai` 이름 자리에 넣는다.
+
+    `AsyncOpenAI`만 가짜다: 만들어진 클라이언트의 `chat.completions.create`가 `FakeGuardSend`로
+    간다. 그 밖의 이름(예외 클래스 · `Timeout`)은 진짜 openai로 넘긴다. 튜터가 쓰는 `openai`
+    모듈 자체는 건드리지 않는다.
+    """
+
+    def __init__(self, fake: FakeGuardSend) -> None:
+        self._fake = fake
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(openai, name)
+
+    def AsyncOpenAI(self, **_: Any) -> Any:  # noqa: N802  SDK 클래스 이름 그대로
+        fake = self._fake
+        fake.clients += 1
+
+        async def create(**kwargs: Any) -> Any:
+            return await fake(kwargs)
+
+        completions = types.SimpleNamespace(create=create)
+        return types.SimpleNamespace(chat=types.SimpleNamespace(completions=completions))
 
 
 def _plain_main(answer: str) -> dict[str, Any]:

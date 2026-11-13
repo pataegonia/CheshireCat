@@ -19,12 +19,45 @@ _CLEARED_ENV = (
     "OPENAI_BASE_URL",
 )
 LLM_MODES = ("v2", "baseline")
+# 가드 LLM이 기동 때 읽는 API 설정의 가짜 값. 주소는 이 컴퓨터의 닫힌 포트라, 가짜 전송을 비켜 간
+# 코드가 있어도 밖으로 나가지 못한다.
+GUARD_LLM_ENV = {
+    "OPENAI_API_KEY": "fake-guard-key",
+    "OPENAI_MODEL": "fake-model",
+    "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
+}
 _MODE_LINE = re.compile(r"^mode:[ \t]*v2(?P<rest>[ \t]*(?:#.*)?)$", re.M)
 
 
 @pytest.fixture
-def app_env(monkeypatch):
-    """가짜 토큰 · 모델 이름만 넣고, 실제 키와 설정 경로 환경변수는 지운다."""
+def fake_guard_send(monkeypatch):
+    """가드 LLM(`guardrail.llm.LLM`)의 전송만 가짜로 바꾼다. 게이트 · 재시도 · 카운터는 실제다.
+
+    가드 LLM은 `start()`에서 `openai_env()`로 설정을 읽고 `openai.AsyncOpenAI`로 클라이언트를
+    만든다. 그 두 이름을 `guardrail.llm` 모듈 안에서만 바꾼다(환경변수와 튜터가 쓰는 openai 모듈은
+    그대로 둔다). 지금 루트 앱의 가드는 상수 판정기라 이 가짜는 불리지 않는다. 가드가 기본 판정기를
+    실제 판정기로 바꾸면(S2.8) 그때부터 모든 통합 테스트의 가드 nano 호출이 여기로 온다.
+    """
+    from tests.integration.applib import FakeGuardSend, OpenAIShim
+
+    fake = FakeGuardSend()
+    llm_mod = importlib.import_module("guardrail.llm")
+    monkeypatch.setattr(llm_mod, "openai", OpenAIShim(fake))
+    monkeypatch.setattr(llm_mod, "openai_env", lambda: dict(GUARD_LLM_ENV))
+    yield fake
+    # 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼킨다. 가짜가 모르는 호출이 있었으면 여기서 드러낸다.
+    assert fake.unknown == [], (
+        "FakeGuardSend가 모르는 스키마로 가드 LLM을 불렀다(applib.FakeGuardSend를 고친다)"
+    )
+
+
+@pytest.fixture
+def app_env(monkeypatch, fake_guard_send):
+    """가짜 토큰 · 모델 이름만 넣고, 실제 키와 설정 경로 환경변수는 지운다.
+
+    앱을 띄우는 테스트는 모두 이 픽스처를 지난다. 가드 LLM의 가짜 전송(`fake_guard_send`)을 여기에
+    묶어, 어떤 방법으로 앱을 띄우든 가드 nano 호출이 실제 API로 나가지 않게 한다.
+    """
     from tests.integration.applib import TOKEN
 
     for name in _CLEARED_ENV:
@@ -73,6 +106,33 @@ def open_app(app_env, fake_send):
     def _open():
         module = importlib.reload(importlib.import_module("app"))
         with TestClient(module.app) as client:
+            yield client
+
+    return _open
+
+
+@pytest.fixture
+def open_llm_guard_app(app_env, fake_send):
+    """루트 app.py와 같은 조립에서 판정기만 LLM을 쓰는 대역(`llm_guard`)으로 바꾼 앱을 여는 함수.
+
+    가드의 실제 판정기가 들어오기 전에 "기본 판정기가 nano를 부르는 앱"을 미리 띄워 보는 용도다.
+    """
+    from fastapi.testclient import TestClient
+
+    @contextlib.contextmanager
+    def _open():
+        from guardrail.server import create_app
+
+        import tutor
+        from tests.integration.llm_guard import llm_backed_factory
+
+        app = create_app(
+            llm_backed_factory,
+            tutor_router=tutor.router,
+            defaults={"/tutor": tutor.TUTOR_DEFAULT},
+            startups=[tutor.startup],
+        )
+        with TestClient(app) as client:
             yield client
 
     return _open

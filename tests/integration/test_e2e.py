@@ -30,6 +30,7 @@ from tests.integration import strategies
 from tests.integration.applib import (
     ANSWER_WORD,
     AUTH,
+    GUARD_BUDGET_HINT,
     GUARD_RESPONSE_SCHEMA,
     MAX_LLM_CALLS_PER_REQUEST,
     ROOT,
@@ -38,6 +39,7 @@ from tests.integration.applib import (
     assert_tutor_contract,
     cache_sizes,
     find_text,
+    guard_call_budget,
     scoring,
     state_roots,
     user,
@@ -154,9 +156,10 @@ def test_public_set_rows_are_what_the_scorer_sends():
     assert len(SECTION_IDS) == 48
 
 
-def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send):
+def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send, fake_guard_send):
     """채점기가 보내는 400개 요청 전부: 200 + JSON + 스키마. 3xx · 4xx · 5xx가 하나도 없다."""
     fake_send.vary = True  # LLM 답의 모양을 프롬프트 해시로 바꿔 가며 낸다
+    fake_guard_send.vary = True  # 가드 nano의 판정도(가드가 nano를 부르게 되면 범주 10종을 지난다)
     app = llm_client.app
     probes = _state_probes()
     kept_before = sorted(find_text(state_roots(app), probes))
@@ -210,6 +213,9 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
     if llm_mode == "baseline":
         assert fake_send.count == limit  # 행마다 빠짐없이 부른다
     assert dict(app.state.tutor_llm.blocked) == {}
+    # 가드 nano 호출 수(가드 LLM의 가짜 전송이 센다): 두 경로를 합쳐 상한 안이다
+    guard_limit = guard_call_budget(tutor=len(TUTOR_ROWS), guard=len(GUARD_ROWS))
+    assert fake_guard_send.count <= guard_limit, GUARD_BUDGET_HINT
 
     # 400행을 보낸 뒤에도 요청 내용이 남지 않는다. 기동 때 읽은 자료(공개 세트 예시 등)에 같은
     # 문장이 이미 있을 수 있어, 보내기 전과 같은지로 본다.
@@ -281,10 +287,12 @@ def test_fuzzed_conversations_reach_the_llm_on_tutor(llm_client, llm_mode, fake_
 
 
 @pytest.mark.parametrize("name", sorted(FUZZ))
-def test_fuzzed_bodies_get_200_in_contract_on_guard(client, fake_send, name):
+def test_fuzzed_bodies_get_200_in_contract_on_guard(client, fake_send, fake_guard_send, name):
     """`/guard`는 튜터 모드와 무관하다(튜터 설정만 다르다). 저장소 설정으로 한 번만 돈다."""
-    fuzz(FUZZ[name], client, "/guard")
+    fake_guard_send.vary = True
+    sent = fuzz(FUZZ[name], client, "/guard")
     assert fake_send.count == 0  # 가드는 튜터 LLM을 부르지 않는다
+    assert fake_guard_send.count <= guard_call_budget(guard=len(sent)), GUARD_BUDGET_HINT
 
 
 # ── 고정 경계 사례 ────────────────────────────────────────────────────────

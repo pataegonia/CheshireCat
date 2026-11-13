@@ -158,9 +158,12 @@ def test_revealed_hidden_instruction_reaches_the_model():
 
 
 def test_question_is_normalized_and_capped():
-    body = build_messages("가" * 5000, "답변", HITS, CFG)[1]["content"]
+    long = "".join(f"문장{i} " for i in range(2000)) + "끝말"  # 반복 줄이기로 줄지 않는 글
+    body = build_messages(long, "답변", HITS, CFG)[1]["content"]
     question = body.split("<question>")[1].split("</question>")[0]
-    assert len(question) == CFG.input.max_chars
+    # 입력 판정기와 같은 방식: 앞 + 생략 표시 + 뒤(preprocess.clip)
+    assert len(question) == CFG.input.max_chars + len("…") + 2  # 생략 표시와 앞뒤 줄바꿈
+    assert question.startswith("문장0 ") and question.endswith("끝말")
 
 
 # --- 호출 -----------------------------------------------------------------

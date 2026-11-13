@@ -146,8 +146,10 @@ class Ranking:                   # kb.py. KbIndex.rank(query)가 BM25 점수를 
     hits: tuple[Hit, ...]        # 점수 내림차순 전체. 상위 k = hits[:k], 1위 섹션 = hits[0].section_id
     margin: float                # 전체 순위를 섹션별 최고 점수로 접은 뒤 1위 섹션 점수 − 다른 섹션 중 최고 점수(top_k 안만 보지 않음)
 # KbIndex(kb.py): load(kb_dir), rank(query) -> Ranking,
-#   search(query, k) -> list[Hit]   # = list(rank(query).hits[:k]). 튜터·테스트용. judge()는 rank()를 한 번만 부른다
+#   search(query, k) -> list[Hit]   # = list(rank(query).hits[:k]). 섹션이 아니라 조각 상위 k개, 테스트용. judge()는 rank()를 한 번만 부른다
 #   section_text(section_id) -> str   # 그 섹션의 모든 조각 + 붙은 CSV
+#   chunks -> tuple[tuple[str, str], ...]   # (섹션 ID, 조각 텍스트), 섹션·조각 순서
+#   scores(query) -> list[float]   # 조각 순서 BM25 점수. 튜터 섹션 순위·임베딩 색인용
 #   점수 계산은 질의 2-gram → 조각 역색인으로 해도 된다. 단 점수가 common.py BM25와 1e-9 안에서 같아야 한다(테스트)
 
 @dataclass(frozen=True)
@@ -367,7 +369,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.5** | kNN·LR 보조 판정기 | 05·14 / 0013 | P0 | 5h | Sonnet | S1.4·S2.1 | 교차 검증 kNN 다수·LR 각각의 block F1·범주 정확도, 기동 학습 ≤10초, 요청당 p95 ≤20ms, 색인 불변 테스트 |
 | **S2.6** | 입력 판정 nano·프롬프트 v1 | 04 / 0012·0013 | P0 | 8h | Opus + santa | S1.3·S2.5 | `FakeLLM`으로 스키마·재시도·기본값 계약, 기본값을 쓰기 전 nano 응답 성공률 ≥98%(재시도 포함), 실패율은 오류 코드별 보고, 호출 p95 ≤5s |
 | **S2.7** | 출력 근거 판정 nano·프롬프트 v1 | 07 / 0014 | P0 | 5h | Opus + santa | S1.3·S2.2 | 입력 형식(발화·드러낸 답변·상위 3조각), 스키마 `reason → grounded`, 실패 시 `None` |
-| **S2.8** | 판정 조립: decision·3단·safe·기본값·예산 | 07·08·09·01 / 0012·0014·0009 | P0 | 5h | Opus | S1.2·S2.3·S2.4·S2.6·S2.7 | GR-07 표 ①–④·GR-08·GR-09 표 전 행 테스트, 장애 주입에서 형식 오류 0·30초 안, 서버 연결 |
+| **S2.8** | 판정 조립: decision·3단·safe·기본값·예산 | 07·08·09·01 / 0012·0014·0009 | P0 | 5h | Opus | S1.2·S2.3·S2.4·S2.6·S2.7 | GR-07 표 ①–④·GR-08·GR-09 표 전 행 테스트, 장애 주입에서 형식 오류 0·30초 안, 서버 연결, 입력 판정 KB 발췌에서 score==0 조각 제외(테스트), 규칙 ②·발췌가 hits[0]을 쓰기 전 hits[0].score > 0 확인, KB 로드 ValueError가 /tutor 기동까지 막으므로 제출 전 자가 점검이 잡는지 확인 |
 | **S2.9** | 평가 하네스 v1·베이스라인 | 13·11 / 0006·0013 | P0 | 6h | Sonnet | S1.4·S2.8 | §4.6 `report.md` 전 항목, 3회 분산, nano 단독·kNN·LR 단독 점수(PRD §11-2-2), 설정만으로 ablation 실행 |
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
 | **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output(messages, candidate_answer, category=None)`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |

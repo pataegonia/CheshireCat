@@ -1,5 +1,6 @@
 """S1.2 서버: 인증·기동·200 보장·반사 0·로그 규칙 (C1 §S1.2, GR-01·09·12, ADR-0009)."""
 
+import dataclasses
 import asyncio
 import contextlib
 import json
@@ -771,3 +772,21 @@ def test_default_factory_reports_a_failed_probe(monkeypatch, caplog):
     assert [(r.getMessage(), r.levelno) for r in records] == [
         ("guard judge=real probe=timeout", logging.ERROR)
     ]
+
+
+class _DegradedGuard:
+    """200으로 답하지만 안에서 기본값으로 떨어진 판정(S2.10: 부하 시험이 이 비율을 센다)."""
+
+    async def judge(self, req: GuardRequest):
+        ok = await ConstantGuard().judge(req)
+        return dataclasses.replace(ok, errors=("input_judge", "output_judge:TimeoutError"))
+
+
+def test_judgement_error_codes_reach_access_log(caplog):
+    caplog.set_level(logging.DEBUG)
+    with TestClient(create_app(_factory(_DegradedGuard()))) as c:
+        r = _post(c, {"messages": [{"role": "user", "content": MARK}], "candidate_answer": MARK})
+    assert r.status_code == 200
+    fields = _access_lines(caplog)[-1].split(" ")
+    assert len(fields) == 7 and fields[-1] == "input_judge,output_judge:TimeoutError"
+    _assert_logs_clean(caplog)

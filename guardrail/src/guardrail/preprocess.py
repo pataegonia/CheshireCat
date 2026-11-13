@@ -61,6 +61,48 @@ def _visible(ch: str) -> bool:
     return not any(lo <= cp <= hi for lo, hi in _INVISIBLE_RANGES)
 
 
+def _invisible_class() -> str:
+    """`_visible`이 False인 문자에서 태그 문자를 뺀 집합의 정규식 문자 클래스(임포트 때 1회).
+
+    전 코드포인트에 `_visible`을 부르면 0.8초라 후보(Cf + `_INVISIBLE_RANGES`)에만 부른다.
+    전 코드포인트 대조는 tests/test_preprocess.py가 한다.
+    """
+    cand = {cp for cp in range(0x110000) if unicodedata.category(chr(cp)) == "Cf"}
+    cand |= {cp for lo, hi in _INVISIBLE_RANGES for cp in range(lo, hi + 1)}
+    runs: list[list[int]] = []  # 범위로 묶어야 C 매칭이 빠르다(낱자 나열은 1MB에 0.2초)
+    for cp in sorted(cp for cp in cand if not 0xE0000 <= cp <= 0xE007F and not _visible(chr(cp))):
+        if runs and runs[-1][1] == cp - 1:
+            runs[-1][1] = cp
+        else:
+            runs.append([cp, cp])
+    return "[" + "".join(f"{re.escape(chr(lo))}-{re.escape(chr(hi))}" for lo, hi in runs) + "]"
+
+
+_INVISIBLE = re.compile(_invisible_class() + "+")  # 연속 구간을 한 번에(1MB U+200B 47ms → 2ms)
+_NOT_TAG = re.compile("[^\U000e0000-\U000e007f]+")
+_CUT = "\n…\n"
+
+
+def _ends(s: str, n: int, mark: str) -> str:
+    if len(s) <= n:
+        return s
+    head = n // 2
+    return s[:head] + mark + s[len(s) - (n - head) :]
+
+
+def clip(text: str, n: int) -> str:
+    """보이지 않는 문자(태그 문자 빼고)를 지우고 `n`자를 넘으면 앞 + 뒤만 남긴다. 정규식이라 선형.
+
+    무거운 정규화(`normalize`) 전에 부른다. 넘을 때는 태그 문자를 따로 앞 + 뒤로 줄여 맨 앞에 둔다:
+    태그 문자로 양쪽을 채워 보이는 글을 밀어내지 못하게. `decode_tags`는 태그 위치를 쓰지 않는다.
+    """
+    s = _INVISIBLE.sub("", text)
+    if len(s) <= n:
+        return s
+    hidden = _NOT_TAG.sub("", FLAG_SEQUENCE.sub("", s))  # 깃발 이모지의 태그는 숨긴 것이 아니다
+    return _ends(hidden, n, "") + _ends(strip_tags(s), n, _CUT)
+
+
 def _fold_width(ch: str) -> str:
     """전각·반각 문자만 기본 문자로 접는다(ｓ→s, 반각 자모 → 호환 자모). 미할당 문자는 그대로."""
     decomposition = unicodedata.decomposition(ch)

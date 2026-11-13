@@ -17,7 +17,7 @@ from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
 from guardrail.judges.schemas import InputOut
 from guardrail.llm import LLM
-from guardrail.preprocess import decode_tags
+from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
 
 _ROLES = frozenset({"user", "assistant"})
@@ -45,7 +45,7 @@ def build_window(messages: Sequence[Message], last: int) -> list[Message]:
 
 def _data(text: str, cfg: GuardConfig) -> str:
     """보이지 않는 문자 제거·상한(앞 + 뒤) → 정규화(태그 문자는 [숨긴 문자: …]로) → escape."""
-    return html.escape(decode_tags(text[: cfg.input.max_chars])[0], quote=False)
+    return html.escape(decode_tags(clip(text, cfg.input.max_chars))[0], quote=False)
 
 
 def _examples(examples: Sequence[LabeledRow], cfg: GuardConfig) -> str:

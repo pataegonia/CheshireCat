@@ -14,6 +14,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -34,6 +35,8 @@ Send = Callable[[dict[str, Any]], Awaitable[Any]]  # chat.completions.create(**k
 MAX_RETRY_AFTER_S = 120.0  # openai-python MAX_RETRY_AFTER_DELAY
 REJECTED = (400, 422)  # probe가 "이 파라미터를 거절했다"로 보는 상태 코드
 OPTIONAL_PARAMS = ("reasoning_effort", "verbosity", "max_completion_tokens")
+# 짝 없는 surrogate는 UTF-8로 못 써서 SDK가 보내기 전에 실패한다(HTTP 0건) → 대체 문자로
+_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 @dataclass(frozen=True)
@@ -238,7 +241,10 @@ class LLM:
         }
 
     def _request(self, messages: list[dict], schema: type[BaseModel]) -> dict[str, Any]:
-        msgs = [dict(m) for m in messages]
+        msgs = [dict(m) for m in messages]  # 복사본만 바꾼다: 응답 구간은 원문의 부분 문자열이다
+        for m in msgs:
+            if isinstance(m.get("content"), str):
+                m["content"] = _SURROGATE.sub("�", m["content"])
         if self.structured == "json_object":
             note = "JSON 객체만 출력한다. 스키마:\n" + json.dumps(
                 strict_schema(schema), ensure_ascii=False

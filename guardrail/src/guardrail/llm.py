@@ -244,7 +244,7 @@ class LLM:
         msgs = [dict(m) for m in messages]  # 복사본만 바꾼다: 응답 구간은 원문의 부분 문자열이다
         for m in msgs:
             if isinstance(m.get("content"), str):
-                m["content"] = _SURROGATE.sub("�", m["content"])
+                m["content"] = _SURROGATE.sub("\ufffd", m["content"])
         if self.structured == "json_object":
             note = "JSON 객체만 출력한다. 스키마:\n" + json.dumps(
                 strict_schema(schema), ensure_ascii=False

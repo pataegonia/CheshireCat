@@ -317,7 +317,7 @@ def test_text_under_cap_keeps_indent_blank_lines_and_repeats():
 
 
 def test_text_fits_after_reduction_has_no_cut_mark():
-    assert target_of(" " * 3000 + ASK) == ASK
+    assert target_of(" " * 3000 + ASK) == " " + ASK  # 공백 연속은 한 글자로, 생략 표시 없음
 
 
 def test_body_of_exactly_cap_after_tag_strip_is_not_cut():

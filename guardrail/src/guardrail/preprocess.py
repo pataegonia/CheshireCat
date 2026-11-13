@@ -79,7 +79,9 @@ def _invisible_class() -> str:
 
 
 _INVISIBLE = re.compile(_invisible_class() + "+")  # 연속 구간을 한 번에(1MB U+200B 47ms → 2ms)
-_NOT_TAG = re.compile("[^\U000e0000-\U000e007f]+")
+_NOT_TAG = re.compile("[^\U000e0020-\U000e007e]+")  # decode_tags가 푸는 범위만 남긴다
+_SPACE_RUN = re.compile(r"(\s)\s+")
+_REPEAT = re.compile(r"(.)\1{3,}", re.S)
 _CUT = "\n…\n"
 
 
@@ -93,14 +95,17 @@ def _ends(s: str, n: int, mark: str) -> str:
 def clip(text: str, n: int) -> str:
     """보이지 않는 문자(태그 문자 빼고)를 지우고 `n`자를 넘으면 앞 + 뒤만 남긴다. 정규식이라 선형.
 
-    무거운 정규화(`normalize`) 전에 부른다. 넘을 때는 태그 문자를 따로 앞 + 뒤로 줄여 맨 앞에 둔다:
-    태그 문자로 양쪽을 채워 보이는 글을 밀어내지 못하게. `decode_tags`는 태그 위치를 쓰지 않는다.
+    무거운 정규화(`normalize`) 전에 부른다. 넘을 때는 본문의 공백류 연속을 한 글자로, 같은 글자
+    4번 이상을 3개로 줄인 뒤 다시 잰다(빈칸처럼 보이는 문자로 양쪽을 채워 밀어내지 못하게).
+    풀 수 있는 태그 문자는 따로 앞 + 뒤로 줄여 맨 앞에 둔다(`decode_tags`는 위치를 쓰지 않는다).
+    한계: 보이는 글이나 서로 다른 문자를 섞은 채우기로 양쪽을 채우면 가운데는 빠진다.
     """
     s = _INVISIBLE.sub("", text)
     if len(s) <= n:
         return s
+    body = _REPEAT.sub(r"\1\1\1", _SPACE_RUN.sub(r"\1", strip_tags(s)))
     hidden = _NOT_TAG.sub("", FLAG_SEQUENCE.sub("", s))  # 깃발 이모지의 태그는 숨긴 것이 아니다
-    return _ends(hidden, n, "") + _ends(strip_tags(s), n, _CUT)
+    return _ends(hidden, n, "") + _ends(body, n, _CUT)
 
 
 def _fold_width(ch: str) -> str:

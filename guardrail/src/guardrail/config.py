@@ -234,6 +234,8 @@ def load_prompt(cfg: GuardConfig, name: str) -> tuple[str, str]:
     head = yaml.safe_load(m.group("head"))
     if not isinstance(head, dict) or head.get("id") != name or not head.get("version"):
         raise ValueError(f"프롬프트 {name}: 머리말 id·version이 맞지 않다")
+    if not text[m.end() :].strip():  # 빈 system 메시지로 판정이 나가 캐시되지 않게
+        raise ValueError(f"프롬프트 {name}: 본문이 비었다")
     return str(head["version"]), text[m.end() :]
 
 

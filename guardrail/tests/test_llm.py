@@ -4,11 +4,15 @@ FakeLLM + FakeClock으로 0ms에 돈다. 실제 API는 `-m live`에서만.
 """
 
 import asyncio
+import copy
 import email.utils
+import json
 import os
 import time
 from collections import Counter
 
+import httpx2 as httpx
+import openai
 import pytest
 from fakes import (
     BadRequest,
@@ -400,6 +404,46 @@ async def test_errors_carry_codes_not_messages():
     r = await call(llm, clock)
     assert r.error == "server" and r.attempts == 1 and secret not in repr(r)
     assert llm.unexpected == Counter({"RuntimeError": 1})  # 클래스 이름만
+
+
+async def test_lone_surrogate_is_sent_as_replacement_in_a_copy():
+    """실제 SDK + 가짜 전송: 짝 없는 surrogate가 있어도 요청이 나가고, 넘긴 메시지는 그대로."""
+    bodies: list[bytes] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(req.content)
+        message = {"role": "assistant", "content": OK_IN}
+        choice = {"index": 0, "finish_reason": "stop", "message": message}
+        return httpx.Response(200, json={"choices": [choice], "usage": {"completion_tokens": 5}})
+
+    client = openai.AsyncOpenAI(
+        api_key="x",
+        base_url="http://fake.invalid/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        max_retries=0,
+    )
+
+    async def send(kwargs):
+        return await client.chat.completions.create(**kwargs)
+
+    llm = LLM(BASE, send=send)
+    msgs = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "a\ud800b"}]
+    before = copy.deepcopy(msgs)
+    r = await llm.complete("input_judge", msgs, InputOut, deadline=time.monotonic() + 20)
+    assert r.error is None and r.parsed is not None
+    assert len(bodies) == 1
+    sent = json.loads(bodies[0].decode("utf-8"))["messages"]
+    assert sent[1]["content"] == "a\ufffdb"
+    assert llm.unexpected == Counter()
+    assert msgs == before
+
+
+@pytest.mark.parametrize("lone", ["\ud800", "\udbff", "\udc00", "\udfff"])
+async def test_both_halves_of_surrogate_range_are_replaced(lone):
+    llm, fake, clock = make(Ok(OK_IN))
+    msgs = [{"role": "user", "content": f"a{lone}b"}]
+    assert (await llm.complete("input_judge", msgs, InputOut, deadline=clock() + 20)).parsed
+    assert fake.requests[0]["messages"][-1]["content"] == "a\ufffdb"
 
 
 # --- live ---

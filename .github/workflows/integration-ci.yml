@@ -1,24 +1,38 @@
-# 통합·평가 CI. 모든 PR에서 돌고, 통합 영역(app.py, integration/, tutor/, harness/, config/)을 건드린 경우에만
-# lint·test·대회 규칙 검사를 실행한다. 대회 규칙 중 금지 의존성 검사는 guardrail/의 의존성 파일까지,
-# 비밀 키 검사는 저장소 전체를 본다(제출물이 저장소 전체이기 때문. guardrail-ci는 guardrail/ 코드 품질만 본다).
-# 필수 검사(required check)로는 `integration / gate` 하나만 지정한다. 구조는 guardrail-ci.yml과 같다.
+# 통합·평가 CI. 모든 PR과 모든 main push 에서 돈다. 작업은 `integration / gate` 하나다(작업마다 분 단위로 올림해 청구되므로
+# 예전의 changes·test·rules·secrets·gate 다섯 작업을 단계로 합쳤다).
+# 단계 순서: checkout → 변경 경로 판별 → 비밀 키 검사(경로와 무관하게 항상) → 통합 영역을 건드렸을 때만
+# lint·test → 대회 규칙 검사 다섯 가지 → 판정. 대회 규칙 중 정적 검사 네 가지(금지 의존성 · 외부 URL 리터럴 ·
+# 본문 로깅 · submission.json/.env)는 경로와 무관하게 항상 돌고(합쳐 1초 미만), 런타임 로그 grep 만 통합 영역을
+# 건드렸을 때 돈다. 대회 규칙 단계는 앞 단계가 실패해도 돌아 결과를 한 번에 볼 수 있다.
+# 어느 단계든 하나라도 실패하면 작업이 실패한다(변경 경로 판별 실패 포함). 맨 끝 판정 단계는 판별 결과가
+# true/false 가 아니거나 돌아야 할 단계가 돌지 않았을 때 실패한다.
+# 통합 영역 = 런박스에 뜨는 앱이나 통합 테스트 결과를 바꿀 수 있는 경로: app.py, integration/, tutor/,
+# harness/, config/, tests/, scripts/, competition/(테스트가 공개 세트·교재·채점 코드를 읽는다), 루트 pyproject.toml·uv.lock,
+# 루트 설정 파일(conftest.py, pytest.ini, tox.ini, setup.cfg, ruff.toml, .ruff.toml, uv.toml, .python-version),
+# 이 파일, 그리고 가드에서는 앱에 영향을 주는 곳만(guardrail/src/, guardrail/configs/, guardrail/prompts/(가드 서버의
+# 기본 프롬프트 폴더), guardrail/docs/contract/, guardrail/pyproject.toml,
+# guardrail/scripts/r13/common.py(tests/tutor/test_retrieval.py 가 이 파일을 실행한다)).
+# 문서 폴더 tutor/docs/ · integration/docs/ 에서는 .md 만 뺀다. 그 폴더의 다른 파일은 통합 영역이다
+# (tests/integration/test_rules.py 가 integration/ · tutor/ 의 *.py 를 전부 훑고, 튜터 ruff 설정에는 docs 제외가 없다.
+# tutor/prompts/ 는 코드가 읽으므로 .md 도 통합 영역이다). 가드 문서·가드 단위 테스트만 고친 PR에서는 lint·test 가
+# 돌지 않는다(guardrail-ci가 본다).
+# 가드·튜터 PR이 조립을 깨면 그 PR에서 걸리게 한다(tests/integration/test_e2e.py, S1 I1.7).
+# 경로를 가리는 곳은 변경 경로 판별 단계 하나다(PR에서만 가린다). main push 와 수동 실행은 경로 필터 없이
+# 항상 전부 돈다: on.push 에 paths 를 두면 그 밖의 경로만 바꾼 push 에서 비밀 키 검사까지 빠진다.
+# PR 본문 수정(edited)에는 돌지 않는다: 결과가 같은 실행을 되풀이하지 않는다. 그래서 base 브랜치를 바꾼 뒤에는
+# PR을 닫았다 다시 열어야 테스트가 새 base 기준으로 다시 돈다. 바꾸고 그대로 두면 pr-policy 의
+# "base 변경 뒤 통합 검사 재실행 확인" 단계가 실패로 알린다.
+# 대회 규칙 중 금지 의존성 검사는 guardrail/의 의존성 파일까지, 비밀 키 검사는 저장소 전체를 본다
+# (제출물이 저장소 전체이기 때문. guardrail-ci는 guardrail/ 코드 품질만 본다).
+# 머지 전 확인할 검사는 `integration / gate` 하나다(비밀 키 검사도 이 안에서 돈다).
 name: integration-ci
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   push:
+    # 경로 필터 없음: main push 는 항상 전부 돈다(비밀 키 검사가 빠지는 경로가 없게)
     branches: [main]
-    paths:
-      - "app.py"
-      - "integration/**"
-      - "tutor/**"
-      - "harness/**"
-      - "config/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "guardrail/pyproject.toml"
-      - ".github/workflows/integration-ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,18 +43,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  changes:
-    name: integration / changes
+  gate:
+    name: integration / gate
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      integration: ${{ steps.diff.outputs.integration }}
+    timeout-minutes: 15
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
+      # fetch-depth 0: 변경 경로 판별이 base...head 를 비교한다
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - id: diff
+      - name: 변경 경로 판별
+        id: diff
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -51,44 +68,64 @@ jobs:
             echo "integration=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then echo "::error::pull_request 인데 base/head SHA 가 비어 있다 (base='$BASE_SHA', head='$HEAD_SHA')"; exit 1; fi
           list="$RUNNER_TEMP/changed-files"
           git -c core.quotepath=false diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA" > "$list"
           rc=0
-          grep -zqE '^(app\.py$|integration/|tutor/|harness/|config/|pyproject\.toml$|uv\.lock$|guardrail/pyproject\.toml$|guardrail/uv\.lock$|\.github/workflows/integration-ci\.yml$)' "$list" || rc=$?
+          # 문서 폴더(tutor/docs/, integration/docs/)의 .md 만 바뀐 것은 통합 영역이 아니다. 그것을 먼저 걸러 낸다
+          # (grep -v 는 남는 줄이 없으면 1을 낸다. 그것은 오류가 아니다).
+          code="$RUNNER_TEMP/changed-files-without-docs"
+          frc=0
+          grep -zvE '^(tutor/docs/|integration/docs/).*\.md$' "$list" > "$code" || frc=$?
+          if [ "$frc" -gt 1 ]; then echo "::error::변경 파일 검사 실패 (grep -v $frc)"; exit 1; fi
+          grep -zqE '^(app\.py$|integration/|tutor/|guardrail/src/|guardrail/configs/|guardrail/prompts/|guardrail/docs/contract/|guardrail/pyproject\.toml$|guardrail/scripts/r13/common\.py$|harness/|config/|tests/|scripts/|competition/|pyproject\.toml$|uv\.lock$|conftest\.py$|pytest\.ini$|tox\.ini$|setup\.cfg$|ruff\.toml$|\.ruff\.toml$|uv\.toml$|\.python-version$|\.github/workflows/integration-ci\.yml$)' "$code" || rc=$?
           case "$rc" in
             0) echo "integration=true" >> "$GITHUB_OUTPUT" ;;
-            1) echo "integration=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "integration=false" >> "$GITHUB_OUTPUT"; echo "통합 영역 변경 없음: lint·test·런타임 로그 검사는 건너뛴다" ;;
             *) echo "::error::변경 파일 검사 실패 (grep $rc)"; exit 1 ;;
           esac
-
-  test:
-    name: integration / lint·test
-    needs: changes
-    if: needs.changes.outputs.integration == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      # ── 비밀 키 검사: 경로와 무관하게 항상(변경 경로 판별이 실패하면 돌지 않고 작업이 실패한다) ──
+      # uv sync 앞에 둔다: 그 뒤에는 작업 폴더에 .venv 가 생긴다
+      - name: gitleaks 설치 (해시 고정)
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "${tarball}" gitleaks
+      # 저장소 전체 현재 파일. 이 단계가 저장소의 유일한 비밀 키 검사다(guardrail-ci 는 이제 비밀 키 검사를
+      # 하지 않는다). 찾은 값은 가린다.
+      # competition/public·kb에는 PII 예시(전화번호·계좌 형태)가 들어 있어 .gitleaks.toml에서 경로를 제외한다.
+      - name: 저장소 전체 비밀 키 검사
+        id: secrets
+        run: ./gitleaks dir . --no-banner --redact --config .gitleaks.toml
+      # ── lint·test: 통합 영역을 건드렸을 때만 ──
+      # 앞 단계가 성공했을 때만 다음으로 간다(setup-uv → uv sync → lint → pytest). 조건을 success() 대신 단계 결과로
+      # 적은 것은 비밀 키 검사가 실패해도 lint·test 결과를 보기 위해서다(예전에는 다른 작업이라 서로 무관했다).
       # 루트 pyproject.toml이 생기기 전(문서·CI만 있는 PR)에는 건너뛴다. 생긴 뒤에는 반드시 돈다.
       # setup-uv도 그 뒤에 둔다: 캐시할 게 없으면 post 단계가 "Cache path does not exist"로 job을 실패시킨다.
       - name: 프로젝트 유무 확인
+        if: ${{ !cancelled() && steps.diff.outputs.integration == 'true' }}
         id: proj
         run: |
           if [ -f pyproject.toml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::warning::루트 pyproject.toml 없음 — lint·test 건너뜀 (통합 코드가 들어오면 반드시 추가)"; fi
-      - if: steps.proj.outputs.present == 'true'
+      - name: uv 설치
+        id: uv
+        if: ${{ !cancelled() && steps.proj.outputs.present == 'true' }}
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.12.17"
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - if: steps.proj.outputs.present == 'true'
+      - name: uv sync
+        id: sync
+        if: ${{ !cancelled() && steps.uv.outcome == 'success' }}
         run: uv sync --locked --all-packages  # 멤버(가드·튜터)와 각자의 dev 그룹까지
       # 존재하는 경로만 검사한다(tutor/ 등이 아직 없을 수 있다).
       # tutor/는 튜터 설정(tutor/pyproject.toml)으로 따로 돈다: 루트 설정으로 보면 import 정렬 기준이 달라 I001이 난다.
-      - if: steps.proj.outputs.present == 'true'
+      - name: lint (ruff)
+        id: lint
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: |
           targets=$(ls -d app.py integration harness 2>/dev/null | tr '\n' ' ')
           echo "lint targets: $targets"
@@ -100,25 +137,19 @@ jobs:
           fi
       # 실제 LLM API는 부르지 않는다(키 없음). 계약 테스트는 FakeLLM으로 돈다:
       # 퍼징 입력 → 전부 200 + 스키마, /tutor/ 3xx 없음, 전역 예외 → 200, 로그에 본문 없음.
-      - if: steps.proj.outputs.present == 'true'
+      - name: pytest (tests/integration + tests/tutor)
+        id: pytest
+        if: ${{ !cancelled() && steps.lint.outcome == 'success' }}
         run: |
           if [ ! -d tests/integration ]; then echo "::error::루트 pyproject.toml은 있는데 tests/integration이 없다 — 통합 코드는 계약 테스트와 함께 들어온다"; exit 1; fi
           # 튜터 테스트도 여기서 돈다(튜터 전용 CI 없음, 리더 제안). 커버리지 80%는 integration 패키지에만 건다.
           dirs="tests/integration"; [ -d tests/tutor ] && dirs="$dirs tests/tutor"
           uv run pytest $dirs --cov=integration --cov-report=term-missing --cov-fail-under=80
-
-  rules:
-    name: integration / competition rules
-    needs: changes
-    if: needs.changes.outputs.integration == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      # ── 대회 규칙: 앞 단계가 실패해도 돈다(결과를 한 번에 본다). 정적 검사 네 가지는 경로와 무관하게 항상 돈다
+      # (제출물이 저장소 전체이고 네 단계 합쳐 1초 미만이다). 런타임 로그 grep 만 통합 영역을 건드렸을 때 돈다 ──
       # SPEC §7 "미리 학습된 모델 파일(임베딩·리랭커·분류 모델)"을 끌어오는 패키지. 제출물은 저장소 전체이므로 guardrail/의 의존성 파일도 같이 본다(guardrail-ci에는 이 검사가 없다).
       - name: 금지 의존성 (SPEC §7.1)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           # 저장소 전체의 의존성 파일(tutor/·guardrail/ 포함). 제출물이 저장소 전체이기 때문.
@@ -135,6 +166,7 @@ jobs:
           echo "금지 의존성 없음"
       # 외부 호출은 OPENAI_BASE_URL·EMBEDDING_BASE_URL 환경변수로만. 코드에 URL 리터럴이 있으면 실패(운영진 터널 주소도 .env에만 둔다).
       - name: 외부 URL 리터럴 (SPEC §7)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           targets=$(ls -d app.py integration tutor harness 2>/dev/null || true)
@@ -147,6 +179,7 @@ jobs:
           echo "외부 URL 리터럴 없음"
       # 요청·답변 본문을 로그에 남기는 코드 (SPEC §8). 정적 검사라 거칠지만 가장 흔한 실수를 막는다.
       - name: 본문 로깅 정적 검사 (SPEC §8)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           # 요청 본문을 다루는 코드 전부: 가드 포함(guardrail-ci에는 이 검사가 없다). tests/는 제외.
@@ -160,12 +193,14 @@ jobs:
             echo "$hits"; echo "::error::로그·print에 요청/답변 본문으로 보이는 값이 들어간다. 길이·상태·오류만 남긴다. 오탐이면 줄 끝에 '# log-ok'"; exit 1
           fi
           echo "본문 로깅 패턴 없음"
-      # 런타임 로그 검사: 서버가 있을 때만. FakeLLM으로 공개 세트 20건을 돌리고 로그를 grep한다.
+      # 런타임 로그 검사: 통합 영역을 건드렸고 서버가 있을 때만. FakeLLM으로 공개 세트 20건을 돌리고 로그를 grep한다.
       - name: 런타임 로그 grep (SPEC §8)
+        if: ${{ !cancelled() && steps.diff.outputs.integration == 'true' }}
         run: |
           if [ -x harness/check_logs.sh ]; then harness/check_logs.sh --ci; else echo "::warning::harness/check_logs.sh 없음 — 통합 코드가 들어오면 추가"; fi
       # 제출 양식 자리표시가 실제 값으로 바뀐 채 커밋되는 것을 막는다.
       - name: submission.json · .env 미커밋
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           if git ls-files --error-unmatch competition/.env >/dev/null 2>&1 || git ls-files --error-unmatch .env >/dev/null 2>&1; then
@@ -177,50 +212,35 @@ jobs:
             fi
           done
           echo "제출 양식·.env 정상"
-
-  secrets:
-    name: integration / secret scan (repo)
-    needs: changes
-    if: ${{ always() && needs.changes.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      GITLEAKS_VERSION: "8.30.1"
-      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: gitleaks 설치 (해시 고정)
+      # 예전 gate 작업의 방어를 옮긴 것: 판별 결과나 프로젝트 유무 확인 결과가 true/false 가 아니거나,
+      # 돌아야 할 단계가 돌지 않았으면 실패한다
+      - name: 판정
+        if: ${{ !cancelled() }}
+        env:
+          DIFF: ${{ steps.diff.outcome }}
+          INTEGRATION: ${{ steps.diff.outputs.integration }}
+          SECRETS: ${{ steps.secrets.outcome }}
+          PRESENT: ${{ steps.proj.outputs.present }}
+          LINT: ${{ steps.lint.outcome }}
+          PYTEST: ${{ steps.pytest.outcome }}
         run: |
-          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
-          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
-          tar -xzf "${tarball}" gitleaks
-      # 저장소 전체 현재 파일. guardrail-ci의 guardrail/ 한정 검사를 보완한다. 찾은 값은 가린다.
-      # competition/public·kb에는 PII 예시(전화번호·계좌 형태)가 들어 있어 .gitleaks.toml에서 경로를 제외한다.
-      - name: 저장소 전체 비밀 키 검사
-        run: ./gitleaks dir . --no-banner --redact --config .gitleaks.toml
-
-  gate:
-    name: integration / gate
-    needs: [changes, test, rules, secrets]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - env:
-          CHANGES: ${{ needs.changes.result }}
-          INTEGRATION: ${{ needs.changes.outputs.integration }}
-          TEST: ${{ needs.test.result }}
-          RULES: ${{ needs.rules.result }}
-          SECRETS: ${{ needs.secrets.result }}
-        run: |
-          echo "changes=$CHANGES integration=$INTEGRATION test=$TEST rules=$RULES secrets=$SECRETS"
-          if [ "$CHANGES" != "success" ]; then echo "::error::변경 감지 job 실패"; exit 1; fi
-          # 비밀 키 검사는 서버 변경 여부와 무관하게 항상 통과해야 한다
-          if [ "$SECRETS" != "success" ]; then echo "::error::비밀 키 검사 실패 (secrets=$SECRETS)"; exit 1; fi
-          if [ "$INTEGRATION" = "false" ]; then echo "통합 영역 변경 없음: 통과"; exit 0; fi
-          if [ "$INTEGRATION" != "true" ]; then echo "::error::변경 감지 결과 비정상: '$INTEGRATION'"; exit 1; fi
-          if [ "$TEST" = "success" ] && [ "$RULES" = "success" ]; then exit 0; fi
-          echo "::error::통합 검사 실패 (test=$TEST, rules=$RULES)"; exit 1
+          {
+            echo "| 단계 | 결과 |"; echo "|---|---|"
+            echo "| 변경 경로 판별 | $DIFF (integration=$INTEGRATION) |"
+            echo "| 비밀 키 검사 | $SECRETS |"
+            echo "| lint | ${LINT:-건너뜀} |"
+            echo "| pytest | ${PYTEST:-건너뜀} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SECRETS" != "success" ]; then echo "::error::비밀 키 검사가 통과하지 않았다 (secrets=$SECRETS)"; exit 1; fi
+          case "$INTEGRATION" in
+            false) echo "통합 영역 변경 없음: lint·test 는 건너뛰었다"; exit 0 ;;
+            true) ;;
+            *) echo "::error::변경 경로 판별 결과가 비정상이다: '$INTEGRATION'"; exit 1 ;;
+          esac
+          case "$PRESENT" in
+            true|false) ;;
+            *) echo "::error::프로젝트 유무 확인 결과가 비정상이다: '$PRESENT'"; exit 1 ;;
+          esac
+          if [ "$PRESENT" = "true" ] && [ "$PYTEST" != "success" ]; then
+            echo "::error::lint·test 가 통과하지 않았다 (lint=$LINT, pytest=$PYTEST)"; exit 1
+          fi

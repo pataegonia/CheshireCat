@@ -101,6 +101,12 @@ def test_every_key_is_required(tmp_path, dotted):
         ("llm.gate", 0),
         ("budget_s", 0),
         ("input.lr.ngram", [3, 1]),
+        *[
+            (k, v)
+            for k in ("input.knn.max_examples", "input.knn.per_category", "input.knn_vote_k")
+            for v in (0, -1)
+        ],
+        *[("input.lr.C", v) for v in (0, -1.0, float("nan"))],
     ],
 )
 def test_bad_value_rejected(dotted, bad):
@@ -201,6 +207,28 @@ def test_forbidden_toggle_combinations(toggles):
         load_config(DEFAULT, overrides={f"toggles.{k}": v for k, v in toggles.items()})
 
 
+@pytest.mark.parametrize(
+    ("dotted", "bad", "msg"),
+    [
+        ("output.rule_extra_tokens", ["bare_numeral"], "bare_numeral"),
+        ("output.rule_extra_tokens", ["value_norm", "bare_numeral"], "bare_numeral"),
+        ("output.rule_require_same_kind", True, "rule_require_same_kind"),
+    ],
+)
+def test_unimplemented_output_options_rejected_at_load(dotted, bad, msg):
+    # rules.py는 요청 때 NotImplementedError를 내므로, 기동 때 막지 않으면 서버가 떠 있다가 깨진다
+    with pytest.raises(ValidationError, match=msg):
+        load_config(DEFAULT, overrides={dotted: bad})
+
+
+def test_implemented_output_options_still_load():
+    cfg = load_config(
+        DEFAULT,
+        overrides={"output.rule_extra_tokens": ["value_norm", "units_extra", "backtick_latin"]},
+    )
+    assert cfg.output.rule_extra_tokens == ["value_norm", "units_extra", "backtick_latin"]
+
+
 def test_allowed_toggle_combinations():
     cfg = load_config(
         DEFAULT,
@@ -282,12 +310,15 @@ def test_load_prompt_returns_version_and_body(monkeypatch):
         "본문만 있고 머리말이 없다\n",
         '---\nid: other\nversion: "1"\n---\n본문\n',
         "---\nid: fx\n---\n",
+        '---\nid: fx\nversion: "1"\n---\n',  # 머리말만
+        '---\nid: fx\nversion: "1"\n---\n  \n\t\n',  # 본문이 공백뿐
     ],
 )
 def test_load_prompt_rejects_bad_front_matter(monkeypatch, tmp_path, text):
     (tmp_path / "fx.md").write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="프롬프트 fx"):
+    with pytest.raises(ValueError, match="프롬프트 fx") as e:
         load_prompt(_with_prompt(monkeypatch, tmp_path), "fx")
+    assert str(tmp_path) not in str(e.value)  # 이름만, 경로 없이
 
 
 def test_load_prompt_rejects_unmapped_name():

@@ -48,14 +48,32 @@ _BLANK_CATEGORIES = frozenset({"Zs", "Zl", "Zp", "Cf", "Mn", "Me"})
 _SPELLED_SYLLABLES = 2
 
 
+def _has_letter(ch: str) -> bool:
+    """글자를 담은 문자인가: 원문자·괄호·사각 라틴·한글·한자, 지역 표시 문자, 점자, 결합 라틴 문자.
+
+    이름에 LETTER·BRAILLE이 들거나(NFKC로 안 접히는 것까지), NFKC로 접은 글자 중 하나라도
+    영숫자다(`㈎`→"(가)"처럼 문장부호가 섞여도). 이런 문자로 쓴 문장은 기호도 공백도 아니다.
+    """
+    name = unicodedata.name(ch, "")
+    return (
+        "LETTER" in name
+        or "BRAILLE" in name
+        or any(c.isalnum() for c in unicodedata.normalize("NFKC", ch))
+    )
+
+
 def _is_symbolic(ch: str) -> bool:
-    """자모·문장부호·이모티콘."""
-    return bool(_JAMO.match(ch)) or unicodedata.category(ch) in _SYMBOLIC_CATEGORIES
+    """자모·문장부호·이모티콘. 글자를 담은 문자는 아니다."""
+    if _JAMO.match(ch):
+        return True
+    return unicodedata.category(ch) in _SYMBOLIC_CATEGORIES and not _has_letter(ch)
 
 
 def _is_blank(ch: str) -> bool:
-    """공백·서식 문자·결합 부호(변형 선택자, 키캡 등)·한글 채움 문자."""
-    return ch.isspace() or ch in _FILLERS or unicodedata.category(ch) in _BLANK_CATEGORIES
+    """공백·한글 채움 문자·서식 문자·결합 부호(변형 선택자, 키캡 등). 결합 라틴 문자는 아니다."""
+    if ch.isspace() or ch in _FILLERS:
+        return True
+    return unicodedata.category(ch) in _BLANK_CATEGORIES and not _has_letter(ch)
 
 
 def _spelled_syllables(text: str) -> int:

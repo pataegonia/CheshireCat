@@ -38,6 +38,8 @@ DEFAULT_WITH_OUTPUT = {
 def _env(monkeypatch):
     for name in ("GUARD_CONFIG", "GUARD_KB_DIR", "GUARD_PUBLIC_DIR", "GUARD_PROMPTS_DIR"):
         monkeypatch.delenv(name, raising=False)
+    # 셸에 키가 있어도 기본 판정기가 실제 API를 부르지 않게 지운다(키가 필요한 테스트는 직접 넣는다)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("TEAM_TOKEN", TOKEN)
 
 

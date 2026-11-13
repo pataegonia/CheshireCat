@@ -5,6 +5,7 @@ Guard.judge는 예외를 밖으로 내지 않는다(GR-09). 실패는 기본값 
 """
 
 import asyncio
+import dataclasses
 import html
 import time
 from collections.abc import Mapping, Sequence
@@ -42,7 +43,7 @@ class Judgement:
     signals: Signals
     knn_major: Category | None
     lr_pred: Category | None
-    calls: int
+    calls: int  # 시작한 nano 호출 수(재시도는 세지 않는다. 실제 전송 수는 LLM.calls)
     errors: tuple[str, ...]  # 오류 코드만
     latency_ms: Mapping[str, float]  # 단계별
     # 출력 nano의 인용이 자른 원문·문맥의 부분 문자열인가(R14-D2). 인용 원문은 두지 않는다
@@ -152,10 +153,14 @@ class Guard:
         # CPU 단계는 길이 상한으로 자른 뒤 한 번에 스레드로 보낸다(이벤트 루프를 막지 않는다)
         p = await asyncio.to_thread(self._prepare, req)
         t1 = time.monotonic()
-        if p is None:  # 학습자 발화가 없다(빈 messages 포함): 요청 파싱 실패와 같은 규칙
-            return self._result(
-                "normal", "default", _Output(self._default_output(req)), None, t0, t1, 0, ()
+        if isinstance(p, Signals):  # 학습자 발화가 없다(빈 messages 포함): 파싱 실패와 같은 규칙
+            out = self._default_output(req)
+            if out is not None and p.hidden_tags and cfg.toggles.safe_rule:
+                out = OutputVerdict(out.grounded, (), False)  # 숨긴 태그는 그래도 본다(GR-08)
+            j = self._result(
+                "normal", "default", _Output(out), None, t0, t1, 0, ("no_user_message",)
             )
+            return dataclasses.replace(j, signals=p)
 
         baseline = cfg.output.mode == "baseline"
         tasks: dict[str, asyncio.Task] = {}
@@ -178,19 +183,24 @@ class Guard:
             late = [t for t in tasks.values() if not t.done()]
             for t in late:
                 t.cancel()
-            if late:
-                await asyncio.gather(*late, return_exceptions=True)
+            if late:  # 취소를 삼키는 호출이 응답을 붙잡지 못하게 기다림에 상한을 둔다
+                await asyncio.wait(late, timeout=DEADLINE_GRACE_S)
 
         category, source = self._category(p, results.get("input_judge"))
-        out = self._output(req, p, category, results.get("output_judge"))
+        try:
+            out = self._output(req, p, category, results.get("output_judge"))
+        except Exception as exc:  # noqa: BLE001 - 입력 판정은 살리고 출력만 기본값으로
+            errors.append(f"output:{type(exc).__name__}")
+            out = _Output(self._default_output(req))
         return self._result(category, source, out, p, t0, t1, len(tasks), tuple(errors))
 
-    def _prepare(self, req: GuardRequest) -> _Prepared | None:
+    def _prepare(self, req: GuardRequest) -> _Prepared | Signals:
         """전처리·신호·kNN·LR·KB 검색·규칙 ②. 받은 글은 모두 상한으로 자른 뒤에 쓴다."""
         cfg, t = self.cfg, self.cfg.toggles
         target = next((m.content for m in reversed(req.messages) if m.role == "user"), None)
-        if target is None:
-            return None
+        if target is None:  # 판정할 발화가 없다. 답변의 숨긴 태그만 본다
+            full = req.candidate_answer
+            return Signals(False, False, isinstance(full, str) and has_hidden_tags(full))
         target = target[: cfg.input.max_chars]
         window = build_window(req.messages, cfg.input.window_last)
         text = normalize(target)[: cfg.retrieval.max_query_chars]

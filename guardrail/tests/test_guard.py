@@ -459,3 +459,60 @@ async def test_build_without_llm_creates_one_and_probes_once(monkeypatch):
     guard = await Guard.build(cfg)  # rows=None → 공개 400행
     assert len(fake.requests) == probe_calls(cfg.llm)
     assert (await guard.judge(req(None, has=False))).response.category == "normal"
+
+
+# --- santa 1라운드 반영 ---
+
+
+async def test_output_assembly_failure_keeps_the_judged_category(no_rule, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError(MARK)
+
+    monkeypatch.setattr(guard_module, "output_verdict", boom)
+    guard, _ = await make(responder("harmful_content"))
+    j = await guard.judge(req())
+    # 입력 판정은 살린다(block이 allow로 바뀌지 않는다). 출력만 기본값
+    assert j.response == GuardResponse("harmful_content", OutputVerdict(True, (), True))
+    assert j.errors == ("output:RuntimeError",) and MARK not in repr(j)
+
+
+async def test_non_string_candidate_on_block_category_is_tier1_and_unsafe(no_rule):
+    guard, _ = await make(responder("harmful_content"), output__failure_default="ungrounded")
+    j = await guard.judge(req(None, has=True))
+    assert j.response.output == OutputVerdict(True, (), False) and j.output_tier == 1
+
+
+async def test_no_user_message_still_sees_hidden_tags(no_rule):
+    guard, _ = await make()
+    j = await guard.judge(req("답" + TAG, (Message("assistant", "안녕"),)))
+    assert j.response == GuardResponse("normal", OutputVerdict(True, (), False))
+    assert j.errors == ("no_user_message",) and j.signals.hidden_tags
+
+
+async def test_cancelling_judge_leaves_no_tasks(no_rule):
+    guard, _ = await make(responder(input_step=Hang(), output_step=Hang()))
+    before = asyncio.all_tasks()
+    task = asyncio.create_task(guard.judge(req()))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert asyncio.all_tasks() == before
+
+
+async def test_call_that_swallows_cancellation_cannot_hold_the_response(no_rule, monkeypatch):
+    release = asyncio.Event()
+
+    async def stubborn(*a, **k):
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue  # 취소를 삼킨다
+
+    monkeypatch.setattr(guard_module, "judge_input", stubborn)
+    guard, _ = await make(budget_s=0.2)
+    t0 = time.monotonic()
+    j = await guard.judge(req(None, has=False))
+    assert time.monotonic() - t0 < 0.2 + 1 and j.errors == ("input_judge",)
+    release.set()

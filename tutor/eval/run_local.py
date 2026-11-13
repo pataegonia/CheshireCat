@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -231,6 +231,11 @@ class RateLimitStop:
             self.tripped, self.by = True, by
             return True
 
+    def next_stage(self) -> None:
+        """튜터 단계가 끝나면 연속 수를 새로 센다(튜터의 429가 판정 실패와 이어지지 않게)."""
+        with self._lock:
+            self.streak = 0
+
     def reason(self) -> str | None:
         """멈춘 사유(결과 JSON의 invalid). 판정기는 429를 가르지 못해 판정 쪽은 단정하지 않는다."""
         if not self.tripped:
@@ -275,20 +280,21 @@ class RateLimitStop:
 
         return watched
 
-    def watch_embed(self, counted: Any) -> None:
-        """임베딩을 감싼다. 멈춘 뒤에는 보내지 않고 실패로 둔다(그 질의는 BM25로 간다).
+    def watch_embed(self, search: Any) -> Any:
+        """질의 임베딩을 감싼 EmbeddingSearch를 돌려준다. 멈춘 뒤에는 보내지 않고 예외를 낸다.
 
-        임베딩은 다시 보내지 않고 호출 수가 시작 전에 정해져 상한 검사를 받으므로 연속 수에는
-        넣지 않는다. 같은 팀 키라 멈춘 뒤 남은 질의(실행마다 영어 질의 수까지)만 막는다.
+        세는 함수(CountedEmbed) 바깥에서 막으므로 막은 질의는 보낸 호출로 세지 않는다. 검색은
+        예외가 난 질의를 BM25로 한다. 임베딩은 다시 보내지 않고 호출 수가 시작 전에 정해져 상한
+        검사를 받으므로 연속 수에는 넣지 않는다. 같은 팀 키라 멈춘 뒤 남은 질의만 막는다.
         """
-        inner = counted.embed
+        inner = search.embed
 
         async def embed(texts: Sequence[str]) -> list[list[float]]:
             if self.tripped:
                 raise RuntimeError("속도 제한으로 멈췄다")
             return await inner(texts)
 
-        counted.embed = embed
+        return replace(search, embed=embed)
 
 
 def _write(
@@ -551,10 +557,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.preset == "tutor":
         state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
         stop.watch_llm(state.tutor_llm)
-    if counted is not None:
-        stop.watch_embed(counted)  # KB 임베딩(기동)은 이미 끝났다. 질의 임베딩만 막는다
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
+    if counted is not None:  # KB 임베딩(기동)은 이미 끝났다. 질의 임베딩만 막는다
+        state.tutor_emb = stop.watch_embed(state.tutor_emb)
     latency: list[float] = []
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
@@ -562,6 +568,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         all_responses = [fixed] * args.runs
     llm_stopped = stop.tripped  # 튜터 단계에서 멈췄나(판정 단계에서 멈춘 것과 가른다)
+    stop.next_stage()
     kb = score_local.load_kb_dir(KB_DIR)
     scorer = stop.watch_judge(judge) if judge is not None else None
     report = metrics.build_report(

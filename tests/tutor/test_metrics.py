@@ -15,7 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.tutor.tutor_testlib import answer_openai, block_openai, rate_limit_openai
+from tests.tutor.tutor_testlib import (
+    answer_openai,
+    block_openai,
+    rate_limit_openai,
+    scattered_rate_limit_openai,
+)
 from tutor.eval import grader, metrics, run_local
 from tutor.eval.grader import KB_DIR, score_local
 from tutor.runtime.response import TUTOR_DEFAULT
@@ -441,8 +446,10 @@ def test_judge_streak_resets_on_a_verdict():
 def test_stop_blocks_embedding_after_tripping():
     """임베딩은 연속 수에 넣지 않지만(재시도 없음, 호출 수가 미리 정해짐) 멈춘 뒤에는 보내지 않는다.
 
-    보내지 않은 질의는 실패로 세어지고 BM25로 간다.
+    보내지 않은 질의는 보낸 호출로 세지 않고 예외를 낸다(검색은 그 질의를 BM25로 한다).
     """
+    from tutor.retrieval.embedding import EmbeddingSearch
+
     sent = []
 
     async def embed(texts):
@@ -450,14 +457,38 @@ def test_stop_blocks_embedding_after_tripping():
         return [[1.0, 0.0] for _ in texts]
 
     counted = run_local.CountedEmbed(embed)
+    search = EmbeddingSearch(embed=counted, chunk_ids=("A",), matrix=None, timeout_s=1.0)
     stop = run_local.RateLimitStop()
-    stop.watch_embed(counted)
-    asyncio.run(counted(["a"]))
+    watched = stop.watch_embed(search)
+    asyncio.run(watched.embed(["a"]))
     for _ in range(run_local.RATE_LIMIT_STREAK):
         stop.record("rate_limit")
     with pytest.raises(RuntimeError):
-        asyncio.run(counted(["b"]))
-    assert sent == [1] and counted.failures == 1
+        asyncio.run(watched.embed(["b"]))
+    assert sent == [1] and counted.calls == 1 and counted.failures == 0
+
+
+def test_judge_stage_starts_a_new_streak():
+    # 튜터 단계의 연속 429가 판정 단계의 실패와 이어지면 멈춘 사유가 틀린다(#153 리뷰)
+    stop = run_local.RateLimitStop()
+    for _ in range(run_local.RATE_LIMIT_STREAK - 1):
+        stop.record("rate_limit")
+    stop.next_stage()
+    stop.record("rate_limit", "judge")
+    assert stop.streak == 1 and not stop.tripped
+
+
+def test_cli_keeps_going_on_scattered_rate_limits(monkeypatch, tmp_path):
+    """흩어진 429로는 멈추지 않는다(가드 #151의 같은 이름 테스트와 같은 뜻).
+
+    5번째 전송마다 429면 재시도로 대부분 성공하고, 최종 실패도 연달아 20회가 되지 않는다.
+    """
+    limited = scattered_rate_limit_openai(monkeypatch, every=5)
+    code = run_local.main(["--preset", "tutor", "--out", str(tmp_path)])
+    assert limited  # 429를 실제로 받았다
+    assert code != run_local.EXIT_RATE_LIMITED
+    data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
+    assert "invalid" not in data
 
 
 def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):

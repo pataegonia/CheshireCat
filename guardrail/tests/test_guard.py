@@ -600,3 +600,30 @@ async def test_cancelled_judge_does_not_leave_task_exceptions_for_asyncio_to_log
         gc.collect()
         await asyncio.sleep(0)
     assert MARK not in caplog.text and "never retrieved" not in caplog.text
+
+
+# --- main(S2.6 보안 수정)과 합친 뒤: 긴 발화는 앞 + 뒤로 줄인다 ---
+
+
+async def test_long_target_keeps_its_tail_for_every_judge():
+    """상한을 넘는 발화의 뒤쪽 문구가 판정기에 닿는다(앞만 남기면 뒤에 붙인 공격이 빠진다)."""
+    guard, fake = await make()
+    n = guard.cfg.input.max_chars
+    filler = "".join(f"문장{i} " for i in range(n))  # 반복 줄이기로 줄지 않는 보이는 글
+    tail = "TAIL-MARK-9c1"
+    j = await guard.judge(req(ANSWER, (Message("user", filler + tail),)))
+    assert j.errors == ()
+    (in_call,) = calls(fake, "input")
+    assert tail in _between(in_call["messages"][1]["content"], "target")
+    (out_call,) = calls(fake, "output")
+    assert tail in out_call["messages"][1]["content"]
+
+
+async def test_long_target_tail_reaches_knn_and_lr():
+    kb, knn, lr = _indexes()
+    knn_spy, lr_spy = Spy(knn, "majority", "fewshot"), Spy(lr, "predict")
+    guard, _ = await make(indexes=(kb, knn_spy, lr_spy))
+    n = guard.cfg.input.max_chars
+    filler = "".join(f"문장{i} " for i in range(n))
+    await guard.judge(req(None, (Message("user", filler + "꼬리표시문구"),)))
+    assert knn_spy.seen and all("꼬리표시문구" in t for t in knn_spy.seen + lr_spy.seen)

@@ -141,7 +141,7 @@ async def test_no_examples_block_when_fewshot_off_or_empty():
     assert "<examples>" not in user_text(empty)
 
 
-# --- 이스케이프(council D3: 자르기 → normalize → escape 마지막) -------------------------
+# --- 이스케이프(clip → normalize → escape 마지막) ---------------------------------------
 
 
 @pytest.mark.parametrize(

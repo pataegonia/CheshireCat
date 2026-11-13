@@ -2,8 +2,9 @@
 
 메시지 배치: system = `prompts/input_judge.md` 본문(요청마다 같은 접두라 프롬프트 캐시가 맞는다),
 user = `<examples>` → `<conversation>` → `<target>` → (`oom_kb_snippet`) `<kb>`.
-태그에 넣는 데이터는 원문을 `input.max_chars`로 자르고 → 정규화(숨긴 태그 문자는 드러냄) →
-`html.escape` 순서로 만든다(council D3). 길이 상한은 원문에 건다: 숨긴 태그 문자가 있으면
+태그에 넣는 데이터는 보이지 않는 문자만 먼저 지우고 `input.max_chars`로 자르고(길면 앞 + 뒤,
+`preprocess.clip`) → 정규화(숨긴 태그 문자는 드러냄) → `html.escape` 순서로 만든다. 자모 조합 같은
+무거운 정규화는 자른 뒤에 한다(1MB 메시지를 전처리하면 CPU 약 1.3초). 숨긴 태그 문자가 있으면
 드러낸 표식(" [숨긴 문자: …]")만큼 상한을 넘을 수 있다.
 알려진 한계: few-shot 예시(`LabeledRow.text` = `normalize`)는 태그 문자를 지운 본이라 표식이
 없다(공개 400행에 태그 문자가 든 발화는 0건).
@@ -43,7 +44,7 @@ def build_window(messages: Sequence[Message], last: int) -> list[Message]:
 
 
 def _data(text: str, cfg: GuardConfig) -> str:
-    """원문 → 상한 → 정규화(태그 문자는 [숨긴 문자: …]로 드러냄) → escape."""
+    """보이지 않는 문자 제거·상한(앞 + 뒤) → 정규화(태그 문자는 [숨긴 문자: …]로) → escape."""
     return html.escape(decode_tags(text[: cfg.input.max_chars])[0], quote=False)
 
 

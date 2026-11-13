@@ -48,7 +48,10 @@ HOLDOUT_OPEN_LIMIT = 3  # 4회째 거부(ADR-0013: 홀드아웃은 거의 보지
 RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
-EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT = 2, 3, 4, 5
+EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT, EXIT_RATE_LIMITED = 2, 3, 4, 5, 6
+# 판정 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속 보내면
+# 어뷰징으로 보일 수 있다(SPEC §7.1). 2026-11-13에 429 뒤로 약 3,700회를 더 보낸 일이 있었다
+RATE_LIMIT_STREAK = 20
 BASELINE, DEFAULT = "baseline", "default"
 
 
@@ -355,6 +358,8 @@ class Tap:
     records: list[tuple[str, str | None, str | None]] = field(default_factory=list)
     # (행 id, 호출 기록). 공개 세트 분석용으로 runs/에만 쓴다. 서버 로그와 무관하다(GR-12)
     parsed: list[tuple[str | None, dict]] = field(default_factory=list)
+    streak: int = 0  # 연달아 rate_limit으로 끝난 호출 수
+    tripped: bool = False  # 속도 제한으로 멈췄다. 뒤의 호출은 보내지 않고 budget 오류가 된다
 
     def attach(self, llm: LLM) -> None:
         inner = llm.complete
@@ -362,6 +367,13 @@ class Tap:
         async def complete(role, messages, schema, *, deadline):  # type: ignore[no-untyped-def]
             res = await inner(role, messages, schema, deadline=deadline)
             self.records.append((role, res.error, res.finish_reason))
+            if res.error == "rate_limit":
+                self.streak += 1
+            elif res.error != "budget":
+                self.streak = 0
+            if self.streak >= RATE_LIMIT_STREAK and not self.tripped:
+                self.tripped = True
+                llm.max_calls = 0  # 이후 호출은 LLM이 보내지 않는다
             out = res.parsed.model_dump(mode="json") if res.parsed is not None else None
             call = {
                 "role": role,
@@ -913,11 +925,18 @@ async def amain(
     summary["input_only"] = args.input_only
     summary["output_only"] = args.output_only
     spent = sum(e == "budget" for _, e, _ in tap.records)
-    if spent:
+    if tap.tripped:
+        summary["invalid"] = (
+            f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다: 결과를 비교에 쓰지 않는다"
+        )
+    elif spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
     out_dir = Path(args.out) / args.name
     _write(out_dir, records, summary, render_report(args.name, summary))
     _say(f"wrote {out_dir}")
+    if tap.tripped:
+        _err(f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 호출을 멈췄다. 결과는 무효다")
+        return EXIT_RATE_LIMITED
     if spent:
         _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT

@@ -339,7 +339,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 - 실행 전에 예상 호출 수를 찍고(probe 호출은 폴드 수와 무관하게 실행당 한 번으로 센다) `--max-calls`(기본은 설정 `eval.max_calls` = 5,000)를 넘으면 멈춘다. `--estimate`는 호출 0회, `--fake`는 `FakeLLM` 고정 응답(입력 `normal`, 출력 grounded)으로 API 0회.
 - 산출: `runs/<name>/responses.jsonl`(공개 세트 응답 + `Judgement` 요약, 배포 자료 분석이라 서버 밖에서 저장 가능), `summary.json`, `report.md`. `runs/`는 커밋하지 않는다. 남길 표는 `results/<날짜>-<이름>.md`로 옮겨 커밋한다.
 - `report.md` 내용: 가드 점수(3회 범위), block F1·정밀도·재현율, 짝 문항만의 block 정확도, 범주 정확도(non-normal)와 혼동행렬, 출력 평균·항목별·단별(①–④) 적중, kNN·LR 단독 점수, 튜터 200행 범주 정확도(따로), 호출 수와 요청당 호출 수, 역할별(입력·출력) 오류 코드 비율(`bad_json`·`timeout` 등)과 `finish_reason=length` 비율(실제 프롬프트로 `max_completion_tokens`를 다시 확인, S1.6 값은 잠정), 지연 p50·p95. 설정 비교는 묶음 단위 부트스트랩 95% 구간을 보고한다(채택 기준은 아님, PRD §7).
-- `--input-only`(R14-D1): `Guard`(S2.8) 없이 입력 판정만 잰다. 저신호 직접 판정 + kNN few-shot + `judge_input`으로 범주를 내고 출력은 상수다(행당 nano 0–1회, 실행당 약 320회). 입력 프롬프트 v1을 출력 판정·조립보다 먼저 재는 데 쓴다. S2.3·S2.5·S2.6이 머지되면 돌 수 있다.
+- `--input-only`(R14-D1): `Guard`(S2.8) 없이 입력 판정만 잰다. 저신호 직접 판정 + kNN few-shot + `judge_input`으로 범주를 내고 출력은 상수다(행당 nano 0–1회, 실행당 약 320회). 입력 프롬프트 v1을 출력 판정·조립보다 먼저 재는 데 쓴다. S2.3·S2.5·S2.6이 머지되면 돌 수 있다. 첫 실측(1회) 뒤 같은 설정으로 2회를 더 돌려 v1의 3회 범위(잡음 바닥)를 만든다(2026-11-13 조정, [결과](../results/2026-11-13-input-v1-solo.md)).
 - 모든 실측 실행은 역할별 실패율(`finish_reason`이 `stop`이 아님·파싱 실패·시간 초과)을 report 맨 위에 낸다. 어느 역할이든 2%를 넘으면 프롬프트 문구보다 길이·문맥부터 고친다(R14-D8). 출력 쪽은 `kb_quote`를 먼저 빼고, 그다음 `output.context_max_chars`를 낮춘다.
 - `load`는 공개 세트의 가드·튜터 요청을 동시 64로 다시 보내 시간 초과·형식 오류·3xx·p50·p95를 낸다. 채점 수준(약 600요청)을 넘는 시험은 하지 않는다(GR-10).
 
@@ -380,7 +380,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
 | **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output(messages, candidate_answer, category=None)`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
 | **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`tier3_trust`(저장된 응답으로, R14-D2)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
-| **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과. 절차는 R14-D7: 변형마다 1회 선별 → 하나의 v2로 합쳐 3회 확정 1회 |
+| **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과. 절차는 R14-D7: 변형마다 1회 선별 → 하나의 v2로 합쳐 3회 확정 1회. v2는 `gr/s3.2-input-tuning`의 새 PR에서 `input_judge.md`의 `version`을 2로 올린다. S2.6 PR은 v1 그대로 머지한다(기준선 보존, §10) |
 | **S3.3** | OOM용 KB 조각 ablation | 04 / 0010 | P1 | 3h | Sonnet | S2.9 | `with_oom_kb_snippet` 순이득(3회 분산 밖에서 > 0이면 켬, 부트스트랩 구간은 보고)과 켜기 결정 |
 | **S3.4** | 3번째 호출 ablation | 05 / 0011·0013 | P2 | 4h | Sonnet → Opus 판정 | S2.9 | **동결 전 미실행(R14-D6).** v1 응답에서 "nano가 kNN·LR 둘 다와 엇갈린 행"의 nano 정답률만 호출 없이 계산해 남긴다. 0.5보다 낮을 때만 다시 올린다 |
 | **S3.5** | nano 구간·임베딩 ablation | 07·03·05 / 0014·0010 | P2 | 5h | Sonnet | S3.1 | 각 순이득과 켜기 결정, 임베딩은 기동 시간·호출 수 함께 |
@@ -466,6 +466,7 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - **슬라이스 = 브랜치 = PR = 이슈.** 브랜치 `gr/s2.6-input-judge`. PR 본문에 `Closes #이슈`. 저장소가 비공개로 바뀌어(PRD §9 T6) push·PR을 지금부터 한다.
 - **테스트 먼저**(`ecc:tdd-workflow`). 새 모듈은 줄 커버리지 80% 이상(CI는 패키지 전체 80%). 결정적 모듈(전처리·신호·규칙·kNN·KB·decide)은 단위 테스트, LLM 단계는 `FakeLLM`으로 계약을 고정한다.
 - **santa**: `prompts/input_judge.md`·`output_judge.md`(와 베이스라인 변형)는 `ecc:santa-method`로 독립 리뷰어 2명(Opus)이 모두 통과해야 머지한다. 프롬프트를 고칠 때마다 다시 한다.
+- **프롬프트 버전**: 실측한 프롬프트의 문구는 그 프롬프트를 넣은 PR에서 고치지 않는다. 새 PR에서 머리말 `version`을 올려 고친다. 실측 결과는 프롬프트 `version`에 묶이고(`config_hash`), 앞 버전의 결과는 기준선으로만 쓴다(2026-11-13).
 - **로그 리뷰**: PR마다 로그·예외 처리 경로를 본다. 본문·판정 값·정규화본·예외 메시지가 로그로 가는 길이 없어야 한다(GR-12). `server.py`·`llm.py`를 건드린 PR은 `ecc:security-reviewer`를 돌린다.
 - **홀드아웃**은 S3.7 전에는 보지 않는다. 열람은 최대 3회이고 하네스가 센다. 기준값·프롬프트는 교차 검증으로만 정한다.
 - **개선 판정**: 같은 빌드 3회 분산 안의 차이는 개선으로 보지 않는다. 채택 기준은 하나다: 3회 분산 밖에서 순이득 > 0. "분산 밖"은 후보의 3회 범위와 기준의 3회 범위가 **겹치지 않는다**는 뜻이다(차이가 없을 때 거짓 채택 5%, R14 §2 A1). 동결 전 3회 확정 실험은 입력 1회·출력 1회·예비 1회가 상한이고 시도한 변형 수를 `results/`에 적는다(R14-D7). 출력 ③의 켜기와 `tier3_trust`는 총점 범위가 아니라 저장된 응답의 정밀도와 건수로 정한다(GR-07, R14-D2). 묶음 단위 부트스트랩 구간은 보고하되 채택 기준이 아니다(R13 D10, PRD §7).
@@ -520,3 +521,4 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - §4.1 `Judgement`에 `answer_quote_ok`·`kb_quote_ok`·`nano_refuses`. §4.3 `OutputOut`을 `answer_quote → kb_quote → grounded → refuses`로(`reason` 삭제). §4.4 `output.tier3_trust`·`quote_min_chars`·`context_max_chars`. §4.2 출력 nano 문맥을 1위 섹션 전체 + 다른 섹션 조각으로.
 - §4.6 `--input-only`와 역할별 실패율 2% 관문. §5 S2.7·S2.9·S3.1·S3.2 수용 기준, S3.4는 동결 전 미실행. §10 "분산 밖"의 뜻과 확정 실험 상한.
 - 바뀌지 않은 것: 입력 프롬프트 v1 문구, 범주 → decision(ADR-0012), safe 규칙(D6), 키워드 힌트 금지(GR-04).
+- 첫 실측 뒤 조정(같은 날, 사용자 결정): 입력 v1 단독 실측의 block F1(가드 160행, 1회 0.771)이 목표 0.90에 못 미쳤다. S2.7 전에 v1을 2회 더 돌려 3회 범위를 만든다(§4.6). 입력 프롬프트 v2는 S3.2의 새 PR에서 한다(§5 S3.2, §10 프롬프트 버전).

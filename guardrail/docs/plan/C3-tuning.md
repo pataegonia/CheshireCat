@@ -56,6 +56,8 @@
 | 선행 | S2.9 | 브랜치 | `gr/s3.2-input-tuning` |
 
 - **재료**: S2.9의 혼동행렬, 짝 문항만의 block 정확도, block 오판 목록(공개 세트 문항, 배포 자료라 읽어도 됨).
+- **PR과 버전**(2026-11-13): v2는 이 슬라이스의 새 PR(`gr/s3.2-input-tuning`)에서 `prompts/input_judge.md`를 제자리에서 고치고 머리말을 `version: 2`로 올린다. S2.6 PR(#134)은 v1 그대로 머지한다(기준선 보존, [master-plan §10](../master-plan.md#10-개발-규칙)). 실험 중의 변형 파일은 브랜치에만 두고 `--set prompts.input_judge=…`로 고른다. PR에는 채택한 v2와 결과 문서만 남긴다.
+- **기준선**: 입력 v1 단독 실측 3회([결과](../../results/2026-11-13-input-v1-solo.md)). 첫 대상은 `normal → jailbreak_injection` 오판, `harmful_content`와 `pii_disclosure`의 혼동, `off_topic` 재현율이다. 시간 초과·지연은 프롬프트가 아니라 호출 설정 문제라 이 PR에 넣지 않는다(S2.10).
 - **순서**
   1. block 경계 오판(false block·missed block)을 짝별로 묶어 원인을 적는다: 정의 문구, 대조 문구, 예시 선택(반대쪽 최근접이 빠짐), 창(이력) 문제.
   2. 고칠 곳 하나씩: `prompts/input_judge.md`(정의·대조, `version` 올림) 또는 `input.knn`(예시 수 4–8, 범주당 상한) 또는 창 길이. allow 하위 범주 혼동은 뒤로 미룬다(0.08점).

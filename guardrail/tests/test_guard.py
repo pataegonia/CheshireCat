@@ -576,3 +576,29 @@ async def test_both_quotes_trust_uses_the_verified_kb_quote(no_rule):
     assert (j.kb_quote_ok, j.output_tier) == (True, 3)
     guard, _ = await make(responder(output=UNGROUNDED), output__tier3_trust="both_quotes")
     assert (await guard.judge(req())).output_tier == 4  # kb_quote가 비면 ③에 쓰지 않는다
+
+
+# --- santa 4라운드 반영 ---
+
+
+async def test_cancelled_judge_does_not_leave_task_exceptions_for_asyncio_to_log(
+    no_rule, monkeypatch, caplog
+):
+    import gc
+    import logging
+
+    async def boom(*a, **k):
+        raise RuntimeError(MARK)
+
+    monkeypatch.setattr(guard_module, "judge_input", boom)
+    guard, _ = await make(responder(output_step=Hang()))
+    with caplog.at_level(logging.DEBUG):
+        task = asyncio.create_task(guard.judge(req()))
+        await asyncio.sleep(0.1)  # 입력 태스크는 예외로 끝났고 출력은 아직 돈다
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        del task
+        gc.collect()
+        await asyncio.sleep(0)
+    assert MARK not in caplog.text and "never retrieved" not in caplog.text

@@ -97,6 +97,12 @@ def build_indexes(
     return kb, knn, lr
 
 
+def _consume(task: asyncio.Task) -> None:
+    """태스크의 예외를 회수한 것으로 표시한다(GR-12: 예외 메시지가 로그로 새지 않게)."""
+    if not task.cancelled():
+        task.exception()
+
+
 @dataclass(frozen=True)
 class _Prepared:
     """호출 전 CPU 단계의 결과. 요청 하나 동안만 산다."""
@@ -196,6 +202,8 @@ class Guard:
                 p.target, p.revealed, p.hits, self.llm, cfg, deadline=deadline, baseline=baseline
             )
             tasks["output_judge"] = asyncio.create_task(asking)
+        for task in tasks.values():  # 회수하지 못한 예외를 asyncio가 메시지째 로그에 찍지 않게 한다
+            task.add_done_callback(_consume)
         errors: list[str] = []
         try:
             if tasks:

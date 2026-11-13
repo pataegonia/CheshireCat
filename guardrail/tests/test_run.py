@@ -386,3 +386,33 @@ async def test_scattered_rate_limits_do_not_stop_the_run(tmp_path):
         return LLM(cfg_llm, send=fake.send, sleep=nosleep)
 
     assert await run.amain(_args(tmp_path), make_llm=make_llm) == 0
+
+
+async def test_streak_resets_on_other_errors_and_holds_on_budget():
+    from types import SimpleNamespace
+
+    from guardrail.llm import LLMResult
+
+    script: list[str | None] = []
+
+    async def inner(role, messages, schema, *, deadline):
+        return LLMResult(None, script.pop(0), 1, 1.0, None, None)  # type: ignore[arg-type]
+
+    async def feed(errors):
+        llm = SimpleNamespace(complete=inner, max_calls=100)
+        tap = run.Tap()
+        tap.attach(llm)  # type: ignore[arg-type]
+        script[:] = errors
+        for _ in errors:
+            await llm.complete("r", [], None, deadline=None)
+        return llm, tap
+
+    rl = ["rate_limit"] * (run.RATE_LIMIT_STREAK - 1)
+    for last in (None, "timeout"):  # 성공이든 다른 오류든 0으로 되돌린다
+        llm, tap = await feed([*rl, last])
+        assert tap.streak == 0 and not tap.tripped and llm.max_calls == 100
+    llm, tap = await feed([*rl, "budget"])  # budget은 세지도 되돌리지도 않는다
+    assert tap.streak == run.RATE_LIMIT_STREAK - 1 and not tap.tripped and llm.max_calls == 100
+    script[:] = ["rate_limit"]
+    await llm.complete("r", [], None, deadline=None)  # 한 번 더 429면 멈춘다
+    assert tap.tripped and llm.max_calls == 0

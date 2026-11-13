@@ -41,6 +41,10 @@ _DOUBLE_JONG = {
     ("ㄹ", "ㅍ"): "ㄿ", ("ㄹ", "ㅎ"): "ㅀ", ("ㅂ", "ㅅ"): "ㅄ",
 }  # fmt: skip
 _EMOTICON_VOWELS = "ㅠㅜ"
+_DOUBLE_JUNG = {
+    ("ㅗ", "ㅏ"): "ㅘ", ("ㅗ", "ㅐ"): "ㅙ", ("ㅗ", "ㅣ"): "ㅚ", ("ㅜ", "ㅓ"): "ㅝ",
+    ("ㅜ", "ㅔ"): "ㅞ", ("ㅜ", "ㅣ"): "ㅟ", ("ㅡ", "ㅣ"): "ㅢ",
+}  # fmt: skip
 
 # 조합형 낱자모(원문자 ㉨ → NFKC → U+110C 등)를 호환 자모로 바꾼다
 _CONJOINING_TO_COMPAT = str.maketrans(
@@ -75,20 +79,26 @@ def _prepare(text: str) -> str:
     return unicodedata.normalize("NFC", s).translate(_CONJOINING_TO_COMPAT)
 
 
-def _compose_run(run: str, keep_emoticons: bool = True) -> str:
-    """호환 자모 연속 구간을 두벌식 입력기처럼 음절로 조합한다. 모음이 없는 구간은 그대로 둔다."""
+def _compose_run(run: str, keep_emoticons: bool = True, compound: bool = True) -> str:
+    """호환 자모 연속 구간을 두벌식 입력기처럼 음절로 조합한다. 모음이 없는 구간은 그대로 둔다.
+
+    두벌식처럼 ㄱㄱ은 ㄲ로 합치지 않고(ㄱㄱㅏ → ㄱ가), compound면 겹모음을 합친다(ㅜㅓ → ㅝ).
+    """
     out: list[str] = []
     i, n = 0, len(run)
     while i < n:
         c = run[i]
         v = run[i + 1] if i + 1 < n else ""
-        # 이모티콘: 조합되지 않고 남은 같은 자음 뒤(ㅋㅋㅠ), ㅠ·ㅜ 반복(ㅋㅠㅠ)은 조합하지 않는다.
+        # 이모티콘: 남은 같은 자음 뒤의 ㅠ·ㅜ(ㅋㅋㅠ), ㅠ·ㅜ 반복(ㅋㅠㅠ)은 조합하지 않는다.
         # 앞 자음이 받침으로 들어갔으면(ㅎㅏㄱㄱㅛ) out[-1]은 음절이라 해당하지 않는다.
         emoticon = keep_emoticons and (
-            (out and out[-1] == c) or (v in _EMOTICON_VOWELS and i + 2 < n and run[i + 2] == v)
+            v in _EMOTICON_VOWELS and ((out and out[-1] == c) or (i + 2 < n and run[i + 2] == v))
         )
         if c in _CHO and _is_vowel(v) and not emoticon:
             jong, i = 0, i + 2
+            v2 = _DOUBLE_JUNG.get((v, run[i] if i < n else "")) if compound else None
+            if v2:
+                v, i = v2, i + 1
             f = run[i] if i < n else ""
             nxt = run[i + 1] if i + 1 < n else ""
             if f and f in _JONG[1:] and not _is_vowel(nxt):
@@ -106,8 +116,8 @@ def _compose_run(run: str, keep_emoticons: bool = True) -> str:
     return "".join(out)
 
 
-def _compose_all(text: str, keep_emoticons: bool = True) -> str:
-    return _JAMO_RUN.sub(lambda m: _compose_run(m.group(), keep_emoticons), text)
+def _compose_all(text: str, keep_emoticons: bool = True, compound: bool = True) -> str:
+    return _JAMO_RUN.sub(lambda m: _compose_run(m.group(), keep_emoticons, compound), text)
 
 
 def normalize(text: str) -> str:
@@ -219,6 +229,6 @@ def skeleton(text: str) -> str:
     s = "".join(_fold_width(ch) for ch in text if _visible(ch))
     s = _nfkc_outside_jamo(s).translate(_CONJOINING_TO_COMPAT)
     s = _FILLER.sub("", s)
-    s = _compose_all(_REPEATED_VOWEL.sub(r"\1", s), keep_emoticons=False)
+    s = _compose_all(_REPEATED_VOWEL.sub(r"\1", s), keep_emoticons=False, compound=False)
     s = _STRETCHED_VOWEL.sub(_drop_stretched_vowel, s)
     return unicodedata.normalize("NFC", s).casefold()

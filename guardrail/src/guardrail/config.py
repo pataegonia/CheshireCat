@@ -166,8 +166,8 @@ class GuardConfig(_Strict):
         t = self.toggles
         if t.third_call and not (t.knn_vote and t.lr):
             raise ValueError("toggles.third_call은 knn_vote·lr이 둘 다 켜졌을 때만 켤 수 있다")
-        if t.nano_span and not t.literal_rule:
-            raise ValueError("toggles.nano_span은 literal_rule이 켜졌을 때만 켤 수 있다")
+        if t.nano_span and not t.nano_tier3:  # 구간을 내는 자리가 ③이다(ADR-0014 R14 수정)
+            raise ValueError("toggles.nano_span은 nano_tier3가 켜졌을 때만 켤 수 있다")
         return self
 
 

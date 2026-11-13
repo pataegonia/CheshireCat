@@ -1,5 +1,6 @@
 """판정기: S1.2 ConstantGuard와 S2.8 Guard (master-plan §4.1·§4.2, PRD GR-07·GR-08·GR-09)."""
 
+import asyncio
 import functools
 import itertools
 import json
@@ -340,6 +341,24 @@ async def test_exception_inside_a_call_is_a_failure_of_that_role(no_rule, monkey
     assert j.output_tier in (1, 3) and MARK not in repr(j)  # 출력 쪽 결과는 살린다
 
 
+async def test_call_that_ignores_the_deadline_is_cancelled(no_rule, monkeypatch):
+    cancelled = []
+
+    async def stuck(*a, **k):
+        try:
+            await asyncio.Event().wait()  # 마감을 지키지 않는 호출
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    monkeypatch.setattr(guard_module, "judge_input", stuck)
+    guard, _ = await make(budget_s=0.2)
+    t0 = time.monotonic()
+    j = await guard.judge(req(None, has=False))
+    assert time.monotonic() - t0 < 0.2 + 1 and cancelled == [True]
+    assert (j.errors, j.input_source, j.response.output) == (("input_judge",), "fallback", None)
+
+
 async def test_fault_injection_over_public_rows_always_answers_in_spec():
     faults = itertools.cycle([Timeout(), ServerError(), RateLimited(), Malformed(), Boom()])
 
@@ -398,7 +417,7 @@ async def test_huge_request_is_cut_before_every_stage(monkeypatch):
     cfg = guard.cfg
     history = tuple(Message("user" if i % 2 == 0 else "assistant", "가" * 1700) for i in range(600))
     last = Message("user", "나" * 1_000_000)
-    answer = "다" * (cfg.input.max_answer_chars - 10) + "append_x" + "라" * 5000
+    answer = "다" * (cfg.input.max_answer_chars - 8) + "append_x" + "라" * 5000
 
     t0 = time.monotonic()
     j = await guard.judge(req(answer, (*history, last)))

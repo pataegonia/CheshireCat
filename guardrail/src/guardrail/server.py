@@ -195,7 +195,8 @@ def _install_log_filters() -> None:
     if not any(isinstance(f, _ExceptionNameOnly) for f in uv.filters):
         uv.addFilter(_ExceptionNameOnly())
     access_log.setLevel(logging.INFO)
-    logging.getLogger("httpx2").setLevel(logging.WARNING)  # base URL을 요청마다 INFO로 남기지 않게
+    for name in ("httpx2", "httpcore2", "httpx"):  # 주소·호스트를 INFO·DEBUG로 남기지 않게
+        logging.getLogger(name).setLevel(logging.WARNING)
     # 루트에 핸들러가 없을 때만 직접 쓴다(있으면 전파로 한 번만 찍힌다)
     if not access_log.handlers and not logging.getLogger().handlers:
         access_log.addHandler(logging.StreamHandler())

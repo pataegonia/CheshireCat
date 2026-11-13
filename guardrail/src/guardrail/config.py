@@ -86,15 +86,15 @@ class Vectorizer(_Strict):
 
 
 class KnnCfg(Vectorizer):
-    max_examples: int
-    per_category: int
+    max_examples: PositiveInt
+    per_category: PositiveInt
     # S3.2 선별용 변형(R14 B4·B5). yaml의 값이 v1 동작이다. 채택하면 master-plan §4.4에 올린다
     order: Literal["nearest_last", "nearest_first"]  # few-shot 제시 순서
     sublinear_tf: bool  # TF-IDF의 tf를 1 + log(tf)로
 
 
 class LrCfg(Vectorizer):
-    C: float
+    C: PositiveFloat
 
 
 class InputCfg(_Strict):
@@ -105,7 +105,7 @@ class InputCfg(_Strict):
     max_chars: int
     max_answer_chars: int
     knn: KnnCfg
-    knn_vote_k: int
+    knn_vote_k: PositiveInt
     lr: LrCfg
     oom_snippet_chars: int
 
@@ -168,6 +168,12 @@ class GuardConfig(_Strict):
             raise ValueError("toggles.third_call은 knn_vote·lr이 둘 다 켜졌을 때만 켤 수 있다")
         if t.nano_span and not t.nano_tier3:  # 구간을 내는 자리가 ③이다(ADR-0014 R14 수정)
             raise ValueError("toggles.nano_span은 nano_tier3가 켜졌을 때만 켤 수 있다")
+        # rules.py는 요청 때 NotImplementedError를 낸다. 기동 때 막는다(rules를 import하면 순환)
+        o = self.output
+        if "bare_numeral" in o.rule_extra_tokens:
+            raise ValueError("output.rule_extra_tokens의 bare_numeral은 미구현이다")
+        if o.rule_require_same_kind:
+            raise ValueError("output.rule_require_same_kind: true는 미구현이다")
         return self
 
 
@@ -252,6 +258,8 @@ def load_prompt(cfg: GuardConfig, name: str) -> tuple[str, str]:
     head = yaml.safe_load(m.group("head"))
     if not isinstance(head, dict) or head.get("id") != name or not head.get("version"):
         raise ValueError(f"프롬프트 {name}: 머리말 id·version이 맞지 않다")
+    if not text[m.end() :].strip():  # 빈 system 메시지로 판정이 나가 캐시되지 않게
+        raise ValueError(f"프롬프트 {name}: 본문이 비었다")
     return str(head["version"]), text[m.end() :]
 
 

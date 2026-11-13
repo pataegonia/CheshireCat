@@ -72,14 +72,15 @@ class ConstantGuard:
 
 
 def unsupported_switches(cfg: GuardConfig) -> list[str]:
-    """Guard가 아직 지원하지 않는데 켜져 있는 설정 이름. 조용히 무시하지 않으려고 미리 본다."""
+    """Guard가 아직 지원하지 않는데 켜져 있는 설정 이름. 조용히 무시하지 않으려고 미리 본다.
+
+    규칙 ②의 미구현 값(bare_numeral·rule_require_same_kind)은 설정 로드가 먼저 막는다(config.py).
+    """
     t = cfg.toggles
     checks = (
         ("third_call", t.third_call),
         ("oom_kb_snippet", t.oom_kb_snippet),
         ("embedding", t.embedding),
-        ("rule_require_same_kind", cfg.output.rule_require_same_kind),
-        ("rule_extra_tokens=bare_numeral", "bare_numeral" in cfg.output.rule_extra_tokens),
     )
     return [name for name, on in checks if on]
 

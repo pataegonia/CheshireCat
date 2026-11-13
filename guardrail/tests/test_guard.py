@@ -528,8 +528,6 @@ async def test_call_that_swallows_cancellation_cannot_hold_the_response(no_rule,
         {"toggles__third_call": True},
         {"toggles__oom_kb_snippet": True},
         {"toggles__embedding": True},
-        {"output__rule_require_same_kind": True},
-        {"output__rule_extra_tokens": ["bare_numeral"]},
     ],
 )
 async def test_unimplemented_switch_fails_at_build_not_per_request(override):

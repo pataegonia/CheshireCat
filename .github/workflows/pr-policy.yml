@@ -1,6 +1,12 @@
-# PR 정책 검사. 경로 필터 없이 모든 PR에서 돈다.
-# 필수 검사로 지정: `pr-policy / attribution`, `pr-policy / zizmor`
-# 필수 아님(경고·자동 처리): `pr-policy / hygiene`
+# PR 정책 검사. 경로 필터 없이 모든 PR에서 돈다. 작업은 둘이다.
+# - `pr-policy`: 모든 PR에서 돈다(작업마다 분 단위로 올림해 청구되므로 예전의 attribution·hygiene 작업을 단계로
+#   합쳤다). 단계 순서: 서명 문구 검사(실패하면 작업 실패) → base 변경 뒤 통합 검사 재실행 확인(base 가 바뀐 뒤
+#   integration-ci 가 다시 돌지 않았으면 작업 실패) → 담당자 지정·이슈 연결 경고(실패시키지 않는다. 봇 PR은
+#   건너뛴다) → .github 변경 여부(작업 출력 github_changed). 앞 단계가 실패해도 뒤 단계는 돈다.
+# - `pr-policy / zizmor`: 워크플로 보안 검사. 이 PR이 .github/ 아래 파일을 바꿨을 때만 돈다(그 밖의 PR에서는
+#   건너뜀으로 뜬다). high 등급이 있으면 실패. 외부 바이너리가 토큰을 받으므로 issues: write 가 있는 `pr-policy`
+#   와 나눠 contents: read 토큰만 준다.
+# 머지 전 확인할 검사는 `pr-policy` 이고, .github/ 를 바꾼 PR에서는 `pr-policy / zizmor` 도 본다.
 name: pr-policy
 
 on:
@@ -16,14 +22,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  attribution:
-    name: pr-policy / attribution
+  policy:
+    name: pr-policy
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     permissions:
-      pull-requests: read
+      contents: read
+      pull-requests: read # PR 정보 · 커밋 · 바뀐 파일 목록 조회
+      actions: read # 통합 CI 실행 목록 조회
+      issues: write # 담당자 지정은 issues API로 한다
+    outputs:
+      github_changed: ${{ steps.gh.outputs.changed }}
     steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      # ── 서명 문구 검사: 실패하면 작업이 실패한다. 뒤 단계는 그래도 돈다 ──
+      - name: 서명 문구 검사
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             // AI 도구 자동 서명 문구. 마크다운 이스케이프(\[)와 공백 변형을 먼저 지운 뒤 본다.
@@ -65,49 +78,46 @@ jobs:
                 "해당 줄을 지우면 이 검사가 다시 돈다. 출처 차단 설정은 .claude/settings.json 참고."
               );
             }
-
-  zizmor:
-    name: pr-policy / zizmor
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      # 의존성 없는 단일 wheel이라 해시 하나로 고정할 수 있다(PyPI의 manylinux x86_64 wheel)
-      ZIZMOR_REQ: "zizmor==1.31.1 --hash=sha256:58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.12.17"
-          enable-cache: false
-      - name: zizmor 설치 (해시 고정)
-        run: |
-          echo "$ZIZMOR_REQ" > "$RUNNER_TEMP/zizmor.txt"
-          uv venv -q "$RUNNER_TEMP/zizmor"
-          uv pip install -q --python "$RUNNER_TEMP/zizmor" --require-hashes --only-binary :all: -r "$RUNNER_TEMP/zizmor.txt"
-      # high 등급만 실패로 처리한다. 낮은 등급은 로컬에서 `uvx zizmor==1.31.1 .github`로 본다.
-      # 온라인 감사(가짜 커밋 SHA, 취약 버전 액션)를 쓰려고 읽기 전용 토큰을 넘긴다.
-      - name: workflow·dependabot 보안 검사 (high만 실패)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --min-severity high .github'
-
-  hygiene:
-    name: pr-policy / hygiene
-    # 봇 PR(dependabot 등)은 담당자·이슈 연결 대상이 아니다
-    if: github.event.pull_request.user.type != 'Bot'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions:
-      contents: read
-      issues: write # 담당자 지정은 issues API로 한다
-      pull-requests: read
-    steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      # integration-ci 는 본문 수정(edited)에 돌지 않는다. base 가 바뀌면(직접 바꾸거나 앞 PR 머지로 자동 변경)
+      # 옛 base 기준 결과가 같은 커밋에 초록으로 남으므로, 그 상태를 여기서 실패로 알린다.
+      # 닫았다 다시 열거나 새 커밋을 올리면 통합 CI가 새 base 로 돌고 이 단계도 통과한다.
+      - name: base 변경 뒤 통합 검사 재실행 확인
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            // 이 job은 필수 검사가 아니고 실패시키지 않는다. API 오류는 경고로만 남긴다.
+            const ACTIONS_WITH_CI = ["opened", "reopened", "synchronize"];
+            if (ACTIONS_WITH_CI.includes(context.payload.action)) {
+              core.info(`${context.payload.action}: integration-ci 가 같은 이벤트로 지금 base 기준으로 돈다`);
+              return;
+            }
+            const { owner, repo } = context.repo;
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: context.payload.pull_request.number });
+            const events = await github.paginate(github.rest.issues.listEventsForTimeline, {
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            const changes = events
+              .filter((e) => e.event === "base_ref_changed" || e.event === "automatic_base_change_succeeded")
+              .map((e) => Date.parse(e.created_at));
+            if (changes.length === 0) { core.info("base 변경 이력 없음"); return; }
+            const lastChange = Math.max(...changes);
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner, repo, workflow_id: "integration-ci.yml", head_sha: pr.head.sha, event: "pull_request", per_page: 100,
+            });
+            // 같은 커밋으로 연 다른 PR의 실행은 뺀다(닫힌 PR의 실행은 pull_requests 가 비어 있다)
+            const mine = runs.filter((r) => (r.pull_requests || []).length === 0 || r.pull_requests.some((p) => p.number === pr.number));
+            const lastRun = mine.length ? Math.max(...mine.map((r) => Date.parse(r.created_at))) : 0;
+            core.info(`마지막 base 변경 ${new Date(lastChange).toISOString()}, 이 커밋의 마지막 integration-ci 실행 ${lastRun ? new Date(lastRun).toISOString() : "없음"}`);
+            if (lastRun > lastChange) return;
+            core.setFailed("base 브랜치가 바뀐 뒤 integration / gate 가 다시 돌지 않았다(지금 초록은 옛 base 기준이다). PR을 닫았다 다시 열거나 새 커밋을 올린다.");
+      # ── 담당자 지정 · 이슈 연결: 경고만 ──
+      # 봇 PR(dependabot 등)은 담당자·이슈 연결 대상이 아니다
+      - name: 담당자 지정 · 이슈 연결 경고
+        if: ${{ !cancelled() && github.event.pull_request.user.type != 'Bot' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // 이 단계는 작업을 실패시키지 않는다. API 오류는 경고로만 남긴다.
             let pr = context.payload.pull_request;
             try {
               // 재실행 때 payload가 오래된 값일 수 있어 최신 PR 정보를 읽는다
@@ -140,3 +150,66 @@ jobs:
             if (!LINK.test(pr.body || "")) {
               core.warning("PR 본문에 연결된 이슈가 없다. `Closes #번호`를 적어 달라.");
             }
+      # ── .github 변경 여부: zizmor 작업을 돌릴지 정한다(작업 출력 github_changed) ──
+      # zizmor 는 이 PR이 .github/ 아래 파일을 바꿨을 때만 돈다. 바뀐 파일 목록은 API로 얻는다(전체 checkout 없이).
+      # 목록을 얻지 못하거나 API 상한(3,000개)에 걸려 목록이 잘렸을 수 있으면 바뀐 것으로 보고 검사한다
+      # (건너뛰어서 통과로 보이는 일이 없게).
+      - name: .github 변경 여부
+        id: gh
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            let changed = true;
+            try {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+              // 이름을 바꾼 파일은 옛 이름도 본다(.github/ 밖으로 옮긴 경우)
+              changed = files.some((f) =>
+                [f.filename, f.previous_filename].some((name) => (name || "").startsWith(".github/"))
+              );
+              // listFiles 는 3,000개까지만 준다. 상한에 걸리면 목록이 잘렸을 수 있으므로 검사한다
+              if (files.length >= 3000) changed = true;
+              core.info(`바뀐 파일 ${files.length}개, .github/ 변경: ${changed}`);
+            } catch (err) {
+              core.warning(`바뀐 파일 목록 조회 실패, 보안 검사를 돌린다: ${err.message}`);
+            }
+            core.setOutput("changed", changed ? "true" : "false");
+
+  # zizmor 는 외부 바이너리이고 온라인 감사를 위해 토큰을 받는다. issues: write 가 있는 policy 작업과 분리해
+  # contents: read 토큰만 넘긴다. .github/ 를 바꾼 PR에서만 돈다(건너뛴 작업은 시간이 청구되지 않는다).
+  # policy 가 실패해 출력이 비었으면 돌린다(건너뛰어서 통과로 보이는 일이 없게).
+  zizmor:
+    name: pr-policy / zizmor
+    needs: policy
+    if: ${{ !cancelled() && needs.policy.outputs.github_changed != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # 워크플로 파일을 읽고 온라인 감사에 쓴다
+    env:
+      # 의존성 없는 단일 wheel이라 해시 하나로 고정할 수 있다(PyPI의 manylinux x86_64 wheel)
+      ZIZMOR_REQ: "zizmor==1.31.1 --hash=sha256:58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.17"
+          enable-cache: false
+      - name: zizmor 설치 (해시 고정)
+        run: |
+          echo "$ZIZMOR_REQ" > "$RUNNER_TEMP/zizmor.txt"
+          uv venv -q "$RUNNER_TEMP/zizmor"
+          uv pip install -q --python "$RUNNER_TEMP/zizmor" --require-hashes --only-binary :all: -r "$RUNNER_TEMP/zizmor.txt"
+      # high 등급만 실패로 처리한다. 낮은 등급은 로컬에서 `uvx zizmor==1.31.1 .github`로 본다.
+      # 온라인 감사(가짜 커밋 SHA, 취약 버전 액션)를 쓰려고 작업 토큰을 넘긴다(이 작업의 권한: contents 읽기뿐).
+      - name: workflow·dependabot 보안 검사 (high만 실패)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --min-severity high .github'

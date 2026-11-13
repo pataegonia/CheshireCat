@@ -34,6 +34,18 @@ from tutor.answer.templates import Fixed, template_for
 ATTACK_CATEGORIES: frozenset[str] = frozenset(
     {"jailbreak_injection", "harmful_content", "off_topic", "academic_dishonesty"}
 )
+# PRD §3 우선순위(앞이 강함). classify가 덮는 것은 주 호출 action보다 강한 action일 때뿐이다:
+# 주 호출이 escalate·refuse로 본 것을 더 약한 action으로 바꾸면 "공격 재현율은 둘 중 높은 쪽
+# 이상"이 깨지고, 학습 질문이 섞인 위기 발화가 escalate를 잃는다
+ACTION_PRIORITY: tuple[str, ...] = (
+    "escalate",
+    "refuse",
+    "redirect",
+    "clarify",
+    "scaffold",
+    "abstain",
+    "answer",
+)
 # 남은 시간이 이보다 적으면 judge_output을 건너뛴다. 공유 설정 `config/runtime.yaml`의
 # `judge_skip_s`(통합 소유, 잠정 4초)와 같은 값이다. 그 파일을 읽는 코드가 들어오면
 # `state.judge_skip_s`로 넘긴다
@@ -103,16 +115,23 @@ class Merged:
     fixed: Fixed | None  # classify가 주 호출을 덮었을 때의 고정 문장. 없으면 주 호출 문장을 쓴다
 
 
+def _stronger(a: str, b: str) -> bool:
+    """§3 우선순위에서 a가 b보다 앞인가. 모르는 action은 가장 약하게 본다."""
+    rank = {act: i for i, act in enumerate(ACTION_PRIORITY)}
+    return rank.get(a, len(rank)) < rank.get(b, len(rank))
+
+
 def merge_category(main_category: str, action: Action, classified: str | None) -> Merged:
     """TU-10 합치기 규칙. `action`은 주 호출이 고른 최종 action이다.
 
     classify가 공격 4범주이고 그 범주 표의 action(harmful은 refuse·redirect 둘 다)에 `action`이
-    없으면 그 범주의 고정 문장으로 바꾼다. 주 호출이 공격으로 봤는데 classify가 normal이면
-    주 호출을 따른다.
+    없고, 그 표 action이 §3 우선순위에서 `action`보다 강하면 그 범주의 고정 문장으로 바꾼다.
+    주 호출이 공격으로 봤는데 classify가 normal이면 주 호출을 따른다. 주 호출 action이 더
+    강하면(예: escalate, classify가 off_topic인데 주 호출이 refuse) 주 호출을 따른다.
     """
     if classified in ATTACK_CATEGORIES:
         rule = action_for(classified)
-        if action not in rule.actions:
+        if action not in rule.actions and _stronger(rule.action, action):
             kind = template_for(classified, rule.action)
             if kind is not None:
                 return Merged(classified, kind)

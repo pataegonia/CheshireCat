@@ -118,7 +118,8 @@ def run_soon(state, seconds, text=QUESTION):
         ("jailbreak_injection", "scaffold", Fixed.REFUSE_JAILBREAK),
         ("harmful_content", "answer", Fixed.REFUSE_HARMFUL),
         ("off_topic", "answer", Fixed.REDIRECT_OFF_TOPIC),
-        ("off_topic", "refuse", Fixed.REDIRECT_OFF_TOPIC),
+        ("off_topic", "clarify", Fixed.REDIRECT_OFF_TOPIC),
+        ("harmful_content", "scaffold", Fixed.REFUSE_HARMFUL),
         ("academic_dishonesty", "answer", Fixed.SCAFFOLD_ACADEMIC),
         ("academic_dishonesty", "abstain", Fixed.SCAFFOLD_ACADEMIC),
     ],
@@ -139,6 +140,25 @@ def test_attack_category_overrides_different_action(classified, main_action, kin
 )
 def test_attack_category_keeps_main_when_action_matches_table(classified, main_action):
     assert merge_category("normal", main_action, classified) == Merged("normal", None)
+
+
+@pytest.mark.parametrize(
+    ("main_category", "main_action", "classified"),
+    [
+        # §3 우선순위: 주 호출 action이 더 강하면 덮지 않는다(재현율은 둘 중 높은 쪽 이상)
+        ("emotional_distress", "escalate", "jailbreak_injection"),
+        ("emotional_distress", "escalate", "academic_dishonesty"),
+        ("emotional_distress", "escalate", "off_topic"),
+        ("jailbreak_injection", "refuse", "off_topic"),
+        ("jailbreak_injection", "refuse", "academic_dishonesty"),
+        ("harmful_content", "redirect", "academic_dishonesty"),
+        ("low_signal_input", "clarify", "academic_dishonesty"),
+    ],
+)
+def test_attack_category_never_weakens_a_stronger_main_action(
+    main_category, main_action, classified
+):
+    assert merge_category(main_category, main_action, classified) == Merged(main_category, None)
 
 
 @pytest.mark.parametrize(
@@ -194,6 +214,13 @@ def test_classify_normal_keeps_main_result():
     assert resp["action"] == "answer"
     assert resp["citations"] == ["PY-01-01"]
     assert "3회까지의 점수를 기록해요" in resp["answer"]
+
+
+def test_classify_cannot_turn_main_escalate_into_a_weaker_fixed_sentence():
+    # 학습 질문이 섞여도 escalate(§3). classify가 공격 범주여도 위기 응답을 지운다면 안 된다
+    guard = FakeGuard("academic_dishonesty")
+    resp = run(build(guard, out(category="emotional_distress", action="escalate", sentences=[])))
+    assert resp["action"] == "escalate"
 
 
 def test_classify_receives_the_request_messages_once():

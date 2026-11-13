@@ -16,8 +16,9 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 `--max-calls`(기본은 config/tutor.yaml의 eval.max_calls, TU-14)를 넘으면
 아무것도 부르지 않고 멈춘다. 실행 중에는 판정 몫(예상 판정 호출)을 뺀 나머지를 튜터 LLM 호출
 상한으로 건다.
-튜터 LLM·판정 호출이 연달아 RATE_LIMIT_STREAK회 429로 끝나면 뒤의 호출을 보내지 않고, 결과를
-무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드 하네스와 같은 규칙).
+튜터 LLM 호출의 429(판정은 최종 실패)가 연달아 RATE_LIMIT_STREAK회 이어지면 뒤의 호출(임베딩
+포함)을 보내지 않고, 결과를 무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드
+하네스와 같은 규칙).
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 """
 
@@ -215,9 +216,10 @@ class RateLimitStop:
     def __init__(self) -> None:
         self.streak = 0
         self.tripped = False
+        self.by: str | None = None  # 멈추게 한 호출: "llm" 또는 "judge"
         self._lock = threading.Lock()
 
-    def record(self, error: str | None) -> bool:
+    def record(self, error: str | None, by: str = "llm") -> bool:
         """호출 하나의 최종 오류 코드를 센다. 이번 호출로 멈췄으면 True."""
         with self._lock:
             if error == "rate_limit":
@@ -226,8 +228,16 @@ class RateLimitStop:
                 self.streak = 0
             if self.streak < RATE_LIMIT_STREAK or self.tripped:
                 return False
-            self.tripped = True
+            self.tripped, self.by = True, by
             return True
+
+    def reason(self) -> str | None:
+        """멈춘 사유(결과 JSON의 invalid). 판정기는 429를 가르지 못해 판정 쪽은 단정하지 않는다."""
+        if not self.tripped:
+            return None
+        if self.by == "judge":
+            return f"판정 최종 실패(429일 수 있음)가 {RATE_LIMIT_STREAK}회 이어져 멈췄다"
+        return f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다"
 
     def watch_llm(self, llm: Any) -> None:
         """튜터 LLM의 complete를 감싼다(서버 코드는 그대로다).
@@ -258,12 +268,27 @@ class RateLimitStop:
             try:
                 verdict = judge(kind, payload)
             except Exception:
-                self.record("rate_limit")
+                self.record("rate_limit", "judge")
                 raise
-            self.record(None)
+            self.record(None, "judge")
             return verdict
 
         return watched
+
+    def watch_embed(self, counted: Any) -> None:
+        """임베딩을 감싼다. 멈춘 뒤에는 보내지 않고 실패로 둔다(그 질의는 BM25로 간다).
+
+        임베딩은 다시 보내지 않고 호출 수가 시작 전에 정해져 상한 검사를 받으므로 연속 수에는
+        넣지 않는다. 같은 팀 키라 멈춘 뒤 남은 질의(실행마다 영어 질의 수까지)만 막는다.
+        """
+        inner = counted.embed
+
+        async def embed(texts: Sequence[str]) -> list[list[float]]:
+            if self.tripped:
+                raise RuntimeError("속도 제한으로 멈췄다")
+            return await inner(texts)
+
+        counted.embed = embed
 
 
 def _write(
@@ -278,7 +303,7 @@ def _write(
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
-    invalid는 실행을 멈춘 사유다(속도 제한). 있으면 tainted도 참이다.
+    invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -526,6 +551,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.preset == "tutor":
         state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
         stop.watch_llm(state.tutor_llm)
+    if counted is not None:
+        stop.watch_embed(counted)  # KB 임베딩(기동)은 이미 끝났다. 질의 임베딩만 막는다
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
     latency: list[float] = []
@@ -534,6 +561,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs
+    llm_stopped = stop.tripped  # 튜터 단계에서 멈췄나(판정 단계에서 멈춘 것과 가른다)
     kb = score_local.load_kb_dir(KB_DIR)
     scorer = stop.watch_judge(judge) if judge is not None else None
     report = metrics.build_report(
@@ -543,7 +571,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
-    invalid = f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다" if stop.tripped else None
+    invalid = stop.reason()
     name = args.preset or args.responses.stem
     path = _write(
         report,
@@ -557,10 +585,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     _show(report, sys.stdout)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
-        _show_tutor_calls(state, blocked, latency, cap=cap, stopped=stop.tripped)
+        _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)
     if use is not None:
         embedding_summary(use, sys.stdout)
-    if previous is not None:
+    if previous is not None and invalid is None:  # 멈춘 실행은 기본값이 섞여 비교하지 않는다
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
     sys.stdout.write(f"저장: {path}\n")

@@ -417,9 +417,9 @@ def test_cli_stops_judging_after_a_streak_of_judge_failures(monkeypatch, tmp_pat
     argv = ["--preset", "reference", "--judge", "--out", str(tmp_path)]
     assert run_local.main(argv) == run_local.EXIT_RATE_LIMITED
     assert len(calls) < run_local.RATE_LIMIT_STREAK + metrics.WORKERS  # 다 돌면 행마다 1회
-    assert "속도 제한(429)" in capsys.readouterr().err
+    assert "판정 최종 실패" in capsys.readouterr().err  # 429라고 단정하지 않는다
     data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
-    assert data["tainted"] is True and "429" in data["invalid"]
+    assert data["tainted"] is True and "판정 최종 실패" in data["invalid"]
 
 
 def test_judge_streak_resets_on_a_verdict():
@@ -436,6 +436,28 @@ def test_judge_streak_resets_on_a_verdict():
         with contextlib.suppress(RuntimeError):
             watched("faithful", {})
     assert stop.streak == 1 and not stop.tripped
+
+
+def test_stop_blocks_embedding_after_tripping():
+    """임베딩은 연속 수에 넣지 않지만(재시도 없음, 호출 수가 미리 정해짐) 멈춘 뒤에는 보내지 않는다.
+
+    보내지 않은 질의는 실패로 세어지고 BM25로 간다.
+    """
+    sent = []
+
+    async def embed(texts):
+        sent.append(len(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    counted = run_local.CountedEmbed(embed)
+    stop = run_local.RateLimitStop()
+    stop.watch_embed(counted)
+    asyncio.run(counted(["a"]))
+    for _ in range(run_local.RATE_LIMIT_STREAK):
+        stop.record("rate_limit")
+    with pytest.raises(RuntimeError):
+        asyncio.run(counted(["b"]))
+    assert sent == [1] and counted.failures == 1
 
 
 def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):

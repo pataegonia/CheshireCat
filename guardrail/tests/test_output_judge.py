@@ -14,6 +14,7 @@ from guardrail.judges.output_judge import ask_grounded, build_messages, output_c
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut, strict_schema
 from guardrail.kb import Hit, KbIndex, Ranking
 from guardrail.llm import LLM
+from guardrail.preprocess import reveal_hidden
 
 pytestmark = pytest.mark.anyio
 
@@ -90,6 +91,14 @@ def test_schema_field_order_is_quotes_then_verdict_then_refuses():
 )
 def test_quote_ok(quote, text, min_chars, want):
     assert quote_ok(quote, text, min_chars) is want
+
+
+def test_quote_spanning_a_hidden_char_is_not_confirmed():
+    answer = "값을 세 번​ 더하면 합계가 나와요"
+    shown = reveal_hidden(answer)  # nano가 보는 글
+    assert shown == "값을 세 번<U+200B> 더하면 합계가 나와요"
+    assert quote_ok("세 번<U+200B> 더하면 합계가", answer, 8) is False  # 표시가 원문에 없다
+    assert quote_ok("더하면 합계가 나와요", answer, 8) is True  # 숨긴 문자가 없는 부분
 
 
 # --- 문맥 조립 -------------------------------------------------------------

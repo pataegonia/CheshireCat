@@ -143,7 +143,8 @@ class OutputOnlyGuard:
     """출력 근거 판정만 잰다: KB 검색 → 문맥 → ask_grounded. 입력은 상수(normal)다.
 
     S2.8 Guard 전에 출력 프롬프트를 재는 하네스 전용 판정기다. nano의 grounded를 그대로 내고
-    구간은 내지 않는다(3단·규칙 ②·safe 규칙은 S2.8). nano가 실패하면 근거 있음으로 두고 오류로 센다.
+    구간은 내지 않는다(3단·규칙 ②·safe 규칙은 S2.8). nano가 실패하면 `output.failure_default`를
+    내고 오류로 센다. 빈 답변은 설정과 상관없이 근거 있음이다(PRD GR-01, 응한 내용이 없음).
     질의와 길이 상한은 master-plan §4.2를 따른다.
     """
 
@@ -170,8 +171,9 @@ class OutputOnlyGuard:
             deadline=time.monotonic() + cfg.budget_s,
             baseline=cfg.output.mode == "baseline",
         )
-        if out is None:
-            return self._result(OutputVerdict(True, (), True), None, 1, ("output_judge",))
+        if out is None:  # 서버 기본값(`server._default_body`)과 같은 규칙
+            grounded = cfg.output.failure_default == "grounded"
+            return self._result(OutputVerdict(grounded, (), True), None, 1, ("output_judge",))
         return self._result(OutputVerdict(out.grounded, (), True), out.grounded, 1)
 
     @staticmethod

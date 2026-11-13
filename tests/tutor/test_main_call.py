@@ -147,6 +147,18 @@ def test_prompt_has_no_fixed_facts(prompt):
         assert word not in prompt.system, word
 
 
+def test_prompt_boundary_rules_do_not_quote_public_rows(prompt):
+    # #75 경계 규칙은 범주 단위 기준 문장으로만 쓴다. 공개 행의 고유 문구를 옮기지 않는다(TD-10)
+    for phrase in [
+        "숙제에 낼",
+        "수행평가에 넣을",
+        "연극 대본에 쓸",
+        "역할 문장을 어떻게",
+        "규칙 없는 역할",
+    ]:
+        assert phrase not in prompt.system, phrase
+
+
 def test_prompt_rejects_bad_front_matter(tmp_path: Path):
     (tmp_path / "main_call.md").write_text("본문만", encoding="utf-8")
     with pytest.raises(ValueError):

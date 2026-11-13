@@ -10,8 +10,11 @@
 
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
 
-아직 없는 단계(뒤 이슈): kNN 예시(#77),
-가드 classify 병렬 합치기·judge_output(#88). 각 단계는 `config/tutor.yaml` 토글로 켜고 끈다(TU-14).
+④ 판단 예시(TU-08, `tutor.judge.examples`): `toggles.fewshot`이 fixed·knn이면 공개 세트 튜터 행의
+   발화·범주·action을 주 호출 <판단 예시>에 넣는다. 색인은 기동 때 만들고 요청 중 바뀌지 않는다
+
+아직 없는 단계(뒤 이슈): 가드 classify 병렬 합치기·judge_output(#88).
+각 단계는 `config/tutor.yaml` 토글로 켜고 끈다(TU-14).
 
 요청 내용은 지역 변수로만 쓰고 남기지 않는다(TU-18). LLM 실패는 예외가 아니라 결과 코드로 온다.
 """
@@ -32,6 +35,7 @@ from tutor.answer.templates import (
 )
 from tutor.judge.conversation import Conversation, tidy
 from tutor.judge.draft import draft_answer
+from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.request import TutorRequest
@@ -44,10 +48,24 @@ REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
 
 def prepare_judge(app_state: Any) -> None:
-    """기동 때 한 번: 범주 → action 표로 주 호출 프롬프트를 만든다.
+    """기동 때 한 번: 범주 → action 표로 주 호출 프롬프트를, 판단 예시를 켰으면 예시 색인을 만든다.
 
-    `tutor.startup.prepare`가 부른다."""
+    `tutor.startup.prepare`가 부른다. 공개 세트 파일을 못 읽으면 예외가 나서 서버가 뜨지 않는다
+    (KB와 같다). 예시를 끈 설정에서는 파일을 읽지 않는다."""
     app_state.tutor_prompt = MainCallPrompt.from_rules()
+    cfg = getattr(app_state, "tutor_cfg", None)
+    on = cfg is not None and cfg.toggles.fewshot != "off"
+    app_state.tutor_examples = build_index(cfg.fewshot) if on else None
+
+
+def examples_block(state: Any, conv: Conversation) -> str:
+    """판단 예시 블록(TU-08). 끔이거나 색인이 없으면 빈 문자열. 질의는 판단 대상 정규화본이다."""
+    cfg = state.tutor_cfg
+    index = getattr(state, "tutor_examples", None)
+    if cfg.toggles.fewshot == "off" or index is None:
+        return ""
+    picked = index.pick(cfg.toggles.fewshot, normalize(conv.target_raw))
+    return render_examples(picked, with_answer=cfg.fewshot.with_answer)
 
 
 def _messages(req: TutorRequest) -> list[dict[str, str]]:
@@ -159,6 +177,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         k=cfg.retrieval.k,
         signals=labels(signals) if cfg.toggles.signals else (),
         embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
+        examples=examples_block(state, conv),
     )
     if draft.out is None:
         return tutor_post(fallback_body(signals))

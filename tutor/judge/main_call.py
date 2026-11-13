@@ -170,19 +170,23 @@ def _turn_block(conv: Conversation) -> str:
 
 
 def build_user_message(
-    conv: Conversation, sections: Sequence[SectionLike], signals: Sequence[str] = ()
+    conv: Conversation,
+    sections: Sequence[SectionLike],
+    signals: Sequence[str] = (),
+    examples: str = "",
 ) -> str:
-    """요청별 부분. 순서: 근거 묶음 → 신호 → 대화 → 샌드위치 규칙(가장 가까운 곳에 규칙)."""
+    """요청별 부분. 순서: 근거 묶음 → 판단 예시 → 신호 → 대화 → 샌드위치 규칙.
+
+    규칙이 대화에 가장 가깝다. `examples`는 `tutor.judge.examples.render_examples`가 만든 블록이고,
+    비었으면(TU-08 끔) 넣지 않는다.
+    """
     bundle = "\n".join(_section_block(s) for s in sections) or "(관련 자료를 찾지 못했습니다)"
     hint = ", ".join(signals) if signals else "없음"
-    return "\n\n".join(
-        [
-            f"<근거 묶음>\n{bundle}\n</근거 묶음>",
-            f"<신호>{defuse(hint)}</신호>",
-            _turn_block(conv),
-            SANDWICH,
-        ]
-    )
+    parts = [f"<근거 묶음>\n{bundle}\n</근거 묶음>"]
+    if examples:
+        parts.append(examples)
+    parts += [f"<신호>{defuse(hint)}</신호>", _turn_block(conv), SANDWICH]
+    return "\n\n".join(parts)
 
 
 def build_messages(
@@ -190,10 +194,11 @@ def build_messages(
     conv: Conversation,
     sections: Sequence[SectionLike],
     signals: Sequence[str] = (),
+    examples: str = "",
 ) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": prompt.system},
-        {"role": "user", "content": build_user_message(conv, sections, signals)},
+        {"role": "user", "content": build_user_message(conv, sections, signals, examples)},
     ]
 
 
@@ -254,10 +259,11 @@ async def run_main_call(
     signals: Sequence[str] = (),
     *,
     deadline: float,
+    examples: str = "",
 ) -> MainCallOut | None:
     """nano 주 호출 1회(재시도는 런타임). 실패·형식 오류면 None → 호출 쪽이 TU-12 기본값."""
     result = await complete(
-        build_messages(prompt, conv, sections, signals), MainCallOut, deadline=deadline
+        build_messages(prompt, conv, sections, signals, examples), MainCallOut, deadline=deadline
     )
     if result.error is not None or not isinstance(result.parsed, MainCallOut):
         return None

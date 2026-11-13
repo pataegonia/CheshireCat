@@ -26,7 +26,7 @@ import math
 import secrets
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +34,7 @@ from types import SimpleNamespace
 from typing import Any, TextIO
 
 import yaml
+from guardrail.eval.cv import load_splits
 
 import tutor
 from tutor import pipeline
@@ -46,6 +47,7 @@ from tutor.eval.recall import (
     missing_embedding_env,
     query_parts,
 )
+from tutor.judge.examples import build_index, load_examples
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import TutorConfig, load_config
@@ -101,8 +103,9 @@ async def _collect(
     async def one(row: dict[str, Any]) -> tuple[str, Any, float]:
         async with gate:
             started = time.perf_counter()
+            own = state.for_row(row["id"]) if isinstance(state, FoldStates) else state
             try:
-                response = await _respond(preset, row, state)
+                response = await _respond(preset, row, own)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
                 sys.stderr.write(f"{row['id']}: {type(exc).__name__}\n")  # 메시지는 내지 않는다
                 response = None
@@ -320,9 +323,43 @@ def _tutor_config(
 def _own_state(cfg: TutorConfig, overrides: dict[str, Any]) -> bool:
     """tutor 프리셋이 handle의 기본 state 대신 자기 state를 만들어 재는가.
 
-    설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다).
+    설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다). 판단 예시를
+    켰을 때도다(기본 state의 예시 색인은 200행 전부라 평가 행 자신이 예시로 들어간다).
     """
-    return bool(overrides) or cfg.toggles.embedding
+    return bool(overrides) or cfg.toggles.embedding or cfg.toggles.fewshot != "off"
+
+
+@dataclass(frozen=True)
+class FoldStates:
+    """판단 예시(TU-08)를 켠 측정: 행마다 그 행의 평가 묶음을 뺀 예시 색인을 쓰는 state.
+
+    폴드 k의 행은 폴드 k와 홀드아웃 묶음을 뺀 색인을, 홀드아웃 행은 홀드아웃 묶음만 뺀 색인을
+    쓴다(가드 `train_rows`와 같은 규칙, TU-16·TD-14). 나머지 기동 결과(LLM 호출기 등)는 같이 쓴다.
+    """
+
+    by_row: Mapping[str, Any]
+
+    def for_row(self, row_id: str) -> Any:
+        return self.by_row[row_id]
+
+
+def fold_states(state: Any, cfg: TutorConfig, rows: Sequence[dict[str, Any]]) -> FoldStates:
+    split = load_splits()
+    pool = load_examples()
+    holdout = set(split.holdout)
+
+    def key(row_id: str) -> str:
+        cluster = split.cluster[row_id]
+        return "holdout" if cluster in holdout else str(split.fold[cluster])
+
+    per_key: dict[str, Any] = {}
+    for k in sorted({key(row["id"]) for row in rows}):
+        excluded = holdout | (
+            set() if k == "holdout" else {c for c, f in split.fold.items() if str(f) == k}
+        )
+        index = build_index(cfg.fewshot, [e for e in pool if split.cluster[e.id] not in excluded])
+        per_key[k] = SimpleNamespace(**{**vars(state), "tutor_examples": index})
+    return FoldStates({row["id"]: per_key[key(row["id"])] for row in rows})
 
 
 def _tutor_state(
@@ -454,6 +491,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     latency: list[float] = []
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
+        if own is not None and cfg.toggles.fewshot != "off":
+            own = fold_states(own, cfg, rows)  # 평가 묶음을 예시 색인에서 뺀다(TU-08·TU-16)
         all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs

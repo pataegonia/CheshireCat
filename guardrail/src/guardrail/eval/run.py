@@ -353,8 +353,8 @@ class Tap:
     """LLM.complete 결과를 모아 둔다(역할별 오류 코드·finish_reason=length 집계용)."""
 
     records: list[tuple[str, str | None, str | None]] = field(default_factory=list)
-    # (행 id, 역할, 파싱된 출력). 공개 세트 분석용으로 runs/에만 쓴다. 서버 로그와 무관하다(GR-12)
-    parsed: list[tuple[str | None, str, dict | None]] = field(default_factory=list)
+    # (행 id, 호출 기록). 공개 세트 분석용으로 runs/에만 쓴다. 서버 로그와 무관하다(GR-12)
+    parsed: list[tuple[str | None, dict]] = field(default_factory=list)
 
     def attach(self, llm: LLM) -> None:
         inner = llm.complete
@@ -363,7 +363,16 @@ class Tap:
             res = await inner(role, messages, schema, deadline=deadline)
             self.records.append((role, res.error, res.finish_reason))
             out = res.parsed.model_dump(mode="json") if res.parsed is not None else None
-            self.parsed.append((ROW_ID.get(), role, out))
+            call = {
+                "role": role,
+                "parsed": out,
+                "latency_ms": round(res.latency_ms, 1),  # 재시도 포함 전체
+                "attempts": res.attempts,
+                "error": res.error,
+                "finish_reason": res.finish_reason,
+                "completion_tokens": res.completion_tokens,  # 마지막 시도의 값
+            }
+            self.parsed.append((ROW_ID.get(), call))
             return res
 
         llm.complete = complete  # type: ignore[method-assign]
@@ -821,9 +830,9 @@ async def _measure(
             scores.append(summarize(plan.public, out, tap.records[mark:], cfg, plan.split))
             resp = _responses(out, block)
             llm_out: dict[str, list[dict]] = {}
-            for rid, role, parsed in tap.parsed[pmark:]:
+            for rid, call in tap.parsed[pmark:]:
                 if rid is not None:
-                    llm_out.setdefault(rid, []).append({"role": role, "parsed": parsed})
+                    llm_out.setdefault(rid, []).append(call)
             for rid, p in row_points([r for r in plan.public if r.id in resp], resp).items():
                 if plan.split.cluster[rid] not in held:
                     points.setdefault(cname, {}).setdefault(rid, []).append(p)

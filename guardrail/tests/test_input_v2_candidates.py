@@ -9,6 +9,7 @@ from fakes import FakeLLM, Ok
 
 from guardrail.config import load_config, load_prompt, resolve_path
 from guardrail.data import labeled_rows, load_public
+from guardrail.eval import fake_llm
 from guardrail.eval.fake_llm import make_fake_llm
 from guardrail.judges.input_judge import judge_input
 from guardrail.judges.schemas import InputModeOut, strict_schema
@@ -75,8 +76,9 @@ async def test_code_never_overrides_the_category_from_mode(mode, category):
 
 
 async def test_reply_without_mode_is_rejected_in_mode_mode():
-    got, _ = await _judge('{"evidence": "e", "category": "off_topic"}', C2)
-    assert got is None
+    reply = '{"evidence": "e", "category": "off_topic"}'
+    assert (await _judge(reply, {}))[0] == "off_topic"  # 대조: 기본 스키마에서는 받아들인다
+    assert (await _judge(reply, C2))[0] is None
 
 
 async def test_default_mode_still_uses_the_v1_schema():
@@ -91,6 +93,9 @@ async def test_fake_llm_answers_the_mode_schema():
     await llm.start()
     got = await judge_input(MSGS, "질문", [], llm, cfg, deadline=time.monotonic() + 30)
     assert got == "normal"
+    InputModeOut.model_validate(fake_llm.MODE_REPLY)
+    kwargs = {"response_format": {"json_schema": {"name": "InputModeOut"}}, "messages": []}
+    assert fake_llm._reply(kwargs) == fake_llm.MODE_REPLY
 
 
 @pytest.mark.parametrize("name", VARIANTS)
@@ -128,6 +133,9 @@ def test_c3_rewrites_the_conflicting_sentences():
     assert "문장 끝이" not in body  # M2: 부딪히던 문장
     assert "아래는 범주 단서가" not in body and "거절하지 말고" not in body  # M8
     assert body.count("실습 대상") <= 1  # M3: 같은 경계를 한 곳에서만
+    assert "요구가 채워" not in body
+    c2 = load_prompt(load_config(overrides=C2), "input_judge")[1]
+    assert "요구가 채워" not in c2.split("## 출력")[1]
 
 
 def test_no_input_prompt_copies_public_item_wording():
@@ -137,8 +145,9 @@ def test_no_input_prompt_copies_public_item_wording():
     k = MAX_SHARED_CHARS + 1
     for path in sorted(resolve_path(cfg.paths.prompts).glob("input_judge*.md")):
         body = squeeze.sub("", path.read_text("utf-8"))
+        grams = {body[i : i + k] for i in range(len(body) - k + 1)}
         copied = next(
-            (t[i : i + k] for t in texts for i in range(len(t) - k + 1) if t[i : i + k] in body),
+            (t[i : i + k] for t in texts for i in range(len(t) - k + 1) if t[i : i + k] in grams),
             None,
         )
         assert copied is None, f"{path.name}: 공개 문항과 {k}자 이상 겹친다"

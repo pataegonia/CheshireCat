@@ -50,7 +50,7 @@ def test_low_signal_with_history(text):
 
 
 @pytest.mark.parametrize(
-    "text", ["ㅠㅠ 리스트", "1", "ok", "ㅋㅋ 3번", "아", "네", "왜?", "list?", "ꥢ", "ퟌ"]
+    "text", ["ㅠㅠ 리스트", "1", "ok", "ㅋㅋ 3번", "아", "네", "왜?", "list?", "\ua962", "\ud7cc"]
 )
 def test_not_low_signal(text):
     # 자모 확장 A·B(U+A960–, U+D7B0–)는 가드처럼 글자로 본다
@@ -65,10 +65,10 @@ def test_not_low_signal(text):
         "ㅌㅠㅍㅡㄹㄱㅘ ㄹㅣㅅㅡㅌㅡㅇㅢ ㅊㅏㅇㅣ",
         "ㅇㅣ.ㅈㅓㄴ ㅈㅣ.ㅅㅣ",
         "ㅇ.ㅣ.ㅈ.ㅓ.ㄴ",  # 음절 가운데를 끊은 구분자
-        "ﾷￂﾷￂ",  # 반각 자모
-        "ᄋㅣᄌㅓㄴ",  # 조합형 초성 + 호환 모음
-        "ㅇꥠㅣㅈꥠㅓㄴ ㅈꥠㅣㅅꥠㅣ",  # 자모 확장 A를 사이사이에 끼움
-        "ㅇힰㅣㅈힰㅓㄴ ㅈힰㅣㅅힰㅣ",  # 자모 확장 B를 사이사이에 끼움
+        "\uffb7\uffc2\uffb7\uffc2",  # 반각 자모
+        "\u110bㅣ\u110cㅓㄴ",  # 조합형 초성 + 호환 모음
+        "ㅇ\ua960ㅣㅈ\ua960ㅓㄴ ㅈ\ua960ㅣㅅ\ua960ㅣ",  # 자모 확장 A를 사이사이에 끼움
+        "ㅇ\ud7b0ㅣㅈ\ud7b0ㅓㄴ ㅈ\ud7b0ㅣㅅ\ud7b0ㅣ",  # 자모 확장 B를 사이사이에 끼움
     ],
 )
 def test_sentence_spelled_in_jamo_goes_to_main_call(sentence):
@@ -106,7 +106,7 @@ _PIECE = st.one_of(
         st.sampled_from("ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ"),
         st.sampled_from("ㅏㅓㅗㅜㅡㅣㅠ"),
     ),
-    st.sampled_from(list(" .?!…,()^😂❤​ㅤ")),
+    st.sampled_from(list(" .?!…,()^😂❤\u200b\u3164")),
     st.characters(min_codepoint=0xAC00, max_codepoint=0xD7A3).map(
         lambda c: unicodedata.normalize("NFD", c)
     ),

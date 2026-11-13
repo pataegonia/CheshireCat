@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from guardrail.classifier import LrClassifier
-from guardrail.config import GuardConfig
+from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow, labeled_rows, load_public
 from guardrail.decide import Tier, fallback_category, output_verdict, safe_of, trusted
 from guardrail.judges.input_judge import build_window, judge_input
@@ -71,6 +71,19 @@ class ConstantGuard:
         )
 
 
+def unsupported_switches(cfg: GuardConfig) -> list[str]:
+    """Guard가 아직 지원하지 않는데 켜져 있는 설정 이름. 조용히 무시하지 않으려고 미리 본다."""
+    t = cfg.toggles
+    checks = (
+        ("third_call", t.third_call),
+        ("oom_kb_snippet", t.oom_kb_snippet),
+        ("embedding", t.embedding),
+        ("rule_require_same_kind", cfg.output.rule_require_same_kind),
+        ("rule_extra_tokens=bare_numeral", "bare_numeral" in cfg.output.rule_extra_tokens),
+    )
+    return [name for name, on in checks if on]
+
+
 def build_indexes(
     cfg: GuardConfig, rows: Sequence[LabeledRow] | None = None
 ) -> tuple[KbIndex, KnnIndex | None, LrClassifier | None]:
@@ -99,6 +112,7 @@ class _Prepared:
     hits: list[Hit]  # 출력 nano에 줄 문맥
     rule_spans: tuple[str, ...] | None
     revealed: str  # 숨긴 문자를 드러낸 답변(출력 nano용)
+    output_error: str | None = None  # 출력 쪽 준비(KB 검색·규칙 ②)가 실패했을 때의 오류 코드
 
 
 @dataclass(frozen=True)
@@ -123,19 +137,13 @@ class Guard:
         lr: LrClassifier | None,
     ) -> None:
         # 아직 없는 기능을 켠 설정은 여기서 막는다(조용히 무시하면 ablation이 "효과 없음"이 된다)
-        t = cfg.toggles
-        missing = [
-            name
-            for name, on in (
-                ("third_call", t.third_call),
-                ("oom_kb_snippet", t.oom_kb_snippet),
-                ("embedding", t.embedding),
-                ("rule_require_same_kind", cfg.output.rule_require_same_kind),
-            )
-            if on
-        ]
+        missing = unsupported_switches(cfg)
         if missing:
             raise NotImplementedError(f"Guard가 아직 지원하지 않는 설정: {', '.join(missing)}")
+        # 프롬프트는 첫 요청이 아니라 여기서 읽는다(경로가 틀리면 기동에서 드러난다)
+        baseline = cfg.output.mode == "baseline"
+        for name in ("input_judge", "output_judge_baseline" if baseline else "output_judge"):
+            load_prompt(cfg, name)
         self.cfg, self.llm, self.kb, self.knn, self.lr = cfg, llm, kb, knn, lr
         self.block = frozenset(cfg.block_categories)
 
@@ -182,7 +190,8 @@ class Guard:
             tasks["input_judge"] = asyncio.create_task(
                 judge_input(p.window, p.target, p.examples, self.llm, cfg, deadline=deadline)
             )
-        if p.answer and (baseline or cfg.toggles.nano_tier3 or cfg.output.call_nano_when_unused):
+        wants_nano = baseline or cfg.toggles.nano_tier3 or cfg.output.call_nano_when_unused
+        if p.answer and wants_nano and p.output_error is None:
             asking = ask_grounded(
                 p.target, p.revealed, p.hits, self.llm, cfg, deadline=deadline, baseline=baseline
             )
@@ -201,11 +210,15 @@ class Guard:
                 await asyncio.wait(late, timeout=DEADLINE_GRACE_S)
 
         category, source = self._category(p, results.get("input_judge"))
-        try:
-            out = self._output(req, p, category, results.get("output_judge"))
-        except Exception as exc:  # noqa: BLE001 - 입력 판정은 살리고 출력만 기본값으로
-            errors.append(f"output:{type(exc).__name__}")
-            out = _Output(self._default_output(req))
+        if p.output_error is not None:
+            errors.append(p.output_error)
+            out = self._fallback_output(req, category, p.signals)
+        else:
+            try:
+                out = self._output(req, p, category, results.get("output_judge"))
+            except Exception as exc:  # noqa: BLE001 - 입력 판정은 살리고 출력만 기본값으로
+                errors.append(f"output:{type(exc).__name__}")
+                out = self._fallback_output(req, category, p.signals)
         return self._result(category, source, out, p, t0, t1, len(tasks), tuple(errors))
 
     def _prepare(self, req: GuardRequest) -> _Prepared | Signals:
@@ -234,16 +247,23 @@ class Guard:
         answer = full[: cfg.input.max_answer_chars]
         # 숨긴 태그 검사만 자르기 전 전체를 본다(GR-02)
         signals = Signals(low, is_refusal(answer), has_hidden_tags(full))
-        half = cfg.retrieval.max_query_chars // 2
-        users = [m.content[: cfg.input.max_chars] for m in window if m.role == "user"]
-        ranking = self.kb.rank("\n".join(users)[-half:] + "\n" + answer[:half])
-        rule_spans = None
-        if t.literal_rule:
-            top = list(ranking.hits[: cfg.kb.top_k])
-            rule_spans = literal_rule(answer, top, ranking.margin, self.kb, cfg)
+        try:  # 출력 쪽 준비가 실패해도 입력 판정은 그대로 간다(GR-09: 출력 실패는 출력만 바꾼다)
+            half = cfg.retrieval.max_query_chars // 2
+            users = [m.content[: cfg.input.max_chars] for m in window if m.role == "user"]
+            ranking = self.kb.rank("\n".join(users)[-half:] + "\n" + answer[:half])
+            rule_spans = None
+            if t.literal_rule:
+                top = list(ranking.hits[: cfg.kb.top_k])
+                rule_spans = literal_rule(answer, top, ranking.margin, self.kb, cfg)
+            hits, revealed = output_context(ranking, self.kb, cfg), reveal_hidden(answer)
+        except Exception as exc:  # noqa: BLE001 - 종류 이름만 남긴다
+            return _Prepared(
+                target, window, low, knn_major, lr_pred, examples, answer, signals, [], None, "",
+                f"output:{type(exc).__name__}",
+            )  # fmt: skip
         return _Prepared(
             target, window, low, knn_major, lr_pred, examples, answer, signals,
-            output_context(ranking, self.kb, cfg), rule_spans, reveal_hidden(answer),
+            hits, rule_spans, revealed,
         )  # fmt: skip
 
     @staticmethod
@@ -275,6 +295,14 @@ class Guard:
         if not req.has_candidate:
             return None
         return OutputVerdict(self.cfg.output.failure_default == "grounded", (), True)
+
+    def _fallback_output(self, req: GuardRequest, category: Category, sig: Signals) -> _Output:
+        """출력을 만들지 못했을 때: grounded는 `failure_default`, safe는 GR-08 그대로."""
+        default = self._default_output(req)
+        if default is None:
+            return _Output(None)
+        safe = safe_of(category, self.block, sig, self.cfg.toggles)
+        return _Output(OutputVerdict(default.grounded, (), safe))
 
     def _output(
         self, req: GuardRequest, p: _Prepared, category: Category, nano: object | None

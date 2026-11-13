@@ -881,8 +881,12 @@ async def amain(
         return EXIT_HOLDOUT
     only = (args.input_only and input_only_factory) or (args.output_only and output_only_factory)
     factory = judge_factory or only or default_factory
-    if factory is default_factory and not hasattr(guard_module, "Guard"):
-        sys.stderr.write("note: guardrail.guard.Guard가 아직 없어 ConstantGuard로 돈다\n")
+    if factory is default_factory:  # 호출을 쓰기 전에 막는다(없는 설정 행은 재지 못한다)
+        bad = {n: guard_module.unsupported_switches(c) for n, c in plan.configs.items()}
+        bad = {n: v for n, v in bad.items() if v}
+        if bad:
+            _err(f"Guard가 아직 지원하지 않는 설정: {bad}. --only에서 빼고 다시 실행한다")
+            return EXIT_USAGE
     llm = make_fake_llm(plan.base.llm) if args.fake else (make_llm or LLM)(plan.base.llm)
     tap = Tap()
     tap.attach(llm)

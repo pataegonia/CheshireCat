@@ -75,7 +75,11 @@ async def default_factory(cfg: GuardConfig) -> Judge:
     except Exception as exc:  # noqa: BLE001 - 종류 이름만 남긴다
         startup_log.error("guard judge=constant reason=%s", type(exc).__name__)
         return ConstantGuard()
-    startup_log.info("guard judge=real")
+    probe = guard.llm.probe_result.get("base")  # 인증 말고 다른 probe 실패는 기동을 막지 않는다
+    if probe is None:
+        startup_log.info("guard judge=real")
+    else:  # 판정기는 떴지만 첫 호출이 실패했다. 오류 코드만 남긴다
+        startup_log.error("guard judge=real probe=%s", probe)
     return guard
 
 

@@ -747,7 +747,7 @@ def test_default_factory_falls_back_when_the_real_guard_cannot_start(monkeypatch
 
 
 def test_default_factory_reports_a_guard_that_cannot_be_built(monkeypatch, caplog, tmp_path):
-    # 프롬프트 경로가 틀리면 "실제 판정기"로 뜨지 않는다(모든 요청이 기본값이 되는 것을 로그로 남긴다)
+    # 프롬프트 경로가 틀리면 "실제 판정기"로 뜨지 않는다(기본값만 내게 되는 것을 로그로 남긴다)
     _fake_guard_llm(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "k")
     monkeypatch.setenv("GUARD_PROMPTS_DIR", str(tmp_path / "none"))

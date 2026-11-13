@@ -79,12 +79,12 @@ class Vectorizer(_Strict):
 
 
 class KnnCfg(Vectorizer):
-    max_examples: int
-    per_category: int
+    max_examples: PositiveInt
+    per_category: PositiveInt
 
 
 class LrCfg(Vectorizer):
-    C: float
+    C: PositiveFloat
 
 
 class InputCfg(_Strict):
@@ -92,7 +92,7 @@ class InputCfg(_Strict):
     max_chars: int
     max_answer_chars: int
     knn: KnnCfg
-    knn_vote_k: int
+    knn_vote_k: PositiveInt
     lr: LrCfg
     oom_snippet_chars: int
 

@@ -95,6 +95,12 @@ def test_every_key_is_required(tmp_path, dotted):
         ("llm.gate", 0),
         ("budget_s", 0),
         ("input.lr.ngram", [3, 1]),
+        *[
+            (k, v)
+            for k in ("input.knn.max_examples", "input.knn.per_category", "input.knn_vote_k")
+            for v in (0, -1)
+        ],
+        *[("input.lr.C", v) for v in (0, -1.0, float("nan"))],
     ],
 )
 def test_bad_value_rejected(dotted, bad):

@@ -22,4 +22,4 @@
 | [0011](0011-llm-call-structure.md) | LLM 호출: 입력·출력 2회 병렬, gpt-5-nano low (v6: 조건부 3번째 호출 ablation, SDK 재시도 0, 전역 게이트) | proposed, v6 수정 | 2026-11-09 |
 | [0012](0012-category-derived-decision.md) | 입력 판정: 범주만 출력하고 decision은 코드가 도출 | proposed | 2026-11-10 |
 | [0013](0013-public-set-knn-and-leakage.md) | 공개 세트 kNN few-shot과 합성 데이터, 누수 방지 | proposed | 2026-11-10 |
-| [0014](0014-output-three-tier-and-safe-rule.md) | 출력 판정: 3단 출력과 규칙 구간, safe 규칙 (R14: 인용 필드와 확인, ③의 `tier3_trust`, `refuses` 기록) | proposed, R14 수정 | 2026-11-10 |
+| [0014](0014-output-three-tier-and-safe-rule.md) | 출력 판정: 3단 출력과 규칙 구간, safe 규칙 (R14: 인용 필드와 확인, ③의 `tier3_trust`, `refuses` 기록. S2.9: 인용을 구간으로 내는 것이 기본, 토큰 상한 1600) | proposed, R14·S2.9 수정 | 2026-11-10 |

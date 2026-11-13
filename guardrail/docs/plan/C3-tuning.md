@@ -108,7 +108,7 @@
 |---|---|---|---|
 | 선행 | S3.1–S3.5(자른 것은 "미실행") | 브랜치 | `gr/s3.6-ablation-table` |
 
-- 설정 수(14개): 베이스라인 1 + 전체 1 + 기본 켬 토글마다 `no_*` 7(`knn_fewshot`·`knn_vote`·`lr`·`low_signal_direct`·`literal_rule`·`nano_tier3`·`safe_rule`) + 기본 끔 토글마다 `with_*` 5(`third_call`·`nano_span`·`oom_kb_snippet`, 임베딩은 `embedding.targets`별로 `with_embedding_kb`·`with_embedding_knn` 2개). S3.1–S3.5에서 켜기로 바뀐 토글은 `with_*` 대신 `no_*`가 되어 개수는 같다.
+- 설정 수(14개): 베이스라인 1 + 전체 1 + 기본 켬 토글마다 `no_*` 8(`knn_fewshot`·`knn_vote`·`lr`·`low_signal_direct`·`literal_rule`·`nano_tier3`·`nano_span`·`safe_rule`. `nano_span`은 S2.9에서 기본 켬이 됐다) + 기본 끔 토글마다 `with_*` 4(`third_call`·`oom_kb_snippet`, 임베딩은 `embedding.targets`별로 `with_embedding_kb`·`with_embedding_knn` 2개). S3.1–S3.5에서 켜기로 바뀐 토글은 `with_*` 대신 `no_*`가 되어 개수는 같다.
 - 호출량(nano 실행당 약 475호출 기준, 3회): 일반 11개 × 475 = 5,225, `with_third_call` 약 570(3번째 호출 +20% 상한으로 잡음), 임베딩 2개 × 약 835(요청당 임베딩 1회 약 360을 더함. 기동 임베딩은 묶어 보내 몇 회) = 1,670. 1회 합계 약 7,465 × 3 = **약 22,400회**. 1차(11/18: `no_literal_rule`·`no_nano_tier3`·`no_safe_rule`·`with_nano_span`·`with_embedding_kb`) 약 8,200회 → 15% 여유로 `--max-calls 9500`, 2차(11/19: 나머지 9개) 약 14,200회 → `--max-calls 16500`. 실행 전에 `--estimate`로 확인한다(§1 하루 상한 안).
 - 어뷰징으로 보이지 않게(SPEC §7.1 키 회수) ablation 실행은 11/18–11/19 이틀에 나눠 돌리고 동시 처리 수를 낮춘다(하네스 동시 실행은 채점 수준 64보다 낮게). 11/18(1차): 입력 프롬프트를 건드리지 않는 토글 행만. 11/19(2차): S3.2 머지 뒤 동결 후보 프롬프트로 베이스라인과 프롬프트에 닿는 나머지 행(S3.3·S3.4 포함), 동결 후보 전체를 (다시) 잰다. 모든 행은 동결 후보 프롬프트 기준이고, S3.1–S3.5에서 다른 프롬프트 버전으로 잰 결과는 S3.6 표에 재사용하지 않는다.
 - `run --ablation configs/ablation/ --only <차수별 행 이름> --repeat 3 --max-calls <차수별 값>`(1차 9500, 2차 16500. `--only`는 S2.9가 만드는 부분 실행 인자이고 기준 행 baseline·default는 늘 포함): 베이스라인(`baseline.yaml`), 전체(동결 후보 `default.yaml`), 기본 켬 토글마다 `no_*`, 채택 안 한 토글마다 `with_*`(위 14개).

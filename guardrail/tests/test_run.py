@@ -290,3 +290,29 @@ async def test_budget_invalid_banner_is_in_report(tmp_path):
     )
     report = (tmp_path / "runs" / "t" / "report.md").read_text(encoding="utf-8")
     assert "# 무효 실행" in report.split("# 평가 보고서")[0]
+
+
+# --- S2.8: 기본 판정기는 Guard ---
+
+
+async def test_fake_run_drives_the_real_guard_end_to_end(tmp_path, capsys):
+    assert await run.amain(_args(tmp_path, "--fake", config=DEFAULT)) == 0
+    est = int(capsys.readouterr().out.split("estimate_calls=")[1].split()[0])
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text("utf-8"))
+    recs = [json.loads(x) for x in (out / "responses.jsonl").read_text("utf-8").splitlines()]
+    score = summary["configs"]["t"]["scores"][0]
+    assert summary["judge_kind"] == "Guard"
+    assert score["cv"]["invalid"] == 0 and score["errors"] == {}
+    # 예상 호출 수는 상한이다. 저신호 직접 판정 행만큼만 덜 부른다
+    low = sum(r["source"] == "low_signal" for r in recs)
+    cfg = load_config(DEFAULT)
+    assert low > 0 and score["calls"]["total"] + run.probe_calls(cfg.llm) == est - low
+    public = {r.id: r for r in load_public(cfg.paths.public)}
+    for r in recs:
+        has = bool(public[r["id"]].candidate_answer)
+        assert (r["tier"] is not None) == has
+        # 인용 확인과 거절 판정 원값이 기록에 남는다(S3.1이 저장된 응답으로 정밀도를 잰다)
+        assert all(
+            (r[k] is not None) == has for k in ("answer_quote_ok", "kb_quote_ok", "nano_refuses")
+        )

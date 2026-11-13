@@ -650,3 +650,53 @@ def test_injected_tutor_client_still_needs_all_three_env(client, monkeypatch, ca
     assert r.json()["answer"] == server.TUTOR_FALLBACK
     assert fake.chat.completions.calls == []
     assert _access_lines(caplog)[-1].split(" ")[-1] == "ValueError"
+
+
+# --- S2.8: 단독 서버는 실제 판정기(Guard)를 쓴다 ---
+
+
+def _fake_guard_llm(monkeypatch, category="answer_seeking"):
+    """Guard.build가 만드는 LLM의 전송만 가짜로 바꾼다."""
+    from fakes import FakeLLM, Ok
+
+    from guardrail import guard as guard_module
+    from guardrail.llm import LLM
+
+    def respond(kw):
+        if kw["messages"] == [{"role": "user", "content": "ping"}]:
+            return Ok()
+        if kw["response_format"]["json_schema"]["name"].startswith("Input"):
+            return Ok(json.dumps({"evidence": "e", "category": category}))
+        return Ok('{"answer_quote": "", "kb_quote": "", "grounded": true, "refuses": false}')
+
+    fake = FakeLLM(respond=respond)
+    monkeypatch.setattr(guard_module, "LLM", lambda c: LLM(c, send=fake.send))
+    return fake
+
+
+def test_standalone_app_serves_the_real_guard(monkeypatch):
+    fake = _fake_guard_llm(monkeypatch)
+    body = {
+        "messages": [{"role": "user", "content": "리스트에 값을 더하려면 어떻게 해요?"}],
+        "candidate_answer": "append를 쓰면 돼요.",
+    }
+    with TestClient(server.app) as c:
+        r = _post(c, body)
+    jsonschema.validate(r.json(), RESPONSE_SCHEMA)
+    assert r.json()["input"] == {"decision": "allow", "category": "answer_seeking"}
+    assert r.json()["output"]["category"] == "answer_seeking"
+    assert len(fake.requests) > 2  # probe + 입력·출력 판정
+
+
+def test_standalone_app_does_not_start_without_llm_env(monkeypatch):
+    # 키가 없으면 상수 판정으로 조용히 뜨지 않고 기동에서 실패한다
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError), TestClient(server.app):  # noqa: PT011 - 메시지에 값이 없다
+        pass
+
+
+def test_create_app_default_is_still_the_constant_guard():
+    # 통합 app.py가 이 기본값을 쓴다. 실제 판정기는 create_app(Guard.build)로 고른다
+    with TestClient(create_app()) as c:
+        assert _post(c, b'{"candidate_answer": ""}').json() == DEFAULT_WITH_OUTPUT

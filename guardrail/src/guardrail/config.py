@@ -79,12 +79,12 @@ class Vectorizer(_Strict):
 
 
 class KnnCfg(Vectorizer):
-    max_examples: int
-    per_category: int
+    max_examples: PositiveInt
+    per_category: PositiveInt
 
 
 class LrCfg(Vectorizer):
-    C: float
+    C: PositiveFloat
 
 
 class InputCfg(_Strict):
@@ -92,7 +92,7 @@ class InputCfg(_Strict):
     max_chars: int
     max_answer_chars: int
     knn: KnnCfg
-    knn_vote_k: int
+    knn_vote_k: PositiveInt
     lr: LrCfg
     oom_snippet_chars: int
 
@@ -150,6 +150,12 @@ class GuardConfig(_Strict):
             raise ValueError("toggles.third_call은 knn_vote·lr이 둘 다 켜졌을 때만 켤 수 있다")
         if t.nano_span and not t.literal_rule:
             raise ValueError("toggles.nano_span은 literal_rule이 켜졌을 때만 켤 수 있다")
+        # rules.py는 요청 때 NotImplementedError를 낸다. 기동 때 막는다(rules를 import하면 순환)
+        o = self.output
+        if "bare_numeral" in o.rule_extra_tokens:
+            raise ValueError("output.rule_extra_tokens의 bare_numeral은 미구현이다")
+        if o.rule_require_same_kind:
+            raise ValueError("output.rule_require_same_kind: true는 미구현이다")
         return self
 
 
@@ -234,6 +240,8 @@ def load_prompt(cfg: GuardConfig, name: str) -> tuple[str, str]:
     head = yaml.safe_load(m.group("head"))
     if not isinstance(head, dict) or head.get("id") != name or not head.get("version"):
         raise ValueError(f"프롬프트 {name}: 머리말 id·version이 맞지 않다")
+    if not text[m.end() :].strip():  # 빈 system 메시지로 판정이 나가 캐시되지 않게
+        raise ValueError(f"프롬프트 {name}: 본문이 비었다")
     return str(head["version"]), text[m.end() :]
 
 

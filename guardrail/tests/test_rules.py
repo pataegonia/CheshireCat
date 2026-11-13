@@ -129,7 +129,7 @@ def test_positions_map_back_to_raw_after_citation_removal():
     assert [t.value for t in toks] == ["5개", "12"]
 
 
-# V2와 토큰이 다른 곳은 수사 경계(ⓕ)가 뺀 이 다섯 매칭뿐이다(공개 답변 86·튜터 참조 200·KB 48섹션)
+# V2와 토큰이 다른 곳은 수사 경계(ⓕ)가 뺀 이 다섯 매칭뿐이다(U 35·G 32·T 119 답변과 KB 48섹션)
 NUMERAL_BOUNDARY_DROPS = Counter(
     {"한 개": 1, "세 개": 1, "한 단계": 1, "한 배": 1, "두 개": 1}
 )  # 불필요[한 개]인 · 두[세 개] 규칙 · 중요[한 단계]를 · 향[한 배]제 · [두 개]수를
@@ -158,9 +158,13 @@ def test_tokens_match_v2_except_numeral_boundary_drops(corpora, index):
         "또한 번호",
         "세 개념",
         "두 배열",
-        "한 개인 정보",
+        "불필요한 개인 정보",
         "두 개수를 더한",
         "필요한 개발",
+        "한 개발",
+        "두 개발자",
+        "두 번호",
+        "두 배제",
         "한 개체",
         "두 번역",
         "향한 배제",
@@ -182,6 +186,12 @@ def test_numeral_boundary_rejects_word_fragments(text):
         ("한 개를", "한 개"),
         ("네 단계로", "네 단계"),
         ("두 배로", "두 배"),
+        ("원소가 두 개인 리스트를 만들어 보세요.", "두 개"),
+        ("답이 세 개인지 확인해요.", "세 개"),
+        ("길이가 한 개인 경우", "한 개"),
+        ("한 개인 정보", "한 개"),  # 서술격 조사 "인"과 구별할 수 없어 받아들인다
+        ("한 단계적 접근", "한 단계"),  # 단계·가지에는 예외가 없다
+        ("두 가지고 놀아요", "두 가지"),
     ],
 )
 def test_numeral_boundary_keeps_real_numerals(text, token):
@@ -199,6 +209,25 @@ def test_cite_prefix_is_limited_to_subjects():
     toks = extract_literals("(AB-01-01)")
     assert "01" in [t.value for t in toks]
     assert extract_literals("(PY-01-01)") == []
+
+
+@pytest.mark.parametrize(
+    "text", ["FIN-01-02에 나와요.", "FIN-01-02에서 더 볼 수 있어요", "참고PY-01-01", "(FIN-01-02)"]
+)
+def test_citation_next_to_hangul_is_removed(text):
+    assert extract_literals(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("XPY-01-01 7개", ["XPY", "01", "01", "7개"]),
+        ("PY-01-012", ["PY", "01", "012"]),
+        ("SPR-12-34", ["SPR", "12", "34"]),
+    ],
+)
+def test_citation_needs_ascii_boundaries(text, want):
+    assert _texts(text, extract_literals(text)) == want
 
 
 def test_token_is_frozen():
@@ -348,6 +377,26 @@ def test_rule_spans_is_linear_in_answer_length():
         assert rule_spans(a, toks, mode)
     assert len(a) > 190_000
     assert time.perf_counter() - t0 < 1.0
+
+
+def test_pm4_merges_touching_windows():
+    toks = [LiteralToken("latin", "1", 4, 5), LiteralToken("latin", "2", 13, 14)]
+    assert rule_spans("aaaa1bbbbbbbb2", toks, "pm4") == ("aaaa1bbbbbbbb2",)
+
+
+def test_eojeol_same_span_once():
+    toks = [LiteralToken("multi_digit", "12", 2, 4), LiteralToken("latin", "ab", 5, 7)]
+    assert rule_spans("ab12 ab12", toks, "eojeol") == ("ab12",)
+
+
+def test_rule_spans_is_linear_without_spaces():
+    a = "".join(f"{i}개" for i in range(10_000, 20_000))  # 공백 없는 한 어절 약 6만 자
+    toks = extract_literals(a)
+    assert len(a) > 59_000
+    for mode in ("pm4", "eojeol"):
+        t0 = time.perf_counter()
+        assert rule_spans(a, toks, mode)
+        assert time.perf_counter() - t0 < 1.0, mode
 
 
 def test_eojeol_expands_to_whitespace_boundaries():

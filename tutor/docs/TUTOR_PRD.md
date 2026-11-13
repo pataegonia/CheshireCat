@@ -129,8 +129,8 @@ POST /tutor  (루트 app.py[통합 IN-05]: Bearer 인증 → tutor.router → tu
   ⑤ 주 호출: 범주 → action(표: config/actions.yaml, 통합 IN-03), 문장 목록(문장별 근거 sid·인용 문구) (TU-06)
      ∥ 가드 classify(messages): ①과 동시에 시작, 주 호출을 기다리게 하지 않음 (TU-10, 통합 I13)
   ▼  [코드]
-  ⑤-2 합치기: classify가 공격 4범주인데 주 호출 action이 그 범주의 표 action과 다르면 classify 범주의 고정 문장으로 바꾼다 (TU-10)
-  ▼  [생성 경로(answer·scaffold·abstain), 남은 시간 ≥ judge_skip_s]
+  ⑤-2 합치기: classify가 공격 4범주인데 주 호출 action이 그 범주의 표 action과 다르고 §3 우선순위에서 더 약하면 classify 범주의 고정 문장으로 바꾼다 (TU-10)
+  ▼  [생성 경로(표 generate: llm, 주 호출 문장이 나가는 answer·scaffold(answer_seeking)), 남은 시간 ≥ judge_skip_s]
   ⑥ 검증: 가드 judge_output(category=⑤-2의 범주) (TU-09 ②, v1 기본 켬)
   ▼  [코드]
   ⑦ 결정적 수정(통합 IN-04: 인용 문구 검사, 근거 없는 문장 삭제, citations 계산, 4,000자) + 튜터 후처리(숨김 문자·채점 지시 문장 제거) (TU-07, TU-01)
@@ -220,7 +220,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - **수용 기준**: 끔 / 고정 예시 / kNN 비교에서 3회 분산 밖 순이득이 있을 때 켠다.
 
 ### TU-09 검증 (P1, ② v1 기본 켬)
-- **v1 기본은 ② 가드 `judge_output`을 주 호출 문장이 그대로 나가는 경로(answer·scaffold(answer_seeking)·pii_disclosure, 표 밖 조합 포함)에 켠다**(통합 §3-1 4단계와 같음). 고정 문장(abstain 포함)은 판정할 주장이 없어 건너뛴다(#88, 11/12 결정). ① 자체 검증과 끔은 ablation으로 비교한다.
+- **v1 기본은 ② 가드 `judge_output`을 주 호출 문장이 그대로 나가는 경로(normal·pii_disclosure의 answer, answer_seeking의 scaffold, 표 밖 조합 포함)에 켠다**(통합 §3 흐름 3단계 "생성 경로만"과 같음). 통합 표(IN-03)에서 out_of_material abstain·academic_dishonesty scaffold는 템플릿(고정 문장)이라 판정할 주장이 없어 건너뛴다(템플릿 경로 nano 2회, 통합 §6). ① 자체 검증과 끔은 ablation으로 비교한다.
 - 대상: scaffold 답변(최종 정답 유출), 신호가 있었던 답변(응함), 수치가 든 answer(근거 대조).
 - 두 방식을 비교한다: ① 튜터 자체 검증 호출(통과 / 고칠 문장) ② 가드 `judge_output(messages, candidate_answer, category=주 호출의 범주)`(가드 §9 D1-2, 가드 9cce438)로 `unsupported` 구간이 든 문장을 지우고 인용을 다시 계산(통합 IN-04). **`category`(⑤-2 합친 범주)를 반드시 넘긴다**: 넘기지 않으면 가드가 `classify`를 다시 불러 nano가 1회 늘어난다.
 - 남은 시간이 `judge_skip_s`(공유 설정 키, 잠정 4초) 미만이거나 판정이 실패하면 **판정만 건너뛰고 생성된 답과 action을 그대로 낸다**(abstain으로 바꾸지 않음, 통합 §3-1과 합의).

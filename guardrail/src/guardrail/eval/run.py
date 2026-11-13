@@ -15,6 +15,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,8 @@ from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdic
 from guardrail.signals import Signals, is_low_signal
 
 CONCURRENCY = 16
+# 지금 판정 중인 행 id. Tap이 LLM 출력을 행에 묶는 데 쓴다(행마다 태스크가 달라 섞이지 않는다)
+ROW_ID: ContextVar[str | None] = ContextVar("row_id", default=None)
 HOLDOUT_OPEN_LIMIT = 3  # 4회째 거부(ADR-0013: 홀드아웃은 거의 보지 않는다)
 RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
@@ -281,6 +284,8 @@ class Tap:
     """LLM.complete 결과를 모아 둔다(역할별 오류 코드·finish_reason=length 집계용)."""
 
     records: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    # (행 id, 역할, 파싱된 출력). 공개 세트 분석용으로 runs/에만 쓴다. 서버 로그와 무관하다(GR-12)
+    parsed: list[tuple[str | None, str, dict | None]] = field(default_factory=list)
 
     def attach(self, llm: LLM) -> None:
         inner = llm.complete
@@ -288,6 +293,8 @@ class Tap:
         async def complete(role, messages, schema, *, deadline):  # type: ignore[no-untyped-def]
             res = await inner(role, messages, schema, deadline=deadline)
             self.records.append((role, res.error, res.finish_reason))
+            out = res.parsed.model_dump(mode="json") if res.parsed is not None else None
+            self.parsed.append((ROW_ID.get(), role, out))
             return res
 
         llm.complete = complete  # type: ignore[method-assign]
@@ -309,6 +316,7 @@ async def _judge_rows(judge: Judge, rows: Sequence[PublicRow], out: Outcome) -> 
 
     async def one(row: PublicRow) -> None:
         async with gate:
+            ROW_ID.set(row.id)
             t0 = time.perf_counter()
             out.judgements[row.id] = await judge.judge(to_request(row))
             out.latency_ms[row.id] = (time.perf_counter() - t0) * 1000
@@ -720,13 +728,17 @@ async def _measure(
         block = frozenset(cfg.block_categories)
         scores = []
         for rep in range(args.repeat):
-            mark = len(tap.records)
+            mark, pmark = len(tap.records), len(tap.parsed)
             out = await run_once(
                 cfg, llm, factory, plan.public, plan.labeled, plan.split, holdout=args.holdout
             )
             summary["judge_kind"] = out.judge_kind
             scores.append(summarize(plan.public, out, tap.records[mark:], cfg, plan.split))
             resp = _responses(out, block)
+            llm_out: dict[str, list[dict]] = {}
+            for rid, role, parsed in tap.parsed[pmark:]:
+                if rid is not None:
+                    llm_out.setdefault(rid, []).append({"role": role, "parsed": parsed})
             for rid, p in row_points([r for r in plan.public if r.id in resp], resp).items():
                 if plan.split.cluster[rid] not in held:
                     points.setdefault(cname, {}).setdefault(rid, []).append(p)
@@ -742,6 +754,7 @@ async def _measure(
                     "errors": list(j.errors),
                     "knn_major": j.knn_major,
                     "lr_pred": j.lr_pred,
+                    "llm": llm_out.get(rid, []),
                 }
                 for rid, j in out.judgements.items()
             ]

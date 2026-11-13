@@ -42,8 +42,10 @@ def _judge_calls(llm):
     return [r for r in llm.fake.requests if r["messages"] != PING]
 
 
-async def _guard(reply=UNGROUNDED):
+async def _guard(reply=UNGROUNDED, failure_default="grounded"):
     cfg = load_config(DEFAULT)
+    out_cfg = cfg.output.model_copy(update={"failure_default": failure_default})
+    cfg = cfg.model_copy(update={"output": out_cfg})
     llm = _llm(cfg.llm, reply)
     await llm.start()
     return run.OutputOnlyGuard(cfg, llm), llm
@@ -69,10 +71,11 @@ async def test_no_candidate_or_empty_candidate_makes_no_call():
     assert not _judge_calls(llm)
 
 
-async def test_failed_call_is_grounded_by_default_and_counted():
-    guard, llm = await _guard(None)
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_failed_call_follows_failure_default_and_is_counted(setting, want):
+    guard, llm = await _guard(None, setting)
     j = await guard.judge(GuardRequest(MSGS, "답변이에요", True))
-    assert j.response.output == OutputVerdict(True, (), True)
+    assert j.response.output == OutputVerdict(want, (), True)
     assert (j.nano_grounded, j.errors, j.calls) == (None, ("output_judge",), 1)
     assert len(_judge_calls(llm)) == 2  # 재시도 1회
 

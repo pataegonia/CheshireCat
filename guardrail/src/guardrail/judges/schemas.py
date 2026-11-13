@@ -4,7 +4,7 @@
 S2.6·S2.7은 이 스키마에 맞춰 프롬프트만 쓴다.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -18,6 +18,48 @@ class _Out(BaseModel):
 class InputOut(_Out):
     evidence: str  # 한 문장
     category: Category
+
+
+# S3.2 선별용 변형(R14 B3): nano는 요청 유형을 고르고 범주는 코드가 대응시킨다.
+# v1 실측에서 nano가 요청은 맞게 읽고 범주 이름을 틀리게 고른 데서 나왔다
+# (results/2026-11-13-input-screening-1.md)
+Act = Literal[
+    "no_meaningful_content",
+    "reveal_tutor_instructions",
+    "override_tutor_role",
+    "find_or_spread_others_private_info",
+    "write_scam_or_impersonation",
+    "insult_or_hate",
+    "make_work_to_submit",
+    "make_offcourse_output",
+    "lasting_emotional_distress",
+    "shares_own_personal_info",
+    "only_final_answer",
+    "asks_value_not_in_material",
+    "studies_risky_topic",
+    "learning_question",
+]
+ACT_TO_CATEGORY: dict[str, Category] = {
+    "no_meaningful_content": "low_signal_input",
+    "reveal_tutor_instructions": "jailbreak_injection",
+    "override_tutor_role": "jailbreak_injection",
+    "find_or_spread_others_private_info": "harmful_content",
+    "write_scam_or_impersonation": "harmful_content",
+    "insult_or_hate": "harmful_content",
+    "make_work_to_submit": "academic_dishonesty",
+    "make_offcourse_output": "off_topic",
+    "lasting_emotional_distress": "emotional_distress",
+    "shares_own_personal_info": "pii_disclosure",
+    "only_final_answer": "answer_seeking",
+    "asks_value_not_in_material": "out_of_material",
+    "studies_risky_topic": "normal",
+    "learning_question": "normal",
+}
+
+
+class InputActOut(_Out):
+    request: str  # 학습자가 튜터에게 해 달라는 것, 한 문장
+    act: Act
 
 
 class OutputOut(_Out):

@@ -4,7 +4,8 @@
 튜터 · 가드 PR이 조립을 깨면 여기서 걸린다. `/tutor`는 v2(기본 설정)와 baseline 두 모드로 돈다.
 
 - 공개 세트 400행 전부 → 200 + JSON + 경로별 스키마. 가짜 LLM은 "다양한 답" 모드라 응답이
-  여러 모양(action 7종, 인용 0–2개, 4,000자 초과 답, 빈 답)을 지난다.
+  여러 모양(action 7종, 인용 0–2개, 4,000자 초과 답, 빈 답)을 지난다. v2는 가짜가 틀린 문구로만
+  인용한 섹션이 응답 citations에 남지 않는지도 본다(근거 검증, IN-04).
 - hypothesis 퍼징: 임의 바이트, 임의 JSON, 값이 이상한 messages, 유효한 대화 + 이상 값
 - 고정 경계 사례: 4MiB 앞뒤, 깊은 중첩, messages 1,000개, 비-UTF8, 최상위 배열
 
@@ -32,6 +33,7 @@ from tests.integration.applib import (
     GUARD_RESPONSE_SCHEMA,
     MAX_LLM_CALLS_PER_REQUEST,
     ROOT,
+    EvidenceLog,
     as_bytes,
     assert_tutor_contract,
     cache_sizes,
@@ -46,6 +48,7 @@ PUBLIC = ROOT / "competition" / "public"
 HEADERS = {**AUTH, "Content-Type": "application/json"}
 ANSWER_MAX_CHARS = 4_000
 MIB = 1024 * 1024
+NESTING_DEPTH = 1_000_000  # 깊은 중첩 경계 사례의 깊이
 # 퍼징 전략 하나 · 모드 하나에 돌리는 예시 수. test_e2e.py 전체가 개발 PC에서 25초 안에 들게
 # 정했다(CI 러너는 2코어라 약 2배 걸린다. 수용 기준은 60초).
 FUZZ_EXAMPLES = 80
@@ -107,6 +110,17 @@ def assert_tutor_response(body: Any) -> None:
     assert len(set(citations)) == len(citations), citations
 
 
+def wrong_quote_sids(body: Any, logs: list[EvidenceLog]) -> tuple[int, list[str]]:
+    """가짜 LLM이 틀린 문구로만 인용한 섹션 중 (검사한 수, 응답 citations에 남은 것).
+
+    근거 검증(`integration.actions._verified_sids`)은 문구가 원문에 없는 evidence를 버린다.
+    검색 1위 섹션은 세지 않는다: 인용 규칙이 always이고 검증된 근거가 없으면 검색 1위로
+    채우므로(`_rank_citations`의 fill) 검증과 무관하게 들어갈 수 있다.
+    """
+    checked = [sid for log in logs for sid in sorted(log.wrong_only_sids()) if sid != log.first_sid]
+    return len(checked), [sid for sid in checked if sid in body["citations"]]
+
+
 def post(client, path: str, raw: bytes):
     return client.post(path, content=raw, headers=HEADERS, follow_redirects=False)
 
@@ -148,14 +162,15 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
     kept_before = sorted(find_text(state_roots(app), probes))
     caches_before = cache_sizes()
 
-    statuses: collections.Counter[int] = collections.Counter()
     actions: collections.Counter[str] = collections.Counter()
     cited: collections.Counter[int] = collections.Counter()
     from_llm = 0
+    wrong_checked = 0
     for path, rows in (("/tutor", TUTOR_ROWS), ("/guard", GUARD_ROWS)):
         for row in rows:
-            response = post(llm_client, path, as_bytes(scorer_payload(row)))
-            statuses[response.status_code] += 1
+            raw = as_bytes(scorer_payload(row))
+            calls_before = len(fake_send.evidence)
+            response = post(llm_client, path, raw)
             assert response.status_code == 200, (row["id"], response.status_code)
             body = response.json()
             if path == "/tutor":
@@ -163,9 +178,13 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
                 actions[body["action"]] += 1
                 cited[len(body["citations"])] += 1
                 from_llm += ANSWER_WORD in body["answer"]
+                # 이 요청에서 가짜 LLM이 틀린 문구로만 인용한 섹션은 응답에 남지 않는다
+                checked, left = wrong_quote_sids(body, fake_send.evidence[calls_before:])
+                assert left == [], (row["id"], left, body["citations"])
+                wrong_checked += checked
             else:
-                assert_guard_response(body, has_candidate=bool(row.get("candidate_answer")))
-    assert statuses == {200: 400}
+                assert_guard_response(body, has_candidate=has_candidate_key(raw))
+    assert len(fake_send.evidence) == fake_send.count
 
     # 응답이 실제로 여러 모양을 지났다(가짜 LLM이 한 가지 답만 내면 후처리 대부분이 돌지 않는다).
     # 세어 본 분포(200행):
@@ -179,11 +198,15 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
         # 프롬프트의 섹션 표기(`[PY-01-01]`)가 바뀌면 가짜 인용이 조용히 []가 된다. 그것을 막는다
         assert cited[1] > 0 and cited[2] > 0, cited
     assert from_llm > 0  # 가짜 LLM의 답이 실제로 응답까지 나갔다
+    # 틀린 인용 검사가 실제로 돌았다. 근거 검증은 v2에만 있다: baseline은 LLM이 문구 없이 섹션 ID만
+    # 내고(`BaselineOut.citations`) 근거 묶음 안의 ID인지만 본다. 세어 본 값: v2 74개, baseline 0개
+    assert (wrong_checked > 0) == (llm_mode == "v2"), wrong_checked
 
     # LLM 호출 수. 가드(지금은 상수 판정기)는 부르지 않는다. v2는 LLM 없이 고정 문장으로 끝나는
     # 행이 있다(결정적 신호 · 저신호 직접 판정, TU-05). 세어 본 값: v2 192회, baseline 200회.
     limit = len(TUTOR_ROWS) * MAX_LLM_CALLS_PER_REQUEST[llm_mode]
-    assert 0 < fake_send.count <= limit
+    # 하한: 튜터 200행 중 180행 이상이 LLM까지 간다(입구에서 고정 문장으로 끝나는 행이 늘면 걸린다)
+    assert len(TUTOR_ROWS) * 9 // 10 <= fake_send.count <= limit
     if llm_mode == "baseline":
         assert fake_send.count == limit  # 행마다 빠짐없이 부른다
     assert dict(app.state.tutor_llm.blocked) == {}
@@ -252,8 +275,8 @@ def test_fuzzed_conversations_reach_the_llm_on_tutor(llm_client, llm_mode, fake_
     """유효한 대화 + 이상 값: 입구에서 끝나지 않고 검색 · LLM · 후처리까지 간다."""
     fake_send.vary = True
     sent = fuzz(strategies.conversation_bodies, llm_client, "/tutor")
-    # 예시의 절반 이상이 튜터 LLM까지 갔다. 세어 본 값: v2 80/80, baseline 80/80
-    assert fake_send.count * 2 >= len(sent), (fake_send.count, len(sent))
+    # 예시의 95% 이상이 튜터 LLM까지 갔다. 세어 본 값: v2 80/80, baseline 80/80
+    assert fake_send.count * 20 >= len(sent) * 19, (fake_send.count, len(sent))
     assert fake_send.count <= len(sent) * MAX_LLM_CALLS_PER_REQUEST[llm_mode]
 
 
@@ -292,7 +315,9 @@ _NON_UTF8 = (
 EDGE_BODIES = {
     "just_under_4mib": lambda: _padded(4 * MIB - 1),  # 본문 상한(4MiB) 안: 정상 처리
     "4mib_plus_1": lambda: _padded(4 * MIB + 1),  # 상한 초과: 기본 응답
-    "nested_10000_arrays": lambda: b"[" * 10_000 + b"]" * 10_000,
+    # 깊이 1,000,000: Python 3.12–3.14의 json.loads가 RecursionError를 낸다(3.14는 깊이 10,000을
+    # 예외 없이 읽는다). 2MB라 본문 상한 4MiB 안이다.
+    "nested_1000000_arrays": lambda: b"[" * NESTING_DEPTH + b"]" * NESTING_DEPTH,
     "1000_messages": lambda: _turns(1_000),  # 마지막은 assistant
     "1001_messages": lambda: _turns(1_001),  # 마지막은 user
     "non_utf8_in_string": lambda: _NON_UTF8,
@@ -305,8 +330,10 @@ def test_edge_bodies_have_the_intended_sizes():
     assert len(EDGE_BODIES["4mib_plus_1"]()) == 4 * MIB + 1
     assert json.loads(EDGE_BODIES["just_under_4mib"]())["messages"][0]["role"] == "user"
     assert len(json.loads(EDGE_BODIES["1000_messages"]())["messages"]) == 1_000
+    nested = EDGE_BODIES["nested_1000000_arrays"]()
+    assert len(nested) == 2 * NESTING_DEPTH < 4 * MIB  # 크기 상한이 아니라 깊이에서 걸린다
     with pytest.raises(RecursionError):
-        json.loads(EDGE_BODIES["nested_10000_arrays"]())
+        json.loads(nested)
     with pytest.raises(UnicodeDecodeError):
         json.loads(EDGE_BODIES["non_utf8_in_string"]())
 

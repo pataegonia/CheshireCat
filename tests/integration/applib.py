@@ -12,7 +12,7 @@ import sys
 import types
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, NamedTuple, get_args
 
 import jsonschema
 from guardrail.schema import Category
@@ -78,6 +78,21 @@ _SID_IN_PROMPT = re.compile(r"\[((?:PY|PR|FIN)-\d{2}-\d{2})\]")  # baseline 프�
 _SECTION_IN_PROMPT = re.compile(r'<섹션 id="([^"]+)">\n(.*?)\n</섹션>', re.S)  # v2 프롬프트
 
 
+class EvidenceLog(NamedTuple):
+    """가짜 LLM이 호출 하나에서 낸 근거의 기록. 섹션 ID와 참 · 거짓만 담는다(요청 내용 없음)."""
+
+    first_sid: str | None  # 프롬프트의 첫 섹션(검색 1위). 섹션이 없으면 None
+    items: tuple[tuple[str, bool], ...]  # (sid, 인용 문구가 원문에 없는가)
+
+    def wrong_only_sids(self) -> set[str]:
+        """틀린 문구로만 인용된 섹션. 맞는 문구가 하나라도 같이 있는 섹션은 뺀다."""
+        right = {sid for sid, wrong in self.items if not wrong}
+        return {sid for sid, wrong in self.items if wrong} - right
+
+
+NO_EVIDENCE = EvidenceLog(first_sid=None, items=())
+
+
 class UnknownSchema(AssertionError):
     """튜터가 가짜 전송이 모르는 스키마로 LLM을 불렀다(새 호출이 붙었다). FakeSend를 고친다."""
 
@@ -97,7 +112,8 @@ class FakeSend:
     """chat.completions.create 자리에 넣는 가짜 전송. 실제 API를 부르지 않는다.
 
     답변은 받은 messages의 해시로 정한다: 서버가 다른 요청의 내용을 프롬프트에 섞으면 답이 달라진다.
-    받은 내용은 저장하지 않고 횟수와 해시만 남긴다(요청 내용 탐색에 걸리지 않게).
+    받은 내용은 저장하지 않고 횟수와 해시, 낸 근거의 섹션 ID · 틀림 여부(`evidence`)만 남긴다
+    (요청 내용 탐색에 걸리지 않게).
 
     - 기본: 항상 같은 모양(action answer, v2는 non_claim 한 문장, baseline은 첫 섹션 인용).
     - `vary=True`: 모양도 해시로 고른다(무작위 없음, 같은 프롬프트면 같은 답). 범주 · action ·
@@ -111,6 +127,8 @@ class FakeSend:
         self.count = 0
         self.digests: list[str] = []
         self.unknown: list[str] = []
+        # 호출마다 하나씩(`count`와 길이가 같다). v2 주 호출의 vary 모드만 채운다(그 밖은 빈 기록)
+        self.evidence: list[EvidenceLog] = []
 
     async def __call__(self, kwargs: dict[str, Any]) -> Any:
         self.count += 1
@@ -126,9 +144,13 @@ class FakeSend:
         answer = f"{ANSWER_WORD} {digest}"
         picks = itertools.cycle(full.digest())  # 해시 바이트를 차례로 꺼내 모양을 고른다
         name = _schema_name(kwargs, system)
+        log = NO_EVIDENCE
         if name == "MainCallOut":  # v2 주 호출(tutor.judge.main_call)
             user_part = messages[-1]["content"] if messages else ""
-            reply = _varied_main(answer, user_part, picks) if self.vary else _plain_main(answer)
+            if self.vary:
+                reply, log = _varied_main(answer, user_part, picks)
+            else:
+                reply = _plain_main(answer)
         elif name == "BaselineOut":  # 베이스라인(tutor.baseline): 튜터 규격 그대로
             sids = _SID_IN_PROMPT.findall(system)
             reply = (
@@ -138,7 +160,9 @@ class FakeSend:
             )
         else:
             self.unknown.append(name)
+            self.evidence.append(log)
             raise UnknownSchema(name)
+        self.evidence.append(log)
         content = json.dumps(reply, ensure_ascii=False)
         choice = types.SimpleNamespace(
             message=types.SimpleNamespace(content=content), finish_reason="stop"
@@ -166,9 +190,15 @@ def _quote_from(body: str, pick: int) -> str:
     return lines[pick % len(lines)][:40] if lines else body.strip()[:40]
 
 
-def _varied_main(answer: str, user_part: str, picks: Iterator[int]) -> dict[str, Any]:
-    """MainCallOut 모양의 다양한 답: 범주 10종 × action 7종, 문장 0–3개, evidence 0–2개."""
+def _varied_main(
+    answer: str, user_part: str, picks: Iterator[int]
+) -> tuple[dict[str, Any], EvidenceLog]:
+    """MainCallOut 모양의 다양한 답: 범주 10종 × action 7종, 문장 0–3개, evidence 0–2개.
+
+    낸 근거의 (sid, 틀림 여부)를 같이 돌려준다(테스트가 틀린 인용이 응답에 남았는지 본다).
+    """
     sections = _SECTION_IN_PROMPT.findall(user_part)  # [(sid, 본문)]
+    logged: list[tuple[str, bool]] = []
     category = CATEGORIES[next(picks) % len(CATEGORIES)]
     action = ACTIONS[next(picks) % len(ACTIONS)]
     shape = next(picks) % 8  # 0: 빈 문장 목록, 1: 4,000자 초과, 그 밖: 보통 길이
@@ -180,12 +210,15 @@ def _varied_main(answer: str, user_part: str, picks: Iterator[int]) -> dict[str,
             wrong = next(picks) % 3 == 0  # 셋 중 하나는 원문에 없는 문구
             quote = f"원문에 없는 문구 {answer}" if wrong else _quote_from(body, next(picks))
             evidence.append({"sid": sid, "quote": quote})
+            logged.append((sid, wrong))
         text = f"{answer} {index + 1}번째 문장이에요."
         if shape == 1 and index == 0:
             text += LONG_TAIL
         kind = "claim" if next(picks) % 4 else "non_claim"
         sentences.append({"text": text, "kind": kind, "evidence": evidence})
-    return {"category": category, "action": action, "sentences": sentences}
+    reply = {"category": category, "action": action, "sentences": sentences}
+    first_sid = sections[0][0] if sections else None
+    return reply, EvidenceLog(first_sid=first_sid, items=tuple(logged))
 
 
 def _varied_baseline(answer: str, sids: list[str], picks: Iterator[int]) -> dict[str, Any]:

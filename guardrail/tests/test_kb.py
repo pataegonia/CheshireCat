@@ -6,6 +6,7 @@
 """
 
 import json
+import shutil
 import statistics
 import sys
 import time
@@ -269,6 +270,14 @@ def test_single_section_margin_is_top_score():
 # --- 입력 검증 ---
 
 
+def _mini_kb(root: Path) -> Path:
+    """세 과목 폴더에 섹션 md 하나씩 둔 최소 KB."""
+    for folder, sid in [("finance", "FIN-01-01"), ("prompt", "PR-01-01"), ("python", "PY-01-01")]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+        (root / folder / f"{sid}.md").write_text("## x\n사과", encoding="utf-8")
+    return root
+
+
 def test_load_rejects_missing_dir(tmp_path):
     with pytest.raises(FileNotFoundError):
         KbIndex.load(tmp_path / "nope")
@@ -299,16 +308,14 @@ def test_rejects_bad_params(params):
 
 
 def test_load_rejects_non_section_md(tmp_path):
-    (tmp_path / "python").mkdir()
-    (tmp_path / "python" / "PY-01-01.md").write_text("## x\n사과", encoding="utf-8")
+    _mini_kb(tmp_path)
     (tmp_path / "python" / "README.md").write_text("## 안내\n사과", encoding="utf-8")
     with pytest.raises(ValueError, match="README"):
         KbIndex.load(tmp_path)
 
 
 def test_load_rejects_empty_section_md(tmp_path):
-    (tmp_path / "python").mkdir()
-    (tmp_path / "python" / "PY-01-01.md").write_text("## x\n사과", encoding="utf-8")
+    _mini_kb(tmp_path)
     (tmp_path / "python" / "PY-01-02.md").write_text(" \n", encoding="utf-8")
     with pytest.raises(ValueError, match="PY-01-02"):
         KbIndex.load(tmp_path)
@@ -470,24 +477,59 @@ def test_index_time_and_memory_report(capsys):
 
 @pytest.mark.parametrize(
     ("folder", "name"),
-    [("python", "XX-01-01.md"), ("python", "FIN-01-01.md"), ("history", "PY-01-01.md")],
+    [("python", "XX-01-01.md"), ("python", "FIN-01-01.md"), ("python", "PY-1-01.md")],
 )
 def test_load_rejects_bad_prefix_or_folder(tmp_path, folder, name):
-    (tmp_path / folder).mkdir()
+    _mini_kb(tmp_path)
     (tmp_path / folder / name).write_text("## x\n사과", encoding="utf-8")
     with pytest.raises(ValueError) as e:
         KbIndex.load(tmp_path)
     msg = str(e.value)
     assert name in msg
-    assert str(tmp_path.parent) not in msg  # 파일·폴더 이름만 노출
+    assert str(tmp_path) not in msg  # 파일·폴더 이름만 노출
 
 
 def test_real_kb_has_48_sections_with_folder_prefix(index):
     ids = {sid for sid, _ in index.chunks}
     assert len(ids) == 48
     prefix = {"python": "PY", "prompt": "PR", "finance": "FIN"}
-    for md in KB_DIR.glob("*/*.md"):
+    mds = [md for folder in prefix for md in (KB_DIR / folder).glob("*.md")]
+    assert len(mds) == 48
+    for md in mds:
         assert md.stem.split("-")[0] == prefix[md.parent.name]
+
+
+def test_load_rejects_lowercase_section_id(tmp_path):
+    _mini_kb(tmp_path)
+    (tmp_path / "python" / "PY-01-01.md").rename(tmp_path / "python" / "py-01-01.md")
+    with pytest.raises(ValueError, match="py-01-01"):
+        KbIndex.load(tmp_path)
+
+
+def test_load_ignores_folders_outside_the_three_subjects(tmp_path):
+    _mini_kb(tmp_path)
+    for folder, name in [
+        (".ipynb_checkpoints", "PY-01-01-checkpoint.md"),
+        ("python_backup", "PY-01-01.md"),
+        ("history", "PY-01-01.md"),  # 모르는 폴더는 과목 대조 대신 무시한다
+    ]:
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / name).write_text("## 다른\n바나나", encoding="utf-8")
+    idx = KbIndex.load(tmp_path)
+    assert [sid for sid, _ in idx.chunks] == ["FIN-01-01", "PR-01-01", "PY-01-01"]
+    assert all("바나나" not in t for _, t in idx.chunks)
+
+
+@pytest.mark.parametrize("folder", ["finance", "prompt", "python"])
+def test_load_rejects_missing_or_empty_subject_folder(tmp_path, folder):
+    _mini_kb(tmp_path)
+    (tmp_path / folder / next(iter(sorted(p.name for p in (tmp_path / folder).iterdir())))).unlink()
+    with pytest.raises(ValueError, match=folder) as e:
+        KbIndex.load(tmp_path)
+    assert str(tmp_path) not in str(e.value)
+    shutil.rmtree(tmp_path / folder)  # 폴더째 없는 경우도 같다
+    with pytest.raises(ValueError, match=folder):
+        KbIndex.load(tmp_path)
 
 
 # --- 리뷰 반영: 0점 질의·search 조각 단위 고정 ---

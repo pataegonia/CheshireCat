@@ -41,6 +41,7 @@ from tutor.judge.conversation import Conversation, tidy
 from tutor.judge.draft import draft_answer
 from tutor.judge.guard_merge import (
     JUDGE_SKIP_S,
+    attack_fixed,
     judge_candidate,
     merge_category,
     start_classify,
@@ -88,16 +89,20 @@ def choose_action(out: MainCallOut, *, from_category: bool) -> Action:
     return rule.action
 
 
-def fallback_body(signals: Sequence[Signal] = ()) -> dict[str, Any]:
+def fallback_body(signals: Sequence[Signal] = (), classified: str | None = None) -> dict[str, Any]:
     """주 호출 실패(재시도 후)·예산 초과의 기본 응답(TU-12).
 
-    신호가 위기면 escalate, 지시 무력화면 refuse 고정 문장. 그 밖에는 공유 설정
+    신호가 위기면 escalate, 지시 무력화면 refuse 고정 문장. 그다음 가드 classify가 공격 4범주였으면
+    그 범주의 고정 문장(TU-10, 공격 재현율은 classify 단독 이상). 그 밖에는 공유 설정
     `fallback_action`(잠정 clarify)의 고정 문장. 위기가 먼저다(PRD §3 우선순위).
     """
     if Signal.CRISIS in signals:
         return fixed_body(Fixed.ESCALATE)
     if Signal.OVERRIDE in signals:
         return fixed_body(Fixed.REFUSE_JAILBREAK)
+    attack = attack_fixed(classified)
+    if attack is not None:
+        return fixed_body(attack)
     action = FALLBACK_ACTION
     return {"answer": empty_answer(action), "action": action, "citations": []}
 
@@ -209,7 +214,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
         )
         if draft.out is None:
-            return tutor_post(fallback_body(signals))
+            if classify is not None and classified is None:
+                classified = await classify  # 자기 시간 제한 안에서 끝난다(실패면 None)
+            return tutor_post(fallback_body(signals, classified))
         if classify is not None and classified is None:
             classified = await classify  # classify는 자기 시간 제한 안에서 끝난다(실패면 None)
     finally:

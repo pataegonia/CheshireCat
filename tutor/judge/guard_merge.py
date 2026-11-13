@@ -121,6 +121,13 @@ def _stronger(a: str, b: str) -> bool:
     return rank.get(a, len(rank)) < rank.get(b, len(rank))
 
 
+def attack_fixed(classified: str | None) -> Fixed | None:
+    """classify가 공격 4범주면 그 범주 표 action의 고정 문장. 아니면 None(주 호출 실패 기본값용)."""
+    if classified not in ATTACK_CATEGORIES:
+        return None
+    return template_for(classified, action_for(classified).action)
+
+
 def merge_category(main_category: str, action: Action, classified: str | None) -> Merged:
     """TU-10 합치기 규칙. `action`은 주 호출이 고른 최종 action이다.
 

@@ -298,10 +298,42 @@ def test_no_guard_on_state_is_main_call_only():
     assert run(s)["action"] == "answer"
 
 
-def test_main_call_failure_ignores_classify_and_uses_tu12_default():
-    guard = FakeGuard("jailbreak_injection")
+@pytest.mark.parametrize(
+    ("classified", "kind"),
+    [
+        ("jailbreak_injection", Fixed.REFUSE_JAILBREAK),
+        ("harmful_content", Fixed.REFUSE_HARMFUL),
+        ("off_topic", Fixed.REDIRECT_OFF_TOPIC),
+        ("academic_dishonesty", Fixed.SCAFFOLD_ACADEMIC),
+    ],
+)
+def test_main_call_failure_uses_classify_attack_fixed_sentence(classified, kind):
+    # 주 호출이 실패해도 classify가 공격 범주면 그 고정 문장(TU-12·TU-10)
+    guard = FakeGuard(classified, classify_delay=0.01)
     resp = run(build(guard, llm=FakeLLM(error="timeout")))
-    assert resp["action"] == "clarify"  # 잠정 기본값. classify로 바꾸지 않는다(PRD TU-12)
+    assert resp["answer"] == TEXT[kind]
+    assert resp["citations"] == []
+
+
+@pytest.mark.parametrize("classified", ["normal", "answer_seeking", "emotional_distress"])
+def test_main_call_failure_with_non_attack_classify_uses_tu12_default(classified):
+    guard = FakeGuard(classified)
+    resp = run(build(guard, llm=FakeLLM(error="timeout")))
+    assert resp["action"] == "clarify"  # 잠정 기본값(fallback_action)
+
+
+def test_main_call_failure_with_classify_error_uses_tu12_default():
+    guard = FakeGuard("jailbreak_injection", classify_error=RuntimeError("x"))
+    resp = run(build(guard, llm=FakeLLM(error="timeout")))
+    assert resp["action"] == "clarify"
+
+
+def test_main_call_failure_crisis_signal_beats_classify_attack():
+    # 위기 신호가 먼저다(§3 우선순위)
+    guard = FakeGuard("off_topic")
+    text = "몇 주째 너무 힘들고 혼자 버티기 힘들어요 아무것도 하기 싫어요"
+    resp = run(build(guard, llm=FakeLLM(error="timeout")), text)
+    assert resp["action"] == "escalate"
 
 
 def test_pending_classify_is_cancelled_when_flow_raises():

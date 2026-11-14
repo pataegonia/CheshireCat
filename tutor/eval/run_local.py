@@ -19,6 +19,11 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 튜터 LLM 호출의 429(판정은 최종 실패)가 연달아 RATE_LIMIT_STREAK회 이어지면 뒤의 호출(임베딩
 포함)을 보내지 않고, 결과를 무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드
 하네스와 같은 규칙).
+튜터 점수는 모든 행과, 공유 분할(가드 splits/v1.json)의 홀드아웃 묶음을 뺀 교차 검증 행으로 따로
+낸다. 설정을 비교할 때는 교차 검증 점수를 본다(홀드아웃은 설정을 고정한 뒤 최대 3회만 본다, TU-16).
+실행별 항목·응함 문항도 교차 검증 행으로만 낸다. 모든 행 점수(첫 줄)와 그 밖의 지표(항목별
+평균·범주별 점수·오차단·혼동표·흔들리는 문항·--compare의 새로 틀린 문항, 결과 JSON의 행별
+points)에는 홀드아웃 행이 섞여 있다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
 결과 JSON의 tutor_llm에 남긴다.
@@ -76,6 +81,19 @@ EXIT_RATE_LIMITED = 6
 def public_tutor_rows() -> list[dict[str, Any]]:
     lines = (PUBLIC_DIR / "tutor.jsonl").read_text(encoding="utf-8").splitlines()
     return [json.loads(line) for line in lines if line.strip()]
+
+
+def holdout_ids(rows: Sequence[dict[str, Any]] = ()) -> frozenset[str]:
+    """공유 분할(가드 splits/v1.json)의 홀드아웃 묶음에 든 행 id. 교차 검증 점수에서 뺀다.
+
+    rows를 주면 모두 분할에 있는지 본다. 없는 행이 조용히 교차 검증 행으로 들어가지 않게 한다.
+    """
+    split = load_splits()
+    missing = sum(1 for row in rows if row["id"] not in split.cluster)
+    if missing:
+        raise ValueError(f"공유 분할에 없는 행 {missing}개: 교차 검증 점수를 낼 수 없다")
+    held = set(split.holdout)
+    return frozenset(row_id for row_id, cluster in split.cluster.items() if cluster in held)
 
 
 def _reference(row: dict[str, Any], citations: list[str]) -> dict[str, Any]:
@@ -370,6 +388,15 @@ def _latency_line(latency: Sequence[float]) -> str:
     )
 
 
+def _per_run(values: Sequence[float | None], spec: str) -> str:
+    """실행별 값과 범위. 값이 없는 실행(None)은 -로 내고 범위에서 뺀다."""
+    shown = ", ".join("-" if v is None else format(v, spec) for v in values)
+    present = [v for v in values if v is not None]
+    if not present:
+        return f"{shown} (범위 -)"
+    return f"{shown} (범위 {min(present):{spec}}~{max(present):{spec}})"
+
+
 def _token_line(buckets: Mapping[tuple[str, int], int]) -> str:
     """성공한 시도의 completion_tokens 분포 한 줄(역할별 p50·p95·최대 구간). 없으면 빈 문자열.
 
@@ -391,16 +418,34 @@ def _token_line(buckets: Mapping[tuple[str, int], int]) -> str:
     return f"{head}: {', '.join(parts)}\n"
 
 
-def _show(report: metrics.Report, out: TextIO) -> None:
+def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
     scores = ", ".join(f"{t:.2f}" for t in report.tutor)
     out.write(f"튜터 점수(실행별): {scores}, 범위 {min(report.tutor):.2f}~{max(report.tutor):.2f}")
     out.write(f" (문항 {report.rows}개, 실행 {report.runs}회")
     out.write(f", 판정 오류 {sum(report.judge_errors)})\n")
+    held = report.rows - report.cv_rows
+    # 교차 검증 행이 없으면 0.00이 아니라 -로 낸다(재서 0인 것처럼 읽히지 않게)
+    cv_score = _per_run(report.cv_tutor, ".2f") if report.cv_rows else "- (측정 없음)"
+    out.write(f"교차 검증 행 튜터 점수(실행별, 설정 비교용): {cv_score}")
+    out.write(f", 문항 {report.cv_rows}개(홀드아웃 {held}개 뺌)")
+    out.write(f", 판정 오류 {sum(report.cv_judge_errors)}\n")
     parts = ", ".join(
         f"{name} {'-' if value is None else f'{value:.3f}'}"
         for name, value in report.components.items()
     )
     out.write(f"항목별 평균: {parts}, 응함 {report.complied}\n")
+    out.write("교차 검증 행 항목별(실행별):\n")
+    for name in report.components:
+        values = [run[name] for run in report.cv_components_by_run]
+        out.write(f"- {name} {_per_run(values, '.3f')}\n")
+    if not judged:  # 응함은 판정이 있어야 잰다. 0으로 내면 재서 0인 것처럼 읽힌다
+        out.write("- 응함 - (판정 없음)\n")
+        out.write("교차 검증 행에서 응함으로 잡힌 문항(실행별): 판정 없음\n")
+    else:
+        out.write(f"- 응함 {_per_run([len(ids) for ids in report.cv_complied_by_run], 'd')}\n")
+        out.write("교차 검증 행에서 응함으로 잡힌 문항(실행별):\n")
+        for number, ids in enumerate(report.cv_complied_by_run, 1):
+            out.write(f"- {number}회 {len(ids)}개{_ids(ids)}\n")
     out.write(f"오차단(실행별): {', '.join(map(str, report.false_blocks))}\n")
     categories = ", ".join(f"{c} {v:.1f}" for c, v in report.by_category.items())
     out.write(f"범주별 점수: {categories}\n")
@@ -629,6 +674,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
     rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
+    try:
+        held = holdout_ids(rows)  # API를 부르기 전에 읽는다
+    except ValueError as exc:
+        ap.error(str(exc))
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
     stop = RateLimitStop()  # 튜터 LLM·판정이 같이 쓴다(같은 팀 키)
@@ -660,7 +709,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     kb = score_local.load_kb_dir(KB_DIR)
     scorer = stop.watch_judge(judge) if judge is not None else None
     report = metrics.build_report(
-        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses]
+        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses],
+        holdout=held,
     )
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
@@ -678,7 +728,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         invalid=invalid,
         llm=state.tutor_llm if state is not None else None,
     )
-    _show(report, sys.stdout)
+    _show(report, sys.stdout, judged=judge is not None)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
         _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)

@@ -151,3 +151,58 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
     assert summary["judge_kind"] == "InputOnlyGuard" and summary["input_only"] is True
     assert all({"knn_major", "lr_pred"} <= r.keys() for r in recs)
     assert "입력 단독" in (out / "report.md").read_text("utf-8").splitlines()[0]
+
+
+def _flaky_llm(fail_first_n):
+    """처음 보는 발화 중 앞 n개는 재시도까지 늘 잘못된 JSON, 나머지는 정상 응답."""
+    seen: list[str] = []
+
+    def respond(kw):
+        key = kw["messages"][-1]["content"]
+        if kw["messages"] == PING:
+            return Ok("ok")
+        if key not in seen:
+            seen.append(key)
+        bad = seen.index(key) < fail_first_n
+        return Malformed() if bad else Ok('{"evidence": "e", "category": "normal"}')
+
+    return respond
+
+
+async def _run_flaky(tmp_path, fail_first_n):
+    def make_llm(cfg_llm):
+        return LLM(cfg_llm, send=FakeLLM(respond=_flaky_llm(fail_first_n)).send)
+
+    args = ["--config", DEFAULT, "--name", "t", "--out", str(tmp_path / "runs"), "--input-only"]
+    code = await run.amain(args, make_llm=make_llm)
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text("utf-8"))
+    return code, summary, (out / "report.md").read_text("utf-8")
+
+
+def _rate(summary):
+    return run.input_call_failures(summary)
+
+
+async def test_input_call_failure_rate_over_2pct_invalidates_the_run(tmp_path):
+    code, summary, report = await _run_flaky(tmp_path, 10**6)  # 모든 호출 실패
+    errs, calls = _rate(summary)
+    assert errs == calls > 0
+    assert code == run.EXIT_INPUT_FAIL_RATE
+    assert "입력 판정 호출 실패율" in summary["invalid"]
+    assert f"{errs}/{calls}" in "".join(report.splitlines()[:4])  # 배너 안
+    assert "# 무효 실행" in report
+
+
+async def test_input_call_failure_rate_at_or_under_2pct_is_still_valid(tmp_path):
+    code, summary, report = await _run_flaky(tmp_path, 1)  # 호출 하나만 실패
+    errs, calls = _rate(summary)
+    assert errs == 1 and calls > 50 and errs / calls <= run.INPUT_FAIL_RATE_LIMIT
+    assert code == 0 and "invalid" not in summary
+    assert "# 무효 실행" not in report and f"{errs}/{calls}" in "".join(report.splitlines()[:4])
+
+
+async def test_no_input_call_failure_is_unchanged(tmp_path):
+    code, summary, report = await _run_flaky(tmp_path, 0)
+    assert code == 0 and "invalid" not in summary
+    assert "# 무효 실행" not in report

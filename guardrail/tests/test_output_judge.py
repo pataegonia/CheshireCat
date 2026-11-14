@@ -236,6 +236,15 @@ async def test_returns_parsed_output_with_the_strict_schema():
     assert reqs[-1]["response_format"]["json_schema"]["name"] == "OutputOut"
 
 
+async def test_deadline_already_passed_makes_no_call():
+    fake = FakeLLM(respond=lambda _: Ok("{}"))
+    llm = LLM(CFG.llm, send=fake.send)
+    await llm.start()
+    sent = len(fake.requests)
+    got = await ask_grounded("질문", "답변", HITS, llm, CFG, deadline=time.monotonic() - 1)
+    assert got is None and len(fake.requests) == sent
+
+
 async def test_baseline_returns_the_baseline_schema():
     got, reqs = await _ask(Ok('{"reason": "r", "grounded": true, "safe": false}'), baseline=True)
     assert got == OutputBaselineOut(reason="r", grounded=True, safe=False)

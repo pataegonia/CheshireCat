@@ -155,6 +155,15 @@ async def test_kb_search_uses_the_answer_and_its_head_when_it_is_long():
     assert await _kb_part(hello, KEYED_ANSWER + FILLER) == short
 
 
+async def test_kb_search_query_is_capped_on_both_sides():
+    quiet = (Message("user", "zxqv"),)
+    # 답변 쪽: 상한(질의 절반) 뒤에만 있는 글은 검색에 쓰지 않는다
+    assert await _kb_part(quiet, FILLER + KEYED_ANSWER) == await _kb_part(quiet, FILLER)
+    # 학습자 쪽: 여러 발화를 이은 글의 상한 앞쪽은 검색에 쓰지 않는다
+    early = (Message("user", KEYED), Message("user", FILLER))
+    assert await _kb_part(early) == await _kb_part((Message("user", FILLER),))
+
+
 @pytest.mark.parametrize("setting", ["grounded", "ungrounded"])
 async def test_request_without_a_user_message_is_grounded_without_a_call(setting):
     guard, llm = await _guard(failure_default=setting)

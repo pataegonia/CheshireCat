@@ -29,9 +29,11 @@ from test_guard import (
     responder,
 )
 
-from guardrail.schema import Category, GuardRequest, Message, OutputVerdict
+from guardrail.guard import GuardUnavailable
+from guardrail.schema import Category, GuardRequest, GuardResponse, Message, OutputVerdict
 
 pytestmark = pytest.mark.anyio
+MARK = "BODY-MARK-7f3a"  # 예외 메시지로 새면 안 되는 본문 표식
 
 no_rule = test_guard.no_rule  # 같은 픽스처를 이름으로 등록한다
 
@@ -96,18 +98,34 @@ async def test_classify_low_signal_turn_skips_nano():
     assert not calls(fake, "input")
 
 
-async def test_classify_falls_back_to_knn_and_lr_when_nano_fails():
-    guard, _ = await make(
-        responder(input_step=ServerError()), indexes=_stubbed("answer_seeking", "harmful_content")
-    )
-    assert await guard.classify(DICTS) == "harmful_content"  # 둘이 다르면 LR
+@pytest.mark.parametrize(
+    ("kw", "fallback", "source"),
+    [
+        ({"indexes": _stubbed("answer_seeking", "harmful_content")}, "harmful_content", "fallback"),
+        ({"toggles__lr": False, "toggles__knn_vote": False}, "normal", "default"),
+    ],
+    ids=["knn_lr", "no_helpers"],
+)
+async def test_classify_raises_when_nano_fails_but_judge_still_falls_back(kw, fallback, source):
+    # 튜터는 classify가 실패하면 주 호출 범주만 쓴다. 추측값을 성공처럼 주면 그 범주로 덮는다
+    guard, fake = await make(responder(input_step=ServerError()), **kw)
+    with pytest.raises(GuardUnavailable):
+        await guard.classify(DICTS)
+    assert len(calls(fake, "input")) == 1
+    j = await guard.judge(req(None, has=False))  # /guard 경로의 폴백은 그대로
+    assert (j.response.category, j.input_source) == (fallback, source)
 
 
-async def test_classify_without_helpers_falls_back_to_normal_without_raising():
-    guard, _ = await make(
-        responder(input_step=ServerError()), toggles__lr=False, toggles__knn_vote=False
-    )
-    assert await guard.classify(DICTS) == "normal"
+async def test_classify_raises_when_the_guard_itself_fails(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError(MARK)
+
+    guard, _ = await make(responder("normal"))
+    monkeypatch.setattr(guard, "_prepare", boom)
+    with pytest.raises(GuardUnavailable) as caught:
+        await guard.classify(DICTS)
+    assert MARK not in str(caught.value) and MARK not in repr(caught.value.__context__)
+    assert (await guard.judge(req(None, has=False))).response.category == "normal"  # /guard
 
 
 @pytest.mark.parametrize("messages", [[], [{"role": "assistant", "content": "안녕"}]])
@@ -228,7 +246,8 @@ async def test_judge_output_cancelled_from_outside_propagates_and_leaves_nothing
 async def test_classify_does_not_retry_but_judge_does():
     reply = responder(input_step=Malformed())
     guard, fake = await make(reply)
-    await guard.classify(DICTS)
+    with pytest.raises(GuardUnavailable):  # 파싱 실패 1회로 끝난다
+        await guard.classify(DICTS)
     assert len(calls(fake, "input")) == 1
     other, fake2 = await make(reply)
     await other.judge(req(None, has=False))
@@ -269,19 +288,85 @@ def test_classify_equals_the_category_of_judge(raw, nano_fails):
         step = ServerError() if nano_fails else None
         guard, _ = await make(responder("answer_seeking", input_step=step))
         msgs = tuple(Message(m["role"], m["content"]) for m in raw)
-        want = (await guard.judge(GuardRequest(msgs, None, False))).response.category
-        assert await guard.classify(raw) == want
+        j = await guard.judge(GuardRequest(msgs, None, False))
+        # nano가 범주를 냈거나, nano를 부를 일이 없었으면(low-signal·발화 없음) 같은 범주
+        if not nano_fails or j.input_source == "low_signal" or "no_user_message" in j.errors:
+            assert await guard.classify(raw) == j.response.category
+        else:  # nano 실패: /guard는 폴백, classify는 실패를 알린다
+            with pytest.raises(GuardUnavailable):
+                await guard.classify(raw)
 
     anyio.run(run)
 
 
-@pytest.mark.parametrize("hidden", [False, True])
-async def test_given_category_without_learner_turn_is_the_default_output(hidden):
+@pytest.mark.parametrize("hidden", [False, True], ids=["plain", "hidden_tag"])
+@pytest.mark.parametrize(
+    ("category", "answer", "want"),
+    [
+        ("harmful_content", ANSWER, (True, False)),  # block 범주에 응했다: ①, safe=false
+        ("harmful_content", REFUSAL, (True, True)),
+        ("answer_seeking", ANSWER, (False, True)),  # allow: failure_default
+        (None, ANSWER, (False, True)),  # 범주가 없으면 기본 출력(이전과 같다)
+    ],
+    ids=["block_answer", "block_refusal", "allow", "no_category"],
+)
+async def test_given_category_without_learner_turn_keeps_the_safe_rule(
+    hidden, category, answer, want
+):
     guard, fake = await make(responder(output=UNGROUNDED), output__failure_default="ungrounded")
-    answer = ANSWER + TAG if hidden else ANSWER
-    v = await guard.judge_output([], answer, category="harmful_content")
-    assert v == OutputVerdict(False, (), not hidden)  # 숨긴 태그는 그래도 본다(GR-08)
+    text = answer + TAG if hidden else answer
+    v = await guard.judge_output([], text, category=category)
+    assert v == OutputVerdict(want[0], (), want[1] and not hidden)  # 숨긴 태그는 그래도 본다
     assert not calls(fake, "input") and not calls(fake, "output")
+
+
+UNREADABLE_TURNS = [
+    [Message("user", 123)],  # 판정이 예외로 끝난다(_run이 삼킨다)
+    [{"content": QUESTION}],  # role이 없다: 학습자 발화 없음
+]
+
+
+@pytest.mark.parametrize("messages", UNREADABLE_TURNS, ids=["error", "no_user"])
+@pytest.mark.parametrize(
+    ("answer", "safe"),
+    [(ANSWER, False), (REFUSAL, True), ("", True)],
+    ids=["answer", "refusal", "empty"],
+)
+async def test_given_block_category_survives_an_unreadable_turn(messages, answer, safe):
+    guard, _ = await make(responder(output=UNGROUNDED))
+    v = await guard.judge_output(messages, answer, category="jailbreak_injection")
+    assert v.unsupported == () and v.safe is safe
+    if answer:
+        assert v.grounded is True  # GR-07 ①
+
+
+@pytest.mark.parametrize(
+    "msgs", [(Message("user", 123),), (Message("", QUESTION),)], ids=["error", "no_user"]
+)
+async def test_guard_path_on_an_unreadable_turn_is_unchanged(msgs):
+    guard, _ = await make(responder(output=UNGROUNDED), output__failure_default="ungrounded")
+    j = await guard.judge(GuardRequest(msgs, ANSWER, True))
+    assert j.response == GuardResponse("normal", OutputVerdict(False, (), True))
+
+
+class _Explosive(dict):
+    """읽으면 본문이 든 예외를 내는 dict(튜터 쪽 버그 흉내)."""
+
+    def get(self, key, default=None):
+        raise RuntimeError(MARK)
+
+
+async def test_unreadable_message_objects_never_leak_their_exception():
+    guard, fake = await make(responder("normal"))
+    bad = [_Explosive(role="user", content=QUESTION)]
+    with pytest.raises(GuardUnavailable) as caught:
+        await guard.classify(bad)
+    assert MARK not in str(caught.value) and caught.value.__context__ is None
+    v = await guard.judge_output(bad, ANSWER, category="jailbreak_injection")
+    assert v == OutputVerdict(True, (), False)
+    v = await guard.judge_output(bad, ANSWER)
+    assert isinstance(v, OutputVerdict) and v.safe
+    assert not calls(fake, "input")
 
 
 async def test_mixed_messages_and_dicts_read_like_the_guard_body():

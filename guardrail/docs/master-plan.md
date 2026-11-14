@@ -250,9 +250,9 @@ class LLM:
 ### 4.4 설정 (`configs/*.yaml`)
 
 ```yaml
-version: "6.0.2"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.3"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
-prompts: {}                        # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.6·S2.7이 input_judge·output_judge·output_judge_baseline을 더한다
+prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en.md, output_judge_baseline: output_judge_baseline.md}   # R14-D9. 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.6·S2.7이 input_judge·output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
 block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, off_topic]   # 범주 → decision 표(ADR-0012)
 llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다
@@ -533,5 +533,5 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - S2.8 조립 중 조정(같은 날, santa 1라운드와 council 2라운드): 서버 기본 판정기를 키 기준(`default_factory`)으로 정했다. 키가 있으면 `Guard.build`, 없거나 기동이 실패하면 상수 판정기 + 기동 로그 한 줄이다. 무조건 `Guard.build`로 바꾸면 통합 테스트 464개 중 154개가 깨지고, 상수로 두면 통합 앱의 `/guard`가 상수 판정으로 제출된다. `candidate_answer`가 문자열이 아닐 때는 GR-07 표를 그대로 탄다(block 범주면 ①). 학습자 발화가 없어도 숨긴 태그는 본다. `Judgement.errors` 코드 목록을 §4.1에 적었다.
 - S2.8 조립 전 조정(같은 날, 출력 단독 실측 뒤): §4.4 `nano_span`의 뜻을 "③에서 확인된 `answer_quote`를 구간으로"로 적고 허용 조건을 `nano_tier3`로 바꿨다. §4.1 인용 확인의 답변 쪽 대조 대상을 자른 원문으로 못박았다. 근거는 [results/2026-11-13-output-v1-solo.md](../results/2026-11-13-output-v1-solo.md)(인용을 구간으로 내면 출력 평균 0.858–0.869 → 0.892–0.909). 기본값은 끔 그대로다.
 - 첫 실측 뒤 조정(같은 날, 사용자 결정): 입력 v1 단독 실측의 block F1(가드 160행, 1회 0.771)이 목표 0.90에 못 미쳤다. S2.7 전에 v1을 2회 더 돌려 3회 범위를 만든다(§4.6). 입력 프롬프트 v2는 S3.2의 새 PR에서 한다(§5 S3.2, §10 프롬프트 버전).
-- 영어 지시문 실험(2026-11-14, 사용자 결정 + council, R14-D9): 판정 프롬프트 3개의 지시문을 영어로 옮긴 `prompts/*_en.md`(`version: "1.1"`)를 더한다. 기본 설정은 한국어 v1 그대로이고 영어판은 `--set prompts.<이름>=…`로만 고른다. 같은 코드로 한국어·영어를 번갈아 3회씩 재서 R14-D9 기준을 넘을 때만 기본값을 바꾼다. 측정 순서는 S3.2 다음이다. 숨긴 문자 표식과 JSON 모드 안내 문장은 튜터와 같은 계약이라 한국어로 둔다.
+- 영어 지시문 실험(2026-11-14, 사용자 결정 + council, R14-D9): 판정 프롬프트 3개의 지시문을 영어로 옮긴 `prompts/*_en.md`(`version: "1.1"`)를 더한다. 실험 시작 때 기본 설정은 한국어 v1이었고 영어판은 `--set`으로만 골랐다(아래 채택 항목으로 바뀜). 같은 코드로 한국어·영어를 번갈아 3회씩 재서 R14-D9 기준을 넘을 때만 기본값을 바꾼다. 측정 순서는 S3.2 다음이다. 숨긴 문자 표식과 JSON 모드 안내 문장은 튜터와 같은 계약이라 한국어로 둔다.
 - 영어 지시문판 채택(2026-11-14, R14-D9 기준 통과, [결과](../results/2026-11-14-v1-english.md)): 기본 설정의 입력·출력 판정 프롬프트를 `input_judge_en.md`·`output_judge_en.md`(1.1)로 바꾸고 설정 `version`을 6.0.3으로 올린다. 같은 코드 번갈아 3회에서 가드 84.87–88.33(한국어 81.93–87.59), 출력 평균은 분산 밖으로 올랐다. 베이스라인 설정의 입력 프롬프트도 기본과 같은 영어판으로 바꾼다("예시만 뺀 같은 프롬프트" 불변식). `output_judge_baseline`은 영어로 재지 않아 한국어 v1 그대로 둔다. 베이스라인 수치는 다시 재야 한다. 측정 순서는 사용자 결정으로 S3.2보다 앞섰다.

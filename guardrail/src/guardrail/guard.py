@@ -10,7 +10,7 @@ import html
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast, get_args
 
 from guardrail.classifier import LrClassifier
 from guardrail.config import GuardConfig, load_prompt
@@ -24,14 +24,23 @@ from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags, normalize, reveal_hidden, strip_tags
 from guardrail.rules import literal_rule
-from guardrail.schema import Category, GuardRequest, GuardResponse, Message, OutputVerdict
+from guardrail.schema import (
+    Category,
+    GuardRequest,
+    GuardResponse,
+    Message,
+    OutputVerdict,
+    _messages,
+)
 from guardrail.signals import Signals, has_hidden_tags, is_low_signal, is_refusal
 
 # nano 호출은 스스로 마감 안에 끝난다(llm.complete). 그 결과를 받을 여유만 둔다
 DEADLINE_GRACE_S = 0.2
 NO_SIGNALS = Signals(False, False, False)
+CATEGORIES: tuple[str, ...] = get_args(Category)  # 튜플: 해시할 수 없는 값도 TypeError 없이 비교
 
-InputSource = Literal["low_signal", "nano", "third_call", "fallback", "default"]
+# given = 튜터 공유 API(judge_output)가 범주를 넘겨 입력 nano를 부르지 않았다
+InputSource = Literal["low_signal", "nano", "third_call", "fallback", "default", "given"]
 
 
 @dataclass(frozen=True)
@@ -98,6 +107,25 @@ def build_indexes(
     return kb, knn, lr
 
 
+class GuardUnavailable(RuntimeError):
+    """튜터 공유 API가 판정하지 못했다. 메시지에 본문·범주 값을 넣지 않는다(GR-12)."""
+
+
+def _as_messages(raw: object) -> tuple[Message, ...] | None:
+    """튜터가 넘긴 대화 → Message 튜플. `Message`는 그대로, dict는 /guard 본문과 같은 규칙
+    (`schema._messages`)으로 읽는다. list·tuple이 아니면 빈 대화다(GR-09: 예외를 내지 않는다).
+    읽다가 예외가 나면 None: 예외 메시지에 본문이 들 수 있어 밖으로 내지 않는다(GR-12)."""
+    if not isinstance(raw, list | tuple):
+        return ()
+    try:
+        out: list[Message] = []
+        for m in raw:
+            out.extend((m,) if isinstance(m, Message) else _messages([m]))
+        return tuple(out)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _consume(task: asyncio.Task) -> None:
     """태스크의 예외를 회수한 것으로 표시한다(GR-12: 예외 메시지가 로그로 새지 않게)."""
     if not task.cancelled():
@@ -133,7 +161,16 @@ class _Output:
 
 
 class Guard:
-    """입력 범주 판정과 출력 근거 판정을 묶는다. 만든 뒤 색인은 바뀌지 않는다."""
+    """입력 범주 판정과 출력 근거 판정을 묶는다. 만든 뒤 색인은 바뀌지 않는다.
+
+    튜터 공유 API(S2.11, interface.md §2.1): `classify`·`judge_output`. 범주 → 튜터 action
+    (PRD §9 T3): normal·pii → answer, answer_seeking·academic → scaffold, out_of_material →
+    abstain, jailbreak → refuse, harmful → refuse/redirect, off_topic → redirect, emotional →
+    escalate, low_signal → clarify. 시간 제한은 튜터가 바깥에서 건다(취소는 그대로 올라간다).
+    취소되면 안쪽 nano 태스크를 회수하느라 최대 `DEADLINE_GRACE_S`(0.2초) 늦게 돌아올 수 있다.
+    재시도는 하지 않는다. nano 호출: classify 1회, judge_output은 category가 있으면 1회·없으면 2회
+    (병렬). low-signal 직행·학습자 발화 없음이면 더 적다.
+    """
 
     def __init__(
         self,
@@ -165,23 +202,84 @@ class Guard:
         return cls(cfg, llm, *await asyncio.to_thread(build_indexes, cfg, rows))
 
     async def judge(self, req: GuardRequest) -> Judgement:
-        t0 = time.monotonic()
-        try:
-            return await self._judge(req, t0)
-        except Exception as exc:  # noqa: BLE001 - GR-09: 어떤 실패에도 규격 응답. 종류 이름만 남긴다
-            return self._result(
-                "normal", "default", _Output(self._default_output(req)), None, t0, t0, 0,
-                (f"guard:{type(exc).__name__}",),
-            )  # fmt: skip
+        return await self._run(req)
+
+    async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
+        """마지막 학습자 발화의 범주(nano·low-signal 직행은 `judge`와 같다). nano 1회, 재시도 없음.
+
+        nano 실패·판정 오류면 `GuardUnavailable`(kNN·LR 추측값을 성공처럼 주지 않는다. 튜터는
+        그때 주 호출 범주만 쓴다). 학습자 발화가 없으면 실패가 아니라 "normal"이다.
+        """
+        msgs = _as_messages(messages)
+        if msgs is None:
+            raise GuardUnavailable("대화를 읽지 못했다")
+        j = await self._run(GuardRequest(msgs, None, False), retries=0)
+        if j.input_source not in ("nano", "low_signal") and "no_user_message" not in j.errors:
+            raise GuardUnavailable("입력 범주를 판정하지 못했다")
+        return j.response.category
+
+    async def judge_output(
+        self,
+        messages: list[dict[str, str]] | Sequence[Message],
+        candidate_answer: str,
+        category: Category | None = None,
+    ) -> OutputVerdict:
+        """후보 답변의 근거·safe 판정. 재시도 없음. 실패해도 예외 없이 값을 낸다.
+
+        출력 nano가 실패하면 nano 없이 GR-07을 계산한다: block 범주면 ①(true), 규칙 ②가 걸리면
+        false와 그 구간, 그 밖에는 `output.failure_default`. 가드 예외·학습자 발화 없음이면 규칙 ②도
+        없이 ①·`output.failure_default`만 쓴다. category가 있으면 safe는 이 모든 경우에 GR-08 규칙
+        그대로다. category가 None인데 가드 예외가 나면 `/guard`와 같이 safe=true다.
+
+        category가 있으면 입력 nano 없이 그 범주로 GR-07 ①과 safe를 계산한다(low-signal로 덮지
+        않는다). 판정이 실패하거나 학습자 발화가 없어도 그 범주로 ①·safe(GR-08)는 계산한다.
+        None이면 `judge`처럼 입력·출력 nano를 병렬로 부르고, 입력 nano가 실패하면 `judge`처럼
+        kNN·LR 폴백 범주로 계산한다(튜터는 늘 category를 넘긴다).
+        """
+        if category is not None and category not in CATEGORIES:
+            raise ValueError("category가 Category 값이 아니다")  # 받은 값은 넣지 않는다(GR-12)
+        answer = candidate_answer if isinstance(candidate_answer, str) else None
+        msgs = _as_messages(messages)
+        req = GuardRequest(() if msgs is None else msgs, answer, True)  # 못 읽으면 발화 없음
+        out = (await self._run(req, category, retries=0)).response.output
+        return cast(OutputVerdict, out)  # has_candidate=True라 None이 오지 않는다
 
     # --- 내부 ---
 
-    async def _judge(self, req: GuardRequest, t0: float) -> Judgement:
+    async def _run(
+        self, req: GuardRequest, category: Category | None = None, retries: int | None = None
+    ) -> Judgement:
+        t0 = time.monotonic()
+        try:
+            return await self._judge(req, t0, category, retries)
+        except Exception as exc:  # noqa: BLE001 - GR-09: 어떤 실패에도 규격 응답. 종류 이름만 남긴다
+            out = (
+                _Output(self._default_output(req)) if category is None
+                else self._given_output(req, category)
+            )  # fmt: skip
+            return self._result(
+                "normal", "default", out, None, t0, t0, 0, (f"guard:{type(exc).__name__}",)
+            )
+
+    async def _judge(
+        self,
+        req: GuardRequest,
+        t0: float,
+        given: Category | None = None,
+        retries: int | None = None,
+    ) -> Judgement:
+        """given이 있으면 입력 nano 없이 그 범주를 쓴다. retries는 nano마다(None=설정값)."""
         cfg = self.cfg
         deadline = t0 + cfg.budget_s
         # CPU 단계는 길이 상한으로 자른 뒤 한 번에 스레드로 보낸다(이벤트 루프를 막지 않는다)
         p = await asyncio.to_thread(self._prepare, req)
         t1 = time.monotonic()
+        if isinstance(p, Signals) and given is not None:  # 발화는 없지만 범주는 받았다
+            j = self._result(
+                given, "given", self._given_output(req, given), None, t0, t1, 0,
+                ("no_user_message",),
+            )  # fmt: skip
+            return dataclasses.replace(j, signals=p)
         if isinstance(p, Signals):  # 학습자 발화가 없다(빈 messages 포함): 파싱 실패와 같은 규칙
             out = self._default_output(req)
             if out is not None and p.hidden_tags and cfg.toggles.safe_rule:
@@ -193,15 +291,24 @@ class Guard:
 
         baseline = cfg.output.mode == "baseline"
         tasks: dict[str, asyncio.Task] = {}
-        if not p.low:
+        if not p.low and given is None:
             tasks["input_judge"] = asyncio.create_task(
-                judge_input(p.window, p.target, p.examples, self.llm, cfg, deadline=deadline)
+                judge_input(
+                    p.window,
+                    p.target,
+                    p.examples,
+                    self.llm,
+                    cfg,
+                    deadline=deadline,
+                    retries=retries,
+                )
             )
         wants_nano = baseline or cfg.toggles.nano_tier3 or cfg.output.call_nano_when_unused
         if p.answer and wants_nano and p.output_error is None:
             asking = ask_grounded(
-                p.target, p.revealed, p.hits, self.llm, cfg, deadline=deadline, baseline=baseline
-            )
+                p.target, p.revealed, p.hits, self.llm, cfg,
+                deadline=deadline, baseline=baseline, retries=retries,
+            )  # fmt: skip
             tasks["output_judge"] = asyncio.create_task(asking)
         for task in tasks.values():  # 회수하지 못한 예외를 asyncio가 메시지째 로그에 찍지 않게 한다
             task.add_done_callback(_consume)
@@ -218,7 +325,10 @@ class Guard:
             if late:  # 취소를 삼키는 호출이 응답을 붙잡지 못하게 기다림에 상한을 둔다
                 await asyncio.wait(late, timeout=DEADLINE_GRACE_S)
 
-        category, source = self._category(p, results.get("input_judge"))
+        if given is None:
+            category, source = self._category(p, results.get("input_judge"))
+        else:
+            category, source = given, "given"
         if p.output_error is not None:
             errors.append(p.output_error)
             out = self._fallback_output(req, category, p.signals)
@@ -326,6 +436,16 @@ class Guard:
             category, self.block, None, None, False, cfg.toggles, cfg.output.failure_default
         )
         return _Output(OutputVerdict(grounded, unsupported, safe), tier)
+
+    def _given_output(self, req: GuardRequest, given: Category) -> _Output:
+        """받은 범주로 nano 없이(GR-07 ①, GR-08). 판정 오류·학습자 발화 없음일 때(judge_output)."""
+        full = req.candidate_answer
+        if not full:  # 응한 내용이 없다(또는 문자열이 아니다): 이전과 같은 기본 출력
+            return _Output(self._default_output(req))
+        answer = full[: self.cfg.input.max_answer_chars]
+        return self._fallback_output(
+            req, given, Signals(False, is_refusal(answer), has_hidden_tags(full))
+        )
 
     def _output(
         self, req: GuardRequest, p: _Prepared, category: Category, nano: object | None

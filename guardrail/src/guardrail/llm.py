@@ -198,9 +198,17 @@ class LLM:
             yield
 
     async def complete(
-        self, role: Role, messages: list[dict], schema: type[BaseModel], *, deadline: float
+        self,
+        role: Role,
+        messages: list[dict],
+        schema: type[BaseModel],
+        *,
+        deadline: float,
+        retries: int | None = None,
     ) -> LLMResult:
+        """retries가 None이면 `llm.retries`. 튜터 공유 메서드는 0을 넘긴다(interface.md §2)."""
         self._require_send()  # start() 전 호출은 프로그래밍 오류라 코드로 바꾸지 않는다
+        max_retries = self.cfg.retries if retries is None else retries
         t0 = self._clock()
         kwargs = self._request(messages, schema)
         attempts, last = 0, _Attempt()
@@ -221,7 +229,7 @@ class LLM:
                 self._gate.release()
             if last.error is None:
                 return self._result(last, None, attempts, t0)
-            if not last.retry or attempts > self.cfg.retries:
+            if not last.retry or attempts > max_retries:
                 return self._result(last, last.error, attempts, t0)
             wait = self._retry_wait(last.headers or {})
             if wait is None or self._clock() + wait + self.cfg.timeout_s.read > deadline:

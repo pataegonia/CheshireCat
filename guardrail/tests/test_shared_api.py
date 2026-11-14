@@ -17,7 +17,7 @@ from guardrail.clusters import build_clusters
 from guardrail.config import DEFAULT_CONFIG, load_config, resolve_path
 from guardrail.data import LabeledRow, PublicRow, load_public
 from guardrail.eval.cv import load_splits
-from guardrail.guard import ConstantGuard
+from guardrail.guard import ConstantGuard, Guard
 from guardrail.judges.schemas import strict_schema
 from guardrail.kb import KbIndex
 from guardrail.knn import select_fewshot
@@ -243,3 +243,14 @@ def test_strict_schema_returns_closed_object_schema():
     schema = strict_schema(Out)
     assert isinstance(schema, dict)
     assert schema["additionalProperties"] is False
+
+
+def test_guard_shared_methods_are_coroutines_with_the_tutor_signature():
+    """tutor/judge/guard_merge.py: await guard.classify(messages),
+    await guard.judge_output(messages, candidate, category=...)(S2.11)."""
+    assert inspect.iscoroutinefunction(Guard.classify)
+    assert inspect.iscoroutinefunction(Guard.judge_output)
+    assert list(inspect.signature(Guard.classify).parameters) == ["self", "messages"]
+    p = inspect.signature(Guard.judge_output).parameters
+    assert list(p) == ["self", "messages", "candidate_answer", "category"]
+    assert p["category"].default is None

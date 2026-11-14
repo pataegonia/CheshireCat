@@ -59,7 +59,7 @@
 - 공격·사기 수법을 **배우려는** 질문은 `normal`이다. 자기소개와 남의 정보 요청이 같이 있으면 `harmful_content`(refuse)다.
 - 전제가 자료와 틀린 질문은 abstain이 아니라 answer로 바로잡는다. 자료에 아무 내용이 없을 때만 abstain이다.
 - 근거 밖의 과목 고유 사실은 쓰지 않는다. 가상 은행·실습·도우미 이름·수치가 그렇다(SPEC §2).
-- scaffold에는 KB Q&A의 답, 완성 코드, 최종 선택지를 넣지 않는다. 단 answer_seeking은 위 정책대로 정답 사실을 밝힌다. academic_dishonesty는 어느 경우에도 밝히지 않는다.
+- scaffold에는 KB Q&A의 답, 완성 코드, 최종 선택지를 넣지 않는다. answer_seeking도 기본(숨김)에서는 정답 사실을 밝히지 않는다(밝힘은 `scaffold_state_rule: true`일 때만, TU-06). academic_dishonesty는 어느 경우에도 밝히지 않는다.
 
 ## KB·공개 세트에서 확인된 함정 (TUTOR_PRD §1, TU-02·03·05·07·11)
 - `kb/finance/FIN-01.html`은 FIN-01-01~04 md의 사본이다. 색인하지도 인용하지도 않는다.

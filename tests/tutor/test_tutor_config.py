@@ -27,10 +27,12 @@ def test_repo_config_has_the_prd_defaults():
     toggles = cfg.toggles
     assert cfg.mode == "v2"
     assert toggles.action_from_category is False  # TU-06 기본 끔
-    assert toggles.verify == "guard"  # TU-09 judge_output v1 기본 켬
-    assert toggles.guard_classify == "parallel"  # TU-14 기본 parallel
+    # TU-09·TU-10: 가드 judge_output·classify는 #170(S2.11) 뒤 런박스 켬/끔 비교 전까지 끔(11/14)
+    assert toggles.verify == "off"
+    assert toggles.guard_classify == "off"
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
     assert toggles.max_citations == 1  # TU-07 기본 1
+    assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     assert cfg.llm.max_completion_tokens == 1600  # 주 호출 상한(가드 판정 호출과 따로)
     assert cfg.eval.max_calls == 5000  # TU-14

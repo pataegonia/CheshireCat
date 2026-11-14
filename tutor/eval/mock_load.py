@@ -20,10 +20,11 @@
   키우면 가드 시간 초과로 실패할 수 있다
 - 가짜 가드는 튜터가 부르는 classify·judge_output도 흉내 낸다. 각각 가짜 nano 1회(같은 게이트,
   같은 호출당 읽기 제한)이고, classify는 "normal", judge_output은 통과 판정을 낸다. 가드의 실제
-  classify·judge_output(S2.11)은 아직 없어 각 1회는 가정이다. 지금 배포 서버의 가드 기본 판정기에는
-  둘이 없어 튜터가 건너뛰지만(missing), 모의 부하는 S2.11 뒤 서버가 탈 경로를 잰다. 시간 제한은
-  튜터 설정(timeout_s.classify·verify, 부른 때부터 게이트 대기 포함)이고, 넘으면 튜터가 그 단계만
-  건너뛴다(state.guard_skips에 timeout으로 센다)
+  classify·judge_output(S2.11)은 아직 없어 각 1회는 가정이다. 배포 설정(config/tutor.yaml)은 두
+  단계를 끈다(11/14 리더 결정, S2.11 뒤 런박스 켬/끔 비교 전까지). 그래서 기본 실행은 두 단계 없이
+  재고, 켠 경로는 켠 설정 파일을 TUTOR_CONFIG로 주어 잰다(요약의 가정 줄에 켬·끔이 나온다).
+  시간 제한은 튜터 설정(timeout_s.classify·verify, 부른 때부터 게이트 대기 포함)이고, 넘으면
+  튜터가 그 단계만 건너뛴다(state.guard_skips에 timeout으로 센다)
 - 가짜 가드는 튜터 LLM과 같은 게이트를 쥔다. 이는 가드에 LLM 판정기가 붙은 구성의 가정이다(그때
   튜터가 가드 LLM의 slot()을 같이 쓴다). 지금 루트 app.py는 LLM이 없는 가드 기본 판정기라,
   배포 서버에서는 튜터가 같은 크기(llm.gate)의 자기 게이트를 따로 쓰고 가드는 LLM을 부르지 않는다
@@ -107,11 +108,17 @@ REPLIES: dict[str, dict[str, Any]] = {
         "action": "answer",
         "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
     },
+    "CheckedMainCallOut": {
+        "asked_in_evidence": True,
+        "category": "normal",
+        "action": "answer",
+        "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
+    },
 }
 UNKNOWN_REPLY = "모르는 스키마"  # JSON이 아니다
 # 모드마다 튜터 LLM이 쓸 응답 스키마. 다른 이름이 오면(새 호출) 실패로 본다
 EXPECTED_SCHEMAS: dict[str, frozenset[str]] = {
-    "v2": frozenset({"MainCallOut"}),
+    "v2": frozenset({"MainCallOut", "CheckedMainCallOut"}),  # 근거 대조 칸 토글(#162)이면 뒤의 것
     "baseline": frozenset({"BaselineOut"}),
 }
 
@@ -713,7 +720,10 @@ def show(report: Report, bar: Bar, out: TextIO | None = None) -> bool:
     read_s, budget_s = report.guard_limits
     out.write(f"(배율 {report.scale:g}), 가드 판정 최대 {report.guard_per_request}회 병렬")
     out.write(f"(읽기 제한 {read_s:g}초·마감 {budget_s:g}초)")
-    out.write(f", 게이트 {report.gate}, 동시 {report.concurrency}\n")
+    out.write(f", 게이트 {report.gate}, 동시 {report.concurrency}")
+    onoff = {True: "켬", False: "끔"}
+    out.write(f", 튜터 가드 단계 classify {onoff[report.classify_on]}")
+    out.write(f"·judge_output {onoff[report.judge_output_on]}\n")
     out.write(
         f"요청 {report.requests}개(튜터 {n_tutor}·가드 {n_guard}), 전체 {report.wall_s:.1f}초\n"
     )

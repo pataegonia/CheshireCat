@@ -62,6 +62,17 @@ async def test_nano_verdict_is_recorded_and_sent_with_kb_context():
     assert "OutputOut" in str(_judge_calls(llm)[-1]["response_format"])
 
 
+async def test_kb_search_ignores_hidden_chars_interleaved_in_the_answer():
+    answer = "append를 쓰면 리스트 끝에 값이 붙어요."
+    kbs = []
+    for a in (answer, "​".join(answer)):
+        guard, llm = await _guard()
+        await guard.judge(GuardRequest((Message("user", "안녕"),), a, True))
+        user = _judge_calls(llm)[-1]["messages"][1]["content"]
+        kbs.append(user[user.index("</answer>") :])
+    assert '<kb id="' in kbs[0] and kbs[0] == kbs[1]
+
+
 async def test_no_candidate_or_empty_candidate_makes_no_call():
     guard, llm = await _guard()
     none = await guard.judge(GuardRequest(MSGS, None, False))

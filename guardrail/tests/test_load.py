@@ -1,6 +1,7 @@
 """S2.10 부하 도구: 요청 만들기·분류·집계·접근 로그 집계 (C2 §S2.10, GR-10). API 0회."""
 
 import json
+import socket
 import time
 
 import pytest
@@ -116,8 +117,13 @@ def test_kb_bench_runs_without_api():
     assert rep["queries"] > 200 and 0 < rep["p50_ms"] <= rep["p95_ms"]
 
 
+FULL = json.dumps(
+    json.loads(OK) | {"output": {"grounded": True, "unsupported": [], "safe": True}}
+).encode()
+
+
 def _main_out(monkeypatch, capsys, argv):
-    monkeypatch.setattr(load, "http_sender", lambda url, token: lambda p: (200, OK))
+    monkeypatch.setattr(load, "http_sender", lambda url, token: lambda p: (200, FULL))
     load.main(["--n", "3", "--concurrency", "2", *argv])
     return capsys.readouterr()
 
@@ -128,5 +134,107 @@ def test_main_warns_without_access_log(monkeypatch, capsys):
 
 def test_main_no_warning_with_access_log(monkeypatch, capsys, tmp_path):
     log = tmp_path / "access.log"
-    log.write_text("", "utf-8")
+    log.write_text("2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 -\n" * 3, "utf-8")
     assert _main_out(monkeypatch, capsys, ["--access-log", str(log)]).err == ""
+
+
+def _closed_url() -> str:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    return f"http://127.0.0.1:{port}/guard"  # 닫힌 로컬 포트
+
+
+def test_main_exits_1_when_all_requests_fail(capsys, tmp_path):
+    out = tmp_path / "r.json"
+    args = ["--url", _closed_url(), "--n", "3", "--concurrency", "2", "--out", str(out)]
+    with pytest.raises(SystemExit) as e:
+        load.main(args)
+    assert e.value.code == 1
+    rep = json.loads(out.read_text("utf-8"))
+    assert json.loads(capsys.readouterr().out) == rep
+    assert rep["all_ok"] is False and rep["access_log"] is False
+    assert rep["counts"]["ok"] == 0 and rep["latency_ok_s"] is None
+    assert rep["latency_s"]["n"] == 3  # 기존 키는 실패 요청도 포함
+
+
+def test_main_all_ok_flags(monkeypatch, capsys, tmp_path):
+    rep = json.loads(_main_out(monkeypatch, capsys, []).out)
+    assert rep["all_ok"] is True and rep["access_log"] is False
+    assert rep["latency_ok_s"]["n"] == 3
+    log = tmp_path / "a.log"
+    log.write_text("", "utf-8")
+    assert (
+        json.loads(_main_out(monkeypatch, capsys, ["--access-log", str(log)]).out)["access_log"]
+        is True
+    )
+
+
+def test_latency_ok_excludes_failed_requests():
+    def send(p):
+        if p["session_id"].endswith("0"):
+            raise ConnectionError("refused")
+        return 200, OK
+
+    payloads = [{"session_id": f"load_{i:04d}", "messages": []} for i in range(10)]
+    rep = load.run_load(send, payloads, concurrency=4)
+    assert rep["latency_s"]["n"] == 10 and rep["latency_ok_s"]["n"] == 9
+
+
+def test_main_missing_access_log_sends_nothing(monkeypatch, capsys, tmp_path):
+    sent = []
+    monkeypatch.setattr(load, "http_sender", lambda url, token: lambda p: sent.append(p))
+    out = tmp_path / "r.json"
+    with pytest.raises(SystemExit) as e:
+        load.main(["--n", "3", "--access-log", str(tmp_path / "nope.log"), "--out", str(out)])
+    assert e.value.code == 2 and sent == [] and not out.exists()
+    err = capsys.readouterr().err
+    assert "nope.log" in err and len(err.strip().splitlines()) == 1
+
+
+def test_main_flags_log_mismatch(monkeypatch, capsys, tmp_path):
+    log = tmp_path / "a.log"
+    line = "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 -\n"
+    log.write_text(line, "utf-8")
+    res = _main_out(monkeypatch, capsys, ["--access-log", str(log)])
+    assert json.loads(res.out)["log_mismatch"] is True and "1" in res.err
+    log.write_text(line * 3, "utf-8")
+    res = _main_out(monkeypatch, capsys, ["--access-log", str(log)])
+    assert json.loads(res.out)["log_mismatch"] is False
+
+
+def _body(decision="allow", category="normal", **output):
+    d = {"input": {"decision": decision, "category": category}}
+    if output:
+        d["output"] = output
+    return json.dumps(d).encode()
+
+
+@pytest.mark.parametrize("unsupported", ["abc", None, {"a": 1}, [""], ["a", 1], [None]])
+def test_classify_rejects_bad_unsupported(unsupported):
+    p = {"messages": [], "candidate_answer": "답"}
+    body = _body(grounded=True, unsupported=unsupported, safe=True)
+    assert load.classify(p, 200, body) == "format"
+
+
+@pytest.mark.parametrize(
+    ("decision", "category", "want"),
+    [
+        ("allow", "normal", "ok"),
+        ("block", "jailbreak_injection", "ok"),
+        ("block", "normal", "format"),
+        ("allow", "jailbreak_injection", "format"),
+        ("allow", "not_a_category", "format"),
+        ("block", "not_a_category", "format"),
+        ("allow", ["normal"], "format"),
+    ],
+)
+def test_classify_checks_category_and_decision_mapping(decision, category, want):
+    assert load.classify({"messages": []}, 200, _body(decision, category)) == want
+
+
+def test_classify_allows_any_string_output_category():
+    p = {"messages": [], "candidate_answer": "답"}  # SPEC: output.category는 아무 문자열
+    d = json.loads(_body(grounded=True, unsupported=["구간"], safe=True))
+    d["output"]["category"] = "whatever"
+    assert load.classify(p, 200, json.dumps(d).encode()) == "ok"

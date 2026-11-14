@@ -86,6 +86,8 @@ for run in runs:
     n = ok = 0
     for i in ids:
         r = run[i]; p = pred(run, i) in B; k, lr = r.get("knn_major"), r.get("lr_pred")
+        if r["source"] != "nano":
+            continue
         if k and lr and (k in B) != p and (lr in B) != p:
             n += 1; ok += p == (by[i].category in B)
     d.append(f"{ok}/{n}")

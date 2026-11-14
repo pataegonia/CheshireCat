@@ -53,6 +53,8 @@ EXIT_PROBE_FAILED = 7  # probe의 맨 요청이 429 말고 다른 오류로 실�
 # 판정 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속 보내면
 # 어뷰징으로 보일 수 있다(SPEC §7.1). 2026-11-13에 429 뒤로 약 3,700회를 더 보낸 일이 있었다
 RATE_LIMIT_STREAK = 20
+EXIT_INPUT_FAIL_RATE = 8  # 입력 단독 실측의 입력 판정 호출 실패율이 상한을 넘었다
+INPUT_FAIL_RATE_LIMIT = 0.02  # R14-D8: 역할별 호출 실패율 2% 초과면 무효
 BASELINE, DEFAULT = "baseline", "default"
 
 
@@ -173,7 +175,8 @@ class OutputOnlyGuard:
             return self._result(output, None)
         answer = req.candidate_answer[: cfg.input.max_answer_chars]
         half = cfg.retrieval.max_query_chars // 2
-        query = "\n".join(users)[-half:] + "\n" + answer[:half]  # 학습자 쪽은 최근 발화를 남긴다
+        # 학습자 쪽은 최근 발화를 남긴다. KbIndex.scores는 normalize를 거친 질의를 받는다
+        query = normalize("\n".join(users))[-half:] + "\n" + normalize(answer)[:half]
         hits = output_context(self.kb.rank(query), self.kb, cfg)
         out = await ask_grounded(
             users[-1],
@@ -624,6 +627,15 @@ def add_variance(summary: dict) -> None:
     }
 
 
+def input_call_failures(summary: dict) -> tuple[int, int]:
+    """입력 판정 호출 (실패 수, 시도 수). 모든 설정·반복의 합이다."""
+    scores = [s for c in summary["configs"].values() for s in c["scores"]]
+    return (
+        sum(s["errors"].get("input_judge", 0) for s in scores),
+        sum(s["calls"]["total"] for s in scores),
+    )
+
+
 def _banner(summary: dict) -> list[str]:
     lines = []
     if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
@@ -634,6 +646,8 @@ def _banner(summary: dict) -> list[str]:
         )
     if summary.get("input_only"):
         lines.append("# 입력 단독 실행 — 출력·가드 점수는 상수 출력 기준이라 비교에 쓰지 않는다")
+    if f := summary.get("input_fail"):
+        lines.append(f"# 입력 판정 호출 실패 {f['failed']}/{f['calls']}")
     if summary.get("invalid"):
         lines.append(f"# 무효 실행 — {summary['invalid']}")
     return lines
@@ -880,7 +894,7 @@ async def _measure(
                     "errors": list(j.errors),
                     "knn_major": j.knn_major,
                     "lr_pred": j.lr_pred,
-                    "llm": llm_out.get(rid, []),
+                    "llm": [] if plan.split.cluster[rid] in held else llm_out.get(rid, []),
                 }
                 for rid, j in out.judgements.items()
             ]
@@ -945,12 +959,21 @@ async def amain(
     summary["input_only"] = args.input_only
     summary["output_only"] = args.output_only
     spent = sum(e == "budget" for _, e, _ in tap.records)
+    failed, tried = input_call_failures(summary) if args.input_only else (0, 0)
+    too_flaky = tried > 0 and failed / tried > INPUT_FAIL_RATE_LIMIT
+    if args.input_only:
+        summary["input_fail"] = {"failed": failed, "calls": tried}
     if tap.tripped:
         summary["invalid"] = (
             f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다: 결과를 비교에 쓰지 않는다"
         )
     elif spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
+    elif too_flaky:  # 종료 코드 우선순위: 연속 429, budget이 먼저다
+        summary["invalid"] = (
+            f"입력 판정 호출 실패율 {failed}/{tried} = {failed / tried:.1%}가 "
+            f"{INPUT_FAIL_RATE_LIMIT:.0%}를 넘는다: 결과를 비교에 쓰지 않는다"
+        )
     out_dir = Path(args.out) / args.name
     _write(out_dir, records, summary, render_report(args.name, summary))
     _say(f"wrote {out_dir}")
@@ -960,6 +983,9 @@ async def amain(
     if spent:
         _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT
+    if too_flaky:
+        _err(f"입력 판정 호출 실패율 {failed}/{tried}가 상한 초과. 결과는 무효다")
+        return EXIT_INPUT_FAIL_RATE
     return 0
 
 

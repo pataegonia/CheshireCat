@@ -49,6 +49,7 @@ RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
 EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT, EXIT_RATE_LIMITED = 2, 3, 4, 5, 6
+EXIT_PROBE_FAILED = 7  # probe의 맨 요청이 429 말고 다른 오류로 실패(연결·서버·잘못된 요청)
 # 판정 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속 보내면
 # 어뷰징으로 보일 수 있다(SPEC §7.1). 2026-11-13에 429 뒤로 약 3,700회를 더 보낸 일이 있었다
 RATE_LIMIT_STREAK = 20
@@ -933,6 +934,9 @@ async def amain(
     except ValueError as e:  # 환경변수 없음·인증 거절
         _err(str(e))
         return EXIT_USAGE
+    if base_error := llm.probe_result.get("base"):  # 막힌 키에 판정 호출을 보내지 않는다
+        _err(f"probe의 맨 요청이 {base_error}로 실패했다. 측정을 시작하지 않는다. 무효 실행이다")
+        return EXIT_RATE_LIMITED if base_error == "rate_limit" else EXIT_PROBE_FAILED
     if args.holdout:  # 열람은 start()가 성공한 뒤에만 센다
         record_holdout_open(args.name, config_hash(plan.base))
 

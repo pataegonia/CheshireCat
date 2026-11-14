@@ -416,3 +416,57 @@ async def test_streak_resets_on_other_errors_and_holds_on_budget():
     script[:] = ["rate_limit"]
     await llm.complete("r", [], None, deadline=None)  # 한 번 더 429면 멈춘다
     assert tap.tripped and llm.max_calls == 0
+
+
+# --- probe의 맨 요청이 막혀 있으면 측정을 시작하지 않는다 ---
+
+
+def _blocked_llm(made, step):
+    from guardrail.llm import LLM
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        fake = FakeLLM(respond=lambda kw: step)
+        made.append(fake)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    return make_llm
+
+
+async def test_probe_base_rate_limit_stops_before_any_judge_call(tmp_path, capsys):
+    from fakes import RateLimited
+
+    made = []
+    argv = _args(tmp_path, "--holdout")
+    code = await run.amain(
+        argv, make_llm=_blocked_llm(made, RateLimited("0")), judge_factory=constant_factory
+    )
+    err = capsys.readouterr().err
+    assert code == run.EXIT_RATE_LIMITED == 6
+    assert len(made[0].requests) == 1  # probe의 맨 요청뿐. 판정 호출 0회
+    assert "rate_limit" in err and "무효" in err and err.count("\n") == 1
+    assert not run.HOLDOUT_VIEWS.exists()  # 열람 기록은 이 종료보다 뒤다
+
+
+async def test_probe_base_other_failure_uses_its_own_exit_code(tmp_path, capsys):
+    from fakes import ServerError
+
+    made = []
+    code = await run.amain(
+        _args(tmp_path, "--holdout"),
+        make_llm=_blocked_llm(made, ServerError()),
+        judge_factory=constant_factory,
+    )
+    err = capsys.readouterr().err
+    assert code == run.EXIT_PROBE_FAILED == 7
+    assert len(made[0].requests) == 1 and "server" in err and "무효" in err
+    assert not run.HOLDOUT_VIEWS.exists()
+
+
+async def test_probe_success_still_measures_and_records_holdout(tmp_path):
+    code = await run.amain(
+        _args(tmp_path, "--holdout"), make_llm=_counting_llm, judge_factory=constant_factory
+    )
+    assert code == 0 and len(run.holdout_views()) == 1

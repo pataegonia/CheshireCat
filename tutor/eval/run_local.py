@@ -8,7 +8,7 @@
 - reference: 공개 정답 답변·action·근거를 그대로 낸다(상한, PRD §7)
 - reference_top1: 정답 답변·action에, 근거가 있는 행은 검색 1위 섹션을 인용한다
 `--responses` 파일(JSONL, 줄마다 {"id", "response"})을 주면 그 응답(통합 하네스 결과 등)으로
-파일에 있는 행만 잰다.
+파일에 있는 행만 잰다(홀드아웃 행은 아래처럼 뺀다).
 
 판정(사실·충실·응함)은 `--judge`를 줄 때만 켠다. 운영진 API를 부르므로 OPENAI_BASE_URL·
 OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 action·인용만 채점한다.
@@ -19,11 +19,12 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 튜터 LLM 호출의 429(판정은 최종 실패)가 연달아 RATE_LIMIT_STREAK회 이어지면 뒤의 호출(임베딩
 포함)을 보내지 않고, 결과를 무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드
 하네스와 같은 규칙).
-튜터 점수는 모든 행과, 공유 분할(가드 splits/v1.json)의 홀드아웃 묶음을 뺀 교차 검증 행으로 따로
-낸다. 설정을 비교할 때는 교차 검증 점수를 본다(홀드아웃은 설정을 고정한 뒤 최대 3회만 본다, TU-16).
-실행별 항목·응함 문항도 교차 검증 행으로만 낸다. 모든 행 점수(첫 줄)와 그 밖의 지표(항목별
-평균·범주별 점수·오차단·혼동표·흔들리는 문항·--compare의 새로 틀린 문항, 결과 JSON의 행별
-points)에는 홀드아웃 행이 섞여 있다.
+공유 분할(가드 splits/v1.json)의 홀드아웃 묶음 행(공개 튜터 40행)은 재지 않는다. 모든 프리셋과
+--responses에서 예상 호출 수를 세기 전, 튜터·판정·임베딩을 부르기 전에 뺀다. 홀드아웃은 설정을
+고정한 뒤 통합 하네스(#61)에서 최대 3회만 보므로(TU-16·#84) 넣는 옵션은 두지 않는다. 그래서 모든
+지표가 교차 검증 행 값이고, 교차 검증 행 줄(설정 비교용)은 첫 줄 점수와 같다. 뺀 행 수는 결과
+JSON의 holdout_excluded에 남는다. 홀드아웃 행이 섞인 이전 결과(200행)와도 --compare할 수 있다:
+이번에 재지 않은 행은 새로 틀린 문항으로 세지 않는다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
 결과 JSON의 tutor_llm에 남긴다.
@@ -84,7 +85,7 @@ def public_tutor_rows() -> list[dict[str, Any]]:
 
 
 def holdout_ids(rows: Sequence[dict[str, Any]] = ()) -> frozenset[str]:
-    """공유 분할(가드 splits/v1.json)의 홀드아웃 묶음에 든 행 id. 교차 검증 점수에서 뺀다.
+    """공유 분할(가드 splits/v1.json)의 홀드아웃 묶음에 든 행 id. 잴 행에서 뺀다(TU-16·#84).
 
     rows를 주면 모두 분할에 있는지 본다. 없는 행이 조용히 교차 검증 행으로 들어가지 않게 한다.
     """
@@ -330,11 +331,13 @@ def _write(
     tainted: bool,
     embedding: "EmbeddingUse | None",
     invalid: str | None,
+    holdout_excluded: int,
     llm: Any = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
     invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
+    holdout_excluded는 재지 않고 뺀 홀드아웃 행 수다(행 id는 남기지 않는다).
     llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
     읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다.
     """
@@ -342,6 +345,7 @@ def _write(
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = out_dir / f"{name}-{stamp}.json"
     data: dict[str, Any] = {"preset": name, "judge": judge, "created": stamp, "tainted": tainted}
+    data["holdout_excluded"] = holdout_excluded
     if invalid is not None:
         data["invalid"] = invalid
     if embedding is not None:
@@ -423,11 +427,10 @@ def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
     out.write(f"튜터 점수(실행별): {scores}, 범위 {min(report.tutor):.2f}~{max(report.tutor):.2f}")
     out.write(f" (문항 {report.rows}개, 실행 {report.runs}회")
     out.write(f", 판정 오류 {sum(report.judge_errors)})\n")
-    held = report.rows - report.cv_rows
     # 교차 검증 행이 없으면 0.00이 아니라 -로 낸다(재서 0인 것처럼 읽히지 않게)
     cv_score = _per_run(report.cv_tutor, ".2f") if report.cv_rows else "- (측정 없음)"
     out.write(f"교차 검증 행 튜터 점수(실행별, 설정 비교용): {cv_score}")
-    out.write(f", 문항 {report.cv_rows}개(홀드아웃 {held}개 뺌)")
+    out.write(f", 문항 {report.cv_rows}개")
     out.write(f", 판정 오류 {sum(report.cv_judge_errors)}\n")
     parts = ", ".join(
         f"{name} {'-' if value is None else f'{value:.3f}'}"
@@ -528,6 +531,8 @@ class FoldStates:
 
     폴드 k의 행은 폴드 k와 홀드아웃 묶음을 뺀 색인을, 홀드아웃 행은 홀드아웃 묶음만 뺀 색인을
     쓴다(가드 `train_rows`와 같은 규칙, TU-16·TD-14). 나머지 기동 결과(LLM 호출기 등)는 같이 쓴다.
+    `main`은 홀드아웃 행을 재지 않으므로(#84) 홀드아웃 분기는 지금 쓰이지 않는다. 가드 규칙과
+    맞춰 두는 방어용이다.
     """
 
     by_row: Mapping[str, Any]
@@ -621,10 +626,37 @@ def embedding_summary(use: EmbeddingUse, out: TextIO) -> None:
         out.write(f"질의 임베딩이 예상({use.queries}회)보다 많다: 예상 호출 수 계산을 다시 본다\n")
 
 
+def _measured_rows(
+    ap: argparse.ArgumentParser, fixed: Mapping[str, Any] | None
+) -> tuple[list[dict[str, Any]], int]:
+    """잴 공개 튜터 행과 뺀 홀드아웃 행 수. 예상 호출 수를 세기 전에 홀드아웃 행을 뺀다.
+
+    홀드아웃은 설정을 고정한 뒤 통합 하네스(#61)에서 최대 3회만 본다(TU-16·#84). 로컬 측정이 돌
+    때마다 그 행을 보지 않게, 그리고 운영진 API 호출을 아끼게 모든 프리셋과 --responses에서 뺀다.
+    """
+    public = public_tutor_rows()
+    try:
+        held = holdout_ids(public)  # 분할에 없는 행이 있으면 API를 부르기 전에 멈춘다
+    except ValueError as exc:
+        ap.error(str(exc))
+    rows = public if fixed is None else [row for row in public if row["id"] in fixed]
+    measured = [row for row in rows if row["id"] not in held]
+    excluded = len(rows) - len(measured)
+    sys.stdout.write(f"홀드아웃 {excluded}행은 재지 않는다(통합 하네스에서 최대 3회, TU-16·#84)\n")
+    if fixed is not None:
+        unknown = len(set(fixed) - {row["id"] for row in public})
+        sys.stdout.write(f"응답 파일: 공개 튜터 행 {len(measured)}개를 잰다")
+        sys.stdout.write(f"(공개 세트에 없는 id {unknown}개는 뺀다)\n")
+        if not measured:
+            ap.error("응답 파일에 잴 공개 튜터 행 id가 없다(홀드아웃 행은 재지 않는다)")
+    return measured, excluded
+
+
 def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any, ...]:
     """API를 부르기 전에 입력을 모두 읽고 검사한다.
 
-    돌려주는 것: (행, 저장 응답, 판정기, 비교 점수, 튜터 설정, 덮은 설정, 임베딩 예상 호출).
+    돌려주는 것: (행, 저장 응답, 판정기, 비교 점수, 튜터 설정, 덮은 설정, 임베딩 예상 호출,
+    뺀 홀드아웃 행 수). 행에는 홀드아웃 행이 없다.
     """
     if args.runs < 1:
         ap.error("--runs는 1 이상이어야 한다")
@@ -639,14 +671,7 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         previous = load_previous(args.compare, judge=args.judge) if args.compare else None
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
-    rows = public_tutor_rows()
-    if fixed is not None:
-        unknown = len(set(fixed) - {row["id"] for row in rows})
-        rows = [row for row in rows if row["id"] in fixed]
-        sys.stdout.write(f"응답 파일: 공개 튜터 행 {len(rows)}개를 잰다")
-        sys.stdout.write(f"(공개 세트에 없는 id {unknown}개는 뺀다)\n")
-        if not rows:
-            ap.error("응답 파일에 공개 튜터 행 id가 없다")
+    rows, excluded = _measured_rows(ap, fixed)
     calls = expected_calls(
         rows,
         preset=args.preset,
@@ -667,17 +692,13 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         sys.stdout.write(f"임베딩 예상 호출 {embedding}회(기동 KB 묶음 + 실행마다 영어 질의)\n")
     if calls + embedding > args.max_calls:
         ap.error(f"예상 호출 {calls + embedding}회가 상한 {args.max_calls}회를 넘는다")
-    return rows, fixed, judge, previous, cfg, overrides, embedding
+    return rows, fixed, judge, previous, cfg, overrides, embedding, excluded
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
-    rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
-    try:
-        held = holdout_ids(rows)  # API를 부르기 전에 읽는다
-    except ValueError as exc:
-        ap.error(str(exc))
+    rows, fixed, judge, previous, cfg, overrides, embedding, excluded = _inputs(ap, args)
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
     stop = RateLimitStop()  # 튜터 LLM·판정이 같이 쓴다(같은 팀 키)
@@ -708,9 +729,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     stop.next_stage()
     kb = score_local.load_kb_dir(KB_DIR)
     scorer = stop.watch_judge(judge) if judge is not None else None
-    report = metrics.build_report(
-        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses],
-        holdout=held,
+    report = metrics.build_report(  # 홀드아웃 행은 이미 뺐다: 교차 검증 행 = 모든 행
+        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses]
     )
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
@@ -726,6 +746,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tainted=tainted,
         embedding=use,
         invalid=invalid,
+        holdout_excluded=excluded,
         llm=state.tutor_llm if state is not None else None,
     )
     _show(report, sys.stdout, judged=judge is not None)
@@ -737,6 +758,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if previous is not None and invalid is None:  # 멈춘 실행은 기본값이 섞여 비교하지 않는다
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
+        skipped = len(previous.keys() - report.points.keys())
+        if skipped:  # 홀드아웃 행이 섞인 이전 결과(200행) 등. 재지 않은 행은 틀린 것이 아니다
+            sys.stdout.write(f"이전 결과에만 있는 행 {skipped}개는 비교하지 않는다\n")
     sys.stdout.write(f"저장: {path}\n")
     if invalid is not None:
         sys.stderr.write(f"{invalid}. 결과는 무효다\n")

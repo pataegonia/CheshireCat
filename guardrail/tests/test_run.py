@@ -14,6 +14,7 @@ from guardrail.eval import cv, run
 from guardrail.eval.fake_llm import make_fake_llm
 from guardrail.guard import ConstantGuard
 from guardrail.judges.schemas import InputOut, OutputBaselineOut
+from guardrail.llm import LLMResult
 
 pytestmark = pytest.mark.anyio
 
@@ -615,3 +616,16 @@ async def test_measure_writes_no_nano_output_for_held_out_rows(monkeypatch):
     llm_by_id = {r["id"]: r["llm"] for r in records}
     assert llm_by_id["a"] == [{"role": "input", "parsed": {"evidence": "x"}}]
     assert llm_by_id["b"] == []
+
+
+async def test_tap_forwards_extra_kwargs():
+    seen = {}
+
+    async def inner(role, messages, schema, *, deadline, retries=None):
+        seen["retries"] = retries
+        return LLMResult(None, None, 1, 1.0, None, None)  # type: ignore[arg-type]
+
+    llm = SimpleNamespace(complete=inner, max_calls=100)
+    run.Tap().attach(llm)  # type: ignore[arg-type]
+    await llm.complete("r", [], None, deadline=None, retries=0)
+    assert seen["retries"] == 0

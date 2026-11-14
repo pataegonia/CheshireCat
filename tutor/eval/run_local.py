@@ -30,7 +30,7 @@ import secrets
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,7 +38,11 @@ from types import SimpleNamespace
 from typing import Any, TextIO
 
 import yaml
-from guardrail.eval.cv import load_splits
+from guardrail.config import load_config as load_guard_config
+from guardrail.data import labeled_rows, load_public
+from guardrail.eval.cv import load_splits, train_rows
+from guardrail.guard import Guard
+from guardrail.llm import LLM
 
 import tutor
 from tutor import pipeline
@@ -65,6 +69,10 @@ RUNS_DIR = Path(__file__).resolve().parent / "runs"
 TUTOR_CALLS = 3
 CALLS_PER_REQUEST = {"v2": TUTOR_CALLS, "baseline": 1}  # 모드별 요청당 nano 호출(재시도 제외)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
+# --guard: 가드 LLM 기동 시험(probe) 호출 상한(맨 요청 1 + 파라미터 3 + json_schema 1)과
+# 요청당 가드 호출(classify + judge_output, TU-13). 둘 다 TUTOR_CALLS 안에서 나눠 쓴다
+GUARD_PROBE_CALLS = 5
+GUARD_CALLS_PER_REQUEST = 2
 # 운영진 API 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속
 # 보내면 어뷰징으로 보일 수 있다(SPEC §7.1). 값과 종료 코드는 가드 하네스(#151)와 같다
 RATE_LIMIT_STREAK = 20
@@ -124,18 +132,26 @@ async def _collect(
 
 
 def collect_timed(
-    preset: str, rows: Sequence[dict[str, Any]], runs: int, state: Any = None
+    preset: str,
+    rows: Sequence[dict[str, Any]],
+    runs: int,
+    state: Any = None,
+    *,
+    setup: Callable[[], Awaitable[Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[float]]:
     """실행마다 응답을, 그리고 요청마다 걸린 시간(초, 모든 실행)을 모은다(TU-16 지연).
 
     튜터가 루프에 묶인 클라이언트를 써도 되게 루프 하나에서 돈다. 동시 요청은 metrics.WORKERS개다.
     state가 없으면 tutor 프리셋은 tutor.handle(기본 설정)로, 있으면 그 state로 부른다.
+    setup이 있으면 같은 루프에서 먼저 불러 그 결과를 state로 쓴다(가드 LLM 클라이언트도 루프에
+    묶인다, --guard).
     """
     if preset not in PRESETS:
         raise ValueError(f"모르는 프리셋: {preset}")
 
     async def every_run() -> list[tuple[dict[str, Any], list[float]]]:
-        return [await _collect(preset, rows, state) for _ in range(runs)]
+        own = await setup() if setup is not None else state
+        return [await _collect(preset, rows, own) for _ in range(runs)]
 
     results = asyncio.run(every_run())
     return [responses for responses, _t in results], [t for _r, ts in results for t in ts]
@@ -387,6 +403,11 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", type=Path, default=RUNS_DIR)
     ap.add_argument("--compare", type=Path, help="이전 결과 JSON. 새로 틀린 문항을 낸다")
     ap.add_argument(
+        "--guard",
+        action="store_true",
+        help="가드 판정기(Guard)를 붙여 잰다. 폴드마다 평가 묶음을 뺀 행으로 만든다(TU-10·TU-16)",
+    )
+    ap.add_argument(
         "--tutor-set",
         action="append",
         default=[],
@@ -427,21 +448,23 @@ def _tutor_config(
     return cfg, overrides
 
 
-def _own_state(cfg: TutorConfig, overrides: dict[str, Any]) -> bool:
+def _own_state(cfg: TutorConfig, overrides: dict[str, Any], *, guard: bool = False) -> bool:
     """tutor 프리셋이 handle의 기본 state 대신 자기 state를 만들어 재는가.
 
     설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다). 판단 예시를
-    켰을 때도다(기본 state의 예시 색인은 200행 전부라 평가 행 자신이 예시로 들어간다).
+    켰을 때도다(기본 state의 예시 색인은 200행 전부라 평가 행 자신이 예시로 들어간다). 가드를
+    붙일 때도다(기본 state에는 가드가 없다).
     """
-    return bool(overrides) or cfg.toggles.embedding or cfg.toggles.fewshot != "off"
+    return guard or bool(overrides) or cfg.toggles.embedding or cfg.toggles.fewshot != "off"
 
 
 @dataclass(frozen=True)
 class FoldStates:
-    """판단 예시(TU-08)를 켠 측정: 행마다 그 행의 평가 묶음을 뺀 예시 색인을 쓰는 state.
+    """판단 예시(TU-08)를 켜거나 가드를 붙인 측정: 행마다 그 행의 평가 묶음을 뺀 state.
 
-    폴드 k의 행은 폴드 k와 홀드아웃 묶음을 뺀 색인을, 홀드아웃 행은 홀드아웃 묶음만 뺀 색인을
-    쓴다(가드 `train_rows`와 같은 규칙, TU-16·TD-14). 나머지 기동 결과(LLM 호출기 등)는 같이 쓴다.
+    폴드 k의 행은 폴드 k와 홀드아웃 묶음을 뺀 예시 색인·가드를, 홀드아웃 행은 홀드아웃 묶음만 뺀
+    것을 쓴다(가드 `train_rows`와 같은 규칙, TU-10·TU-16·TD-14). 나머지 기동 결과(LLM 호출기 등)는
+    같이 쓴다.
     """
 
     by_row: Mapping[str, Any]
@@ -450,34 +473,79 @@ class FoldStates:
         return self.by_row[row_id]
 
 
-def fold_states(state: Any, cfg: TutorConfig, rows: Sequence[dict[str, Any]]) -> FoldStates:
+def _fold_key(split: Any, row_id: str) -> str:
+    """행의 평가 묶음: 홀드아웃 묶음이면 "holdout", 아니면 폴드 번호(가드 train_rows와 같다)."""
+    cluster = split.cluster[row_id]
+    return "holdout" if cluster in set(split.holdout) else str(split.fold[cluster])
+
+
+def fold_states(
+    state: Any,
+    cfg: TutorConfig,
+    rows: Sequence[dict[str, Any]],
+    *,
+    guards: Mapping[str, Any] | None = None,
+) -> FoldStates:
+    """행마다 평가 묶음을 뺀 state. 판단 예시를 켰으면 예시 색인을, guards가 있으면 가드를 바꾼다.
+
+    guards는 build_fold_guards가 만든 (평가 묶음 → 가드)다.
+    """
     split = load_splits()
-    pool = load_examples()
     holdout = set(split.holdout)
-
-    def key(row_id: str) -> str:
-        cluster = split.cluster[row_id]
-        return "holdout" if cluster in holdout else str(split.fold[cluster])
-
+    examples = cfg.toggles.fewshot != "off"
+    pool = load_examples() if examples else []
     per_key: dict[str, Any] = {}
-    for k in sorted({key(row["id"]) for row in rows}):
-        excluded = holdout | (
-            set() if k == "holdout" else {c for c, f in split.fold.items() if str(f) == k}
-        )
-        index = build_index(cfg.fewshot, [e for e in pool if split.cluster[e.id] not in excluded])
-        per_key[k] = SimpleNamespace(**{**vars(state), "tutor_examples": index})
-    return FoldStates({row["id"]: per_key[key(row["id"])] for row in rows})
+    for k in sorted({_fold_key(split, row["id"]) for row in rows}):
+        extra: dict[str, Any] = {}
+        if examples:
+            excluded = holdout | (
+                set() if k == "holdout" else {c for c, f in split.fold.items() if str(f) == k}
+            )
+            kept = [e for e in pool if split.cluster[e.id] not in excluded]
+            extra["tutor_examples"] = build_index(cfg.fewshot, kept)
+        if guards is not None:
+            extra["guard"] = guards[k]
+        per_key[k] = SimpleNamespace(**{**vars(state), **extra})
+    return FoldStates({row["id"]: per_key[_fold_key(split, row["id"])] for row in rows})
+
+
+async def build_fold_guards(
+    rows: Sequence[dict[str, Any]],
+    *,
+    llm: Any,
+    cfg: Any = None,
+    build: Callable[..., Awaitable[Any]] | None = None,
+) -> dict[str, Any]:
+    """평가 묶음마다 그 묶음을 뺀 행으로 가드를 만든다(TU-10·TU-16, #83). 열쇠는 _fold_key와 같다.
+
+    폴드 k 행의 가드는 폴드 k와 홀드아웃 묶음을, 홀드아웃 행의 가드는 홀드아웃 묶음만 뺀 공개
+    400행(가드·튜터)으로 kNN·LR을 만든다(가드 train_rows, `Guard.build(rows=…)`). 가드 LLM
+    호출기(게이트·probe 결과)는 하나를 같이 쓴다. 튜터 LLM은 자기 게이트를 쓴다(측정 동시 요청은
+    metrics.WORKERS개라 게이트가 차지 않는다).
+    """
+    gcfg = cfg if cfg is not None else load_guard_config()
+    split = load_splits()
+    labeled = labeled_rows(load_public(gcfg.paths.public))
+    make = build if build is not None else Guard.build
+    guards: dict[str, Any] = {}
+    for k in sorted({_fold_key(split, row["id"]) for row in rows}):
+        if k == "holdout":
+            train = train_rows(split, labeled, holdout=True)
+        else:
+            train = train_rows(split, labeled, fold=int(k))
+        guards[k] = await make(gcfg, llm=llm, rows=train)
+    return guards
 
 
 def _tutor_state(
-    cfg: TutorConfig, overrides: dict[str, Any], cap: int
+    cfg: TutorConfig, overrides: dict[str, Any], cap: int, *, guard: bool = False
 ) -> tuple[Any, CountedEmbed | None, tuple[int, int]]:
     """tutor 프리셋이 쓸 기동 결과, 임베딩을 켰으면 그 호출을 세는 함수, 기동 직후 (호출, 실패).
 
     튜터 LLM 호출에 상한을 건다: 예상 수 확인은 시작 전에 한 번이고, 이것은 실행 중의 멈춤이다.
     임베딩을 켰으면 서버 기동과 같은 함수(startup.build_embedding)로 KB 임베딩을 만든다.
     """
-    if _own_state(cfg, overrides):
+    if _own_state(cfg, overrides, guard=guard):
         state = SimpleNamespace()
         prepare(state, cfg)
     else:
@@ -561,6 +629,8 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         sys.stdout.write(f"(공개 세트에 없는 id {unknown}개는 뺀다)\n")
         if not rows:
             ap.error("응답 파일에 공개 튜터 행 id가 없다")
+    if args.guard and args.preset != "tutor":
+        ap.error("--guard는 --preset tutor에서만 쓴다")
     calls = expected_calls(
         rows,
         preset=args.preset,
@@ -568,6 +638,8 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         judge=args.judge,
         tutor_calls=CALLS_PER_REQUEST[cfg.mode],
     )
+    if args.guard:  # 가드 classify·judge_output은 TUTOR_CALLS 안에 이미 있다. probe만 더한다
+        calls += GUARD_PROBE_CALLS
     sys.stdout.write(f"운영진 API 예상 호출 {calls}회")
     sys.stdout.write(f"(재시도 여유 1.1배, 상한 {args.max_calls}회)\n")
     embedding = 0
@@ -590,10 +662,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
+    guard_cap = 0
+    if args.guard:  # 가드 몫(probe + 요청당 classify·judge_output)을 튜터 몫에서 떼어 준다
+        per_run = GUARD_CALLS_PER_REQUEST * len(rows) * args.runs
+        guard_cap = GUARD_PROBE_CALLS + (per_run * 11 + 9) // 10
+        tutor_cap -= guard_cap
     stop = RateLimitStop()  # 튜터 LLM·판정이 같이 쓴다(같은 팀 키)
     state, counted, built = None, None, (0, 0)
+    guard_llm = None
     if args.preset == "tutor":
-        state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
+        state, counted, built = _tutor_state(cfg, overrides, tutor_cap, guard=args.guard)
         stop.watch_llm(state.tutor_llm)
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
@@ -601,17 +679,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         state.tutor_emb = stop.watch_embed(state.tutor_emb)
     latency: list[float] = []
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
-        own = state if _own_state(cfg, overrides) else None
-        if own is not None and cfg.toggles.fewshot != "off":
+        own = state if _own_state(cfg, overrides, guard=args.guard) else None
+        setup = None
+        if args.guard:
+            if own is None:
+                ap.error("가드를 붙인 측정은 자기 state가 있어야 한다")
+            guard_llm = LLM(load_guard_config().llm)
+            guard_llm.max_calls = guard_cap
+            setup = _guard_setup(ap, own, cfg, rows, guard_llm)
+        elif own is not None and cfg.toggles.fewshot != "off":
             own = fold_states(own, cfg, rows)  # 평가 묶음을 예시 색인에서 뺀다(TU-08·TU-16)
         if (
-            args.preset == "tutor"
+            setup is None
+            and args.preset == "tutor"
             and cfg.toggles.fewshot != "off"
             and not isinstance(own, FoldStates)
         ):
             # 행별 색인이 아니면 평가 행 자신이 예시 풀에 든다. 조용히 부풀린 점수를 내지 않는다
             ap.error("판단 예시를 켠 측정은 행마다 평가 묶음을 뺀 예시 색인을 써야 한다(TU-16)")
-        all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
+        if setup is None:
+            all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
+        else:  # 가드 LLM·폴드별 가드는 응답을 모으는 루프에서 만든다
+            all_responses, latency = collect_timed(args.preset, rows, args.runs, setup=setup)
     else:
         all_responses = [fixed] * args.runs
     llm_stopped = stop.tripped  # 튜터 단계에서 멈췄나(판정 단계에서 멈춘 것과 가른다)
@@ -640,6 +729,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
         _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)
+    if guard_llm is not None:
+        _show_guard(guard_llm, getattr(state, "guard_skips", None))
     if use is not None:
         embedding_summary(use, sys.stdout)
     if previous is not None and invalid is None:  # 멈춘 실행은 기본값이 섞여 비교하지 않는다
@@ -650,6 +741,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"{invalid}. 결과는 무효다\n")
         return EXIT_RATE_LIMITED
     return 1 if tainted else 0
+
+
+def _guard_setup(
+    ap: argparse.ArgumentParser,
+    state: Any,
+    cfg: TutorConfig,
+    rows: Sequence[dict[str, Any]],
+    llm: Any,
+) -> Callable[[], Awaitable[FoldStates]]:
+    """--guard: 측정 루프 안에서 가드 LLM을 기동(probe)하고 폴드별 가드로 행마다 state를 만든다.
+
+    가드 LLM 클라이언트는 만든 루프에 묶이므로 응답을 모으는 루프에서 만든다(collect_timed setup).
+    """
+
+    async def setup() -> FoldStates:
+        await llm.start()
+        states = fold_states(state, cfg, rows, guards=await build_fold_guards(rows, llm=llm))
+        if not isinstance(states, FoldStates):
+            # 폴드별 가드가 아니면 평가 행이 가드 kNN·LR에 든다(TU-10). 튜터를 부르기 전에 멈춘다
+            ap.error("가드를 붙인 측정은 행마다 평가 묶음을 뺀 가드를 써야 한다(TU-10·TU-16)")
+        return states
+
+    return setup
+
+
+def _show_guard(llm: Any, skips: Any) -> None:
+    """--guard: 가드 LLM 호출 수(probe 제외, 모든 실행 합)와 튜터가 가드 단계를 건너뛴 사유별 횟수.
+
+    가드에 classify·judge_output이 아직 없으면(S2.11 전) 건너뜀이 missing으로 잡힌다.
+    """
+    calls = ", ".join(f"{role} {n}회" for role, n in sorted(llm.calls.items())) or "0회"
+    sys.stdout.write(f"가드 LLM 호출: {calls} (상한 {llm.max_calls}회)\n")
+    shown = ", ".join(
+        f"{stage} {reason} {n}회" for (stage, reason), n in sorted((skips or {}).items())
+    )
+    sys.stdout.write(f"가드 단계 건너뜀(모든 실행 합): {shown or '없음'}\n")
 
 
 def _show_tutor_calls(

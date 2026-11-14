@@ -60,7 +60,12 @@ def test_default_loads_section_4_4_model():
         "academic_dishonesty",
         "off_topic",
     ]
-    assert cfg.prompts == {"input_judge": "input_judge.md"}  # S2.6
+    assert cfg.prompts == {  # S2.6·S2.7
+        "input_judge": "input_judge.md",
+        "output_judge": "output_judge.md",
+        "output_judge_baseline": "output_judge_baseline.md",
+    }
+    assert cfg.output.tier3_trust == "answer_quote" and cfg.output.quote_min_chars == 8
     assert cfg.toggles.knn_vote and not cfg.toggles.third_call
     assert cfg.output.mode == "v6" and cfg.output.rule_min_margin == 3.5
 

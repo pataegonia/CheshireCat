@@ -33,9 +33,11 @@ from guardrail.eval.score import as_scoring_input, score_responses, scoring
 from guardrail.eval.stats import cluster_bootstrap_ci
 from guardrail.guard import ConstantGuard, Judgement
 from guardrail.judges.input_judge import judge_input
+from guardrail.judges.output_judge import ask_grounded, output_context
+from guardrail.kb import KbIndex
 from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
-from guardrail.preprocess import clip, decode_tags, normalize, strip_tags
+from guardrail.preprocess import clip, decode_tags, normalize, reveal_hidden, strip_tags
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict
 from guardrail.signals import Signals, is_low_signal
 
@@ -148,6 +150,69 @@ async def input_only_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]
     return InputOnlyGuard(cfg, llm, train)
 
 
+class OutputOnlyGuard:
+    """출력 근거 판정만 잰다: KB 검색 → 문맥 → ask_grounded. 입력은 상수(normal)다.
+
+    S2.8 Guard 전에 출력 프롬프트를 재는 하네스 전용 판정기다. nano의 grounded를 그대로 내고
+    구간은 내지 않는다(3단·규칙 ②·safe 규칙은 S2.8). nano가 실패하면 `output.failure_default`를
+    내고 오류로 센다. 빈 답변은 설정과 상관없이 근거 있음이다(PRD GR-01, 응한 내용이 없음).
+    질의와 길이 상한은 master-plan §4.2를 따른다.
+    """
+
+    def __init__(self, cfg: GuardConfig, llm: LLM) -> None:
+        self.cfg, self.llm = cfg, llm
+        self.kb = KbIndex.load(cfg.paths.kb, ngram=cfg.kb.ngram, k1=cfg.kb.k1, b=cfg.kb.b)
+
+    async def judge(self, req: GuardRequest) -> Judgement:
+        cfg = self.cfg
+        users = [m.content[: cfg.input.max_chars] for m in req.messages if m.role == "user"]
+        if not req.candidate_answer or not users:
+            output = OutputVerdict(True, (), True) if req.has_candidate else None
+            return self._result(output, None)
+        answer = req.candidate_answer[: cfg.input.max_answer_chars]
+        half = cfg.retrieval.max_query_chars // 2
+        # 학습자 쪽은 최근 발화를 남긴다. KbIndex.scores는 normalize를 거친 질의를 받는다
+        query = normalize("\n".join(users))[-half:] + "\n" + normalize(answer)[:half]
+        hits = output_context(self.kb.rank(query), self.kb, cfg)
+        out = await ask_grounded(
+            users[-1],
+            reveal_hidden(answer),
+            hits,
+            self.llm,
+            cfg,
+            deadline=time.monotonic() + cfg.budget_s,
+            baseline=cfg.output.mode == "baseline",
+        )
+        if out is None:  # 서버 기본값(`server._default_body`)과 같은 규칙
+            grounded = cfg.output.failure_default == "grounded"
+            return self._result(OutputVerdict(grounded, (), True), None, 1, ("output_judge",))
+        return self._result(OutputVerdict(out.grounded, (), True), out.grounded, 1)
+
+    @staticmethod
+    def _result(
+        output: OutputVerdict | None,
+        nano_grounded: bool | None,
+        calls: int = 0,
+        errors: tuple[str, ...] = (),
+    ) -> Judgement:
+        return Judgement(
+            response=GuardResponse("normal", output),
+            input_source="default",
+            output_tier=None,
+            nano_grounded=nano_grounded,
+            signals=Signals(False, False, False),
+            knn_major=None,
+            lr_pred=None,
+            calls=calls,
+            errors=errors,
+            latency_ms={},
+        )
+
+
+async def output_only_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]) -> Judge:
+    return OutputOnlyGuard(cfg, llm)
+
+
 # --- 설정 -----------------------------------------------------------------
 
 
@@ -224,12 +289,19 @@ def estimate_calls(
     llm: Llm,
     *,
     input_only: bool = False,
+    output_only: bool = False,
 ) -> int:
-    """probe는 실행당 한 번, 나머지는 설정 행 × 반복 × 행. input_only면 행당 입력 1회뿐이다."""
+    """probe는 실행당 한 번, 나머지는 설정 행 × 반복 × 행.
+
+    input_only면 행당 입력 1회뿐이고, output_only면 후보 답변이 있는 행만 출력 1회다.
+    """
     total = 0
     for cfg in configs.values():
         if input_only:
             total += len(rows)
+            continue
+        if output_only:
+            total += sum(bool(r.candidate_answer) for r in rows)
             continue
         total += sum(calls_per_row(cfg, r.candidate_answer is not None) for r in rows)
     return probe_calls(llm) + total * repeat
@@ -546,6 +618,10 @@ def _banner(summary: dict) -> list[str]:
     lines = []
     if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
         lines.append("# FAKE/상수 판정기 — 점수 무효 (results/로 옮기지 않는다)")
+    if summary.get("output_only"):
+        lines.append(
+            "# 출력 단독 실행 — 입력은 상수(normal)라 가드 점수·block F1은 비교에 쓰지 않는다"
+        )
     if summary.get("input_only"):
         lines.append("# 입력 단독 실행 — 출력·가드 점수는 상수 출력 기준이라 비교에 쓰지 않는다")
     if f := summary.get("input_fail"):
@@ -672,6 +748,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--input-only", action="store_true", help="입력 판정만 잰다(출력은 상수, 행당 호출 ≤1)"
     )
+    ap.add_argument(
+        "--output-only", action="store_true", help="출력 근거 판정만 잰다(입력은 상수 normal)"
+    )
     ap.add_argument("--out", default=str(RUNS_DIR))
     return ap
 
@@ -709,6 +788,8 @@ class Plan:
 def _usage_error(args: argparse.Namespace) -> str | None:
     if args.repeat < 1:
         return "--repeat은 1 이상"
+    if args.input_only and args.output_only:
+        return "--input-only와 --output-only는 함께 쓰지 않는다"
     if args.holdout and args.fake:
         return (
             "--fake와 --holdout은 함께 쓰지 않는다(가짜 응답으로 홀드아웃 열람 횟수를 쓰지 않는다)"
@@ -736,7 +817,14 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     held = set(split.holdout)
     judged = [r for r in public if args.holdout or split.cluster[r.id] not in held]
     limit = args.max_calls if args.max_calls is not None else base.eval.max_calls
-    est = estimate_calls(configs, judged, args.repeat, base.llm, input_only=args.input_only)
+    est = estimate_calls(
+        configs,
+        judged,
+        args.repeat,
+        base.llm,
+        input_only=args.input_only,
+        output_only=args.output_only,
+    )
     _say(
         f"estimate_calls={est} probe={probe_calls(base.llm)} max_calls={limit} "
         f"configs={','.join(configs)} judged_rows={len(judged)} repeat={args.repeat}"
@@ -818,7 +906,8 @@ async def amain(
     except HoldoutRefused as e:
         _err(str(e))
         return EXIT_HOLDOUT
-    factory = judge_factory or (input_only_factory if args.input_only else default_factory)
+    only = (args.input_only and input_only_factory) or (args.output_only and output_only_factory)
+    factory = judge_factory or only or default_factory
     if factory is default_factory and not hasattr(guard_module, "Guard"):
         sys.stderr.write("note: guardrail.guard.Guard가 아직 없어 ConstantGuard로 돈다\n")
     llm = make_fake_llm(plan.base.llm) if args.fake else (make_llm or LLM)(plan.base.llm)
@@ -836,6 +925,7 @@ async def amain(
     summary, records = await _measure(plan, args, llm, tap, factory)
     summary["fake"] = args.fake
     summary["input_only"] = args.input_only
+    summary["output_only"] = args.output_only
     spent = sum(e == "budget" for _, e, _ in tap.records)
     failed, tried = input_call_failures(summary) if args.input_only else (0, 0)
     too_flaky = tried > 0 and failed / tried > INPUT_FAIL_RATE_LIMIT

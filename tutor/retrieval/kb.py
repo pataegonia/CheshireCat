@@ -1,10 +1,9 @@
-"""KB 섹션 읽기와 조각 내기(TU-03, 가드 GR-03과 같은 방식).
+"""KB 섹션 읽기(TU-03, 가드 GR-03과 같은 방식).
 
 섹션 = `kb/<과목>/<ID>.md` 하나와 같은 이름의 CSV(`<ID>-table*.csv`)다. HTML은 읽지 않는다.
-조각은 섹션 원문(md + CSV)을 `## `로 시작하는 줄 앞에서 자른 것이다(가드 R13 `kb_chunks`와 같다).
+조각 내기와 BM25는 가드 `KbIndex`가 한다(`tutor.retrieval.index`).
 """
 
-import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +11,6 @@ from typing import Final
 
 # 채점기 scoring.normalize와 같은 정규화: NFKC·소문자, 공백과 아래 문장부호 제거(테스트가 맞춰 본다)
 _PUNCT: Final = frozenset(".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
-_CHUNK_SPLIT: Final = re.compile(r"\n(?=## )")
 
 
 def normalize(text: str) -> str:
@@ -65,8 +63,3 @@ def load_sections(kb_dir: Path) -> dict[str, Section]:
             path.stem, path.parent.name, _title(path.stem, text), text, tables
         )
     return sections
-
-
-def split_chunks(text: str) -> list[str]:
-    """`## `로 시작하는 줄마다 자른다. 코드 블록 안도 자르고, 첫 `## ` 앞부분은 따로 한 조각이다."""
-    return _CHUNK_SPLIT.split(text)

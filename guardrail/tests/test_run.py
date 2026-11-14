@@ -188,7 +188,7 @@ async def test_estimate_does_not_log_holdout_open(tmp_path):
 def test_ablation_files_each_toggle_one_switch():
     base = load_config(DEFAULT).toggles.model_dump()
     names = run.ablation_files(ROOT / "configs/ablation")
-    assert len(names) == 11
+    assert len(names) == 11 and "no_nano_span" in names  # S2.9: nano 구간은 기본 켬
     for name, path in names.items():
         t = load_config(DEFAULT, ablation=path).toggles.model_dump()
         diff = {k for k in t if t[k] != base[k]}

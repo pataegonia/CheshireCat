@@ -191,7 +191,7 @@ async def test_tier2_rule_spans_win_over_nano(monkeypatch):
 
 
 async def test_tier3_verified_quote_is_ungrounded_without_span(no_rule):
-    guard, _ = await make(responder(output=UNGROUNDED))
+    guard, _ = await make(responder(output=UNGROUNDED), toggles__nano_span=False)
     j = await guard.judge(req())
     assert j.response.output == OutputVerdict(False, (), True) and j.output_tier == 3
     assert (j.nano_grounded, j.answer_quote_ok, j.kb_quote_ok, j.nano_refuses) == (

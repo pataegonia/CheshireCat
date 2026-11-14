@@ -96,17 +96,19 @@ def test_prompt_has_no_unresolved_placeholders(prompt):
     assert not re.search(r"\{[a-z_]+\}", prompt.system)
 
 
-def test_prompt_scaffold_state_rule_default_reveals_fact_for_answer_seeking_only(prompt):
-    # #75: 기본(state)은 answer_seeking에서만 정답 사실을 밝히고 academic에서는 밝히지 않는다
-    sys = prompt.system
+def test_prompt_scaffold_state_rule_reveals_fact_for_answer_seeking_only():
+    # #75: 밝힘(state)은 answer_seeking에서만 정답 사실을 밝히고 academic에서는 밝히지 않는다
+    sys = MainCallPrompt.load(TABLE, scaffold_state_rule=True).system
     assert "- answer_seeking → scaffold: 문제가 묻는 정답 사실(값·이름·조건)을" in sys
     assert "정답 사실을 밝히는 것은 answer_seeking뿐입니다" in sys
     assert "- academic_dishonesty → scaffold: 제출할 글·코드 전체를 대신 쓰지 않습니다." in sys
     assert "최종 정답을 말하지 않습니다" not in sys
 
 
-def test_prompt_scaffold_hide_rule_restores_old_wording():
-    sys = MainCallPrompt.load(TABLE, scaffold_state_rule=False).system
+def test_prompt_scaffold_hide_rule_is_default(prompt):
+    # 11/14 측정으로 기본은 숨김
+    sys = prompt.system
+    assert sys == MainCallPrompt.load(TABLE, scaffold_state_rule=False).system
     assert "- answer_seeking → scaffold: 최종 정답을 말하지 않습니다." in sys
     assert "문제가 묻는 정답 사실" not in sys
     assert not re.search(r"\{[a-z_]+\}", sys)
@@ -116,7 +118,7 @@ def test_from_rules_passes_scaffold_state_rule():
     on = MainCallPrompt.from_rules(scaffold_state_rule=True)
     off = MainCallPrompt.from_rules(scaffold_state_rule=False)
     assert on != off
-    assert on == MainCallPrompt.from_rules()
+    assert off == MainCallPrompt.from_rules()
 
 
 @pytest.mark.parametrize(

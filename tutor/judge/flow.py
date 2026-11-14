@@ -66,12 +66,14 @@ REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
 
 def prepare_judge(app_state: Any) -> None:
-    """기동 때 한 번: 범주 → action 표로 주 호출 프롬프트를, 판단 예시를 켰으면 예시 색인을 만들고,
-    가드 단계 건너뜀 횟수를 0으로 둔다.
+    """기동 때 한 번: 범주 → action 표와 scaffold 정책(`scaffold_state_rule`)으로 주 호출
+    프롬프트를, 판단 예시를 켰으면 예시 색인을 만들고, 가드 단계 건너뜀 횟수를 0으로 둔다.
 
     `tutor.startup.prepare`가 부른다. 공개 세트 파일을 못 읽으면 예외가 나서 서버가 뜨지 않는다
     (KB와 같다). 예시를 끈 설정에서는 파일을 읽지 않는다."""
-    app_state.tutor_prompt = MainCallPrompt.from_rules()
+    app_state.tutor_prompt = MainCallPrompt.from_rules(
+        scaffold_state_rule=app_state.tutor_cfg.toggles.scaffold_state_rule
+    )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
@@ -111,6 +113,27 @@ def choose_action(out: MainCallOut, *, from_category: bool) -> Action:
     if not from_category or out.action in rule.actions or rule.action == "answer":
         return out.action
     return rule.action
+
+
+# §3 우선순위에서 scaffold보다 앞인 action. 제출물 대행 보정이 이것들을 약하게 바꾸지 않는다
+_STRONGER_THAN_SCAFFOLD = frozenset({"escalate", "refuse", "redirect", "clarify"})
+
+
+def delegation_guard(
+    out: MainCallOut, signals: Sequence[Signal], *, state_rule: bool
+) -> MainCallOut:
+    """제출물 대행 신호가 잡혔는데 주 호출이 answer_seeking으로 보면 academic_dishonesty로 바꾼다.
+
+    두 범주 모두 scaffold지만, 밝힘(`scaffold_state_rule`)에서 answer_seeking은 정답 사실을 먼저
+    밝혀 과제 대행 문항에 응함(0점)이 된다. academic_dishonesty는 과목 사실 없는 고정 문장이다
+    (TU-06, #139 리뷰). 더 강한 action(escalate·refuse·redirect·clarify)은 그대로 둔다.
+    숨김(`state_rule` 거짓)에서는 answer_seeking도 정답을 밝히지 않으니 바꾸지 않는다(오탐 비용만
+    남기 때문).
+    """
+    if not state_rule or Signal.DELEGATION not in signals or out.category != "answer_seeking":
+        return out
+    action = out.action if out.action in _STRONGER_THAN_SCAFFOLD else "scaffold"
+    return out.model_copy(update={"category": "academic_dishonesty", "action": action})
 
 
 def fallback_body(signals: Sequence[Signal] = (), classified: str | None = None) -> dict[str, Any]:
@@ -246,7 +269,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     finally:
         if classify is not None:
             classify.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
-    out = draft.out
+    # 제출물 대행 보정은 합치기 앞에 둔다: 보정된 academic scaffold는 표 고정 문장이라
+    # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다
+    out = delegation_guard(draft.out, signals, state_rule=cfg.toggles.scaffold_state_rule)
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
     merged = merge_category(out.category, action, classified)
     if merged.fixed is not None:

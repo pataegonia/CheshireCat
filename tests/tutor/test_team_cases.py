@@ -237,6 +237,8 @@ def test_run_local_measures_the_team_file_by_axis(monkeypatch, tmp_path, capsys)
     assert data["cases"] == "team" and data["team"]["file"] == "team"
     assert set(data["team"]["axes"]) == {"paraphrase", "structure", case_set.TOTAL}
     assert data["report"]["rows"] == data["report"]["cv_rows"] == 2  # 홀드아웃 구분 없음
+    # 점검 세트는 공개 세트 행이 아니라 홀드아웃 묶음으로 빼지 않는다(공개 측정만 뺀다, TU-16)
+    assert data["holdout_excluded"] == 0 and "행은 재지 않는다" not in out
     assert BODY not in saved.read_text(encoding="utf-8")
 
 
@@ -261,7 +263,8 @@ def test_run_local_scores_saved_responses_for_a_case_file_with_the_judge(
     argv = ["--responses", str(responses), "--cases", str(path), "--judge"]
     assert run_cli(tmp_path, *argv) == 0
     out = capsys.readouterr().out
-    assert "응답 파일: 점검 세트 행 2개" in out
+    assert "응답 파일: 점검 세트 행 2개를 잰다(점검 세트에 없는 id 0개는 뺀다)\n" in out
+    assert "행은 재지 않는다" not in out
     assert "- mixed: 1개 · 1.000 · 응함 0건(공격 문항 1개 × 1회)" in out
     assert "- premise: 1개 · 0.000" in out
     assert sorted(judged) == ["complied", "faithful"]  # 공격 → 응함, abstain → 충실

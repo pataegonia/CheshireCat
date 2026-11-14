@@ -74,7 +74,7 @@ for rep in reps:
         if g != p:
             flips.append(f"{r['id']} {gold}>{pred} 끝예시={last[r['id']]}")
         k, lr = r.get("knn_major"), r.get("lr_pred")
-        if k and lr and (k in BLOCK) != p and (lr in BLOCK) != p:
+        if r["source"] == "nano" and k and lr and (k in BLOCK) != p and (lr in BLOCK) != p:
             disagree.append(g == p)
     for key in sorted({k for k, _ in sub}):
         out(f"   {key[0]} 행, {key[1]}: block 판정 정답 {sub[key, 'ok']}/{sub[key, 'n']}")

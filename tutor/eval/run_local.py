@@ -8,7 +8,8 @@
 - reference: 공개 정답 답변·action·근거를 그대로 낸다(상한, PRD §7)
 - reference_top1: 정답 답변·action에, 근거가 있는 행은 검색 1위 섹션을 인용한다
 `--responses` 파일(JSONL, 줄마다 {"id", "response"})을 주면 그 응답(통합 하네스 결과 등)으로
-파일에 있는 행만 잰다.
+파일에 있는 행만 잰다. `--cases team`이면 공개 세트 대신 팀 작성 점검 세트(case_set, 홀드아웃
+없음)를 재고 축별 action 정확도·응함을 더 낸다(TU-19).
 
 판정(사실·충실·응함)은 `--judge`를 줄 때만 켠다. 운영진 API를 부르므로 OPENAI_BASE_URL·
 OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 action·인용만 채점한다.
@@ -49,7 +50,7 @@ from guardrail.eval.cv import load_splits
 
 import tutor
 from tutor import pipeline
-from tutor.eval import metrics
+from tutor.eval import case_set, metrics
 from tutor.eval.grader import KB_DIR, PUBLIC_DIR, judge_from_env, score_local, scoring
 from tutor.eval.recall import (
     CountedEmbed,
@@ -189,8 +190,10 @@ def load_responses(path: Path) -> dict[str, Any]:
     return out
 
 
-def load_previous(path: Path, *, judge: bool) -> dict[str, list[float | None]]:
-    """--compare 결과 파일의 행별 문항 점수. 판정 모드가 다르면 비교하지 않는다(ValueError)."""
+def load_previous(
+    path: Path, *, judge: bool, cases: str = "public"
+) -> dict[str, list[float | None]]:
+    """--compare 결과 파일의 행별 문항 점수. 판정 모드나 잰 세트가 다르면 비교하지 않는다."""
     data = json.loads(path.read_text(encoding="utf-8"))
     report = data.get("report") if isinstance(data, dict) else None
     points = report.get("points") if isinstance(report, dict) else None
@@ -198,6 +201,8 @@ def load_previous(path: Path, *, judge: bool) -> dict[str, list[float | None]]:
         raise ValueError(f"비교 파일에 report.points가 없다: {path}")
     if data.get("judge") is not judge:
         raise ValueError("판정 모드(--judge)가 다른 결과와는 비교하지 않는다")
+    if data.get("cases", "public") != cases:
+        raise ValueError("공개 세트와 점검 세트(--cases) 결과는 서로 비교하지 않는다")
     if data.get("tainted"):
         raise ValueError("비교 파일은 기본값이나 BM25가 섞인 결과다(tainted): 기준으로 쓰지 않는다")
     return points
@@ -331,12 +336,13 @@ def _write(
     embedding: "EmbeddingUse | None",
     invalid: str | None,
     llm: Any = None,
+    team: Mapping[str, Any] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
     invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
     llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
-    읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다.
+    읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다. team(점검 세트)이면 cases=team도 남긴다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -344,6 +350,8 @@ def _write(
     data: dict[str, Any] = {"preset": name, "judge": judge, "created": stamp, "tainted": tainted}
     if invalid is not None:
         data["invalid"] = invalid
+    if team is not None:
+        data["cases"], data["team"] = "team", dict(team)
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
     if llm is not None:
@@ -465,6 +473,7 @@ def _parser() -> argparse.ArgumentParser:
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--preset", choices=PRESETS)
     source.add_argument("--responses", type=Path, help="JSONL: 줄마다 {id, response}")
+    ap.add_argument("--cases", default="public", help="public(기본) | team | 점검 세트 JSONL 경로")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--judge", action="store_true", help="운영진 API로 사실·충실·응함 판정")
     ap.add_argument(
@@ -634,19 +643,25 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     judge = judge_from_env() if args.judge else None
     if args.judge and judge is None:
         ap.error("--judge에는 OPENAI_BASE_URL·OPENAI_MODEL·OPENAI_API_KEY가 모두 필요하다")
+    kind = "public" if args.cases == "public" else "team"
+    if kind == "team" and args.preset not in (None, "tutor"):  # reference는 정답 답변을 낸다
+        ap.error("--cases는 --preset tutor나 --responses와 쓴다(점검 세트에는 정답 답변이 없다)")
     try:
         fixed = load_responses(args.responses) if args.responses else None
-        previous = load_previous(args.compare, judge=args.judge) if args.compare else None
+        previous = (
+            load_previous(args.compare, judge=args.judge, cases=kind) if args.compare else None
+        )
+        rows = public_tutor_rows() if kind == "public" else case_set.load_for_run(args.cases)
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
-    rows = public_tutor_rows()
     if fixed is not None:
+        label = "공개 튜터" if kind == "public" else "점검 세트"
         unknown = len(set(fixed) - {row["id"] for row in rows})
         rows = [row for row in rows if row["id"] in fixed]
-        sys.stdout.write(f"응답 파일: 공개 튜터 행 {len(rows)}개를 잰다")
-        sys.stdout.write(f"(공개 세트에 없는 id {unknown}개는 뺀다)\n")
+        sys.stdout.write(f"응답 파일: {label} 행 {len(rows)}개를 잰다")
+        sys.stdout.write(f"(잴 세트에 없는 id {unknown}개는 뺀다)\n")
         if not rows:
-            ap.error("응답 파일에 공개 튜터 행 id가 없다")
+            ap.error(f"응답 파일에 {label} 행 id가 없다")
     calls = expected_calls(
         rows,
         preset=args.preset,
@@ -674,8 +689,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
     rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
+    team = args.cases != "public"
     try:
-        held = holdout_ids(rows)  # API를 부르기 전에 읽는다
+        held = frozenset() if team else holdout_ids(rows)  # API를 부르기 전에 읽는다
     except ValueError as exc:
         ap.error(str(exc))
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
@@ -693,7 +709,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
         if own is not None and cfg.toggles.fewshot != "off":
-            own = fold_states(own, cfg, rows)  # 평가 묶음을 예시 색인에서 뺀다(TU-08·TU-16)
+            # 평가 묶음(점검 세트는 홀드아웃과 씨앗 행 묶음)을 예시 색인에서 뺀다(TU-08·TU-16)
+            own = (
+                FoldStates(case_set.example_states(own, cfg, rows))
+                if team
+                else fold_states(own, cfg, rows)
+            )
         if (
             args.preset == "tutor"
             and cfg.toggles.fewshot != "off"
@@ -708,16 +729,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     stop.next_stage()
     kb = score_local.load_kb_dir(KB_DIR)
     scorer = stop.watch_judge(judge) if judge is not None else None
-    report = metrics.build_report(
-        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses],
-        holdout=held,
-    )
+    scored = [
+        metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses
+    ]
+    report = metrics.build_report(scored, holdout=held)
+    by_axis = case_set.axis_scores(scored, rows, judged=judge is not None) if team else None
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
     invalid = stop.reason()
-    name = args.preset or args.responses.stem
+    name = (args.preset or args.responses.stem) + ("-team" if team else "")
     path = _write(
         report,
         name=name,
@@ -727,8 +749,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         embedding=use,
         invalid=invalid,
         llm=state.tutor_llm if state is not None else None,
+        team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
     )
     _show(report, sys.stdout, judged=judge is not None)
+    if by_axis is not None:
+        case_set.show_axes(by_axis, args.runs, sys.stdout)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
         _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)

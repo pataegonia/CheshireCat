@@ -4,7 +4,7 @@ import time
 import typing
 
 import pytest
-from fakes import FakeLLM, Ok
+from fakes import FakeLLM, Malformed, Ok
 
 from guardrail.config import load_config, load_prompt
 from guardrail.eval.fake_llm import make_fake_llm
@@ -97,3 +97,13 @@ async def test_fake_llm_answers_the_act_schema():
     await llm.start()
     got = await judge_input(MSGS, "질문", [], llm, cfg, deadline=time.monotonic() + 30)
     assert got == "normal"
+
+
+async def test_act_mode_honours_retries_zero():
+    cfg = load_config(overrides=ACT)
+    fake = FakeLLM(respond=lambda kw: Malformed())
+    llm = LLM(cfg.llm, send=fake.send)
+    await llm.start()
+    n0 = len(fake.requests)
+    got = await judge_input(MSGS, "질문", [], llm, cfg, deadline=time.monotonic() + 30, retries=0)
+    assert got is None and len(fake.requests) - n0 == 1

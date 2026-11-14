@@ -1,2 +1,5 @@
 # 로컬 측정 결과(TU-16): git에 올리지 않는다
 runs/
+# 점검 세트 nano 초안과 고른 기록(#80): 남긴 문항(team_cases/tutor.jsonl)만 커밋한다
+team_cases/draft.jsonl
+team_cases/reviewed.jsonl

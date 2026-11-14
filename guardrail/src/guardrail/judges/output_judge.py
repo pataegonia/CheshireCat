@@ -102,9 +102,15 @@ async def ask_grounded(
     *,
     deadline: float,
     baseline: bool = False,
+    retries: int | None = None,
 ) -> OutputOut | OutputBaselineOut | None:
-    """후보 답변의 근거 판정. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8)."""
+    """후보 답변의 근거 판정. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
+
+    retries가 None이면 `llm.retries`.
+    """
     schema = OutputBaselineOut if baseline else OutputOut
     messages = build_messages(target, answer_revealed, hits, cfg, baseline)
-    result = await llm.complete("output_judge", messages, schema, deadline=deadline)
+    result = await llm.complete(
+        "output_judge", messages, schema, deadline=deadline, retries=retries
+    )
     return result.parsed if isinstance(result.parsed, schema) else None

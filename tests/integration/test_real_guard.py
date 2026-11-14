@@ -8,13 +8,15 @@
 - 기동: 진짜 판정기로 뜨고 probe를 마쳤고, 판정 호출은 아직 없다.
 - `/guard`: 후보 답변이 없으면 nano 1회(입력 판정), 있으면 2회(+ 출력 판정).
 - `/tutor` → 가드: 가드에 classify · judge_output이 있으면 튜터가 각각 정확히 1회 부르고 건너뛴
-  단계가 없다(`assert_tutor_uses_guard`). 없으면 건너뛴 수만 센다.
+  단계가 없다(`assert_tutor_uses_guard`). 없으면 건너뛴 수만 센다. 연결을 보는 것이라
+  `real_guard_client`는 튜터의 두 단계를 켠 설정으로 띄운다(`tutor_guard_stages_on`).
+- 배포 설정(config/tutor.yaml)은 두 단계를 끈다(11/14 리더 결정, 가드 #170 뒤 런박스 켬/끔 비교
+  전까지). 그 설정의 앱은 가드에 두 함수가 있어도 부르지 않는다.
 - 요청 내용 · 판정 글이 앱 상태 · 모듈 · 로그 · stdout · stderr에 남지 않는다.
 - 요청마다 가드 nano 호출이 상한(`applib.guard_call_budget(real_guard=True)`) 안이다.
 """
 
 import collections
-import re
 
 import pytest
 from guardrail.schema import OutputVerdict
@@ -24,7 +26,6 @@ from tests.integration.applib import (
     AUTH,
     GUARD_BUDGET_HINT,
     GUARD_WORD,
-    ROOT,
     as_bytes,
     assert_guard_contract,
     assert_tutor_contract,
@@ -33,6 +34,7 @@ from tests.integration.applib import (
     guard_calls_per_request,
     state_roots,
     user,
+    write_tutor_config,
 )
 
 MARKER = "진짜가드표식RG4"
@@ -74,7 +76,8 @@ def assert_tutor_uses_guard(client, fake_guard_send, monkeypatch) -> None:
     건너뛴 단계(사유 무관)가 없고, 가드 nano 호출이 `/tutor` 상한 안인지 본다.
 
     두 메서드는 부른 횟수만 세는 감싸개로 바꾼다(원래 메서드를 그대로 부른다). 가드가 규칙만으로
-    판정해 nano를 부르지 않을 수 있어 nano 호출의 하한은 두지 않는다.
+    판정해 nano를 부르지 않을 수 있어 nano 호출의 하한은 두지 않는다. 앱은 튜터의 두 단계를 켠
+    설정으로 띄운다(배포 설정은 끔, `tutor_guard_stages_on`).
     """
     app = client.app
     guard = app.state.guard
@@ -92,7 +95,9 @@ def assert_tutor_uses_guard(client, fake_guard_send, monkeypatch) -> None:
     r = post(client, "/tutor", user(QUESTION))
     calls = fake_guard_send.count - before
     skipped = dict(collections.Counter(app.state.guard_skips) - skips_before)
-    seen = f"감싸개 횟수 {dict(called)}, guard_skips {skipped}, 가드 nano {calls}회. "
+    toggles = app.state.tutor_cfg.toggles
+    seen = f"감싸개 횟수 {dict(called)}, guard_skips {skipped}, 가드 nano {calls}회"
+    seen += f"(튜터 설정 guard_classify={toggles.guard_classify}, verify={toggles.verify}). "
     seen += TUTOR_GUARD_HINT
     assert r.status_code == 200, seen
     assert_tutor_contract(r.json())
@@ -186,24 +191,45 @@ def test_tutor_guard_check_catches_a_broken_guard_method(
         assert_tutor_uses_guard(real_guard_client, fake_guard_send, monkeypatch)
 
 
-_VERIFY_LINE = re.compile(r"^(?P<head>[ \t]+verify:[ \t]*)guard\b", re.M)
-
-
 def test_tutor_guard_check_catches_a_tutor_that_skips_judge_output(
     open_real_guard_app, fake_guard_send, monkeypatch, tmp_path
 ):
-    # 튜터 설정에서 가드 검증을 끈 사본(toggles.verify: off): 튜터가 judge_output을 부르지 않는다
-    text = (ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8")
-    changed, count = _VERIFY_LINE.subn(r'\g<head>"off"', text)  # 따옴표 없으면 YAML bool
-    assert count == 1
-    path = tmp_path / "tutor.yaml"
-    path.write_text(changed, encoding="utf-8")
+    # classify만 켜고 가드 검증은 끈 설정(toggles.verify: off): 튜터가 judge_output을 부르지 않는다
+    path = write_tutor_config(tmp_path / "tutor.yaml", guard_classify="parallel", verify="off")
     monkeypatch.setenv("TUTOR_CONFIG", str(path))
     with open_real_guard_app() as client:
-        assert client.app.state.tutor_cfg.toggles.verify == "off"
+        toggles = client.app.state.tutor_cfg.toggles
+        assert (toggles.guard_classify, toggles.verify) == ("parallel", "off")
         _attach(monkeypatch, client.app.state.guard, _classify_normal, _judge_grounded)
         with pytest.raises(AssertionError, match="interface.md"):
             assert_tutor_uses_guard(client, fake_guard_send, monkeypatch)
+
+
+def test_shipped_tutor_config_calls_no_guard_stage(
+    open_real_guard_app, fake_guard_send, monkeypatch
+):
+    # 배포 설정(11/14 끔): 가드에 classify · judge_output이 있어도 튜터는 부르지 않고 건너뜀으로도
+    # 세지 않는다. 가드 nano도 0회다
+    called: collections.Counter[str] = collections.Counter()
+
+    async def classify(messages):
+        called["classify"] += 1
+        return "normal"
+
+    async def judge_output(messages, candidate_answer, category=None):
+        called["judge_output"] += 1
+        return OutputVerdict(True, (), True)
+
+    with open_real_guard_app() as client:
+        app = client.app
+        toggles = app.state.tutor_cfg.toggles
+        assert (toggles.guard_classify, toggles.verify) == ("off", "off")
+        _attach(monkeypatch, app.state.guard, classify, judge_output)
+        t, calls = sent(client, fake_guard_send, "/tutor", user(QUESTION))
+        assert_tutor_contract(t.json())
+        assert t.json()["answer"].startswith(ANSWER_WORD)  # 주 호출 답이 그대로 나갔다
+        assert called == {} and calls == 0
+        assert dict(app.state.guard_skips) == {}
 
 
 # 표식이 든 요청들: 후보 답변이 있는 /guard, /tutor

@@ -483,7 +483,7 @@ async def test_bad_request_is_none_without_retry():
 def test_prompt_registered_and_versioned():
     version, body = load_prompt(CFG, "input_judge")
     assert version
-    assert "빠른 질문 버튼" in body  # 버튼 문구만 있는 1턴 → normal(규칙 아님, 정의로)
+    assert "quick-question button" in body  # 버튼 문구만 있는 1턴 → normal(규칙 아님, 정의로)
 
 
 def test_baseline_config_has_same_prompt():

@@ -159,7 +159,8 @@ def test_cli_records_check_per_row_under_concurrency(monkeypatch, tmp_path, caps
     assert code == 0
     data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
     by_run = data["evidence_check"]["by_run"]
-    rows = run_local.public_tutor_rows()
+    held = run_local.holdout_ids()
+    rows = [r for r in run_local.public_tutor_rows() if r["id"] not in held]  # 홀드아웃은 안 잰다
     assert len(by_run) == 2 and all(set(seen) == {r["id"] for r in rows} for seen in by_run)
     recorded = 0
     for row in rows:

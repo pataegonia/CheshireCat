@@ -44,3 +44,9 @@ known-first-party = ["integration", "tests", "tutor"]
 
 [tool.coverage.run]
 source = ["integration"]
+
+# 루트에서 가드 테스트까지 같이 돌려도(`pytest tests guardrail/tests`) 실제 API 테스트는 고르지 않는다.
+# 가드 폴더 안에서 돌릴 때는 guardrail/pyproject.toml의 같은 설정이 쓰인다.
+[tool.pytest.ini_options]
+markers = ["live: 실제 API 호출. CI에서 돌지 않음"]
+addopts = "-m 'not live'"

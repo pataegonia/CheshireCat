@@ -30,6 +30,7 @@ from tests.integration import strategies
 from tests.integration.applib import (
     ANSWER_WORD,
     AUTH,
+    GUARD_BUDGET_HINT,
     GUARD_RESPONSE_SCHEMA,
     MAX_LLM_CALLS_PER_REQUEST,
     ROOT,
@@ -38,6 +39,8 @@ from tests.integration.applib import (
     assert_tutor_contract,
     cache_sizes,
     find_text,
+    guard_call_budget,
+    guard_calls_per_request,
     scoring,
     state_roots,
     user,
@@ -154,9 +157,10 @@ def test_public_set_rows_are_what_the_scorer_sends():
     assert len(SECTION_IDS) == 48
 
 
-def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send):
+def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send, fake_guard_send):
     """채점기가 보내는 400개 요청 전부: 200 + JSON + 스키마. 3xx · 4xx · 5xx가 하나도 없다."""
     fake_send.vary = True  # LLM 답의 모양을 프롬프트 해시로 바꿔 가며 낸다
+    fake_guard_send.vary = True  # 가드 nano의 판정도(가드가 nano를 부르게 되면 범주 10종을 지난다)
     app = llm_client.app
     probes = _state_probes()
     kept_before = sorted(find_text(state_roots(app), probes))
@@ -170,8 +174,12 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
         for row in rows:
             raw = as_bytes(scorer_payload(row))
             calls_before = len(fake_send.evidence)
+            guard_before = fake_guard_send.count
             response = post(llm_client, path, raw)
             assert response.status_code == 200, (row["id"], response.status_code)
+            # 가드 nano 호출은 요청마다 그 경로의 상한 안이다(합계만 보면 서로 상쇄된다)
+            guard_used = fake_guard_send.count - guard_before
+            assert guard_used <= guard_calls_per_request(path), GUARD_BUDGET_HINT
             body = response.json()
             if path == "/tutor":
                 assert_tutor_response(body)
@@ -210,6 +218,9 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
     if llm_mode == "baseline":
         assert fake_send.count == limit  # 행마다 빠짐없이 부른다
     assert dict(app.state.tutor_llm.blocked) == {}
+    # 가드 nano 호출 수(가드 LLM의 가짜 전송이 센다): 요청마다(위 반복)와 합계 모두 상한 안이다
+    guard_limit = guard_call_budget(tutor=len(TUTOR_ROWS), guard=len(GUARD_ROWS))
+    assert fake_guard_send.count <= guard_limit, GUARD_BUDGET_HINT
 
     # 400행을 보낸 뒤에도 요청 내용이 남지 않는다. 기동 때 읽은 자료(공개 세트 예시 등)에 같은
     # 문장이 이미 있을 수 있어, 보내기 전과 같은지로 본다.
@@ -244,8 +255,14 @@ FUZZ = {
 }
 
 
-def fuzz(strategy, client, path: str, examples: int = FUZZ_EXAMPLES) -> list[int]:
-    """전략의 예시를 `path`에 보내 하나씩 검사한다. 보낸 본문의 길이 목록을 돌려준다."""
+def fuzz(
+    strategy, client, path: str, examples: int = FUZZ_EXAMPLES, *, guard_send=None
+) -> list[int]:
+    """전략의 예시를 `path`에 보내 하나씩 검사한다. 보낸 본문의 길이 목록을 돌려준다.
+
+    `guard_send`(가드 LLM의 가짜 전송)를 주면 예시마다 가드 nano 호출 수가 그 경로의 상한 안인지도
+    본다. 예시는 하나씩 차례로 보내므로 앞뒤 차이가 그 요청 하나의 호출 수다.
+    """
     sent: list[int] = []
 
     @settings(
@@ -258,7 +275,11 @@ def fuzz(strategy, client, path: str, examples: int = FUZZ_EXAMPLES) -> list[int
     @given(raw=strategy)
     def run(raw: bytes) -> None:
         sent.append(len(raw))
+        before = guard_send.count if guard_send is not None else 0
         check(client, path, raw)
+        if guard_send is not None:
+            used = guard_send.count - before
+            assert used <= guard_calls_per_request(path), GUARD_BUDGET_HINT
 
     run()
     assert len(sent) >= examples
@@ -281,10 +302,12 @@ def test_fuzzed_conversations_reach_the_llm_on_tutor(llm_client, llm_mode, fake_
 
 
 @pytest.mark.parametrize("name", sorted(FUZZ))
-def test_fuzzed_bodies_get_200_in_contract_on_guard(client, fake_send, name):
+def test_fuzzed_bodies_get_200_in_contract_on_guard(client, fake_send, fake_guard_send, name):
     """`/guard`는 튜터 모드와 무관하다(튜터 설정만 다르다). 저장소 설정으로 한 번만 돈다."""
-    fuzz(FUZZ[name], client, "/guard")
+    fake_guard_send.vary = True
+    sent = fuzz(FUZZ[name], client, "/guard", guard_send=fake_guard_send)  # 예시마다 상한도 본다
     assert fake_send.count == 0  # 가드는 튜터 LLM을 부르지 않는다
+    assert fake_guard_send.count <= guard_call_budget(guard=len(sent)), GUARD_BUDGET_HINT
 
 
 # ── 고정 경계 사례 ────────────────────────────────────────────────────────

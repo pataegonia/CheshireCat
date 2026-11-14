@@ -95,8 +95,13 @@ class RaisingLLM:
         raise RuntimeError("boom")
 
 
+# 배포 설정(config/tutor.yaml)은 두 단계를 끈다(11/14 리더 결정, #170 뒤 런박스 켬/끔 비교 전까지).
+# 이 파일은 켠 경로를 보므로 `build`가 켜고, 테스트가 준 덮어쓰기(serial·off 등)가 이긴다
+STAGES_ON = {"toggles.guard_classify": "parallel", "toggles.verify": "guard"}
+
+
 def build(guard, parsed=None, llm=None, **overrides):
-    s = state_with(llm or FakeLLM(parsed or out(sentences=[GOOD])), **overrides)
+    s = state_with(llm or FakeLLM(parsed or out(sentences=[GOOD])), **{**STAGES_ON, **overrides})
     s.guard = guard
     return s
 
@@ -533,6 +538,17 @@ def test_classify_off_is_not_counted_as_a_skip():
     state = build(FakeGuard("normal"), **{"toggles.guard_classify": "off"})
     run(state)
     assert state.guard_skips == GuardSkips()
+
+
+def test_shipped_config_calls_neither_guard_stage():
+    # 배포 설정(11/14 끔): 가드에 두 함수가 있어도 부르지 않고, 건너뜀으로도 세지 않는다
+    guard = FakeGuard("jailbreak_injection")
+    state = state_with(FakeLLM(out(sentences=[GOOD])))  # 덮어쓰기 없음 = config/tutor.yaml
+    state.guard = guard
+    resp = run(state)
+    assert guard.classify_calls == [] and guard.judge_calls == []
+    assert state.guard_skips == GuardSkips()
+    assert resp["action"] == "answer" and resp["answer"] == GOOD.text  # 주 호출 단독
 
 
 def test_no_guard_on_state_is_main_call_only():

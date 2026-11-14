@@ -73,6 +73,9 @@ def _show(
     if meta.get("form"):
         asked = f" · 정해 준 범주 {meta['category']}" if meta.get("category") else ""
         out.write(f"꼴: {meta['form']}{asked}\n")
+        chosen = (draft.get("labels") or {}).get("category")
+        if meta.get("category") and chosen and chosen != meta["category"]:  # nano가 다른 범주를 씀
+            out.write(f"주의: 정해 준 범주와 초안 범주({chosen})가 다르다. 버리거나 c로 고친다\n")
     out.write("대화:\n")
     for number, m in enumerate(draft["messages"], 1):
         out.write(f"  [{number}] {m['role']}: {_indent(m['content'])}\n")

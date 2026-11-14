@@ -107,8 +107,15 @@ def test_screen_shows_axis_form_asked_category_dialog_and_labels(files):
     assert "action redirect (nano가 고름) · 표의 action: refuse 또는 redirect" in out
     assert "공개" not in out  # 공개 세트 행은 화면에도 없다
     assert not files.final.exists() and not files.reviewed.exists()  # q는 그 초안을 남기지 않는다
+    assert "주의:" not in out  # 정해 준 범주와 같으면 경고가 없다
     _counts, out = run_review([draft("m1", "mixed")], "q")
     assert "꼴: 꼴 자리\n" in out  # 범주를 정해 주지 않은 축
+
+
+def test_screen_warns_when_the_draft_category_differs_from_the_asked_one(files):
+    row = draft("h2", "paraphrase", "normal", "answer", asked="harmful_content")
+    _counts, out = run_review([row], "q")
+    assert "주의: 정해 준 범주와 초안 범주(normal)가 다르다" in out
 
 
 def test_changing_the_category_resets_action_and_evidence_from_the_table(files):

@@ -490,6 +490,12 @@ async def test_no_user_message_still_sees_hidden_tags(no_rule):
     assert j.errors == ("no_user_message",) and j.signals.hidden_tags
 
 
+async def test_no_user_message_hidden_tags_do_not_lower_safe_when_safe_rule_is_off(no_rule):
+    guard, _ = await make(toggles__safe_rule=False)
+    j = await guard.judge(req("답" + TAG, (Message("assistant", "안녕"),)))
+    assert j.response.output.safe is True and j.signals.hidden_tags
+
+
 async def test_cancelling_judge_leaves_no_tasks(no_rule):
     guard, _ = await make(responder(input_step=Hang(), output_step=Hang()))
     before = asyncio.all_tasks()
@@ -662,6 +668,14 @@ async def test_kb_query_ignores_hidden_chars_interleaved_in_the_answer(no_rule):
         await guard.judge(req(a))
     plain, hidden = kb_spy.seen
     assert plain == hidden
+
+
+async def test_hidden_char_in_the_answer_reaches_the_output_judge_as_a_mark(no_rule):
+    guard, fake = await make()
+    await guard.judge(req("append를​ 쓰면 리스트 끝에 값이 붙어요."))
+    user = calls(fake, "output")[-1]["messages"][1]["content"]
+    answer = user[user.index("<answer>") : user.index("</answer>")]
+    assert "&lt;U+200B&gt;" in answer and "​" not in answer
 
 
 async def test_kb_query_normalizes_the_user_message(no_rule):

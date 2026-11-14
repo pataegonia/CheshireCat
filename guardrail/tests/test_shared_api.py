@@ -19,6 +19,7 @@ from guardrail.data import LabeledRow, PublicRow, load_public
 from guardrail.eval.cv import load_splits
 from guardrail.guard import ConstantGuard
 from guardrail.judges.schemas import strict_schema
+from guardrail.kb import KbIndex
 from guardrail.knn import select_fewshot
 from guardrail.llm import LLM, ErrorCode
 from guardrail.preprocess import normalize, skeleton
@@ -129,7 +130,9 @@ def test_default_config_exposes_public_path_and_attack_categories():
     for name in ("reasoning_effort", "verbosity", "max_completion_tokens"):
         assert hasattr(llm, name)
     assert isinstance(llm.timeout_s.read, int | float)
-    assert isinstance(cfg.retrieval.max_query_chars, int)  # examples.py(#141)
+    assert isinstance(cfg.retrieval.max_query_chars, int)  # examples.py(#141), index.py(#158)
+    assert isinstance(cfg.kb.ngram, int)  # index.py(#158)
+    assert all(isinstance(v, int | float) for v in (cfg.kb.k1, cfg.kb.b))
     assert isinstance(cfg.budget_s, int | float)
     assert load_config(DEFAULT_CONFIG).block_categories == cfg.block_categories
 
@@ -183,6 +186,22 @@ def test_select_fewshot_takes_five_positional_args_and_reads_only_id_category():
     out = select_fewshot(ranked, {"a": "a", "b": "b", "c": "c"}, frozenset(ATTACKS), 8, 2)
     assert {r.id for r in out} == {"a", "b", "c"}
     assert all(isinstance(r, Row) for r in out)
+
+
+def test_kb_index_takes_sections_and_kb_config_keywords():
+    """tutor/retrieval/index.py(#158): KbIndex(sections, ngram=, k1=, b=)를 설정 kb로 만들고
+    chunks((섹션 ID, 조각), 섹션 순서)·scores(질의)(조각 순서 float)를 읽는다.
+    점수 값은 고정하지 않는다."""
+    p = inspect.signature(KbIndex).parameters
+    assert p["sections"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for name in ("ngram", "k1", "b"):
+        assert p[name].kind is inspect.Parameter.KEYWORD_ONLY
+    kb = load_config().kb
+    index = KbIndex({"s2": "미분의 정의", "s1": "적분의 정의"}, ngram=kb.ngram, k1=kb.k1, b=kb.b)
+    assert [sid for sid, _ in index.chunks] == ["s2", "s1"]
+    assert all(isinstance(t, str) for _, t in index.chunks)
+    s = index.scores("미분")
+    assert len(s) == len(index.chunks) and all(isinstance(x, float) for x in s)
 
 
 def test_load_splits_cluster_fold_holdout_shapes():

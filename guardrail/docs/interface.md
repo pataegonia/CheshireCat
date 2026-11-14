@@ -45,7 +45,7 @@ Content-Type: application/json
 |---|---|---|---|
 | 입력 범주 판정 | `async Guard.classify(messages) -> Category`와 `decision_of(category, block)`(`block` = 설정 `block_categories`, master-plan §4) | action 결정. 튜터 공개 세트의 범주 → action 대응(PRD §9 T3). block 범주이고 확신할 때만 거절 | 가드만 사용 |
 | 출력 판정 | `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict` | 생성 직후 자기 답변 거르기(`category`가 None이면 먼저 `classify(messages)`를 부른다(nano 호출 +1). 3단 ①과 safe는 그 범주를 쓴다): `unsupported` 구간이 든 문장을 지우고 citations 재계산(PRD §9 T1-2). 넘겨받은 `category`는 다시 확인하지 않는다. 튜터는 classify가 실패하면 주 호출 범주를 넘긴다(#138) | 가드만 사용 |
-| KB 색인 | 기동 때 한 번 만든 BM25 색인 객체 | 튜터 검색 | 가드 자체 색인 |
+| KB 색인 | 기동 때 한 번 만든 BM25 색인 객체 | 튜터 검색(#158) | 튜터가 기동 때 가드 `KbIndex`를 같은 설정 `kb`로 따로 만든다 |
 | 전역 LLM 게이트 | 세마포어 + 지터 재시도, 요청 예산 | 튜터 생성 호출 | 각자 게이트(합계 동시성 주의) |
 | kNN 색인 | 공개 400행 TF-IDF | 튜터 판단 예시 고르기(#141). 튜터는 색인을 따로 만들고 아래 2.1의 정규화·묶음 함수와 GR-05 고르기 규칙을 쓴다 | 색인은 각자, 규칙은 공유 |
 
@@ -62,7 +62,8 @@ Content-Type: application/json
 | `guardrail.server` | `create_app`(인자 없는 `guard_factory` 기본값, `tutor_router`·`defaults`·`startups` 키워드). 기동 때 `app.state.cfg`(설정)·`app.state.guard`(`await guard_factory(cfg)`)를 두고 `startups`를 `await fn(app.state)`로 부른다 | `app.py`, `tutor/startup.py`, `tutor/runtime/budget.py`, `tutor/runtime/llm.py`, `tutor/eval/mock_load.py` |
 | `guardrail.guard` | `ConstantGuard` | `tutor/eval/mock_load.py` |
 | `guardrail.schema` | `Category`, `OutputVerdict` | `integration/contracts.py`, `integration/actions.py`, `tutor/judge/guard_merge.py`(#138) |
-| `guardrail.config` | `load_config`, `resolve_path`, `DEFAULT_CONFIG`, `GuardConfig`(타입), 설정의 `paths.public`·`paths.kb`·`block_categories`·`retrieval.max_query_chars`·`budget_s`·`llm.gate`·`llm.timeout_s.read`·`llm.structured_output`·`llm.reasoning_effort`·`llm.verbosity`·`llm.max_completion_tokens` | `tutor/retrieval/search.py`, `tutor/runtime/llm.py`, `tutor/eval/mock_load.py`, `tutor/judge/examples.py`(#141) |
+| `guardrail.config` | `load_config`, `resolve_path`, `DEFAULT_CONFIG`, `GuardConfig`(타입), 설정의 `paths.public`·`paths.kb`·`block_categories`·`retrieval.max_query_chars`·`kb.ngram`·`kb.k1`·`kb.b`·`budget_s`·`llm.gate`·`llm.timeout_s.read`·`llm.structured_output`·`llm.reasoning_effort`·`llm.verbosity`·`llm.max_completion_tokens` | `tutor/retrieval/search.py`, `tutor/retrieval/index.py`(#158, `retrieval.max_query_chars`·`kb.*`), `tutor/runtime/llm.py`, `tutor/eval/mock_load.py`, `tutor/judge/examples.py`(#141) |
+| `guardrail.kb` | `KbIndex(sections, *, ngram, k1, b)`. `sections`는 섹션 ID → 섹션 원문 Mapping, 나머지는 키워드 인자. `chunks`는 `(섹션 ID, 조각)` 튜플(섹션 순서), `scores(query: str) -> list[float]`는 조각 순서. 점수 값은 고정하지 않는다 | `tutor/retrieval/index.py`(#158) |
 | `guardrail.preprocess` | `normalize`, `skeleton` | `tutor/judge/conversation.py`, `tutor/judge/signals.py`, `tutor/answer/postprocess.py`, `tutor/judge/examples.py`(#141) |
 | `guardrail.signals` | `is_low_signal(target_pre, has_history, hidden)`. 위치 인자 셋, `hidden`은 str(없으면 `""`), 반환 bool. 1턴이거나 숨긴 텍스트가 있으면 거짓 | `tutor/judge/signals.py`(#156) |
 | `guardrail.llm` | `ErrorCode`, `LLM`의 `slot()`·`params`·`structured`(`app.state.guard.llm`으로 접근) | `tutor/runtime/llm.py` |

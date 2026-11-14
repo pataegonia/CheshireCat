@@ -42,9 +42,10 @@ def _judge_calls(llm):
     return [r for r in llm.fake.requests if r["messages"] != PING]
 
 
-async def _guard(reply=UNGROUNDED, failure_default="grounded"):
+async def _guard(reply=UNGROUNDED, failure_default="grounded", mode=None):
     cfg = load_config(DEFAULT)
-    out_cfg = cfg.output.model_copy(update={"failure_default": failure_default})
+    update = {"failure_default": failure_default} | ({"mode": mode} if mode else {})
+    out_cfg = cfg.output.model_copy(update=update)
     cfg = cfg.model_copy(update={"output": out_cfg})
     llm = _llm(cfg.llm, reply)
     await llm.start()
@@ -71,6 +72,45 @@ async def test_kb_search_ignores_hidden_chars_interleaved_in_the_answer():
         user = _judge_calls(llm)[-1]["messages"][1]["content"]
         kbs.append(user[user.index("</answer>") :])
     assert '<kb id="' in kbs[0] and kbs[0] == kbs[1]
+
+
+def _section(llm, tag):
+    user = _judge_calls(llm)[-1]["messages"][1]["content"]
+    return user[user.index(f"<{tag}>") : user.index(f"</{tag}>")]
+
+
+async def test_question_is_the_last_user_message():
+    guard, llm = await _guard()
+    msgs = (Message("user", "첫질문AAA"), Message("assistant", "답"), Message("user", "끝질문BBB"))
+    await guard.judge(GuardRequest(msgs, "append를 쓰면 리스트 끝에 값이 붙어요.", True))
+    question = _section(llm, "question")
+    assert "끝질문BBB" in question and "첫질문AAA" not in question
+
+
+async def test_hidden_char_in_the_answer_reaches_nano_as_a_mark():
+    guard, llm = await _guard()
+    await guard.judge(GuardRequest(MSGS, "append를​ 쓰면 리스트 끝에 값이 붙어요.", True))
+    answer = _section(llm, "answer")
+    assert "&lt;U+200B&gt;" in answer and "​" not in answer
+
+
+async def test_answer_past_the_cap_is_not_sent():
+    guard, llm = await _guard()
+    cap = guard.cfg.input.max_answer_chars
+    await guard.judge(GuardRequest(MSGS, "가" * cap + "꼬리표시ZZZ", True))
+    assert "꼬리표시ZZZ" not in _section(llm, "answer")
+
+
+async def test_baseline_mode_asks_with_the_baseline_schema_and_prompt():
+    reply = '{"reason": "r", "grounded": false, "safe": true}'
+    default_guard, default_llm = await _guard()
+    await default_guard.judge(GuardRequest(MSGS, "append를 쓰면 리스트 끝에 값이 붙어요.", True))
+    guard, llm = await _guard(reply, mode="baseline")
+    j = await guard.judge(GuardRequest(MSGS, "append를 쓰면 리스트 끝에 값이 붙어요.", True))
+    call = _judge_calls(llm)[-1]
+    assert "OutputBaselineOut" in str(call["response_format"])
+    assert call["messages"][0] != _judge_calls(default_llm)[-1]["messages"][0]
+    assert (j.response.output.grounded, j.errors) == (False, ())
 
 
 async def test_no_candidate_or_empty_candidate_makes_no_call():

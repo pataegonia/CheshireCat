@@ -2,7 +2,9 @@
 
 import json
 import socket
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 from fastapi.testclient import TestClient
@@ -94,7 +96,15 @@ def test_run_load_counts_slow_and_failed_sends():
 
     payloads = [{"session_id": f"load_{i:04d}", "messages": []} for i in range(10)]
     rep = load.run_load(send, payloads, concurrency=4, timeout_s=0.1)
-    assert rep["counts"] == {"ok": 7, "timeout": 2, "http": 0, "json": 0, "format": 0, "error": 1}
+    assert rep["counts"] == {
+        "ok": 7,
+        "timeout": 2,
+        "redirect": 0,
+        "http": 0,
+        "json": 0,
+        "format": 0,
+        "error": 1,
+    }
 
 
 def test_log_failures_counts_roles_once_per_request():
@@ -238,3 +248,169 @@ def test_classify_allows_any_string_output_category():
     d = json.loads(_body(grounded=True, unsupported=["구간"], safe=True))
     d["output"]["category"] = "whatever"
     assert load.classify(p, 200, json.dumps(d).encode()) == "ok"
+
+
+# ---- S2.10 확장: 튜터 혼합·redirect·probe·서버 지연 ----
+
+MARK = "MARK_7f3"
+
+
+def _tutor_body(**over):
+    d = {"answer": "답", "action": "answer", "citations": ["kb_1"]} | over
+    return json.dumps(d).encode()
+
+
+def _gp(i, tag="g"):
+    return {"session_id": f"{tag}_{i:04d}", "messages": [{"role": "user", "content": MARK}]}
+
+
+def test_tutor_rows_exclude_holdout():
+    rows = load.tutor_rows()
+    split = load_splits()
+    assert rows and all(r.endpoint == "tutor" for r in rows)
+    assert not {split.cluster[r.id] for r in rows} & set(split.holdout)
+
+
+def test_mix_keeps_counts_and_order_without_endpoint_key():
+    g = load.build_payloads(load.guard_rows(), 20)
+    t = load.build_payloads(load.tutor_rows(), 15)
+    jobs = load.mix(g, t)
+    assert len(jobs) == 35
+    assert [ep for ep, _ in jobs].count("guard") == 20
+    assert [ep for ep, _ in jobs].count("tutor") == 15
+    assert all("candidate_answer" not in p for ep, p in jobs if ep == "tutor")
+    assert all("endpoint" not in p for _, p in jobs)
+    assert jobs == load.mix(g, t)  # 같은 시드 → 같은 순서
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "want"),
+    [
+        (200, _tutor_body(), "ok"),
+        (200, _tutor_body(answer="가" * 4000), "ok"),
+        (200, _tutor_body(answer="가" * 4001), "format"),
+        (200, _tutor_body(action="dance"), "format"),
+        (200, _tutor_body(citations=["a", 1]), "format"),
+        (200, b"{broken", "json"),
+        (500, b"", "http"),
+        (307, b"", "redirect"),
+    ],
+)
+def test_classify_tutor(status, body, want):
+    assert load.classify_tutor(status, body) == want
+
+
+def test_classify_guard_redirect():
+    assert load.classify({"messages": []}, 301, b"") == "redirect"
+
+
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+def test_http_sender_does_not_follow_redirect(code):
+    """urllib은 POST의 301·302·303을 GET으로 따라간다. 채점기는 3xx를 실패로 본다."""
+    hits = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            hits.append(self.path)
+            self.send_response(code)
+            self.send_header("Location", "/followed")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST  # 따라가면 GET으로 온다
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        send = load.http_sender(f"http://127.0.0.1:{srv.server_port}/guard", TOKEN, 5.0)
+        assert send({"messages": []}) == (code, b"")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert hits == ["/guard"]
+
+
+def test_run_mixed_splits_by_endpoint_and_counts_redirect():
+    def g_send(p):
+        return (307, b"") if p["session_id"].endswith("0") else (200, OK)
+
+    sends = {"guard": g_send, "tutor": lambda p: (200, _tutor_body())}
+    jobs = [("guard", _gp(i)) for i in range(10)] + [("tutor", _gp(i, "t")) for i in range(6)]
+    rep = load.run_mixed(sends, jobs, concurrency=4)
+    keys = ["ok", "timeout", "redirect", "http", "json", "format", "error"]
+    assert list(rep["counts"]) == keys
+    assert rep["requests"] == 16 and rep["probe"] is None and rep["total_sent"] == 16
+    g, t = rep["by_endpoint"]["guard"], rep["by_endpoint"]["tutor"]
+    assert g["requests"] == 10 and g["counts"]["redirect"] == 1 and g["counts"]["ok"] == 9
+    assert t["requests"] == 6 and t["counts"]["ok"] == 6 and t["all_ok"] is True
+    assert g["latency_s"]["n"] == 10 and t["latency_s"]["n"] == 6
+    for k in keys:
+        assert g["counts"][k] + t["counts"][k] == rep["counts"][k]
+
+
+def test_run_mixed_against_app_all_ok():
+    g = load.build_payloads(load.guard_rows(), 30)
+    t = load.build_payloads(load.tutor_rows(), 30)
+    h = {"Authorization": f"Bearer {TOKEN}"}
+    with TestClient(create_app(_constant)) as c:
+
+        def mk(path):
+            def send(p):
+                r = c.post(path, json=p, headers=h)
+                return r.status_code, r.content
+
+            return send
+
+        sends = {"guard": mk("/guard"), "tutor": mk("/tutor")}
+        rep = load.run_mixed(sends, load.mix(g, t), concurrency=8)
+    assert rep["requests"] == 60 and rep["counts"]["ok"] == 60 and rep["all_ok"] is True
+
+
+def test_run_mixed_probe_counts_separately():
+    def probe():
+        time.sleep(0.01)
+        return 401
+
+    def slow(p):
+        time.sleep(0.2)
+        return 200, OK
+
+    jobs = [("guard", _gp(i)) for i in range(4)]
+    rep = load.run_mixed({"guard": slow}, jobs, concurrency=4, probe=probe, probe_interval_s=0.02)
+    n = rep["probe"]["n"]
+    assert n >= 1 and rep["probe"]["statuses"] == {"401": n}
+    assert rep["requests"] == 4 and rep["total_sent"] == 4 + n
+    assert rep["probe"]["p50_ms"] <= rep["probe"]["p95_ms"] <= rep["probe"]["max_ms"]
+
+
+def test_log_latency_uses_only_200_lines():
+    def ln(path, status, ms, extra=""):
+        return f"2026-11-13T00:00:00.0Z {path} 10 20 {status} {ms} -{extra}"
+
+    lines = [ln("/guard", 200, m) for m in (1.0, 2.0, 3.0, 4.0)]
+    lines += [ln("/guard", 401, 999.0), "INFO: uvicorn started", "a b c"]
+    lines += [ln("/tutor", 200, 50.0)]
+    rep = load.log_latency(lines)
+    assert rep["/guard"] == {"n": 4, "p50_ms": 2.5, "p95_ms": 4.0, "max_ms": 4.0}
+    assert rep["/tutor"] == {"n": 1, "p50_ms": 50.0, "p95_ms": 50.0, "max_ms": 50.0}
+    assert load.log_latency([])["/tutor"] == {"n": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
+
+
+def test_main_tutor_n_without_tutor_url_sends_nothing(monkeypatch, capsys):
+    sent = []
+    monkeypatch.setattr(load, "http_sender", lambda *a, **k: lambda p: sent.append(p))
+    with pytest.raises(SystemExit) as e:
+        load.main(["--n", "3", "--tutor-n", "5"])
+    assert e.value.code == 2 and sent == []
+    assert "--tutor-url" in capsys.readouterr().err
+
+
+def test_mixed_report_has_no_payload_text():
+    jobs = [("guard", _gp(i)) for i in range(3)] + [("tutor", _gp(i, "t")) for i in range(3)]
+    sends = {"guard": lambda p: (200, OK), "tutor": lambda p: (200, _tutor_body())}
+    rep = load.run_mixed(sends, jobs, concurrency=2)
+    assert MARK not in json.dumps(rep, ensure_ascii=False)

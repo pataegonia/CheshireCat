@@ -66,7 +66,7 @@ def test_default_loads_section_4_4_model():
         "output_judge_baseline": "output_judge_baseline.md",
         "jb_check": "jb_check_en.md",  # S3.3, input.jb_check가 켜졌을 때만 쓴다
     }
-    assert not cfg.input.jb_check
+    assert cfg.toggles.jb_check  # S3.3 채택(baseline.yaml은 끈 채)
     assert cfg.output.tier3_trust == "answer_quote" and cfg.output.quote_min_chars == 8
     assert cfg.toggles.knn_vote and not cfg.toggles.third_call
     assert cfg.output.mode == "v6" and cfg.output.rule_min_margin == 3.5
@@ -131,7 +131,7 @@ def test_load_order_overrides_beat_env_beat_ablation(tmp_path, monkeypatch):
 def test_baseline_differs_only_in_toggles_and_mode():
     base = load_config(BASELINE)
     assert not any(base.toggles.model_dump().values())
-    assert len(base.toggles.model_dump()) == 11
+    assert len(base.toggles.model_dump()) == 12
     assert base.output.mode == "baseline"
     expected = {f"toggles.{t}" for t, on in load_config(DEFAULT).toggles if on} | {"output.mode"}
     assert _diff(base, load_config(DEFAULT)) == expected

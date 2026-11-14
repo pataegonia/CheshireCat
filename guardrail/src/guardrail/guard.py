@@ -188,7 +188,7 @@ class Guard:
         baseline = cfg.output.mode == "baseline"
         for name in ("input_judge", "output_judge_baseline" if baseline else "output_judge"):
             load_prompt(cfg, name)
-        if cfg.input.jb_check:
+        if cfg.toggles.jb_check:
             load_prompt(cfg, "jb_check")
         self.cfg, self.llm, self.kb, self.knn, self.lr = cfg, llm, kb, knn, lr
         self.block = frozenset(cfg.block_categories)

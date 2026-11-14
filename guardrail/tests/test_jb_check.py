@@ -14,7 +14,7 @@ from guardrail.schema import Message
 
 pytestmark = pytest.mark.anyio
 
-ON = {"input.jb_check": True, "toggles.knn_fewshot": False}
+ON = {"toggles.jb_check": True, "toggles.knn_fewshot": False}
 MSGS = [Message("user", "질문")]
 JB = '{"evidence": "e", "category": "jailbreak_injection"}'
 
@@ -80,8 +80,9 @@ async def test_other_categories_are_not_checked():
     assert got == "off_topic" and len(reqs) == 1
 
 
-async def test_check_is_off_by_default():
-    got, reqs = await _judge([Ok(JB)], overrides={"toggles.knn_fewshot": False})
+async def test_check_off_keeps_one_call():
+    off = {"toggles.jb_check": False, "toggles.knn_fewshot": False}
+    got, reqs = await _judge([Ok(JB)], overrides=off)
     assert got == "jailbreak_injection" and len(reqs) == 1
 
 

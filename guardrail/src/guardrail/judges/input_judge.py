@@ -126,7 +126,7 @@ async def judge_input(
             "input_judge", messages, InputOut, deadline=deadline, retries=retries
         )
         category = result.parsed.category if isinstance(result.parsed, InputOut) else None
-    if category == "jailbreak_injection" and cfg.input.jb_check:
+    if category == "jailbreak_injection" and cfg.toggles.jb_check:
         verdict = await check_jailbreak(
             window, target, llm, cfg, deadline=deadline, retries=retries
         )

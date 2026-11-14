@@ -6,7 +6,7 @@
 """
 
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -40,9 +40,15 @@ class Report:
     runs: int
     rows: int
     tutor: tuple[float, ...]  # 실행마다 튜터 점수(채점기 aggregate)
+    # 실행마다 교차 검증 행(홀드아웃 묶음 밖)만의 튜터 점수. 그 행이 없으면 None(측정 없음)
+    cv_tutor: tuple[float | None, ...]
+    cv_rows: int  # 교차 검증 행 수
+    cv_judge_errors: tuple[int, ...]  # 실행마다 교차 검증 행의 판정 오류 수
     judge_errors: tuple[int, ...]  # 실행마다 판정 오류 수
     components: dict[str, float | None]  # 항목별 평균(판정 오류 문항 제외, 모든 실행)
-    complied: int  # 공격 문항에 응한 수(판정이 있을 때만 센다)
+    cv_components_by_run: tuple[dict[str, float | None], ...]  # 실행마다 교차 검증 행 항목별 평균
+    complied: int  # 공격 문항에 응한 수(판정이 있을 때만 센다, 모든 실행)
+    cv_complied_by_run: tuple[tuple[str, ...], ...]  # 실행마다 교차 검증 행에서 응함으로 잡힌 행
     confusion: dict[str, dict[str, int]]  # 정답 action → 낸 action → 수(모든 실행)
     false_blocks: tuple[int, ...]  # 실행마다 오차단 수
     missed_evidence: tuple[str, ...]  # 정답 근거를 다 인용하지 못한 행(한 번이라도)
@@ -139,21 +145,40 @@ def _missed_evidence(s: Scored) -> bool:
     return s.has_evidence and (recall is None or recall < 1.0)
 
 
-def build_report(runs: Sequence[Sequence[Scored]]) -> Report:
+def _tutor_score(run: Iterable[Scored]) -> float:
+    return scoring.aggregate([dict(s.result) for s in run], [], ONLY_TUTOR)["tutor"]
+
+
+def build_report(runs: Sequence[Sequence[Scored]], *, holdout: Collection[str] = ()) -> Report:
+    """holdout은 교차 검증 행에서 뺄 행 id다(공유 분할의 홀드아웃 묶음, TU-16).
+
+    실행마다 보는 값(cv_*)은 교차 검증 행으로만 낸다. 홀드아웃은 설정을 고정한 뒤 최대 3회만
+    보므로 평소 실행에서 그 행의 결과가 드러나지 않게 한다.
+    """
     if not runs:
         raise ValueError("실행 결과가 없다")
     pooled = [s for run in runs for s in run]
     points = _points_by_row(pooled)
+    # 전제: 이 값이 교차 검증 점수인 것은 예시 색인(TU-08)·가드 kNN·LR(TU-10)을 붙이지 않았을
+    # 때뿐이다. 붙이면 폴드마다 평가 묶음을 뺀 상태(#141의 fold_states)로 재야 교차 검증 점수다
+
+    cv_runs = [[s for s in run if s.row_id not in holdout] for run in runs]
     return Report(
         runs=len(runs),
         rows=len(points),
-        tutor=tuple(
-            scoring.aggregate([dict(s.result) for s in run], [], ONLY_TUTOR)["tutor"]
-            for run in runs
-        ),
+        tutor=tuple(_tutor_score(run) for run in runs),
+        cv_tutor=tuple(_tutor_score(run) if run else None for run in cv_runs),
+        cv_rows=sum(row_id not in holdout for row_id in points),
+        cv_judge_errors=tuple(sum(s.points is None for s in run) for run in cv_runs),
         judge_errors=tuple(sum(s.points is None for s in run) for run in runs),
         components=_components([s.result for s in pooled if s.points is not None]),
+        cv_components_by_run=tuple(
+            _components([s.result for s in run if s.points is not None]) for run in cv_runs
+        ),
         complied=sum(bool(s.result["complied"]) for s in pooled),
+        cv_complied_by_run=tuple(
+            tuple(sorted(s.row_id for s in run if s.result["complied"])) for run in cv_runs
+        ),
         confusion=_confusion(pooled),
         false_blocks=tuple(
             sum(s.gold_action in ANSWERING and s.pred_action in BLOCKING for s in run)

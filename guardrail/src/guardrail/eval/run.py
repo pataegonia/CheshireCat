@@ -53,8 +53,20 @@ EXIT_PROBE_FAILED = 7  # probe의 맨 요청이 429 말고 다른 오류로 실�
 # 판정 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속 보내면
 # 어뷰징으로 보일 수 있다(SPEC §7.1). 2026-11-13에 429 뒤로 약 3,700회를 더 보낸 일이 있었다
 RATE_LIMIT_STREAK = 20
-EXIT_INPUT_FAIL_RATE = 8  # 입력 단독 실측의 입력 판정 호출 실패율이 상한을 넘었다
+# 호출 실패율이 상한을 넘었다(입력 단독은 2%, 그 밖의 모드는 GROSS_FAIL_RATE)
+EXIT_INPUT_FAIL_RATE = EXIT_FAIL_RATE = 8
+EXIT_CALLS_FAILED = 9  # 인증 오류, 또는 429·서버·시간 초과가 섞여 이어져 호출을 멈췄다
 INPUT_FAIL_RATE_LIMIT = 0.02  # R14-D8: 역할별 호출 실패율 2% 초과면 무효
+WARN_FAIL_RATE = 0.02  # R14-D8: 넘으면 report 맨 위에 경고를 낸다(모든 모드)
+# 역할별 호출 실패율이 이것을 넘으면 무효다(실행 전체, 또는 한 회차). 실패한 호출은 기본값으로
+# 채워져 점수를 바꾼다. 10%는 잠정값이다: read 12초 시간 초과 조치를 잰 뒤 다시 정한다
+GROSS_FAIL_RATE = 0.10
+TRANSPORT_ERRORS = frozenset({"rate_limit", "server", "timeout"})
+STOP_TEXT = {
+    "rate_limit": f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다",
+    "auth": "인증 오류(401·403)가 나서 멈췄다",
+    "errors": f"호출 실패(429·서버·시간 초과)가 {RATE_LIMIT_STREAK}회 이어져 멈췄다",
+}
 BASELINE, DEFAULT = "baseline", "default"
 
 
@@ -375,7 +387,13 @@ class Tap:
     # (행 id, 호출 기록). 공개 세트 분석용으로 runs/에만 쓴다. 서버 로그와 무관하다(GR-12)
     parsed: list[tuple[str | None, dict]] = field(default_factory=list)
     streak: int = 0  # 연달아 rate_limit으로 끝난 호출 수
-    tripped: bool = False  # 속도 제한으로 멈췄다. 뒤의 호출은 보내지 않고 budget 오류가 된다
+    fails: int = 0  # 연달아 429·서버·시간 초과로 끝난 호출 수(응답이 한 번 오면 0)
+    # 멈춘 사유(STOP_TEXT의 키). 멈춘 뒤의 호출은 보내지 않고 budget 오류가 된다
+    stop: str | None = None
+
+    @property
+    def tripped(self) -> bool:
+        return self.stop is not None
 
     def attach(self, llm: LLM) -> None:
         inner = llm.complete
@@ -387,9 +405,19 @@ class Tap:
                 self.streak += 1
             elif res.error != "budget":
                 self.streak = 0
-            if self.streak >= RATE_LIMIT_STREAK and not self.tripped:
-                self.tripped = True
-                llm.max_calls = 0  # 이후 호출은 LLM이 보내지 않는다
+            if res.error in TRANSPORT_ERRORS:
+                self.fails += 1
+            elif res.error != "budget":
+                self.fails = 0
+            if self.stop is None:
+                if res.error == "auth":  # 키가 회수됐을 수 있다(SPEC §7.1). 한 번에 멈춘다
+                    self.stop = "auth"
+                elif self.streak >= RATE_LIMIT_STREAK:
+                    self.stop = "rate_limit"
+                elif self.fails >= RATE_LIMIT_STREAK:
+                    self.stop = "errors"
+                if self.stop:
+                    llm.max_calls = 0  # 이후 호출은 LLM이 보내지 않는다
             out = res.parsed.model_dump(mode="json") if res.parsed is not None else None
             call = {
                 "role": role,
@@ -637,6 +665,34 @@ def input_call_failures(summary: dict) -> tuple[int, int]:
     )
 
 
+def call_failures(records: Sequence[tuple[str, str | None, str | None]]) -> dict[str, dict]:
+    """역할별 호출 (실패, 시도). 보내지 않은 호출(budget)은 세지 않는다."""
+    out: dict[str, dict] = {}
+    for role, error, _ in records:
+        if error != "budget":
+            d = out.setdefault(role, {"failed": 0, "calls": 0})
+            d["calls"] += 1
+            d["failed"] += error is not None
+    return out
+
+
+def worst_fail_rate(fails: Mapping[str, Mapping[str, int]]) -> float:
+    return max((f["failed"] / f["calls"] for f in fails.values()), default=0.0)
+
+
+def _worst_run_fail_rate(summary: dict) -> float:
+    """한 회차·한 역할의 실패율 가운데 가장 큰 값(합계가 나쁜 회차 하나를 가리지 않게)."""
+    return max(
+        (
+            sum(r for code, r in role["error_rate"].items() if code != "budget")
+            for c in summary["configs"].values()
+            for s in c["scores"]
+            for role in s.get("llm_by_role", {}).values()
+        ),
+        default=0.0,
+    )
+
+
 def _banner(summary: dict) -> list[str]:
     lines = []
     if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
@@ -649,6 +705,12 @@ def _banner(summary: dict) -> list[str]:
         lines.append("# 입력 단독 실행 — 출력·가드 점수는 상수 출력 기준이라 비교에 쓰지 않는다")
     if f := summary.get("input_fail"):
         lines.append(f"# 입력 판정 호출 실패 {f['failed']}/{f['calls']}")
+    for role, f in summary.get("call_fail", {}).items():
+        if f["failed"] / f["calls"] > WARN_FAIL_RATE:
+            lines.append(
+                f"# 경고 — {role} 호출 실패 {f['failed']}/{f['calls']}"
+                f"({f['failed'] / f['calls']:.1%}) > {WARN_FAIL_RATE:.0%} (R14-D8)"
+            )
     if summary.get("invalid"):
         lines.append(f"# 무효 실행 — {summary['invalid']}")
     return lines
@@ -969,10 +1031,10 @@ async def amain(
     too_flaky = tried > 0 and failed / tried > INPUT_FAIL_RATE_LIMIT
     if args.input_only:
         summary["input_fail"] = {"failed": failed, "calls": tried}
-    if tap.tripped:
-        summary["invalid"] = (
-            f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다: 결과를 비교에 쓰지 않는다"
-        )
+    summary["call_fail"] = call_failures(tap.records)
+    gross = max(worst_fail_rate(summary["call_fail"]), _worst_run_fail_rate(summary))
+    if tap.stop:
+        summary["invalid"] = f"{STOP_TEXT[tap.stop]}: 결과를 비교에 쓰지 않는다"
     elif spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
     elif too_flaky:  # 종료 코드 우선순위: 연속 429, budget이 먼저다
@@ -980,18 +1042,26 @@ async def amain(
             f"입력 판정 호출 실패율 {failed}/{tried} = {failed / tried:.1%}가 "
             f"{INPUT_FAIL_RATE_LIMIT:.0%}를 넘는다: 결과를 비교에 쓰지 않는다"
         )
+    elif gross > GROSS_FAIL_RATE:
+        summary["invalid"] = (
+            f"역할별 호출 실패율 최대 {gross:.1%}가 {GROSS_FAIL_RATE:.0%}를 넘는다"
+            "(실행 전체 또는 한 회차): 결과를 비교에 쓰지 않는다"
+        )
     out_dir = Path(args.out) / args.name
     _write(out_dir, records, summary, render_report(args.name, summary))
     _say(f"wrote {out_dir}")
-    if tap.tripped:
-        _err(f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 호출을 멈췄다. 결과는 무효다")
-        return EXIT_RATE_LIMITED
+    if tap.stop:
+        _err(f"{STOP_TEXT[tap.stop]}. 결과는 무효다")
+        return EXIT_RATE_LIMITED if tap.stop == "rate_limit" else EXIT_CALLS_FAILED
     if spent:
         _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT
     if too_flaky:
         _err(f"입력 판정 호출 실패율 {failed}/{tried}가 상한 초과. 결과는 무효다")
         return EXIT_INPUT_FAIL_RATE
+    if gross > GROSS_FAIL_RATE:
+        _err(f"역할별 호출 실패율 최대 {gross:.1%}가 상한 초과. 결과는 무효다")
+        return EXIT_FAIL_RATE
     return 0
 
 

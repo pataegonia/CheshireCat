@@ -585,6 +585,18 @@ async def test_both_quotes_trust_uses_the_verified_kb_quote(no_rule):
     assert (await guard.judge(req())).output_tier == 4  # kb_quote가 비면 ③에 쓰지 않는다
 
 
+async def test_kb_quote_of_one_char_is_enough_under_both_quotes_trust(no_rule):
+    # KB 인용은 answer_quote와 달리 최소 길이(quote_min_chars)를 두지 않는다. 1자면 확인된 것이다
+    guard, _ = await make(output__tier3_trust="both_quotes")
+    kb_text = guard.kb.rank(MSGS[0].content + chr(10) + ANSWER).hits[0].text
+    one = next(c for c in kb_text if c.isalnum())
+    guard, _ = await make(
+        responder(output={**UNGROUNDED, "kb_quote": one}), output__tier3_trust="both_quotes"
+    )
+    j = await guard.judge(req())
+    assert (j.kb_quote_ok, j.output_tier, j.response.output.grounded) == (True, 3, False)
+
+
 # --- santa 4라운드 반영 ---
 
 

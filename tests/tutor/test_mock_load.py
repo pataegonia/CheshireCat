@@ -12,12 +12,15 @@ import math
 import random
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_args
 
 import httpx
 import pytest
+from guardrail.schema import OutputVerdict
 
+from integration.contracts import Category
 from tutor.eval import mock_load
-from tutor.judge import flow
+from tutor.judge import flow, guard_merge
 from tutor.judge.conversation import tidy
 from tutor.judge.signals import direct_clarify
 from tutor.runtime.response import TUTOR_DEFAULT
@@ -60,6 +63,11 @@ def passed(**changes):
         guard_judged=n_guard,
         guard_timeouts=0,
         guard_limits=mock_load.base_guard_limits(),
+        classify_on=True,
+        judge_output_on=True,
+        classify_calls=n_tutor,
+        judge_output_calls=n_tutor,
+        guard_skips=(),
         schemas=(("MainCallOut", n_tutor),),
         gate_entries=(("guard", 2 * n_guard), ("tutor", n_tutor)),
         gate_queued=0,
@@ -118,6 +126,11 @@ def test_tutor_sends_and_guard_judges_wait_on_their_own_latency(monkeypatch):
     asyncio.run(fake.hold())
     asyncio.run(fake.send({"response_format": {}}))
     assert waited == pytest.approx([1.0, 4.0])  # 가드 2초·튜터 8초, 배율 0.5
+    # 튜터가 부르는 가드 classify·judge_output도 가드 지연을 쓴다(스모크 검사 "가짜 가드 지연")
+    guard = mock_load.FakeGuard(fake, mock_load.TimedGate(4), calls=2, read_s=12, budget_s=20)
+    asyncio.run(guard.classify([]))
+    asyncio.run(guard.judge_output([], "답"))
+    assert waited[2:] == pytest.approx([1.0, 1.0])
     same = mock_load.FakeLLM(fake.latency, random.Random(0), scale=1.0)  # noqa: S311
     assert same.tutor_latency is same.latency  # 따로 주지 않으면 가드 판정 지연을 같이 쓴다
 
@@ -305,7 +318,94 @@ def test_cli_rejects_values_that_hang_or_break_the_run(flag, capsys):
 
 def test_tutor_and_guard_calls_all_go_through_one_gate():
     report = run(n_tutor=20, n_guard=20, scale=0.001, seed=2)
-    assert dict(report.gate_entries) == {"tutor": report.llm_calls, "guard": report.guard_calls}
+    stages = report.classify_calls + report.judge_output_calls  # 튜터가 부른 가드 단계도 가드 몫
+    assert stages > 0
+    assert dict(report.gate_entries) == {
+        "tutor": report.llm_calls,
+        "guard": report.guard_calls + stages,
+    }
+
+
+def test_tutor_calls_the_guard_classify_and_judge_output_once_per_llm_request():
+    """#138: v2는 가드 classify(주 호출과 병렬)·judge_output(주 호출 뒤)을 부른다(#159 리뷰)."""
+    report = run(n_tutor=40, n_guard=0, scale=0.001, seed=11)
+    assert report.classify_on and report.judge_output_on  # config/tutor.yaml: parallel·guard
+    # 가짜 주 호출은 늘 normal·answer라 LLM을 부른 요청은 모두 judge_output까지 간다
+    assert report.classify_calls == report.judge_output_calls == report.llm_requests
+    assert report.llm_requests == 40 - direct_count(40, 11)  # 직접 판정은 셋 다 0회
+    assert report.guard_skips == ()  # 가짜 가드의 반환 형식을 튜터가 받는다(invalid·error 없음)
+    assert dict(report.gate_entries)["guard"] == 2 * report.llm_requests
+
+
+def test_judge_output_waits_for_the_main_call_and_classify_runs_alongside(monkeypatch):
+    events: list[str] = []
+    send, stage = mock_load.FakeLLM.send, mock_load.FakeGuard._stage_call
+
+    async def logged_send(self, kwargs):
+        events.append("main start")
+        try:
+            return await send(self, kwargs)
+        finally:
+            events.append("main end")
+
+    async def logged_stage(self, name):
+        events.append(f"{name} start")
+        await stage(self, name)
+
+    monkeypatch.setattr(mock_load.FakeLLM, "send", logged_send)
+    monkeypatch.setattr(mock_load.FakeGuard, "_stage_call", logged_stage)
+    assert direct_count(1, 0) == 0  # 첫 튜터 행은 LLM을 부른다
+    run(n_tutor=1, n_guard=0, scale=0.001, seed=0)
+    assert events == ["classify start", "main start", "main end", "judge_output start"]
+
+
+def test_fake_guard_stages_hold_the_shared_gate_and_answer_like_the_guard():
+    fake = mock_load.FakeLLM(
+        mock_load.Latency.from_quantiles(1.0, 1.0),
+        random.Random(0),  # noqa: S311
+        scale=0.01,
+    )
+    gate = mock_load.TimedGate(1)
+    guard = mock_load.FakeGuard(fake, gate, calls=2, read_s=12, budget_s=20)
+
+    async def both():
+        return await asyncio.gather(guard.classify([]), guard.judge_output([], "답", "normal"))
+
+    category, verdict = asyncio.run(both())
+    assert gate.entries == {"guard": 2} and gate.queued == 1 and fake.peak == 1
+    assert guard.stage_calls == {"classify": 1, "judge_output": 1}
+    assert category in get_args(Category) and category not in guard_merge.ATTACK_CATEGORIES
+    assert isinstance(verdict, OutputVerdict) and verdict.safe and verdict.grounded
+    assert fake.guard_calls == 0  # /guard 판정 호출 수와 따로 센다
+
+
+def test_fake_guard_stages_give_up_past_the_read_limit():
+    _fake, guard = slow_guard(0.2, 4, read_s=0.02, budget_s=10)
+    for call in (guard.classify([]), guard.judge_output([], "답")):
+        with pytest.raises(TimeoutError):  # 튜터는 이것을 그 단계 timeout으로 센다
+            asyncio.run(call)
+    assert guard.stage_calls == {"classify": 1, "judge_output": 1}
+
+
+@pytest.mark.parametrize(
+    "missing, reasons",
+    [
+        (("classify",), "가드 classify 안 부름"),
+        (("judge_output",), "가드 judge_output 안 부름"),
+        (("classify", "judge_output"), "가드 classify 안 부름, 가드 judge_output 안 부름"),
+    ],
+)
+def test_a_guard_without_the_tutor_stages_fails_the_run(monkeypatch, capsys, missing, reasons):
+    """#159 리뷰: 가짜 가드에 없으면 튜터가 건너뛰어(missing) 주 호출만 잰다. 통과로 내지 않는다."""
+    for name in missing:
+        monkeypatch.delattr(mock_load.FakeGuard, name)
+    report = run(n_tutor=10, n_guard=0, scale=0.001, seed=15)
+    stage = {"classify": "classify", "judge_output": "judge"}  # guard_merge의 단계 이름
+    skips = dict(report.guard_skips)
+    assert report.llm_requests > 0
+    assert all(skips[f"{stage[name]} missing"] == report.llm_requests for name in missing)
+    ok, last = judged(report, capsys)
+    assert not ok and last == f"실패: {reasons}"
 
 
 def test_gate_waits_are_measured_when_the_gate_is_tight():
@@ -375,7 +475,7 @@ def test_a_run_without_tutor_requests_fails(capsys):
 
 
 def test_an_unknown_reply_schema_counts_as_an_llm_failure(monkeypatch, capsys):
-    """가짜 답을 모르는 호출(예: 새 classify·검증 호출)은 LLM 실패로 드러난다(#88 때 답을 더한다)."""
+    """가짜 답을 모르는 호출(예: 튜터 LLM의 새 호출)은 LLM 실패로 드러난다."""
     monkeypatch.setattr(mock_load, "REPLIES", {})
     report = run(n_tutor=5, n_guard=0, scale=0.001, seed=13)
     ok, last = judged(report, capsys)
@@ -445,7 +545,10 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     assert f"튜터 {report.llm_calls}회" in out  # 튜터는 직접 판정을 뺀 수
     assert f"가드 {report.guard_calls}회" in out and report.guard_calls == report.guard_expected
     assert report.llm_calls >= mock_load.MIN_LLM_SHARE * 20  # 출력 숫자 자체도 하한을 지킨다
-    assert "게이트 줄 선 호출 0회" in out
+    n = report.llm_requests  # 튜터가 부른 가드 classify·judge_output(배율 0.001이라 시간 초과 없음)
+    assert f"튜터의 가드 호출 classify {n}회 · judge_output {n}회(건너뜀 없음)\n" in out
+    # 튜터 요청이 classify·주 호출을 함께 쥐어 요청 40개로도 게이트 64가 찰 수 있다
+    assert f"게이트 줄 선 호출 {report.gate_queued}회" in out
     assert out.splitlines()[-1] == (  # 배율·요청 수가 기준과 달라 실측이 아니다
         "통과(스모크: 배율 0.001, 튜터 요청 20 < 300, 가드 요청 20 < 300, 실측 아님)"
     )
@@ -633,6 +736,9 @@ def test_missing_or_non_json_responses_count_as_failures(client, status, monkeyp
         guard_judged=0,
         guard_timeouts=0,
         guard_limits=(12.0, 20.0),
+        stages_on=(True, True),
+        stage_calls={},
+        guard_skips={},
         slash=404,
         mode="v2",
         guard_per_request=2,

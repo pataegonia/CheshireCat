@@ -78,7 +78,9 @@ class KnnIndex:
         k = cfg.input.knn
         if cfg.input.knn_vote_k < 1:  # 요청 때 IndexError 대신 기동 때 실패
             raise ValueError("input.knn_vote_k는 1 이상")
-        vec = TfidfVectorizer(analyzer=k.analyzer, ngram_range=tuple(k.ngram))
+        vec = TfidfVectorizer(
+            analyzer=k.analyzer, ngram_range=tuple(k.ngram), sublinear_tf=k.sublinear_tf
+        )
         # 행마다 L2 정규화 → 내적 = 코사인
         matrix = vec.fit_transform([r.text for r in rows]).tocsr()
         # 배열은 쓰기 금지. vocabulary_(dict)는 요청 경로가 transform만 해서 바뀌지 않는다

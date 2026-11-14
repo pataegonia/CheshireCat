@@ -2,28 +2,49 @@
 
 from collections.abc import Sequence
 from functools import cache
-from pathlib import Path
 
-from guardrail.config import load_config, resolve_path
+from guardrail.config import GuardConfig, load_config, resolve_path
 
 from tutor.retrieval.embedding import EmbeddingSearch, is_english
 from tutor.retrieval.index import KbIndex
 from tutor.retrieval.kb import Section, bigrams
 
-# 가드 retrieval.max_query_chars와 같은 상한. 넘으면 뒤쪽(최근 발화)을 남긴다
-MAX_QUERY_CHARS = 4000
 DEFAULT_K = 5
 
 
-def default_kb_dir() -> Path:
-    """가드와 같은 KB 폴더: 가드 설정 `paths.kb`(GUARD_KB_DIR로 덮어쓸 수 있다)."""
-    return resolve_path(load_config().paths.kb)
+def build_index(cfg: GuardConfig) -> KbIndex:
+    """가드 설정 cfg의 KB 폴더(`paths.kb`)·BM25 값(`kb`)·질의 상한(`retrieval`)으로 색인을 만든다.
+
+    서버는 `tutor.startup`이 가드가 기동 때 읽은 설정(`app.state.cfg`)으로 한 번 부른다. 설정
+    값이 `default_index()`를 만든 값과 같으면 그 색인을 같이 쓴다(테스트처럼 앱을 여러 번 띄울
+    때 다시 만들지 않는다). 그래서 cfg가 기본 설정과 다르면 기본 색인도 한 번 만든다(배포에서는
+    두 설정이 같아 한 번만 만든다). 배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18).
+    """
+    settings, index = _default()
+    if _settings(cfg) == settings:
+        return index
+    return KbIndex.from_dir(resolve_path(cfg.paths.kb), cfg)
+
+
+def _settings(cfg: GuardConfig) -> tuple[str, int, float, float, int]:
+    """색인이 cfg에서 읽는 값 전부(KB 폴더·n-gram·k1·b·질의 상한). 같으면 색인도 같다."""
+    kb = cfg.kb
+    return (str(resolve_path(cfg.paths.kb)), kb.ngram, kb.k1, kb.b, cfg.retrieval.max_query_chars)
 
 
 @cache
+def _default() -> tuple[tuple[str, int, float, float, int], KbIndex]:
+    """처음 부를 때의 `load_config()`로 만든 색인과 그 설정 값."""
+    cfg = load_config()
+    return _settings(cfg), KbIndex.from_dir(resolve_path(cfg.paths.kb), cfg)
+
+
 def default_index() -> KbIndex:
-    """기동 때 한 번 만드는 KB 색인. 배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18)."""
-    return KbIndex.from_dir(default_kb_dir())
+    """앱 state가 없는 쪽(로컬 측정·프로세스 안 handle·테스트)의 색인. 처음 부를 때 한 번 만든다.
+
+    가드 설정은 `load_config()`로 읽는다(GUARD_CONFIG·GUARD_KB_DIR를 따른다).
+    """
+    return _default()[1]
 
 
 async def retrieve(
@@ -33,6 +54,7 @@ async def retrieve(
     subject: str | None = None,
     k: int = DEFAULT_K,
     embedding: EmbeddingSearch | None = None,
+    index: KbIndex | None = None,
 ) -> list[Section]:
     """KB 섹션을 점수 높은 순으로 0개 이상 k개 이하 돌려준다.
 
@@ -40,15 +62,18 @@ async def retrieve(
     아무것도 못 찾아도 임베딩 순위로 k개를 채운다.
 
     query는 판단 대상 학습자 발화, history는 창 안의 다른 학습자 발화다. 어느 발화를 넣을지는
-    부르는 쪽이 고른다(버튼 문구는 빼서 넘긴다). 둘을 이어 한 질의로 쓰고 너무 길면 뒤쪽을 남긴다.
+    부르는 쪽이 고른다(버튼 문구는 빼서 넘긴다). 둘을 이어 한 질의로 쓰고 가드 설정
+    retrieval.max_query_chars보다 길면 뒤쪽을 남긴다.
     subject는 과목 폴더 이름(python·prompt·finance)으로 거른다.
     embedding(기동 때 만든 임베딩 검색)을 주면 영어 위주 질의에 한해 질의 임베딩 순위를 BM25
     순위와 RRF로 섞는다(TU-11). 2-gram이 없는 질의는 임베딩도 부르지 않는다.
+    index는 기동 때 만든 색인이다(서버는 `app.state.tutor_kb`). 없으면 `default_index()`를 쓴다.
     """
     if k <= 0:
         return []
-    index = default_index()
-    text = "\n".join([*history, query])[-MAX_QUERY_CHARS:]
+    if index is None:
+        index = default_index()
+    text = "\n".join([*history, query])[-index.max_query_chars :]
     ranked = [sid for sid, _score in index.search(text, subject=subject)]
     if embedding is not None and is_english(query) and bigrams(query):
         allowed = None

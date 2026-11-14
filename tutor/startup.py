@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from tutor.judge.flow import prepare_judge
-from tutor.retrieval import default_index
+from tutor.retrieval import build_index, default_index
 from tutor.retrieval.embedding import BUILD_TIMEOUT_S, Embed, EmbeddingSearch, openai_embed
 from tutor.runtime.config import TutorConfig, load_config
 from tutor.runtime.llm import build_llm, missing_api_env
@@ -22,9 +22,12 @@ def prepare(app_state: Any, cfg: TutorConfig | None = None) -> None:
     서버는 startup이 app.state에, 프로세스 안 호출(handle)은 기본 state에 한 번 만든다.
     cfg를 주면 그 설정을 쓴다(로컬 측정이 설정을 바꿔 부를 때). 임베딩 검색(TU-11)은 API를
     불러야 해서 여기서 만들지 않고 비워 둔다(build_embedding).
+    KB 색인은 가드가 기동 때 읽어 app_state.cfg에 둔 설정으로 만든다(가드와 같은 KB 폴더·BM25
+    값·질의 상한, TD-03). 가드 설정이 없는 state(프로세스 안 handle·로컬 측정)는 기본 색인을 쓴다.
     """
+    guard_cfg = getattr(app_state, "cfg", None)  # 가드 setup_guard가 둔다
     app_state.tutor_cfg = cfg if cfg is not None else load_config()
-    app_state.tutor_kb = default_index()
+    app_state.tutor_kb = build_index(guard_cfg) if guard_cfg is not None else default_index()
     app_state.tutor_llm = build_llm(app_state, app_state.tutor_cfg)
     app_state.tutor_emb = None
     prepare_judge(app_state)  # 주 호출 프롬프트(범주 → action 표 포함, #72)
@@ -56,7 +59,7 @@ async def startup(app_state: Any) -> None:
 
     설정·KB를 못 읽으면 예외가 나서 서버가 뜨지 않는다. LLM 호출기는 가드 게이트를 같이 쓴다.
     운영진 API 환경변수가 비면 서버는 뜨지만(언제나 200) 모든 답이 기본값이 되므로, 빈 이름만
-    오류로 남긴다(값은 남기지 않는다, TU-15). 예시 kNN·이름 사전도 뒤 이슈에서 여기서 만든다.
+    오류로 남긴다(값은 남기지 않는다, TU-15). 판단 예시 색인(TU-08)은 prepare_judge가 만든다.
     """
     missing = missing_api_env()
     if missing:

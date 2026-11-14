@@ -52,7 +52,7 @@ def messages_for(req: TutorRequest, sections: list[Section]) -> list[dict[str, s
 
 async def answer(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
     query, history = req.search_query()
-    sections = await retrieve(query, history, k=BASELINE_K)
+    sections = await retrieve(query, history, k=BASELINE_K, index=state.tutor_kb)
     result = await state.tutor_llm.complete(
         ROLE,
         messages_for(req, sections),

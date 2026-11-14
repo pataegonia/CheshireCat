@@ -2,7 +2,7 @@
 
 공개 튜터 행 중 정답 근거(evidence)가 있는 행마다 창 안의 학습자 발화로 `retrieve`를 불러,
 정답 섹션이 상위 k개에 있는지 본다. 폴드별 값(가드 `splits/v1.json`), 놓친 행,
-검색 지연을 함께 낸다.
+검색 지연을 함께 낸다. 홀드아웃 묶음 행은 재지 않는다(통합 하네스에서 최대 3회, TU-16·#84).
 `--embedding`을 주면 영어 질의에 임베딩 RRF를 섞는다(TU-11). 운영진 임베딩 API를 부르므로
 EMBEDDING_API_KEY·EMBEDDING_MODEL·EMBEDDING_BASE_URL이 있어야 하고(런박스), 부르기 전에
 예상 호출 수를 낸다.
@@ -39,7 +39,7 @@ class Report:
     rows: int
     row_ids: tuple[str, ...]
     recall: dict[int, float]  # k → recall@k
-    by_fold: dict[str, tuple[float, int]]  # 폴드(또는 holdout) → (recall@5, 행 수)
+    by_fold: dict[str, tuple[float, int]]  # 폴드 → (recall@5, 행 수)
     missed: tuple[
         tuple[str, tuple[str, ...], tuple[str, ...], bool], ...
     ]  # (id, 정답, 상위 5, 영어)
@@ -57,9 +57,16 @@ def query_parts(messages: Sequence[Any]) -> tuple[str, list[str]]:
 
 
 def public_rows(path: Path = PUBLIC) -> list[dict[str, Any]]:
+    """정답 근거가 있는 공개 튜터 행 중 교차 검증 행(홀드아웃 묶음은 뺀다, TU-16·#84)."""
     lines = path.read_text(encoding="utf-8").splitlines()
     rows = [json.loads(line) for line in lines if line.strip()]
-    return [row for row in rows if row["labels"].get("evidence")]
+    return cv_rows([row for row in rows if row["labels"].get("evidence")])
+
+
+def cv_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """홀드아웃 묶음에 든 행을 뺀다. 분할에 없는 행은 KeyError(조용히 섞이지 않게)."""
+    split = load_splits()
+    return [row for row in rows if split.cluster[row["id"]] not in split.holdout]
 
 
 Build = Callable[[], Awaitable[EmbeddingSearch]]
@@ -84,7 +91,7 @@ async def _rank(
 
 def measure(rows: Sequence[dict[str, Any]] | None = None, *, build: Build | None = None) -> Report:
     """build(임베딩 검색을 만드는 함수)를 주면 영어 질의에 임베딩 RRF를 섞어 잰다(TU-11)."""
-    rows = public_rows() if rows is None else list(rows)
+    rows = public_rows() if rows is None else cv_rows(rows)
     if not rows:
         raise ValueError("측정할 행이 없다")
     split = load_splits()
@@ -96,9 +103,7 @@ def measure(rows: Sequence[dict[str, Any]] | None = None, *, build: Build | None
     }
     folds: dict[str, list[bool]] = {}
     for row, hit in zip(rows, hits[5], strict=True):
-        cluster = split.cluster[row["id"]]
-        fold = "holdout" if cluster in split.holdout else str(split.fold[cluster])
-        folds.setdefault(fold, []).append(hit)
+        folds.setdefault(str(split.fold[split.cluster[row["id"]]]), []).append(hit)
     missed = tuple(
         (row["id"], gold, top, is_english(query_parts(row["messages"])[0]))
         for row, gold, top, hit in zip(rows, golds, tops, hits[5], strict=True)

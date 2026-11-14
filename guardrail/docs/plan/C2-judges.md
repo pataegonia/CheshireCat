@@ -179,7 +179,7 @@
 |---|---|---|---|
 | 선행 | S2.8 | 라벨 | + `orchestrator` |
 
-- `Guard.classify(messages) -> Category`, `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict`(PRD §9 T1-2. `category`가 None이면 먼저 `classify(messages)`를 부른다(nano 호출 +1). 3단 ①과 safe는 그 범주를 쓴다), `KbIndex` 재사용, `LLM.slot()`을 팀 서버에서 import하는 예제(`tests/test_tutor_api.py`). 범주 → action 대응(PRD §9 T3)을 docstring에 둔다. 리더에게 PR 링크로 전달한다. `/tutor` 코드는 고치지 않는다.
+- `async Guard.classify(messages) -> Category`, `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict`(PRD §9 T1-2. `category`가 None이면 입력·출력 nano를 병렬로 부른다(최대 2회). 두 메서드는 nano 재시도 0. 구현됨), `KbIndex` 재사용, `LLM.slot()`을 팀 서버에서 import하는 예제(`tests/test_tutor_api.py`). 범주 → action 대응(PRD §9 T3)을 docstring에 둔다. 리더에게 PR 링크로 전달한다. `/tutor` 코드는 고치지 않는다.
 
 ## 4. Phase 끝 점검
 

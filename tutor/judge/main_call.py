@@ -66,6 +66,8 @@ _FRONT = re.compile(r"\A---\n(?P<head>.*?)\n---\n", re.S)
 _TAGS = (
     "근거 묶음", "섹션", "대화", "학습자 발화", "튜터 발화", "다른 발화", "신호",
     "다시 확인할 규칙",
+    # 판단 예시 블록(TU-08). 이름 앞부분만 보므로 `예시`가 `<예시 범주="…">`까지 막는다
+    "판단 예시", "예시", "발화", "답변",
 )  # fmt: skip
 # 태그 이름 안의 공백은 몇 칸이든(없어도) 같은 태그로 본다: `<학습자  발화>`, `< /대화>` 등
 _TAG_RX = re.compile(
@@ -86,10 +88,10 @@ SANDWICH = (
 )
 
 
-# answer_seeking의 scaffold 정책(TU-06 `scaffold_state_rule`, #75). 공개 8행 3회 측정(11/11):
-# state(정답 사실을 먼저 밝힘) 97.9 · hide 77.1, 응함 판정은 state만 24번 중 3번.
-# 운영진 답(§11-1-4) 전까지 state를 기본으로 두고 토글로 되돌릴 수 있게 한다. 이 기본값은 잠정이고
-# 과제 대행 행 측정(#139) 뒤 확정한다.
+# answer_seeking의 scaffold 정책(TU-06 `scaffold_state_rule`, #75). 공개 8행 3회 측정(11/11)은
+# state(정답 사실을 먼저 밝힘) 97.9 · hide 77.1이었지만, 전체 200행 3회(11/14)에서는 전체 점수가
+# 같고(79.9 대 80.1) 과제 대행 행 0점이 늘어(3 → 5) 기본을 hide로 둔다. T3에서 운영진 답(§11-1-4)과
+# 함께 다시 본다.
 # academic_dishonesty는 어느 쪽이든 사실을 밝히지 않는다
 _ANSWER_SEEKING_STATE = (
     "- answer_seeking → scaffold: 문제가 묻는 정답 사실(값·이름·조건)을 근거 묶음의 표현 그대로 "
@@ -145,7 +147,7 @@ class MainCallPrompt:
         action_table: Mapping[str, Sequence[str]],
         prompt_dir: Path = PROMPT_DIR,
         *,
-        scaffold_state_rule: bool = True,
+        scaffold_state_rule: bool = False,
     ) -> "MainCallPrompt":
         # Windows 체크아웃(autocrlf)의 CRLF도 같은 프롬프트로 읽는다(런박스는 LF)
         raw = (prompt_dir / f"{PROMPT_ID}.md").read_text(encoding="utf-8")
@@ -169,7 +171,7 @@ class MainCallPrompt:
         rules: Mapping[str, ActionRule] | None = None,
         prompt_dir: Path = PROMPT_DIR,
         *,
-        scaffold_state_rule: bool = True,
+        scaffold_state_rule: bool = False,
     ) -> "MainCallPrompt":
         """통합 표(`integration.actions.load_actions()`, 기본은 `config/actions.yaml`)로 만든다.
 
@@ -222,19 +224,23 @@ def _turn_block(conv: Conversation) -> str:
 
 
 def build_user_message(
-    conv: Conversation, sections: Sequence[SectionLike], signals: Sequence[str] = ()
+    conv: Conversation,
+    sections: Sequence[SectionLike],
+    signals: Sequence[str] = (),
+    examples: str = "",
 ) -> str:
-    """요청별 부분. 순서: 근거 묶음 → 신호 → 대화 → 샌드위치 규칙(가장 가까운 곳에 규칙)."""
+    """요청별 부분. 순서: 근거 묶음 → 판단 예시 → 신호 → 대화 → 샌드위치 규칙.
+
+    규칙이 대화에 가장 가깝다. `examples`는 `tutor.judge.examples.render_examples`가 만든 블록이고,
+    비었으면(TU-08 끔) 넣지 않는다.
+    """
     bundle = "\n".join(_section_block(s) for s in sections) or "(관련 자료를 찾지 못했습니다)"
     hint = ", ".join(signals) if signals else "없음"
-    return "\n\n".join(
-        [
-            f"<근거 묶음>\n{bundle}\n</근거 묶음>",
-            f"<신호>{defuse(hint)}</신호>",
-            _turn_block(conv),
-            SANDWICH,
-        ]
-    )
+    parts = [f"<근거 묶음>\n{bundle}\n</근거 묶음>"]
+    if examples:
+        parts.append(examples)
+    parts += [f"<신호>{defuse(hint)}</신호>", _turn_block(conv), SANDWICH]
+    return "\n\n".join(parts)
 
 
 def build_messages(
@@ -242,10 +248,11 @@ def build_messages(
     conv: Conversation,
     sections: Sequence[SectionLike],
     signals: Sequence[str] = (),
+    examples: str = "",
 ) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": prompt.system},
-        {"role": "user", "content": build_user_message(conv, sections, signals)},
+        {"role": "user", "content": build_user_message(conv, sections, signals, examples)},
     ]
 
 
@@ -306,10 +313,11 @@ async def run_main_call(
     signals: Sequence[str] = (),
     *,
     deadline: float,
+    examples: str = "",
 ) -> MainCallOut | None:
     """nano 주 호출 1회(재시도는 런타임). 실패·형식 오류면 None → 호출 쪽이 TU-12 기본값."""
     result = await complete(
-        build_messages(prompt, conv, sections, signals), MainCallOut, deadline=deadline
+        build_messages(prompt, conv, sections, signals, examples), MainCallOut, deadline=deadline
     )
     if result.error is not None or not isinstance(result.parsed, MainCallOut):
         return None

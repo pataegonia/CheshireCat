@@ -391,9 +391,39 @@ EMBEDDING_ENV = {
     "EMBEDDING_MODEL": "m",
     "EMBEDDING_BASE_URL": "http://127.0.0.1:9",
 }
-BATCHES = math.ceil(len(default_index().chunks) / emb.BATCH)  # 기동 때 KB 묶음 호출 수
 ON = ("--tutor-set", "toggles.embedding=true")
 QUERY = "bank card limit"
+
+
+def kb_batches():
+    """기동 때 KB 묶음 호출 수. 색인은 테스트 안에서 만든다(수집 때 가드 설정을 읽지 않게)."""
+    return math.ceil(len(default_index().chunks) / emb.BATCH)
+
+
+def _english_targets(rows):
+    """임베딩을 부르는 판단 대상 발화(측정 경로의 query_parts, 영어 위주이고 2-gram이 있다)."""
+    from tutor.eval.recall import query_parts
+
+    targets = (query_parts(row["messages"])[0] for row in rows)
+    return [text for text in targets if emb.is_english(text) and bigrams(text)]
+
+
+def assert_no_holdout_queries(fake):
+    """기동 묶음 뒤에 임베딩으로 보낸 질의 텍스트(이력 + 판단 대상)에 홀드아웃 행의 질의가 없다.
+
+    개수만 보면 홀드아웃 행이 섞여도 수가 맞을 수 있다(#167 리뷰). 홀드아웃은 공유 분할
+    (splits/v1.json)로 고른다. 보낸 텍스트는 모두 교차 검증 행의 질의를 담아야 한다(빈 검사가
+    아니다).
+    """
+    from tutor.eval import run_local
+
+    rows, held = run_local.public_tutor_rows(), run_local.holdout_ids()
+    held_targets = _english_targets(row for row in rows if row["id"] in held)
+    cv_targets = _english_targets(row for row in rows if row["id"] not in held)
+    sent = [text for call in fake.calls[kb_batches() :] for text in call]
+    assert held_targets and sent
+    assert all(any(target in text for target in cv_targets) for text in sent)
+    assert not any(target in text for target in held_targets for text in sent)
 
 
 def test_expected_embedding_calls_are_kb_batches_plus_english_queries_per_run():
@@ -406,7 +436,7 @@ def test_expected_embedding_calls_are_kb_batches_plus_english_queries_per_run():
     )
 
     rows = public_rows()
-    assert kb_embedding_batches() == BATCHES == 4  # KB 조각 244개를 64개씩
+    assert kb_embedding_batches() == kb_batches() == 4  # KB 조각 244개를 64개씩
     assert expected_embedding_calls(rows, runs=3) == 4 + 3 * english_queries(rows)
     assert expected_embedding_calls(run_local.public_tutor_rows(), runs=1) == 4 + 20  # 영어 20개
 
@@ -419,7 +449,7 @@ class Returns(FakeEmbed):
         self.reply = reply
 
     async def __call__(self, texts):
-        if len(self.calls) < BATCHES:
+        if len(self.calls) < kb_batches():
             return await super().__call__(texts)
         self.calls.append(list(texts))
         return self.reply
@@ -485,14 +515,15 @@ def test_run_local_builds_and_uses_the_embedding_when_turned_on(monkeypatch, tmp
 
     fake = FakeEmbed()
     code, state = _run_local(monkeypatch, tmp_path, fake, *ON, query=QUERY)
+    batches = kb_batches()
     assert code == 0 and isinstance(state.tutor_emb, emb.EmbeddingSearch)  # 그 state로 잰다
-    assert len(fake.calls) == BATCHES + 1  # 기동 묶음 + 질의 1회(실행 1회)
+    assert len(fake.calls) == batches + 1  # 기동 묶음 + 질의 1회(실행 1회)
     captured = capsys.readouterr()
-    assert "임베딩 예상 호출 24회" in captured.out
+    assert "임베딩 예상 호출 20회" in captured.out  # 홀드아웃 행의 영어 질의 4개는 재지 않는다
     assert (
-        f"임베딩 호출 {BATCHES + 1}회(기동 {BATCHES}회 + 질의 1회 / 영어 질의 20회" in captured.out
+        f"임베딩 호출 {batches + 1}회(기동 {batches}회 + 질의 1회 / 영어 질의 16회" in captured.out
     )
-    assert "영어 질의 20회 중 1회만" in captured.out  # 일부만 써도 실패는 아니고 알린다
+    assert "영어 질의 16회 중 1회만" in captured.out  # 일부만 써도 실패는 아니고 알린다
     sample = run_local.public_tutor_rows()[0]["messages"][-1]["content"]
     assert QUERY not in captured.out + captured.err and sample not in captured.out  # 본문 없음
     saved = _saved(tmp_path)
@@ -532,10 +563,11 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     saved = _saved(tmp_path)
     assert len(english) <= saved["embedding"]["queries"]  # 넘으면 임베딩 호출 추정이 모자라다
     assert saved["embedding"]["calls"] == len(english) and saved["embedding"]["failures"] == 0
-    assert len(fake.calls) == BATCHES + len(english)
+    assert len(fake.calls) == kb_batches() + len(english)
     out = capsys.readouterr().out  # 자기 state 경로에서도 행마다 지연을 잰다
-    assert f"(요청 {len(run_local.public_tutor_rows())}개)" in out
-    assert all(len(texts) == 1 for texts in fake.calls[BATCHES:])  # 질의마다 한 문장씩
+    assert "(요청 160개)" in out  # 홀드아웃 40행은 재지 않는다(TU-16·#84)
+    assert all(len(texts) == 1 for texts in fake.calls[kb_batches() :])  # 질의마다 한 문장씩
+    assert_no_holdout_queries(fake)  # 보낸 질의 텍스트에도 홀드아웃 행이 없다
     assert code == 0 and saved["tainted"] is False
 
 
@@ -544,8 +576,8 @@ def test_run_local_reports_query_failures_over_several_runs(monkeypatch, tmp_pat
     fake = Returns([[math.nan] * DIM])  # 기동은 되고 질의 벡터는 쓸 수 없다
     code, _state = _run_local(monkeypatch, tmp_path, fake, *ON, "--runs", "2", query=QUERY)
     out = capsys.readouterr().out
-    assert code == 1 and len(fake.calls) == BATCHES + 2
-    assert "임베딩 예상 호출 44회" in out and "질의 2회" in out and "실패 2회" in out
+    assert code == 1 and len(fake.calls) == kb_batches() + 2
+    assert "임베딩 예상 호출 36회" in out and "질의 2회" in out and "실패 2회" in out
     assert "BM25로 떨어졌다" in out
     saved = _saved(tmp_path)
     assert saved["tainted"] is True and saved["embedding"]["failures"] == 2
@@ -567,7 +599,7 @@ def test_run_local_blocked_calls_taint_the_result_even_with_a_good_embedding(
     out = capsys.readouterr().out  # 튜터 상한에서 임베딩 몫도 뺐다고 알린다
     assert "상한에 막혀 보내지 못한 튜터 호출 1회" in out
     assert f"(튜터 상한 {state.tutor_llm.max_calls}회" in out  # 실제로 건 상한과 같다
-    assert f"- 임베딩 몫 {BATCHES + 20})" in out  # 기동 묶음 + 영어 질의 20개
+    assert f"- 임베딩 몫 {kb_batches() + 16})" in out  # 기동 묶음 + 교차 검증 행 영어 질의 16개
     marks = ["튜터 LLM 호출:", "튜터 요청 지연", "상한에 막혀 보내지 못한", "임베딩 호출 "]
     at = [out.index(mark) for mark in marks]
     assert at == sorted(at)  # 호출 → 지연(#122) → 상한 막힘 → 임베딩 요약 순
@@ -633,15 +665,16 @@ def test_run_local_checks_the_embedding_env_before_building(
 def test_run_local_counts_the_embedding_in_the_call_cap(monkeypatch, tmp_path, capsys):
     from tutor.eval import run_local
 
-    rows = run_local.public_tutor_rows()
+    held = run_local.holdout_ids()  # 홀드아웃 행은 재지 않는다(TU-16·#84)
+    rows = [row for row in run_local.public_tutor_rows() if row["id"] not in held]
     assert (
-        run_local.expected_calls(rows, preset="tutor", runs=1, judge=False) == 660
-    )  # 3 × 200 × 1.1
-    exact = 660 + 24  # 튜터 + 임베딩(기동 4 + 영어 질의 20)
+        run_local.expected_calls(rows, preset="tutor", runs=1, judge=False) == 528
+    )  # 3 × 160 × 1.1
+    exact = 528 + 20  # 튜터 + 임베딩(기동 4 + 영어 질의 16)
     code, state = _run_local(
         monkeypatch, tmp_path, FakeEmbed(), "--max-calls", str(exact), *ON, query=QUERY
     )
-    assert code == 0 and state.tutor_llm.max_calls == exact - 24  # 실행 중 튜터 상한에서도 뺀다
+    assert code == 0 and state.tutor_llm.max_calls == exact - 20  # 실행 중 튜터 상한에서도 뺀다
     capsys.readouterr()
     with pytest.raises(SystemExit) as stop:  # 하나 모자라면 시작 전에 멈춘다
         _run_local(monkeypatch, tmp_path, FakeEmbed(), "--max-calls", str(exact - 1), *ON)

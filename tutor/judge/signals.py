@@ -1,8 +1,10 @@
 """TU-05 결정적 신호: 저신호 직접 판정과 판단 힌트 신호.
 
 - 저신호 직접 판정(`direct_clarify`): LLM 없이 `clarify` 고정 문장을 낼지 정한다.
-  마지막 학습자 발화(태그 문자만 지운 원문, 자모 조합 전)가 자모·문장부호·기호·이모티콘만으로
-  되어 있고(숫자·라틴·완성 음절 없음, 숨긴 텍스트 없음) 앞에 대화가 있으면 참이다(가드 GR-06 기준).
+  마지막 학습자 발화(태그 문자만 지운 원문에 NFC만 건 것, 자모 조합 전)가 자모·문장부호·기호·
+  이모티콘만으로 되어 있고(숫자·라틴·완성 음절 없음, 숨긴 텍스트 없음), 자모만 모아 조합해도 완성
+  음절이 2개 미만이고(풀어 쓴 문장 제외, 가드 #130과 같은 음절 기준) 앞에 대화가 있으면 참이다.
+  문자 분류(수학·통화 기호, 글자를 담은 기호 등)는 가드 GR-06과 아직 다르다.
   빈 발화·공백뿐인 발화는 1턴이어도 참이다. 1턴 자모 입력은 주 호출이 판단한다.
 - 판단 힌트(`detect`): 위기, 지시 무력화, 정답 요구, 과제 대행, 자기 개인정보, 채점 조작.
   action을 정하지 않는다. 주 호출 입력의 <신호>에 이름만 넘기고 판단은 범주 정의로 한다.
@@ -29,18 +31,25 @@ from tutor.judge.conversation import Conversation, normalize_fast
 
 # --- 저신호 ---
 
+# 자모 확장 A·B(U+A960–, U+D7B0–)는 넣지 않는다. 가드처럼 글자로 본다(자모로 보면 풀어 쓴 문장
+# 사이에 끼워 음절 조합을 끊는 우회가 된다)
 _JAMO_RANGES = (
     (0x1100, 0x11FF),  # 한글 자모(조합형)
     (0x3131, 0x318E),  # 호환 자모
-    (0xA960, 0xA97F),  # 자모 확장 A
-    (0xD7B0, 0xD7FF),  # 자모 확장 B
     (0xFFA0, 0xFFDC),  # 반각 자모
 )
+_SYLLABLE = re.compile("[가-힣]")  # 완성 음절
 
 
 def _is_jamo(ch: str) -> bool:
     cp = ord(ch)
     return any(lo <= cp <= hi for lo, hi in _JAMO_RANGES)
+
+
+def _spelled_syllables(raw: str) -> int:
+    """자모만 모아 조합했을 때의 완성 음절 수. 풀어 쓴 문장(NFD·호환 자모)을 찾는다."""
+    jamo = "".join(ch for ch in raw if _is_jamo(ch))
+    return len(_SYLLABLE.findall(normalize_fast(jamo)))
 
 
 def _ignorable(ch: str) -> bool:
@@ -91,13 +100,22 @@ def direct_clarify(conv: Conversation) -> bool:
       판단은 `Conversation.is_empty` 하나로 한다.
     - 앞 대화가 있고 자모·문장부호·기호만 있으면 참이다. 다만 튜터가 바로 앞에서 질문했다면
       짧은 대답("ㅇㅇ")일 수 있으니 주 호출로 보낸다(공개 세트 저신호 8행은 모두 해당 없음).
+    - 원문은 NFC를 먼저 건다(NFD로 쪼갠 완성 음절은 보통 글자로 본다). 그다음 자모만 모아
+      조합하면 완성 음절이 2개 이상인 글(풀어 쓴 문장)은 거짓이다. 'ㅎㅏ' 같은 1음절은
+      저신호로 둔다(가드 #130과 같은 기준).
     - 숨긴 텍스트가 있으면 거짓이다.
     """
     if conv.target_hidden:
         return False
     if conv.is_empty:
         return True
-    return conv.has_history and is_low_signal_text(conv.target_raw) and not _tutor_asked(conv)
+    raw = unicodedata.normalize("NFC", conv.target_raw)
+    return (
+        conv.has_history
+        and is_low_signal_text(raw)
+        and _spelled_syllables(raw) < 2
+        and not _tutor_asked(conv)
+    )
 
 
 # --- 판단 힌트 신호 ---

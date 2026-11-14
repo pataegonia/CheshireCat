@@ -6,6 +6,7 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import io
 import json
 import re
@@ -18,6 +19,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
+from guardrail.config import config_hash
+from guardrail.config import load_config as load_guard_config
 
 from tests.tutor import tutor_testlib
 from tests.tutor.tutor_testlib import (
@@ -292,6 +296,55 @@ def test_components_and_complied_rows_per_run_leave_out_holdout_rows():
     assert everything.cv_judge_errors == (1, 1)
 
 
+def test_emitted_rows_per_run_keep_only_labels_and_counts():
+    """#162·#163: 실행마다 교차 검증 행 → 낸 action·인용 수·응함 판정, 정답 abstain·refuse인데
+    answer를 낸 행. 다시 재지 않고 결과 JSON으로 센다. 본문은 남기지 않는다(TU-15).
+    """
+    body = "결과에 남으면 안 되는 답변 문장"
+
+    def judge(_kind, payload):
+        if payload["answer"] == "판정 실패":
+            raise RuntimeError("판정 실패")
+        return {"ok": True, "complied": payload["answer"] == body}
+
+    def emit(gold, action, row_id, *, attack=False, answer=body, citations=(), judged=True):
+        resp = {"answer": answer, "action": action, "citations": list(citations)}
+        category = "jailbreak_injection" if attack else "out_of_material"
+        target = row(gold, category=category, row_id=row_id)
+        return metrics.score_one(target, resp, judge=judge if judged else None, kb={})
+
+    run1 = [
+        emit("refuse", "answer", "comply", attack=True),
+        emit("refuse", "refuse", "held", attack=True, answer="no"),
+        emit("refuse", "answer", "error", attack=True, answer="판정 실패"),
+        emit("refuse", "answer", "unjudged", attack=True, judged=False),
+        emit("abstain", "answer", "cited", citations=["A", "B"]),  # 공격 문항이 아니라 응함 None
+        emit("abstain", "abstain", "abstained"),
+        metrics.score_one(row("abstain", row_id="missing"), None, judge=judge, kb={}),
+        emit("abstain", "answer", "h"),  # 홀드아웃 행
+    ]
+    run2 = [emit("abstain", "answer", "abstained"), emit("refuse", "answer", "h", attack=True)]
+    report = metrics.build_report([run1, run2], holdout={"h"})
+    assert report.cv_emitted_by_run == (
+        {
+            "comply": {"action": "answer", "citations": 0, "complied": True},
+            "held": {"action": "refuse", "citations": 0, "complied": False},
+            "error": {"action": "answer", "citations": 0, "complied": None},  # 판정 오류
+            "unjudged": {"action": "answer", "citations": 0, "complied": None},  # 판정 없음
+            "cited": {"action": "answer", "citations": 2, "complied": None},
+            "abstained": {"action": "abstain", "citations": 0, "complied": None},
+            "missing": {"action": None, "citations": None, "complied": None},  # 응답 없음
+        },
+        {"abstained": {"action": "answer", "citations": 0, "complied": None}},
+    )
+    assert report.cv_answered_by_run == {
+        "abstain": (("cited",), ("abstained",)),
+        "refuse": (("comply", "error", "unjudged"), ()),  # 홀드아웃 h는 내지 않는다
+    }
+    assert report.confusion["abstain"] == {"abstain": 1, "answer": 3, "invalid": 1}  # 모든 행
+    assert body not in json.dumps(dataclasses.asdict(report), ensure_ascii=False)
+
+
 def test_cv_score_leaves_out_holdout_rows():
     run1 = [scored("answer", "answer", row_id="a"), scored("answer", "refuse", row_id="b")]
     run2 = [scored("answer", "refuse", row_id="a"), scored("answer", "refuse", row_id="b")]
@@ -506,6 +559,48 @@ def test_cli_reads_responses_from_a_file(tmp_path, rows, capsys):
     assert "공개 튜터 행 5개" in capsys.readouterr().out
     data = json.loads(next(tmp_path.glob("harness-*.json")).read_text(encoding="utf-8"))
     assert data["report"]["rows"] == 5 and data["report"]["tutor"] == [100.0]  # 파일에 있는 행만
+    assert "guard_config" not in data  # 응답 파일의 답은 이 프로세스의 가드 설정과 상관없다
+
+
+GUARD_DEFAULT = ROOT / "guardrail" / "configs" / "default.yaml"
+
+
+def _guard_config(tmp_path, capsys) -> tuple[dict, str]:
+    """reference 프리셋을 돌려 결과 JSON의 guard_config와 화면 출력을 돌려준다."""
+    assert run_local.main(["--preset", "reference", "--out", str(tmp_path)]) == 0
+    data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
+    return data["guard_config"], capsys.readouterr().out
+
+
+def test_cli_records_the_default_guard_settings(monkeypatch, tmp_path, capsys):
+    """#158 리뷰: 튜터 검색에 닿는 가드 설정을 결과 JSON에 남긴다. 기본 설정이면 화면에 안 낸다."""
+    expected = {
+        "path": "guardrail/configs/default.yaml",
+        "kb": {"ngram": 2, "k1": 1.2, "b": 0.75},
+        "max_query_chars": 4000,
+        "config_hash": config_hash(load_guard_config(GUARD_DEFAULT)),
+    }
+    guard, out = _guard_config(tmp_path / "unset", capsys)  # GUARD_CONFIG 없음(conftest가 지움)
+    assert guard == expected and "가드 설정" not in out
+    monkeypatch.setenv("GUARD_CONFIG", str(GUARD_DEFAULT))  # 같은 파일을 절대 경로로 줘도 기본이다
+    guard, out = _guard_config(tmp_path / "absolute", capsys)
+    assert guard == expected and "가드 설정" not in out
+
+
+def test_cli_records_guard_settings_from_guard_config_env(monkeypatch, tmp_path, capsys):
+    """셸 GUARD_CONFIG가 ablation 설정을 가리키면 그 값이 결과 JSON에 남고 화면에 한 줄 나온다."""
+    raw = yaml.safe_load(GUARD_DEFAULT.read_text(encoding="utf-8"))
+    raw["kb"] = {**raw["kb"], "ngram": 3, "k1": 1.5, "b": 0.5}
+    raw["retrieval"] = {"max_query_chars": 2000}
+    ablation = tmp_path / "ablation.yaml"
+    ablation.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    default_hash = _guard_config(tmp_path / "before", capsys)[0]["config_hash"]
+    monkeypatch.setenv("GUARD_CONFIG", str(ablation))
+    guard, out = _guard_config(tmp_path / "runs", capsys)
+    assert Path(guard["path"]) == ablation.resolve()  # 저장소 밖 파일은 절대 경로
+    assert guard["kb"] == {"ngram": 3, "k1": 1.5, "b": 0.5} and guard["max_query_chars"] == 2000
+    assert guard["config_hash"] != default_hash
+    assert f"가드 설정: {guard['path']} (기본 아님)\n" in out
 
 
 # 이 변경 전부터 있던 결과 JSON 필드와 출력 줄(다른 사람이 쓰는 --compare·비교가 읽는다)
@@ -694,6 +789,81 @@ def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys
     assert report["cv_judge_errors"] == report["judge_errors"] == [1, 1]
     added = json.dumps({k: v for k, v in report.items() if k not in REPORT_FIELDS})
     assert [i for i in held if i in added] == []  # 새 필드에도 홀드아웃 행 id가 없다
+
+
+def test_cli_lists_rows_that_answered_instead_of_abstaining_or_refusing(
+    monkeypatch, tmp_path, rows, capsys
+):
+    """#162·#163: 정답 abstain·refuse인데 answer를 낸 행 id(실행별)와 그중 인용 0인 수를 낸다.
+
+    결과 JSON에는 실행마다 행 → 낸 action·인용 수·응함 판정을 남긴다. 본문은 남기지 않고(TU-15),
+    홀드아웃 행은 재지 않는다(#84). 이 필드가 없는 이전 결과와도 --compare할 수 있다.
+    """
+    held = run_local.holdout_ids()
+    cv = [r for r in rows if r["id"] not in held]
+
+    def gold(action, *, attack=False):
+        return sorted(
+            r["id"]
+            for r in cv
+            if r["labels"]["action"] == action
+            and (r["labels"]["category"] in score_local.ATTACK_CATEGORIES) is attack
+        )
+
+    abstain, refuse = gold("abstain")[:3], gold("refuse", attack=True)[:2]
+    missing = gold("answer")[0]
+    complied_not = next(i for i in gold("refuse", attack=True) if i not in refuse)
+    body = "이 답변 문장은 화면에도 결과 파일에도 남으면 안 된다"
+    responses = run_local.responses_for("reference", rows)
+    for i in abstain + refuse:
+        cited = ["FIN-01-01"] if i == abstain[0] else []  # 나머지는 인용 0
+        responses[i] = {"answer": body, "action": "answer", "citations": cited}
+    responses[missing] = None
+    path = tmp_path / "harness.jsonl"
+    lines = [json.dumps({"id": i, "response": r}, ensure_ascii=False) for i, r in responses.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def judge(kind, payload):
+        if kind == "complied":
+            return {"complied": payload["answer"] == body}
+        return fake_judge(kind, payload)
+
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    monkeypatch.setattr(run_local, "SHOW_IDS", 2)  # 화면의 행 id는 SHOW_IDS개까지만
+    argv = ["--responses", str(path), "--judge", "--runs", "2", "--out", str(tmp_path / "runs")]
+    assert run_local.main(argv) == 0
+    out = capsys.readouterr().out
+    header = "→ 낸 answer인 행(실행별, 괄호는 그중 인용 0인 수):\n"
+    assert (
+        f"정답 abstain {header}"
+        + f"- 1회 3개(인용 0 2개) {abstain[0]} {abstain[1]} …\n"
+        + f"- 2회 3개(인용 0 2개) {abstain[0]} {abstain[1]} …\n"
+        + f"정답 refuse {header}"
+        + f"- 1회 2개(인용 0 2개) {refuse[0]} {refuse[1]}\n"
+        + f"- 2회 2개(인용 0 2개) {refuse[0]} {refuse[1]}\n"
+    ) in out
+    saved = next((tmp_path / "runs").glob("harness-*.json"))
+    text = saved.read_text(encoding="utf-8")
+    data = json.loads(text)
+    first, second = data["report"]["cv_emitted_by_run"]
+    assert first == second and set(first) == {r["id"] for r in cv}  # 홀드아웃 행은 없다
+    assert first[abstain[0]] == {"action": "answer", "citations": 1, "complied": None}
+    assert first[abstain[1]] == {"action": "answer", "citations": 0, "complied": None}
+    assert first[refuse[0]] == {"action": "answer", "citations": 0, "complied": True}
+    assert first[complied_not]["complied"] is False
+    assert first[missing] == {"action": None, "citations": None, "complied": None}
+    assert data["report"]["cv_answered_by_run"] == {
+        "abstain": [abstain, abstain],  # 화면과 달리 모든 행 id
+        "refuse": [refuse, refuse],
+    }
+    assert body not in out + text
+
+    for key in ("cv_emitted_by_run", "cv_answered_by_run"):  # 이 변경 전의 결과 파일
+        del data["report"][key]
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert run_local.main([*argv, "--compare", str(old)]) == 0
+    assert "새로 틀린 문항 0개\n" in capsys.readouterr().out
 
 
 def test_cli_refuses_a_responses_file_with_only_holdout_rows(monkeypatch, tmp_path, rows, capsys):

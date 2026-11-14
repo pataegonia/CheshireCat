@@ -12,6 +12,7 @@ from guardrail.config import Llm
 from guardrail.llm import LLM
 
 INPUT_REPLY = {"evidence": "fake", "category": "normal"}
+ACT_REPLY = {"request": "fake", "act": "learning_question"}
 OUTPUT_REPLY = {"reason": "fake", "grounded": True}
 BASELINE_REPLY = {"reason": "fake", "grounded": True, "safe": True}
 
@@ -21,6 +22,8 @@ def _reply(kwargs: dict[str, Any]) -> dict[str, Any]:
     msgs = kwargs.get("messages") or [{}]
     system = msgs[0].get("content", "") if msgs[0].get("role") == "system" else ""
     probe = json.dumps([kwargs.get("response_format"), system], ensure_ascii=False)
+    if "InputActOut" in probe:
+        return ACT_REPLY
     if "OutputBaselineOut" in probe:
         return BASELINE_REPLY
     if "OutputOut" in probe:

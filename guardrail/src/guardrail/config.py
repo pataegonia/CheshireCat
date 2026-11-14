@@ -81,6 +81,9 @@ class Vectorizer(_Strict):
 class KnnCfg(Vectorizer):
     max_examples: PositiveInt
     per_category: PositiveInt
+    # S3.2 선별용 변형(R14 B4·B5). yaml의 값이 v1 동작이다. 채택하면 master-plan §4.4에 올린다
+    order: Literal["nearest_last", "nearest_first"]  # few-shot 제시 순서
+    sublinear_tf: bool  # TF-IDF의 tf를 1 + log(tf)로
 
 
 class LrCfg(Vectorizer):
@@ -88,6 +91,9 @@ class LrCfg(Vectorizer):
 
 
 class InputCfg(_Strict):
+    # S3.2 선별용 변형(R14 B3). category = nano가 범주를 고름(v1),
+    # act = nano는 요청 유형을 고르고 코드가 범주로 대응
+    label_mode: Literal["category", "act"]
     window_last: int
     max_chars: int
     max_answer_chars: int
@@ -156,6 +162,15 @@ class GuardConfig(_Strict):
             raise ValueError("output.rule_extra_tokens의 bare_numeral은 미구현이다")
         if o.rule_require_same_kind:
             raise ValueError("output.rule_require_same_kind: true는 미구현이다")
+        # shortcut: 파일 이름으로 판별. 순서를 말하는 프롬프트가 늘면 머리말 필드로
+        if (
+            self.input.knn.order == "nearest_first"
+            and self.prompts.get("input_judge") == "input_judge.md"
+        ):
+            raise ValueError(
+                "input.knn.order: nearest_first는 input_judge.md와 쓸 수 없다"
+                "(프롬프트가 가장 비슷한 예시가 마지막에 있다고 적는다)"
+            )
         return self
 
 

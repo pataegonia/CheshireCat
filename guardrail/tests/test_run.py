@@ -188,7 +188,7 @@ async def test_estimate_does_not_log_holdout_open(tmp_path):
 def test_ablation_files_each_toggle_one_switch():
     base = load_config(DEFAULT).toggles.model_dump()
     names = run.ablation_files(ROOT / "configs/ablation")
-    assert len(names) == 11
+    assert len(names) == 11 and "no_nano_span" in names  # S2.9: nano 구간은 기본 켬
     for name, path in names.items():
         t = load_config(DEFAULT, ablation=path).toggles.model_dump()
         diff = {k for k in t if t[k] != base[k]}
@@ -333,13 +333,263 @@ async def test_unsupported_ablation_row_is_refused_before_any_call(tmp_path, cap
     assert not (tmp_path / "runs" / "t").exists()
 
 
+# --- 속도 제한이 이어지면 멈춘다(2026-11-13: 429 뒤에도 3,700회를 더 보냈다) ---
+
+
+async def test_consecutive_rate_limits_stop_the_run(tmp_path):
+    from fakes import RateLimited
+
+    from guardrail.llm import LLM
+
+    probes = run.probe_calls(load_config(DEFAULT).llm)
+    made = []
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        def respond(kw):
+            if len(fake.requests) <= probes:  # probe는 통과, 판정 호출은 전부 429
+                return Ok('{"evidence": "e", "category": "normal"}')
+            return RateLimited("0")
+
+        fake = FakeLLM(respond=respond)
+        made.append(fake)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    code = await run.amain(_args(tmp_path, "--repeat", "3", config=DEFAULT), make_llm=make_llm)
+    assert code == run.EXIT_RATE_LIMITED == 6
+    # 3회 × 약 375호출(재시도 포함 약 2,250회)을 다 보내지 않는다
+    assert len(made[0].requests) < probes + 150
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert "속도 제한" in summary["invalid"]
+    assert "# 무효 실행" in (out / "report.md").read_text(encoding="utf-8")
+
+
+async def test_scattered_rate_limits_do_not_stop_the_run(tmp_path):
+    from fakes import RateLimited
+
+    from guardrail.llm import LLM
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        def respond(kw):  # 열 번에 한 번만 429: 재시도로 풀린다
+            if len(fake.requests) % 10 == 0:
+                return RateLimited("0")
+            if "OutputBaselineOut" in json.dumps(kw.get("response_format", {})):
+                return Ok('{"reason": "r", "grounded": true, "safe": true}')
+            return Ok('{"evidence": "e", "category": "normal"}')
+
+        fake = FakeLLM(respond=respond)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    assert await run.amain(_args(tmp_path), make_llm=make_llm) == 0
+
+
+async def test_streak_resets_on_other_errors_and_holds_on_budget():
+    from types import SimpleNamespace
+
+    from guardrail.llm import LLMResult
+
+    script: list[str | None] = []
+
+    async def inner(role, messages, schema, *, deadline):
+        return LLMResult(None, script.pop(0), 1, 1.0, None, None)  # type: ignore[arg-type]
+
+    async def feed(errors):
+        llm = SimpleNamespace(complete=inner, max_calls=100)
+        tap = run.Tap()
+        tap.attach(llm)  # type: ignore[arg-type]
+        script[:] = errors
+        for _ in errors:
+            await llm.complete("r", [], None, deadline=None)
+        return llm, tap
+
+    rl = ["rate_limit"] * (run.RATE_LIMIT_STREAK - 1)
+    for last in (None, "bad_json"):  # 성공이든 응답이 온 오류든 0으로 되돌린다
+        llm, tap = await feed([*rl, last])
+        assert tap.streak == 0 and not tap.tripped and llm.max_calls == 100
+    llm, tap = await feed([*rl, "budget"])  # budget은 세지도 되돌리지도 않는다
+    assert tap.streak == run.RATE_LIMIT_STREAK - 1 and not tap.tripped and llm.max_calls == 100
+    script[:] = ["rate_limit"]
+    await llm.complete("r", [], None, deadline=None)  # 한 번 더 429면 멈춘다
+    assert tap.tripped and llm.max_calls == 0
+
+
+# --- 429가 아닌 실패에서도 멈추고 무효로 남긴다(#151 리뷰) ---
+
+
+async def _feed(errors):
+    from guardrail.llm import LLMResult
+
+    script = list(errors)
+
+    async def inner(role, messages, schema, *, deadline):
+        return LLMResult(None, script.pop(0), 1, 1.0, None, None)  # type: ignore[arg-type]
+
+    llm = SimpleNamespace(complete=inner, max_calls=100)
+    tap = run.Tap()
+    tap.attach(llm)  # type: ignore[arg-type]
+    for _ in errors:
+        await llm.complete("r", [{"role": "user", "content": "BODY-MARK"}], None, deadline=None)
+    return llm, tap
+
+
+async def test_auth_error_stops_at_once():
+    llm, tap = await _feed([None, "auth"])  # 키가 회수되면(SPEC §7.1) 더 보내지 않는다
+    assert tap.stop == "auth" and llm.max_calls == 0
+
+
+async def test_mixed_transport_failures_in_a_row_stop_the_run():
+    n = run.RATE_LIMIT_STREAK
+    mixed = ["server", "timeout"] * (n // 2)
+    llm, tap = await _feed(mixed[:-1])
+    assert tap.stop is None and llm.max_calls == 100
+    llm, tap = await _feed(mixed)
+    assert tap.stop == "errors" and llm.max_calls == 0
+    llm, tap = await _feed([*mixed[:-1], "bad_json", "server"])  # 응답이 한 번 오면 다시 센다
+    assert tap.stop is None
+    llm, tap = await _feed(["rate_limit"] * n)  # 전부 429면 사유는 그대로 429다
+    assert tap.stop == "rate_limit"
+
+
+async def test_call_records_hold_no_request_text():
+    # 행 기록에는 숫자·오류 코드·파싱된 출력만 남긴다. 요청 본문을 넣는 변이를 잡는다
+    _, tap = await _feed([None, "server"])
+    assert "BODY-MARK" not in json.dumps([tap.records, tap.parsed], ensure_ascii=False)
+    assert {k for _, call in tap.parsed for k in call} == {
+        "role", "parsed", "latency_ms", "attempts", "error", "finish_reason", "completion_tokens",
+    }  # fmt: skip
+
+
+def _failing_llm(status_error, every=1):
+    """probe는 통과, 그 뒤 판정 요청은 `every`번에 한 번꼴로 실패하는 LLM."""
+    from guardrail.llm import LLM
+
+    probes = run.probe_calls(load_config(DEFAULT).llm)
+    made = []
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        def respond(kw):
+            n = len(fake.requests)
+            if n > probes and n % every == 0:
+                return status_error
+            if "OutputBaselineOut" in json.dumps(kw.get("response_format", {})):
+                return Ok('{"reason": "r", "grounded": true, "safe": true}')
+            return Ok('{"evidence": "e", "category": "normal"}')
+
+        fake = FakeLLM(respond=respond)
+        made.append(fake)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    return make_llm, made, probes
+
+
+@pytest.mark.parametrize("status", [401, 500])
+async def test_non_429_failures_stop_and_invalidate(tmp_path, status):
+    from fakes import HttpStatus
+
+    make_llm, made, probes = _failing_llm(HttpStatus(status))
+    code = await run.amain(_args(tmp_path, config=DEFAULT), make_llm=make_llm)
+    assert code == run.EXIT_CALLS_FAILED == 9
+    assert len(made[0].requests) < probes + 150  # 약 375호출을 다 보내지 않는다
+    summary = json.loads((tmp_path / "runs" / "t" / "summary.json").read_text(encoding="utf-8"))
+    assert "멈췄다" in summary["invalid"]
+
+
+async def test_scattered_failures_over_the_gross_limit_invalidate(tmp_path):
+    from fakes import RateLimited
+
+    make_llm, _, _ = _failing_llm(RateLimited("0"), every=2)  # 요청의 절반이 429
+    code = await run.amain(_args(tmp_path, config=DEFAULT), make_llm=make_llm)
+    assert code == run.EXIT_FAIL_RATE == 8
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert "실패율" in summary["invalid"]
+    assert any(f["failed"] for f in summary["call_fail"].values())
+
+
+def test_fail_rate_between_warn_and_gross_only_warns():
+    records = [("output_judge", "timeout", None)] * 8 + [("output_judge", None, "stop")] * 376
+    records += [("input_judge", "budget", None)]  # 보내지 않은 호출은 세지 않는다
+    fails = run.call_failures(records)
+    assert fails == {"output_judge": {"failed": 8, "calls": 384}}
+    assert run.worst_fail_rate(fails) == pytest.approx(8 / 384)
+    assert run.WARN_FAIL_RATE < 8 / 384 < run.GROSS_FAIL_RATE
+    lines = run._banner({"call_fail": fails})
+    assert any("output_judge" in x and "8/384" in x for x in lines)
+    assert not run._banner({"call_fail": {"output_judge": {"failed": 1, "calls": 384}}})
+
+
+# --- probe의 맨 요청이 막혀 있으면 측정을 시작하지 않는다 ---
+
+
+def _blocked_llm(made, step):
+    from guardrail.llm import LLM
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        fake = FakeLLM(respond=lambda kw: step)
+        made.append(fake)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    return make_llm
+
+
+async def test_probe_base_rate_limit_stops_before_any_judge_call(tmp_path, capsys):
+    from fakes import RateLimited
+
+    made = []
+    argv = _args(tmp_path, "--holdout")
+    code = await run.amain(
+        argv, make_llm=_blocked_llm(made, RateLimited("0")), judge_factory=constant_factory
+    )
+    err = capsys.readouterr().err
+    assert code == run.EXIT_RATE_LIMITED == 6
+    assert len(made[0].requests) == 1  # probe의 맨 요청뿐. 판정 호출 0회
+    assert "rate_limit" in err and "무효" in err and err.count("\n") == 1
+    assert not run.HOLDOUT_VIEWS.exists()  # 열람 기록은 이 종료보다 뒤다
+
+
+async def test_probe_base_other_failure_uses_its_own_exit_code(tmp_path, capsys):
+    from fakes import ServerError
+
+    made = []
+    code = await run.amain(
+        _args(tmp_path, "--holdout"),
+        make_llm=_blocked_llm(made, ServerError()),
+        judge_factory=constant_factory,
+    )
+    err = capsys.readouterr().err
+    assert code == run.EXIT_PROBE_FAILED == 7
+    assert len(made[0].requests) == 1 and "server" in err and "무효" in err
+    assert not run.HOLDOUT_VIEWS.exists()
+
+
+async def test_probe_success_still_measures_and_records_holdout(tmp_path):
+    code = await run.amain(
+        _args(tmp_path, "--holdout"), make_llm=_counting_llm, judge_factory=constant_factory
+    )
+    assert code == 0 and len(run.holdout_views()) == 1
+
+
 async def test_measure_writes_no_nano_output_for_held_out_rows(monkeypatch):
     # 홀드아웃 행의 nano 파싱 출력(학습자 발화를 옮겨 적은 문장)이 responses.jsonl에 남으면 안 된다
     split = SimpleNamespace(cluster={"a": "c1", "b": "c2"}, holdout=("c2",))
     tap = run.Tap()
 
     async def fake_run_once(*a, **k):
-        tap.parsed += [("a", "input", {"evidence": "x"}), ("b", "input", {"evidence": "y"})]
+        tap.parsed += [  # #151부터 (행 id, 호출 기록)이다
+            (i, {"role": "input", "parsed": {"evidence": e}}) for i, e in (("a", "x"), ("b", "y"))
+        ]
         return SimpleNamespace(
             judgements={i: SimpleNamespace(
                 input_source="s", output_tier=None, calls=1, errors=(), knn_major=None,

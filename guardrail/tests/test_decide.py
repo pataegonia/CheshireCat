@@ -103,7 +103,8 @@ def test_tier2_is_skipped_when_literal_rule_is_off():
 
 
 def test_tier3_trusted_nano_ungrounded_is_false_empty():
-    assert verdict(nano_ungrounded=True, quote_span=QUOTE) == (False, (), 3)
+    off = toggles(nano_span=False)
+    assert verdict(nano_ungrounded=True, quote_span=QUOTE, toggles=off) == (False, (), 3)
 
 
 def test_tier3_emits_quote_only_when_nano_span_is_on():

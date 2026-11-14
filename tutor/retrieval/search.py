@@ -15,19 +15,35 @@ DEFAULT_K = 5
 def build_index(cfg: GuardConfig) -> KbIndex:
     """가드 설정 cfg의 KB 폴더(`paths.kb`)·BM25 값(`kb`)·질의 상한(`retrieval`)으로 색인을 만든다.
 
-    서버는 `tutor.startup`이 가드가 기동 때 읽은 설정(`app.state.cfg`)으로 한 번 부른다.
-    배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18).
+    서버는 `tutor.startup`이 가드가 기동 때 읽은 설정(`app.state.cfg`)으로 한 번 부른다. 설정
+    값이 `default_index()`를 만든 값과 같으면 그 색인을 같이 쓴다(테스트처럼 앱을 여러 번 띄울
+    때 다시 만들지 않는다). 배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18).
     """
+    settings, index = _default()
+    if _settings(cfg) == settings:
+        return index
     return KbIndex.from_dir(resolve_path(cfg.paths.kb), cfg)
 
 
+def _settings(cfg: GuardConfig) -> tuple[str, int, float, float, int]:
+    """색인이 cfg에서 읽는 값 전부(KB 폴더·n-gram·k1·b·질의 상한). 같으면 색인도 같다."""
+    kb = cfg.kb
+    return (str(resolve_path(cfg.paths.kb)), kb.ngram, kb.k1, kb.b, cfg.retrieval.max_query_chars)
+
+
 @cache
+def _default() -> tuple[tuple[str, int, float, float, int], KbIndex]:
+    """처음 부를 때의 `load_config()`로 만든 색인과 그 설정 값."""
+    cfg = load_config()
+    return _settings(cfg), KbIndex.from_dir(resolve_path(cfg.paths.kb), cfg)
+
+
 def default_index() -> KbIndex:
     """앱 state가 없는 쪽(로컬 측정·프로세스 안 handle·테스트)의 색인. 처음 부를 때 한 번 만든다.
 
     가드 설정은 `load_config()`로 읽는다(GUARD_CONFIG·GUARD_KB_DIR를 따른다).
     """
-    return build_index(load_config())
+    return _default()[1]
 
 
 async def retrieve(

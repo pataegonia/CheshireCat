@@ -129,7 +129,7 @@ POST /tutor  (루트 app.py[통합 IN-05]: Bearer 인증 → tutor.router → tu
   ⑤ 주 호출: 범주 → action(표: config/actions.yaml, 통합 IN-03), 문장 목록(문장별 근거 sid·인용 문구) (TU-06)
      ∥ 가드 classify(messages): ①과 동시에 시작, 주 호출을 기다리게 하지 않음 (TU-10, 통합 I13)
   ▼  [코드]
-  ⑤-2 합치기: classify가 공격 4범주인데 주 호출 action이 그 범주의 표 action과 다르면 classify 범주의 고정 문장으로 바꾼다 (TU-10)
+  ⑤-2 합치기: classify가 공격 4범주면, 주 호출이 이미 표 고정 문장을 냈거나 §3 우선순위에서 더 강한 action을 낸 경우를 빼고 classify 범주의 고정 문장으로 바꾼다 (TU-10)
   ▼  [주 호출 문장이 그대로 나가는 조합(고정 문장 제외), 남은 시간 ≥ judge_skip_s]
   ⑥ 검증: 가드 judge_output(category=⑤-2의 범주) (TU-09 ②, v1 기본 켬)
   ▼  [코드]
@@ -233,14 +233,22 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - **v1 기본은 ② 가드 `judge_output`을 주 호출 문장이 그대로 나가는 조합 전부에 켠다**(action과 상관없이, 고정 문장·템플릿 경로는 지울 주장이 없어 제외. 통합 §3-1 3단계 "생성 경로"에 표 밖 조합(예: normal에 refuse, out_of_material에 answer)을 더한 것). ① 자체 검증과 끔은 ablation으로 비교한다.
 - 검증이 주로 잡는 것: scaffold 답변(최종 정답 유출), 신호가 있었던 답변(응함), 수치가 든 answer(근거 대조).
 - 두 방식을 비교한다: ① 튜터 자체 검증 호출(통과 / 고칠 문장) ② 가드 `judge_output(messages, candidate_answer, category=주 호출의 범주)`(가드 §9 D1-2, 가드 9cce438)로 `unsupported` 구간이 든 문장을 지우고 인용을 다시 계산(통합 IN-04). **`category`(⑤-2 합친 범주)를 반드시 넘긴다**: 넘기지 않으면 가드가 `classify`를 다시 불러 nano가 1회 늘어난다.
-- 남은 시간이 `judge_skip_s`(공유 설정 키, 잠정 4초) 미만이거나 판정이 실패하면 **판정만 건너뛰고 생성된 답과 action을 그대로 낸다**(abstain으로 바꾸지 않음, 통합 §3-1과 합의).
+- 남은 시간이 `judge_skip_s`(공유 설정 키, 잠정 4초) 미만이거나 0 이하, 또는 판정이 실패하면 **판정만 건너뛰고 생성된 답과 action을 그대로 낸다**(abstain으로 바꾸지 않음, 통합 §3-1과 합의).
+- `safe=false`이면 답 전체를 버린다(IN-04). 합친 범주가 공격 4범주면 일반 거절 문장 대신 그 범주 표 action의 고정 문장(예: academic_dishonesty는 scaffold 고정 문장), 그 밖에는 IN-04의 거절 문장이다(#138 리뷰).
 - **수용 기준**: 끔 / ① / ②의 응함·유출·사실 점수·지연 비교에서 순이득이 있을 때만 켠다. 응함은 손으로 확인한 실제 응함으로 비교하고, 판정 개수의 차이는 3회 분산 밖일 때만 본다(§7).
 
 ### TU-10 가드 범주 판정 병렬 합치기 (P0, v1 기본)
 - **11/15 v1의 범주 판정은 가드 `Guard.classify(messages)`(가드 §9 D1, 통합 I13 ⓐ)가 맡는다.** 단, 주 호출 앞에 줄 세우지 않고 **주 호출과 동시에** 돌린다(`guard_classify: parallel`). 직렬(ⓐ, 생성 경로 p50 약 9s)은 §6 지연 기준을 넘기 때문이다.
-- **합치기 규칙(⑤-2)**: classify가 공격 4범주(`jailbreak`·`harmful_content`·`off_topic`·`academic_dishonesty`)인데 주 호출 action이 그 범주의 표 action(`config/actions.yaml`, harmful은 refuse·redirect 둘 다)과 다르면, classify 범주의 고정 문장으로 바꾼다(harmful은 refuse 고정 문장 `[측정]`, academic_dishonesty는 과목 사실 없는 scaffold 고정 문장). 그 밖에는 주 호출 결과를 쓴다. 주 호출이 공격으로 봤는데 classify가 normal이면 주 호출을 따른다. 그래서 공격 재현율은 둘 중 높은 쪽 이상이다.
+- **합치기 규칙(⑤-2)**: classify가 공격 4범주(`jailbreak`·`harmful_content`·`off_topic`·`academic_dishonesty`)일 때만 본다. 공격 범주는 코드에 적지 않고 기동 때 가드 설정 `block_categories`를 읽는다(`/guard`와 차단 기준이 같이 움직인다, #138 리뷰). 그 밖에는 주 호출 결과를 쓴다. 주 호출이 공격으로 봤는데 classify가 normal이면 주 호출을 따른다.
+  1. 주 호출이 공격 범주의 표 action이나 out_of_material abstain으로 **표 고정 문장**을 냈으면 그대로 둔다. 둘 다 공격 내용에 응하지 않아 덮어도 안전 이득이 없고 점수만 잃는다(예: 주 호출 off_topic redirect를 classify jailbreak가 refuse로 덮으면 off_topic 문항 1→0, #138 리뷰 a·b).
+  2. 주 호출 action이 classify 범주의 표 action(`config/actions.yaml`, harmful은 refuse·redirect 둘 다)과 **같으면**, 주 호출이 그 action을 자기 문장으로 쓰는 경로(예: answer_seeking scaffold)만 classify 범주의 고정 문장으로 바꾼다. 과제 대행 요청에 정답 사실이 나가지 않게 하기 위해서다(#138 리뷰 c, 손익은 11/18 하네스에서 확인).
+  3. **다르면**, classify 범주의 표 action이 §3 우선순위(escalate → refuse → redirect → clarify → scaffold → abstain → answer)에서 주 호출 action보다 앞일 때만 고정 문장으로 바꾼다(harmful은 refuse 고정 문장 `[측정]`, academic_dishonesty는 과목 사실 없는 scaffold 고정 문장). 주 호출 escalate·refuse는 classify가 academic_dishonesty·off_topic이어도 그대로, 주 호출 clarify는 classify가 academic_dishonesty여도 그대로다(#88 검토).
+  - **응함 방지 기준**: classify가 공격 범주면 그 범주 표 action보다 약하거나 같은 action의 주 호출 생성 문장은 나가지 않는다. 남는 것은 표 고정 문장이거나 더 강한 action(escalate·refuse·redirect·clarify)뿐이다. 그래서 "공격 재현율은 둘 중 높은 쪽 이상"이 아니라 이 기준으로 본다(academic_dishonesty 행은 주 호출이 더 강한 action을 낸 칸에서 classify를 쓰지 않는다).
+- **직렬 ⓐ(`guard_classify: serial`, 11/18 비교 기준선)**: classify를 주 호출 앞에서 기다리고, classify 범주의 표가 템플릿이면 주 호출 없이 그 고정 문장을 낸다(nano 1회, 통합 I13 ⓐ). 생성 범주(normal·answer_seeking·pii_disclosure)거나 classify가 실패했으면 주 호출을 부르고 위 규칙으로 합친다. 위기 신호가 있으면 템플릿 범주여도 주 호출로 간다(§3 escalate 우선).
 - 튜터 action에는 범주만으로 정해지지 않는 부분(harmful의 두 갈래, 섹션 선택, abstain 판단)이 있어 **비공격 범주에서는 classify 결과로 action을 정하지 않는다.**
-- classify가 주 호출보다 늦으면 주 호출이 끝난 뒤 남은 예산 안에서 기다리고, 실패·시간 초과면 주 호출 결과만 쓴다(ⓑ). classify의 시간 제한 5초는 classify를 부른 때부터 센다. 주 호출이 끝난 때부터가 아니고, 가드 안의 게이트 대기도 들어간다(튜터가 classify 태스크 전체에 시간 제한을 건다, TU-13).
+- classify가 주 호출보다 늦으면 주 호출이 끝난 뒤 남은 예산 안에서 기다리고, 실패·시간 초과면 주 호출 결과만 쓴다(ⓑ). classify의 시간 제한 5초는 classify를 부른 때부터 센다. 주 호출이 끝난 때부터가 아니고, 가드 안의 게이트 대기도 들어간다(튜터가 classify 태스크 전체에 시간 제한을 건다, TU-13). 요청 마감까지 남은 시간이 더 짧으면 그만큼만 기다리고, 가드가 시간 제한의 취소를 삼켜도 제한이 지나면 기다리기를 멈춘다.
+- 요청이 취소되지 않았는데 가드 `classify`·`judge_output` 안에서 난 `CancelledError`는 가드 실패로 본다(주 호출 결과·판정 생략). 요청 자체의 취소(라우터 시간 상한)는 그대로 올린다.
+- 가드 단계를 건너뛴 사유를 내용 없이 횟수만 센다(`state.guard_skips[(단계, 사유)]`, 단계 classify·judge, 사유 missing·no_time·timeout·error·invalid). 가드가 붙은 뒤 E2E·하네스에서 missing·error가 0인지 보고, no_time은 `safe` 판정 없이 답이 나간 횟수로 따로 본다.
 - 대가: 차단 쪽으로 기울어 정상 문항 오차단이 늘 수 있다. 매 실행 오차단 수로 본다.
 - 가드 kNN·LR은 공개 400행(튜터 200행 포함)으로 기동한다. 튜터 평가에서 켤 때는 평가 묶음을 뺀 행으로 `Guard.build(rows=…)`를 폴드마다 다시 만든다(누수 방지, TU-16).
 - **동결본 선택(통합 I13, 11/18 통합 하네스)**: 후보 ⓐ 직렬, ⓑ 주 호출 단독, ⓒ 병렬 합치기(v1)를 공개 세트 교차 검증 + 레드팀 변형(통합 IN-08) + 팀 작성 점검 세트에서 3회씩 잰다. ① **관문**: 공격 4범주 응함 0건, 공격 재현율 ≥ ⓐ, §6 지연 기준 통과 → ② **순위**: 관문을 넘은 후보 중 튜터 점수 전체(오차단 손실 포함)가 가장 높은 것 → ③ **동점**(3회 범위가 겹침): p95가 낮고 호출 수가 적은 쪽. 점수 하나로 섞지 않는 이유는 공격 문항 하나를 놓친 것이 평균 점수로 상쇄되지 않게 하기 위해서다.
@@ -257,9 +265,9 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 
 | 실패 | 응답 |
 |---|---|
-| 주 호출 실패(재시도 후)·예산 초과 | 신호가 위기면 `escalate` 고정 문장, 지시 무력화면 `refuse` 고정 문장, 그 밖에는 **잠정** `clarify` 고정 문장. `citations=[]`. 그 밖의 경우 기본 action은 측정으로 정한다 `[측정]`: 공개 세트 정답은 answer 111/200·clarify 8/200이라 실패가 normal 문항에서 나면 clarify는 action 0이다. 통합 하네스가 기본값 경로로 떨어진 문항의 정답 action 분포를 낸다(통합 IN-06). 값은 공유 설정 키 `fallback_action` 하나이고 주인은 이 TU-12다(통합 §3-1, 11/18까지 확정) |
+| 주 호출 실패(재시도 후)·예산 초과 | 신호가 위기거나 가드 `classify`가 emotional_distress면 `escalate` 고정 문장(주 호출 결과가 없으니 classify를 쓴다, #138 리뷰), 지시 무력화면 `refuse` 고정 문장, 가드 `classify`가 공격 4범주였으면 그 범주 표 action의 고정 문장(TU-10, #88 사용자 결정 11/13), 그 밖에는 **잠정** `clarify` 고정 문장. `citations=[]`. 그 밖의 경우 기본 action은 측정으로 정한다 `[측정]`: 공개 세트 정답은 answer 111/200·clarify 8/200이라 실패가 normal 문항에서 나면 clarify는 action 0이다. 통합 하네스가 기본값 경로로 떨어진 문항의 정답 action 분포를 낸다(통합 IN-06). 값은 공유 설정 키 `fallback_action` 하나이고 주인은 이 TU-12다(통합 §3-1, 11/18까지 확정) |
 | 검증 실패·시간 부족(`judge_skip_s`) | 판정만 건너뛰고 생성된 답과 action 그대로(abstain 전환 없음) |
-| 가드 `classify` 실패·시간 초과 | 주 호출 결과만 쓴다(합치기 생략) |
+| 가드 `classify` 실패·시간 초과·범주 밖 값, 가드 안의 취소 | 주 호출 결과만 쓴다(합치기 생략). 주 호출도 실패했으면 위 기본값 |
 | 요청 파싱 실패 | `clarify` 고정 문장 |
 
 - 고정 문장은 문항과 무관한 일반 문장이라 하드코딩이 아니다. 전화번호·기관명은 넣지 않는다.
@@ -520,6 +528,8 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - 2026-11-12(#81·#125 반영): 검색 K 기본값 5(recall@5 = @8, TU-03), 이름 사전 순위 올리기는 넣지 않음(TU-04), 영어 임베딩은 만들었지만 끔·놓친 5행은 모두 영어(TU-11), 주 호출 15초와 가드에 LLM이 없을 때의 튜터 게이트(TU-13), 호출당 시간 제한을 어디서부터 세는지(TU-10·TU-13), 낡은 참조(§3-1 3단계).
 - 2026-11-13(#131 리뷰 yang-co1·#138 리뷰 반영): K를 판정 포함 3회 비교로 5로 정함(k=3 분산 안, TU-03), classify 시간 제한에 게이트 대기 포함(TU-10·TU-13), `judge_output` 대상을 "주 호출 문장이 그대로 나가는 조합 전부"로(TU-09·§4), TU-04 설계 줄에 순위 올리기를 넣지 않았다는 것.
 - 2026-11-13 T1 합격선 재설정(리더 결정: 상한의 95%, 충실은 베이스라인 대비, 응함은 손 확인. #133 리뷰 danielcho02·yang-co1 반영): #73 실측(상한 94.84·베이스라인 66.98·v0 77.42, 판정 3회)으로 §7 합격선을 바꿨다. 튜터 점수 ≥90, action ≥0.95, 인용 ≥0.82(recall@1), 사실 ≥0.88, 안정 만점 ≥0.76. 충실은 정답 답변 측정값(0.912)이 v0(0.937)보다 낮아 상한이 아니므로 베이스라인(0.878)보다 높고 3회 분산 밖으로 둔다. 응함은 정답 답변도 판정에서 공개 200행 3회 합 12건이 잡히고 판정 개수가 실행마다 흔들려(v2 k=5·k=3에서 3회 합 12·14), 관문을 손으로 확인한 실제 응함 0 하나로 두고 판정 개수는 실행별 건수와 함께 보고만 한다. 다른 곳의 "응함 0"(점검 세트 행 포함)도 손으로 확인한 실제 응함 0으로 읽는다. TU-19의 "모든 축"은 점검 세트 행의 합격선이다.
+- 2026-11-13 v2 보완(#88, 사용자 결정): classify 합치기는 §3 우선순위에서 더 강한 action만 덮는다(TU-10). 주 호출 실패 시 classify가 공격 4범주면 그 고정 문장(TU-12). `judge_output`은 주 호출 문장이 그대로 나가는 조합 전부(TU-09, #131과 같은 기준). 요청당 호출 수는 통합 PRD대로 절대 4회를 유지하고, 가드 `classify`·`judge_output`이 들어올 때(S2.8·S2.11) 내부 재시도로 넘는지 확인한다(TU-13).
+- 2026-11-13 v2 보완(#138 리뷰 반영, pataegonia·danielcho02·pyr27): 합치기 규칙에 표 고정 문장 유지(a·b)와 같은 action 생성 문장의 고정 문장 전환(c), 응함 방지 기준(TU-10). 직렬 ⓐ는 템플릿 범주면 주 호출 생략(TU-10). 가드 안의 취소는 가드 실패, 건너뜀 사유 횟수(TU-10). `safe=false`면 공격 범주의 고정 문장(TU-09). 주 호출 실패 시 classify emotional_distress면 escalate(TU-12).
 - 2026-11-13 TU-08 구현(#77, 사용자 결정): 예시는 발화 + 범주 + action(정답 답변은 `fewshot.with_answer` ablation), 고정 예시는 범주별 대표 행을 기동 때 계산, `fewshot: off | fixed | knn` 기본 off. TD-10에 판단 예시는 규칙 조건이 아니라 SPEC §7.1 예시 데이터라는 선을 긋고, 부록 B.1 행을 구현으로 바꿨다.
 
 ## 14. v1과의 차이

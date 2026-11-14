@@ -404,3 +404,43 @@ async def test_given_category_equals_judge_when_nano_returns_it(no_rule, categor
     other, _ = await make(reply, **kw)
     want = (await other.judge(req(ANSWER))).response.output
     assert await guard.judge_output(DICTS, ANSWER, category=category) == want
+
+
+async def test_given_category_is_recorded_as_input_source_given():
+    guard, _ = await make()
+    j = await guard._run(GuardRequest(tuple(MSGS), ANSWER, True), "normal", retries=0)
+    assert j.input_source == "given"
+
+
+@pytest.mark.parametrize("bad", [123, b"x", ["a"], {"a": 1}])
+async def test_non_str_answer_reaches_the_judge_as_none(bad):
+    guard, fake = await make(responder("normal"))
+    seen, real = [], guard._run
+
+    async def spy(r, *a, **k):
+        seen.append(r.candidate_answer)
+        return await real(r, *a, **k)
+
+    guard._run = spy
+    v = await guard.judge_output(DICTS, bad, category="normal")
+    assert seen == [None] and v.safe and not calls(fake, "output")
+
+
+async def test_given_category_without_learner_turn_is_marked_in_the_record():
+    guard, _ = await make()
+    j = await guard._run(GuardRequest((), ANSWER, True), "normal", retries=0)
+    assert (j.input_source, j.errors) == ("given", ("no_user_message",))
+
+
+async def test_unreadable_messages_without_category_still_see_a_hidden_tag():
+    guard, _ = await make(responder("normal"))
+    bad = [_Explosive(role="user", content=QUESTION)]
+    v = await guard.judge_output(bad, ANSWER + TAG)  # 못 읽으면 발화 없음: 숨긴 태그는 본다
+    assert v.safe is False
+
+
+async def test_given_block_category_ignores_a_refusal_past_the_answer_cap():
+    guard, _ = await make(responder(output=UNGROUNDED))
+    pad = "가" * guard.cfg.input.max_answer_chars
+    v = await guard.judge_output([], pad + REFUSAL, category="harmful_content")
+    assert v.safe is False  # 거절 문구는 자른 답변 밖이라 보이지 않는다

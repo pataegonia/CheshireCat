@@ -125,8 +125,8 @@ def test_prompt_forbids_leaking_ids_and_labels_into_the_dialog():
 
 
 def test_no_section_id_reaches_any_prompt():
-    # 11/14 런박스: 원문 머리말·표 자리의 ID를 학습자 발화에 옮겨 써서 premise·mixed 초안이
-    # 모두 메타로 빠졌다. nano는 섹션을 이름(A, B)으로만 보고, 원문에서도 ID를 지운다
+    # 11/14 런박스 진단: 프롬프트 세 곳에 ID가 보였고 premise·mixed 초안이 모두 메타로 빠졌다.
+    # nano는 섹션을 이름(A, B)으로만 보고, 원문에서도 ID를 지운다
     prompts = prompt_text(all_jobs())
     assert "섹션 A\n" in prompts and "섹션 B\n" in prompts
     assert cd.LEAKED_SID.findall(prompts) == []
@@ -141,8 +141,15 @@ def test_shown_section_drops_only_the_ids_and_keeps_title_text_and_tables():
         title = text.splitlines()[0].removeprefix(f"# {sid}").strip()
         assert shown.splitlines()[0] == f"# {title}" and title  # 제목은 남는다
         # 지운 것은 머리말 ID와 표 자리 파일 이름뿐이다(표 내용은 원문 끝에 그대로)
-        assert shown.splitlines()[1:] == cd.TABLE_REF.sub("(표)", text).splitlines()[1:]
-        assert text.splitlines()[-1] == shown.splitlines()[-1]
+        before, after = text.splitlines()[1:], shown.splitlines()[1:]
+        assert len(before) == len(after)
+        for old, new in zip(before, after, strict=True):
+            if f"(표: {sid}-table" in old:
+                start = old.index("(표: ")
+                ref = old[start : old.index(")", start) + 1]  # 예: (표: FIN-03-02-table1.csv)
+                assert new == old.replace(ref, "(표)")
+            else:
+                assert new == old
 
 
 # --- 초안 → 행 ---

@@ -8,7 +8,8 @@
   규칙(RateLimitStop)으로 뒤의 호출을 보내지 않는다.
 - 프롬프트에는 범주 → action 표(`config/actions.yaml`, TD-12), 범주 정의, 꼴 설명(말로만), 표현
   변형 축이면 정해 준 범주 이름, KB 섹션 원문만 넣는다. 섹션은 이름(A, B)으로만 부르고 원문
-  머리말·표 자리의 섹션 ID도 지운다(nano가 ID를 학습자 발화에 옮겨 썼다). 근거도 이름으로 받아
+  머리말·표 자리의 섹션 ID도 지운다(ID가 보이던 진단 실행에서 premise·mixed 초안이 모두 메타로
+  빠졌다). 근거도 이름으로 받아
   섹션 ID로 바꾼다. 공개 세트 행(대화·행 id·정답 답변)은 어느
   축에도 넣지 않는다(TD-10: 가드 kNN이 공개 행을 들고 있어 바꿔 쓴 문항은 점수를 부풀린다).
   예시 발화도 넣지 않는다(문항은 nano가 쓴다, TU-16).
@@ -119,8 +120,9 @@ AXIS_FORMS = {
     ),
 }
 LEAKED_SID = re.compile(r"(?:PY|PR|FIN)-\d{2}-\d{2}")  # 대화에 섹션 ID(학생은 모른다)
-# nano에는 섹션 ID를 보이지 않고 이 이름으로 부른다(11/14 런박스: 원문 머리말·표 자리의 ID를
-# 학습자 발화에 옮겨 써서 메타로 빠진 초안이 premise·mixed는 전부였다). 근거도 이 이름으로 받는다
+# nano에는 섹션 ID를 보이지 않고 이 이름으로 부른다. 근거도 이 이름으로 받는다. 11/14 런박스
+# 진단: 프롬프트 세 곳(섹션 머리·원문 머리말·표 자리)에 ID가 보였고 premise·mixed 초안이 모두
+# 메타로 빠졌다. 메타 종류는 나눠 세지 않아서 ID 노출을 유력한 원인으로 보고 막는다(_leak가 나눠 센다)
 SECTION_NAMES = ("A", "B")
 LEAKED_NAME = re.compile(r"섹션\s*[AB](?![A-Za-z])")  # 대화에 섹션 이름
 TABLE_REF = re.compile(r"\(표: [^)]*\)")  # 원문의 표 자리(표 내용은 원문 끝에 붙어 있다)
@@ -307,7 +309,8 @@ def _well_formed(case: DraftCase) -> bool:
 def _leak(case: DraftCase, table: Mapping[str, ActionRule]) -> str | None:
     """대화에 학생이 모르는 것이 나온다: 프롬프트·라벨이 새어 나온 초안. 무엇이 샜는지 돌려준다.
 
-    범주 이름은 밑줄이 든 것만 본다(normal은 보통 말이고, 코드 이름과도 겹치지 않는다).
+    여럿이 샜으면 섹션 ID → 섹션 이름 → 범주 이름 순서로 앞의 하나만 센다. 범주 이름은 밑줄이
+    든 것만 본다(normal은 보통 말이고, 코드 이름과도 겹치지 않는다).
     """
     names = [c for c in table if "_" in c]
     texts = [m.content for m in case.messages]

@@ -250,7 +250,7 @@ class LLM:
 ### 4.4 설정 (`configs/*.yaml`)
 
 ```yaml
-version: "6.0.1"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.2"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
 prompts: {}                        # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.6·S2.7이 input_judge·output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
@@ -258,7 +258,7 @@ block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, of
 llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다
   reasoning_effort: low
   verbosity: low
-  max_completion_tokens: 1600      # 800이면 출력 판정 호출의 6–9%가 잘렸다(finish_reason=length). 1600에서 0/192(S2.9, results/2026-11-13-v1.md). 입력 판정은 800에서도 잘림이 없었다
+  max_completion_tokens: 1600      # 800이면 출력 판정 호출의 6–9%가 잘렸다(finish_reason=length). 1600에서 잘림 0/192(S2.9, results/2026-11-13-v1.md). 대신 read 12초 시간 초과가 유효 6회에서 8/384(2.1%)다(실질 상한 약 1,390토큰, 조치는 ADR-0014 S2.9 수정). 입력 판정은 800에서도 잘림이 없었다
   structured_output: json_schema   # json_schema | json_object. probe()가 내린다
   timeout_s: {connect: 3, read: 12, write: 5, pool: 5}
   retries: 1
@@ -345,7 +345,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 - 산출: `runs/<name>/responses.jsonl`(공개 세트 응답 + `Judgement` 요약, 배포 자료 분석이라 서버 밖에서 저장 가능), `summary.json`, `report.md`. `runs/`는 커밋하지 않는다. 남길 표는 `results/<날짜>-<이름>.md`로 옮겨 커밋한다.
 - `report.md` 내용: 가드 점수(3회 범위), block F1·정밀도·재현율, 짝 문항만의 block 정확도, 범주 정확도(non-normal)와 혼동행렬, 출력 평균·항목별·단별(①–④) 적중, kNN·LR 단독 점수, 튜터 200행 범주 정확도(따로), 호출 수와 요청당 호출 수, 역할별(입력·출력) 오류 코드 비율(`bad_json`·`timeout` 등)과 `finish_reason=length` 비율(실제 프롬프트로 `max_completion_tokens`를 다시 확인, S1.6 값은 잠정), 지연 p50·p95. 설정 비교는 묶음 단위 부트스트랩 95% 구간을 보고한다(채택 기준은 아님, PRD §7).
 - `--input-only`(R14-D1): `Guard`(S2.8) 없이 입력 판정만 잰다. 저신호 직접 판정 + kNN few-shot + `judge_input`으로 범주를 내고 출력은 상수다(행당 nano 0–1회, 실행당 약 320회). 입력 프롬프트 v1을 출력 판정·조립보다 먼저 재는 데 쓴다. S2.3·S2.5·S2.6이 머지되면 돌 수 있다. 첫 실측(1회) 뒤 같은 설정으로 2회를 더 돌려 v1의 3회 범위(잡음 바닥)를 만든다(2026-11-13 조정, [결과](../results/2026-11-13-input-v1-solo.md)).
-- 모든 실측 실행은 역할별 실패율(`finish_reason`이 `stop`이 아님·파싱 실패·시간 초과)을 report 맨 위에 낸다. 어느 역할이든 2%를 넘으면 프롬프트 문구보다 길이·문맥부터 고친다(R14-D8). 출력 쪽은 `kb_quote`를 먼저 빼고, 그다음 `output.context_max_chars`를 낮춘다.
+- 모든 실측 실행은 역할별 실패율(`finish_reason`이 `stop`이 아님·파싱 실패·시간 초과)을 report 맨 위에 낸다. 어느 역할이든 2%를 넘으면 프롬프트 문구보다 길이·문맥부터 고친다(R14-D8). 출력 쪽은 잘림(`finish_reason=length`)이 2%를 넘을 때 `kb_quote`를 먼저 빼고, 그다음 `output.context_max_chars`를 낮춘다. 시간 초과는 이 규칙에 넣지 않고 역할별 실패율 2%로 따로 센다. 시간 초과의 조치는 문맥 축소가 아니라 `read` 한도·토큰 상한을 API가 돌아오면 재서 고르는 것이다(ADR-0014 S2.9 수정).
 - `load`는 공개 세트의 가드·튜터 요청을 동시 64로 다시 보내 시간 초과·형식 오류·3xx·p50·p95를 낸다. 채점 수준(약 600요청)을 넘는 시험은 하지 않는다(GR-10).
 
 ### 4.7 의존성
@@ -526,9 +526,9 @@ R13-B2 §6의 런박스 질문(PyPI 설치 가능 여부, Python 버전)은 S1.5
 - §4.1 `Judgement`에 `answer_quote_ok`·`kb_quote_ok`·`nano_refuses`. §4.3 `OutputOut`을 `answer_quote → kb_quote → grounded → refuses`로(`reason` 삭제). §4.4 `output.tier3_trust`·`quote_min_chars`·`context_max_chars`. §4.2 출력 nano 문맥을 1위 섹션 전체 + 다른 섹션 조각으로.
 - §4.6 `--input-only`와 역할별 실패율 2% 관문. §5 S2.7·S2.9·S3.1·S3.2 수용 기준, S3.4는 동결 전 미실행. §10 "분산 밖"의 뜻과 확정 실험 상한.
 - 바뀌지 않은 것: 입력 프롬프트 v1 문구, 범주 → decision(ADR-0012), safe 규칙(D6), 키워드 힌트 금지(GR-04).
-- S2.9 결정(같은 날, 3회 실측과 council): `llm.max_completion_tokens`를 800 → 1600으로, `toggles.nano_span`을 켬으로 바꿨다(설정 `version` 6.0.2). 근거는 [results/2026-11-13-v1.md](../results/2026-11-13-v1.md): 출력 호출 실패 6.2–9.4% → 0/192, 출력 평균 0.827–0.837 → 0.889–0.899. `nano_span`은 가드 점수 범위로는 겹쳤지만(입력 잡음이 block F1 0.04–0.09) 출력 단독에서 같은 응답에 조립만 바꾼 값이 800·1600 모두 겹치지 않았다(ADR-0014 S2.9 수정). `knn_fewshot`은 그대로 켠다: 입력 단독 실측의 "예시 없음이 낫다"는 결과가 재현되지 않았다. ablation 파일 `with_nano_span`은 `no_nano_span`으로 바꿨다.
+- S2.9 결정(같은 날, 3회 실측과 council): `llm.max_completion_tokens`를 800 → 1600으로, `toggles.nano_span`을 켬으로 바꿨다(설정 `version` 6.0.2). 근거는 [results/2026-11-13-v1.md](../results/2026-11-13-v1.md): 출력 호출 잘림 6.2–9.4% → 0/192(조합 3회), 대신 `read` 12초 시간 초과가 유효 6회 8/384(2.1%), 출력 평균 0.827–0.837 → 0.889–0.899. `nano_span`은 가드 점수 범위로는 겹쳤지만(입력 잡음이 block F1 0.04–0.09) 출력 단독에서 같은 응답에 조립만 바꾼 값이 800·1600 모두 겹치지 않았다(ADR-0014 S2.9 수정). `knn_fewshot`은 그대로 켠다: 입력 단독 실측의 "예시 없음이 낫다"는 결과가 재현되지 않았다. ablation 파일 `with_nano_span`은 `no_nano_span`으로 바꿨다.
 - S2.8 santa 3라운드(같은 날): ① 출력 쪽 준비(KB 검색·규칙 ②)가 실패해도 입력 판정은 그대로 한다(GR-09 "출력 실패는 출력만 바꾼다"). 출력을 못 만들 때의 safe는 GR-08을 따른다(숨긴 태그·block 순응이면 false). ② 프롬프트 파일은 `Guard`를 만들 때 읽는다(경로가 틀리면 기동에서 실패하고 서버 기본 판정기는 `reason=FileNotFoundError`로 내린다). ③ 없는 설정 목록에 `rule_extra_tokens`의 `bare_numeral`을 더했고, 하네스는 그런 설정 행이 있으면 호출 전에 사용법 오류로 끝낸다(`--only`에서 빼야 한다). ④ 인증이 아닌 probe 실패는 기동을 막지 않되 `guard judge=real probe=<오류 코드>`를 오류 수준으로 남긴다.
 - S2.8 santa 2라운드(같은 날): 아직 구현하지 않은 설정(`third_call`·`oom_kb_snippet`·`embedding`·`output.rule_require_same_kind`)을 켜면 `Guard`가 만들어질 때 `NotImplementedError`로 실패한다(조용히 무시하지 않는다. 하네스는 멈추고, 서버 기본 판정기는 상수 판정기 + `reason=NotImplementedError` 로그로 내린다). 하네스의 예상 호출 수는 상한이다(저신호 직접 판정 행만큼 덜 부른다).
 - S2.8 조립 중 조정(같은 날, santa 1라운드와 council 2라운드): 서버 기본 판정기를 키 기준(`default_factory`)으로 정했다. 키가 있으면 `Guard.build`, 없거나 기동이 실패하면 상수 판정기 + 기동 로그 한 줄이다. 무조건 `Guard.build`로 바꾸면 통합 테스트 464개 중 154개가 깨지고, 상수로 두면 통합 앱의 `/guard`가 상수 판정으로 제출된다. `candidate_answer`가 문자열이 아닐 때는 GR-07 표를 그대로 탄다(block 범주면 ①). 학습자 발화가 없어도 숨긴 태그는 본다. `Judgement.errors` 코드 목록을 §4.1에 적었다.
-- S2.8 조립 전 조정(같은 날, 출력 단독 실측 뒤): §4.4 `nano_span`의 뜻을 "③에서 확인된 `answer_quote`를 구간으로"로 적고 허용 조건을 `nano_tier3`로 바꿨다. §4.1 인용 확인의 답변 쪽 대조 대상을 자른 원문으로 못박았다. 근거는 [results/2026-11-13-output-v1-solo.md](../results/2026-11-13-output-v1-solo.md)(근거 없음 판정 229건 중 225건이 원문에 글자 그대로 있음, 인용을 구간으로 내면 출력 평균 0.858–0.869 → 0.892–0.909). 기본값은 끔 그대로다.
+- S2.8 조립 전 조정(같은 날, 출력 단독 실측 뒤): §4.4 `nano_span`의 뜻을 "③에서 확인된 `answer_quote`를 구간으로"로 적고 허용 조건을 `nano_tier3`로 바꿨다. §4.1 인용 확인의 답변 쪽 대조 대상을 자른 원문으로 못박았다. 근거는 [results/2026-11-13-output-v1-solo.md](../results/2026-11-13-output-v1-solo.md)(인용을 구간으로 내면 출력 평균 0.858–0.869 → 0.892–0.909). 기본값은 끔 그대로다.
 - 첫 실측 뒤 조정(같은 날, 사용자 결정): 입력 v1 단독 실측의 block F1(가드 160행, 1회 0.771)이 목표 0.90에 못 미쳤다. S2.7 전에 v1을 2회 더 돌려 3회 범위를 만든다(§4.6). 입력 프롬프트 v2는 S3.2의 새 PR에서 한다(§5 S3.2, §10 프롬프트 버전).

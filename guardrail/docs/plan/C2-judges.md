@@ -156,8 +156,8 @@
 - CLI는 [master-plan §4.6](../master-plan.md#46-평가-cli-eval). `--ablation`에는 이름으로 일부 행만 돌리는 `--only a,b`를 둔다(기준 행 baseline·default는 늘 포함, `--estimate`도 선택된 행만 센다). 실행 시작 때 LLM 하나를 만들어 `await llm.start()`(probe 1회)하고, 폴드마다 `await Guard.build(cfg, llm=llm, rows=cv.train_rows(fold=k))`로 그 LLM을 주입한 뒤 그 폴드 행의 `judge()`를 동시 16으로 부른다. probe 호출이 폴드 수만큼 늘지 않고, `--estimate`도 probe를 실행당 한 번으로 센다. `--repeat 3`, `--estimate`, `--max-calls`, `--fake`, `--set`, `--ablation`, `--holdout`(열람 기록·4회째 거부).
 - `report.md`: master-plan §4.6 목록 전부 + 튜터 200행 범주 정확도 따로. 역할별(입력·출력) 오류 코드 비율(`bad_json`·`timeout` 등)과 `finish_reason=length` 비율(`LLMResult.finish_reason`), 요청당 호출 수를 넣어 S1.6의 잠정 `max_completion_tokens`를 실제 프롬프트로 다시 확인한다.
 - **입력 단독 실측**(R14-D1, API 약 320회): `--input-only`로 입력 프롬프트 v1을 잰다. 첫 1회 뒤 2회를 더 돌려 3회 범위(잡음 바닥)를 만든다(2026-11-13 조정, 결과 [results/2026-11-13-input-v1-solo.md](../../results/2026-11-13-input-v1-solo.md)). S2.8을 기다리지 않는다(S2.3·S2.5·S2.6 머지 뒤). 볼 것: 역할 실패율·`finish_reason`·지연, block F1·혼동행렬, 맨 끝 예시가 정답과 반대 라벨인 행과 같은 라벨인 행의 정확도(R14 §4의 1번). v1 문구는 고치지 않는다.
-- **실패율 관문**(R14-D8): 모든 실측의 report 맨 위에 역할별 실패율을 낸다. 2%를 넘으면 문구보다 길이·문맥부터 고친다.
-- **첫 실측**(API): `default.yaml` × 3회, `baseline.yaml`(토글 모두 끔 + `output.mode: baseline`) × 3회, kNN 다수·LR 단독(호출 0). 표를 `results/2026-11-15-v1.md`로 커밋.
+- **실패율 관문**(R14-D8): 모든 실측의 report 맨 위에 역할별 실패율을 낸다. 2%를 넘으면 문구보다 길이·문맥부터 고친다. 다만 출력의 `kb_quote`·문맥 축소는 잘림(`finish_reason=length`)에만 해당한다. 시간 초과는 `read` 한도·토큰 상한을 API가 돌아오면 재서 고른다(ADR-0014 S2.9 수정).
+- **첫 실측**(API): `default.yaml` × 3회, `baseline.yaml`(토글 모두 끔 + `output.mode: baseline`) × 3회, kNN 다수·LR 단독(호출 0). 표를 `results/2026-11-13-v1.md`로 커밋.
 - **테스트 먼저**: 골격 단계는 `ConstantGuard`로 400행(판정기 생성 함수를 주입), S2.8 머지 뒤 `--fake`로 `Guard` 400행 끝까지(호출 0) 테스트를 더한다, 예상 호출 수 ≥ 실제 호출 수(상한이다. 저신호 직접 판정 행만큼 덜 부른다. probe는 실행당 한 번), 폴드 5개 실행에서 probe 1회, 상한 초과 시 시작 전 멈춤, 홀드아웃 4회째 거부, 부트스트랩이 묶음 단위로 뽑음.
 - **수용 기준**: GR-13 수용 기준(표 5종, 3회 분산), GR-11(설정만으로 ablation 실행). **스킬**: `ecc:eval-harness`.
 
@@ -183,7 +183,7 @@
 
 ## 4. Phase 끝 점검
 
-- [ ] 관문 ①–④ 판정, 결과 표 커밋(`results/2026-11-15-v1.md`)
+- [ ] 관문 ①–④ 판정, 결과 표 커밋(`results/2026-11-13-v1.md`)
 - [ ] master-plan §4와 코드 15분 대조(서명·설정 키·CLI), 다르면 master-plan 먼저 고침
 - [ ] provenance에 신호·정규식·프롬프트·kNN·LR 행이 있는지 확인(GR-14)
 - [ ] C3 이슈 생성, C2 에픽 체크리스트 갱신

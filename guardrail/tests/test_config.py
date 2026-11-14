@@ -330,7 +330,7 @@ def test_load_prompt_rejects_unmapped_name():
 
 
 # v1 프롬프트(input_judge.md)는 "가장 비슷한 예시가 마지막에 있다"고 적는다
-@pytest.mark.parametrize("prompt", ["input_judge.md", "input_judge_en.md"])
+@pytest.mark.parametrize("prompt", ["input_judge.md", "input_judge_en.md", "input_judge_en_v4.md"])
 def test_nearest_first_with_order_stating_prompt_is_rejected(prompt):
     with pytest.raises(ValidationError, match="nearest_first"):
         load_config(

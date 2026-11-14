@@ -261,6 +261,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             signals=labels(signals) if cfg.toggles.signals else (),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
             examples=examples_block(state, conv),
+            index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다

@@ -4,6 +4,7 @@ R13 참조 구현과 같은 조각·점수, retrieve 계약, 요청 사이 상�
 """
 
 import asyncio
+import contextlib
 import importlib.util
 import logging
 import math
@@ -11,17 +12,21 @@ import re
 
 import pytest
 import yaml
+from fastapi.testclient import TestClient
+from guardrail import server as guard_server
 from guardrail.config import load_config
 from guardrail.kb import KbIndex as GuardKbIndex
 
 import tutor
-from tests.tutor.tutor_testlib import COMPETITION, REPO, scoring
+from tests.tutor.tutor_testlib import AUTH, COMPETITION, REPO, answer_openai, make_app, scoring
+from tutor.judge import draft as draft_mod
 from tutor.retrieval import KbIndex, Section, default_index, retrieve, search
 from tutor.retrieval.kb import load_sections, normalize
 
 KB = COMPETITION / "kb"
 R13 = REPO / "guardrail" / "scripts" / "r13" / "common.py"
 GUARD_DEFAULT = REPO / "guardrail" / "configs" / "default.yaml"
+NGRAM_QUERY = "변수에 값을 저장하는 방법"  # 가드 설정 kb.ngram 2와 3에서 검색 1위가 다르다
 
 
 def use_guard_config(tmp_path, monkeypatch, **changes):
@@ -260,3 +265,83 @@ def test_startup_builds_the_index():
     assert run(tutor.startup(state)) is None
     assert state.tutor_kb is default_index()
     assert len(state.tutor_kb.sections) == 48
+
+
+# --- 서버: 가드가 기동 때 읽은 설정(app.state.cfg)으로 색인을 만든다(TD-03) ---
+
+
+def guard_cfg(**overrides):
+    """저장소 가드 기본 설정에서 몇 값만 바꾼 설정 객체. 환경변수를 거치지 않는다."""
+    return load_config(GUARD_DEFAULT, overrides=overrides)
+
+
+@contextlib.contextmanager
+def server_with(monkeypatch, cfg):
+    """가드 create_app이 기동 때 읽는 설정을 cfg로 바꿔 튜터를 붙인 앱을 띄운다."""
+    monkeypatch.setattr(guard_server, "load_config", lambda: cfg)
+    with TestClient(make_app()) as client:
+        assert client.app.state.cfg is cfg
+        yield client
+
+
+def ranked(index, query):
+    return [sid for sid, _score in index.search(query)]
+
+
+def test_server_builds_the_tutor_index_from_the_guard_config_it_loaded(monkeypatch):
+    cfg = guard_cfg(**{"kb.ngram": 3})
+    guard = GuardKbIndex.load(KB, ngram=3, k1=cfg.kb.k1, b=cfg.kb.b)
+    with server_with(monkeypatch, cfg) as c:
+        index = c.app.state.tutor_kb
+    assert index.chunks == guard.chunks
+    for query in [NGRAM_QUERY, heading("PY-01-01"), "변수", ""]:
+        assert index.chunk_scores(query) == guard.scores(query)
+    assert ranked(index, NGRAM_QUERY)[0] != ranked(default_index(), NGRAM_QUERY)[0]
+
+
+def test_server_index_with_the_default_guard_config_is_the_offline_index(monkeypatch):
+    """설정이 같으면 서버 색인과 앱 state 없는 기본 색인(default_index)의 결과가 같다."""
+    with server_with(monkeypatch, guard_cfg()) as c:
+        index = c.app.state.tutor_kb
+    offline = default_index()
+    assert index.chunks == offline.chunks
+    assert index.max_query_chars == offline.max_query_chars
+    for query in [heading(sid) for sid in offline.sections] + [NGRAM_QUERY]:
+        assert index.search(query) == offline.search(query)
+
+
+def test_two_servers_with_different_guard_configs_search_their_own_index(monkeypatch):
+    """한 프로세스의 두 앱이 서로의 색인을 쓰지 않고, 요청 처리의 검색도 자기 앱 색인을 쓴다."""
+    answer_openai(monkeypatch)  # 주 호출은 보내지 않고 최소 정상 답
+    seen = []
+    real_retrieve = draft_mod.retrieve
+
+    async def watched_retrieve(query, history=(), **kw):
+        found = await real_retrieve(query, history, **kw)
+        seen.append((kw.get("index"), [s.id for s in found]))
+        return found
+
+    monkeypatch.setattr(draft_mod, "retrieve", watched_retrieve)
+    cfg3, cfg2 = guard_cfg(**{"kb.ngram": 3}), guard_cfg()
+    message = {"role": "user", "content": NGRAM_QUERY}
+    body = {"spec_version": "1.0", "session_id": "s", "messages": [message]}
+    with server_with(monkeypatch, cfg3) as c3, server_with(monkeypatch, cfg2) as c2:
+        assert (c3.app.state.cfg, c2.app.state.cfg) == (cfg3, cfg2)
+        for client, cfg in ((c3, cfg3), (c2, cfg2), (c3, cfg3)):  # 뒤에 뜬 앱이 앞 앱을 안 바꾼다
+            assert client.post("/tutor", json=body, headers=AUTH).status_code == 200
+            index, top = seen.pop()
+            assert index is client.app.state.tutor_kb
+            k = client.app.state.tutor_cfg.retrieval.k
+            assert top == ranked(KbIndex(load_sections(KB), cfg), NGRAM_QUERY)[:k]
+    assert ranked(c3.app.state.tutor_kb, NGRAM_QUERY) != ranked(c2.app.state.tutor_kb, NGRAM_QUERY)
+    # 앱 state가 없는 쪽(로컬 측정·테스트)의 기본 색인은 가드 기본 설정 그대로다
+    guard2 = GuardKbIndex.load(KB, ngram=cfg2.kb.ngram, k1=cfg2.kb.k1, b=cfg2.kb.b)
+    assert default_index().chunk_scores(NGRAM_QUERY) == guard2.scores(NGRAM_QUERY)
+
+
+def test_server_refuses_a_guard_config_with_query_limit_below_one(monkeypatch):
+    with (
+        pytest.raises(ValueError, match="max_query_chars"),
+        server_with(monkeypatch, guard_cfg(**{"retrieval.max_query_chars": 0})),
+    ):
+        pass

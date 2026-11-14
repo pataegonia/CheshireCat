@@ -12,13 +12,15 @@ import sys
 import types
 from collections.abc import Generator, Iterator, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple, get_args
+from typing import Any, Literal, NamedTuple, get_args, get_origin
 
+import guardrail.judges.schemas as guard_schemas
 import jsonschema
 import openai
 import pytest
-from guardrail.judges.schemas import InputOut, OutputBaselineOut, OutputOut, strict_schema
+from guardrail.judges.schemas import strict_schema
 from guardrail.schema import Category
+from pydantic import BaseModel, ValidationError
 
 from integration.contracts import ACTIONS
 
@@ -200,10 +202,26 @@ def _completion(content: str) -> Any:
 _GUARD_PROBE = [{"role": "user", "content": "ping"}]  # guardrail.llm.LLM.probe()가 보내는 요청
 # json_object 방식에서 guardrail.llm.LLM._request가 system 끝에 붙이는 표식. 그 뒤가 스키마 JSON이다
 _GUARD_SCHEMA_NOTE = "JSON 객체만 출력한다. 스키마:\n"
-# 가짜가 아는 가드 판정 스키마: 이름 → LLM이 받는 strict 스키마(정확히 같은 것만 그 이름으로 본다)
-_GUARD_SCHEMAS = {
-    model.__name__: strict_schema(model) for model in (InputOut, OutputOut, OutputBaselineOut)
-}
+
+
+def _guard_models() -> dict[str, type[BaseModel]]:
+    """`guardrail.judges.schemas`에 정의된 공개 pydantic 모델 전부(이름 → 모델).
+
+    가드가 스키마를 더하거나 필드를 바꿔도 가짜가 따라간다. 이름이 "_"로 시작하는 것(`_Out`)과
+    다른 모듈에서 가져온 이름(`BaseModel` 등)은 뺀다.
+    """
+    return {
+        name: value
+        for name, value in vars(guard_schemas).items()
+        if not name.startswith("_")
+        and isinstance(value, type)
+        and issubclass(value, BaseModel)
+        and value.__module__ == guard_schemas.__name__
+    }
+
+
+# 가짜가 아는 가드 판정 스키마(이름 → 모델). 테스트는 monkeypatch.setitem으로 임시 모델을 넣는다
+GUARD_MODELS = _guard_models()
 # json_object 방식에서 스키마를 알아보지 못했을 때 `FakeGuardSend.unknown`에 남기는 표시
 UNKNOWN_JSON_OBJECT = "json_object:알 수 없는 스키마"
 
@@ -226,7 +244,9 @@ def _guard_schema_name(kwargs: dict[str, Any], system: str) -> str:
         schema = json.loads(tail)
     except ValueError:
         return ""
-    return next((name for name, known in _GUARD_SCHEMAS.items() if known == schema), "")
+    return next(
+        (name for name, model in GUARD_MODELS.items() if strict_schema(model) == schema), ""
+    )
 
 
 class FakeGuardSend:
@@ -236,10 +256,12 @@ class FakeGuardSend:
     스키마 이름만).
 
     - `count`는 판정 호출 수다. `LLM.start()`의 probe(요청이 "ping" 하나)는 `probes`에 따로 센다.
-    - 기본: 입력 판정은 normal, 출력 판정은 grounded(· safe) true. 튜터 답을 건드리지 않는 값이다.
-    - `vary=True`: 범주 10종과 grounded · safe를 프롬프트 해시로 고른다(무작위 없음).
-    - 모르는 스키마로 부르면 `UnknownSchema`를 던지고 `unknown`에 이름을 남긴다. 가드 LLM은 전송
-      예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send` 픽스처가 끝날 때 `unknown`을 본다.
+    - 응답은 그 스키마 모델의 필드에서 만든다(`_guard_reply`). 기본은 입력 판정 normal, 출력 판정
+      grounded(· safe) true, 그 밖의 bool은 false다. 튜터 답을 건드리지 않는 값이다.
+    - `vary=True`: 범주 등 문자열 Literal과 grounded · safe를 프롬프트 해시로 고른다(무작위 없음).
+    - 모르는 스키마로 부르거나, 만든 응답이 모델 검증을 통과하지 못하면 `UnknownSchema`를 던지고
+      `unknown`에 남긴다. 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send`
+      픽스처가 끝날 때 `unknown`을 본다.
     """
 
     def __init__(self, *, vary: bool = False) -> None:
@@ -268,19 +290,60 @@ class FakeGuardSend:
         self.by_schema[name] += 1
         picks = itertools.cycle(full.digest())
         note = f"{GUARD_WORD} {digest}"
-        if name == "InputOut":
-            category = CATEGORIES[next(picks) % len(CATEGORIES)] if self.vary else "normal"
-            reply: dict[str, Any] = {"evidence": note, "category": category}
-        elif name in ("OutputOut", "OutputBaselineOut"):
-            reply = {"reason": note, "grounded": bool(next(picks) % 2) if self.vary else True}
-            if name == "OutputBaselineOut":
-                reply["safe"] = bool(next(picks) % 4) if self.vary else True
-        else:
+        model = GUARD_MODELS.get(name)
+        if model is None:
             # json_object 방식은 이름이 없다. 빈 문자열 대신 알아볼 수 있는 표시를 남긴다
             # (요청 본문은 남기지 않는다)
             self.unknown.append(name or UNKNOWN_JSON_OBJECT)
             raise UnknownSchema(name or UNKNOWN_JSON_OBJECT)
+        reply = _guard_reply(model, note, picks, vary=self.vary)
+        try:
+            if reply is None:
+                raise ValueError
+            model.model_validate(reply)
+        except (ValidationError, ValueError):
+            # 가드가 필드를 바꿨는데 가짜가 따라가지 못했다. 옛 모양으로 답하면 가드 LLM이 조용히
+            # bad_json이 되므로 여기서 드러낸다
+            problem = f"{name}: 가짜 응답이 스키마와 맞지 않음"
+            self.unknown.append(problem)
+            raise UnknownSchema(problem) from None
         return _completion(json.dumps(reply, ensure_ascii=False))
+
+
+# bool 필드의 기본값이 true인 이름(그 밖의 bool은 false). 튜터 답을 건드리지 않는 쪽이다
+_TRUE_BY_DEFAULT = frozenset({"grounded", "safe"})
+# vary=True일 때 해시로 고르는 bool: 이름 → 나눌 수(0이 아니면 true). grounded는 반반, safe는 3/4
+_VARIED_BOOLS = {"grounded": 2, "safe": 4}
+
+
+def _guard_reply(
+    model: type[BaseModel], note: str, picks: Iterator[int], *, vary: bool
+) -> dict[str, Any] | None:
+    """스키마 모델의 필드를 차례로 돌며 가짜 응답을 만든다. 모르는 타입이 있으면 None.
+
+    - bool: grounded · safe는 true, 그 밖은 false. vary면 grounded · safe를 해시로 고른다.
+    - str: 이름이 "_quote"로 끝나면 ""(인용할 구절 없음), 아니면 `note`(판정 글 표식 + 해시).
+    - 문자열 Literal: category는 "normal", 그 밖은 첫 값. vary면 해시로 고른다.
+    """
+    reply: dict[str, Any] = {}
+    for field, info in model.model_fields.items():
+        kind = info.annotation
+        if kind is bool:
+            if vary and field in _VARIED_BOOLS:
+                reply[field] = bool(next(picks) % _VARIED_BOOLS[field])
+            else:
+                reply[field] = field in _TRUE_BY_DEFAULT
+        elif kind is str:
+            reply[field] = "" if field.endswith("_quote") else note
+        elif get_origin(kind) is Literal and all(isinstance(v, str) for v in get_args(kind)):
+            values = get_args(kind)
+            if vary:
+                reply[field] = values[next(picks) % len(values)]
+            else:
+                reply[field] = "normal" if field == "category" else values[0]
+        else:
+            return None
+    return reply
 
 
 class OpenAIShim:

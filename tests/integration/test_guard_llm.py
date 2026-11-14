@@ -19,22 +19,25 @@ import time
 import pytest
 from guardrail.config import load_config
 from guardrail.judges.input_judge import judge_input
-from guardrail.judges.schemas import InputOut, OutputBaselineOut, OutputOut, strict_schema
+from guardrail.judges.schemas import InputOut, OutputOut, strict_schema
 from guardrail.llm import LLM
 from guardrail.schema import Message
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
+from tests.integration import applib
 from tests.integration.applib import (
     ANSWER_WORD,
     AUTH,
     CATEGORIES,
     GUARD_BUDGET_HINT,
+    GUARD_MODELS,
     GUARD_WORD,
     MAX_GUARD_LLM_CALLS_PER_REQUEST,
     MAX_LLM_CALLS_PER_REQUEST,
     UNKNOWN_JSON_OBJECT,
     FakeGuardSend,
     UnknownSchema,
+    _guard_reply,
     _guard_schema_name,
     as_bytes,
     assert_guard_contract,
@@ -102,7 +105,8 @@ def test_guard_llm_built_the_server_way_talks_to_the_fake(app_env, fake_guard_se
 
 
 @pytest.mark.parametrize("structured", ["json_schema", "json_object"])
-@pytest.mark.parametrize("schema", [InputOut, OutputOut, OutputBaselineOut])
+# 가짜가 아는 모델 전부(guardrail.judges.schemas의 공개 모델). 가드가 스키마를 더하면 늘어난다
+@pytest.mark.parametrize("schema", list(GUARD_MODELS.values()), ids=list(GUARD_MODELS))
 def test_fake_answers_every_guard_schema_in_both_output_modes(app_env, schema, structured):
     fake = FakeGuardSend()
     llm, result = complete_once(
@@ -175,7 +179,8 @@ def test_json_object_output_judge_with_input_fields_in_its_prompt_is_still_outpu
 
 
 class ReasonGroundedSpansOut(BaseModel):
-    """출력 판정 스키마와 필드가 겹치는 새 스키마(가짜가 모르는 것)."""
+    """출력 판정 스키마들(OutputBaselineOut의 reason · grounded 등)과 필드가 겹치는 새 스키마
+    (가드 스키마 모듈에 없어 가짜가 모르는 것)."""
 
     reason: str
     grounded: bool
@@ -183,7 +188,7 @@ class ReasonGroundedSpansOut(BaseModel):
 
 
 def test_json_object_new_schema_overlapping_output_fields_is_recorded_as_unknown(app_env):
-    """json_object 방식: 필드가 겹친다고 아는 스키마(OutputOut)로 답하지 않는다. 모르는 스키마로
+    """json_object 방식: 필드가 겹친다고 아는 스키마로 답하지 않는다. 모르는 스키마로
     `unknown`에 남아(`fake_guard_send` 픽스처라면 끝날 때 실패) 조용한 bad_json이 되지 않는다."""
     fake = FakeGuardSend()
     llm, result = complete_once(
@@ -196,6 +201,68 @@ def test_json_object_new_schema_overlapping_output_fields_is_recorded_as_unknown
     assert dict(llm.unexpected) == {UnknownSchema.__name__: 1}
 
 
+def test_fake_builds_replies_from_the_guard_models_fields():
+    """가짜 응답은 가드 모델의 필드에서 만든다. 가드가 필드를 바꾸면(#147 OutputOut) 따라간다."""
+    assert {"InputOut", "InputActOut", "OutputOut", "OutputBaselineOut"} <= set(GUARD_MODELS)
+    assert all(not name.startswith("_") for name in GUARD_MODELS)
+    for name, model in GUARD_MODELS.items():
+        reply = _guard_reply(model, "판정 글", iter(range(1000)), vary=False)
+        assert reply is not None and list(reply) == list(model.model_fields), name
+        model.model_validate(reply)  # 엄격 모델 검증을 통과한다
+        for field, value in reply.items():
+            if field in ("grounded", "safe"):
+                assert value is True, (name, field)  # 튜터 답을 건드리지 않는 쪽
+            elif isinstance(value, bool):
+                assert value is False, (name, field)
+            elif field.endswith("_quote"):
+                assert value == "", (name, field)
+    assert _guard_reply(GUARD_MODELS["InputOut"], "x", iter(()), vary=False)["category"] == "normal"
+
+
+class _StrictOut(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ChangedJudgeOut(_StrictOut):
+    """필드가 바뀐 판정 스키마의 흉내(가짜의 응답 생성이 옛 모양을 내면 검증에 걸린다)."""
+
+    passage_quote: str
+    supported: bool
+
+
+class ListFieldOut(_StrictOut):
+    """가짜가 만들 줄 모르는 타입(list)이 있는 스키마."""
+
+    spans: list[str]
+
+
+@pytest.mark.parametrize("structured", ["json_schema", "json_object"])
+def test_fake_reply_that_fails_the_models_validation_is_recorded(app_env, monkeypatch, structured):
+    """가짜가 만든 응답이 모델 검증에 실패하면 옛 모양으로 답하지 않고 `unknown`에 남긴다
+    (`fake_guard_send` 픽스처라면 끝날 때 실패). LLM 결과는 parsed가 None이다."""
+    monkeypatch.setitem(GUARD_MODELS, "ChangedJudgeOut", ChangedJudgeOut)
+    # 응답 생성이 가드의 옛 출력 판정 모양을 낸다고 하자(#147 전의 가짜가 하던 것)
+    monkeypatch.setattr(applib, "_guard_reply", lambda *a, **k: {"reason": "x", "grounded": True})
+    fake = FakeGuardSend()
+    llm, result = complete_once(
+        lambda: LLM(load_config().llm, send=fake), ChangedJudgeOut, structured=structured
+    )
+    assert result.parsed is None
+    assert fake.unknown == ["ChangedJudgeOut: 가짜 응답이 스키마와 맞지 않음"]
+    assert dict(fake.by_schema) == {"ChangedJudgeOut": 1}
+    assert dict(llm.unexpected) == {UnknownSchema.__name__: 1}
+
+
+def test_fake_cannot_build_a_field_type_it_does_not_know(app_env, monkeypatch):
+    """bool · str · 문자열 Literal 밖의 타입이 있으면 지어내지 않고 `unknown`에 남긴다."""
+    monkeypatch.setitem(GUARD_MODELS, "ListFieldOut", ListFieldOut)
+    assert _guard_reply(ListFieldOut, "x", iter(()), vary=False) is None
+    fake = FakeGuardSend()
+    _, result = complete_once(lambda: LLM(load_config().llm, send=fake), ListFieldOut)
+    assert result.parsed is None
+    assert fake.unknown == ["ListFieldOut: 가짜 응답이 스키마와 맞지 않음"]
+
+
 def test_guard_schema_name_reads_only_the_appended_schema():
     """json_object 방식의 스키마 판별: system 끝 표식 뒤의 JSON이 아는 strict 스키마와 정확히 같을
     때만 그 이름이다. 표식이 없거나, JSON이 아니거나, 하나라도 다르면 모른다("")."""
@@ -205,7 +272,8 @@ def test_guard_schema_name_reads_only_the_appended_schema():
     def name(system: str) -> str:
         return _guard_schema_name(plain, system)
 
-    for schema in (InputOut, OutputOut, OutputBaselineOut):
+    assert {"InputOut", "OutputOut", "OutputBaselineOut"} <= set(GUARD_MODELS)
+    for schema in GUARD_MODELS.values():
         dumped = json.dumps(strict_schema(schema), ensure_ascii=False)
         assert name(f"판정\n\n{note}{dumped}") == schema.__name__
         # 본문에 다른 스키마(표식 포함)가 먼저 나와도 마지막 표식 뒤만 본다

@@ -802,6 +802,11 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     overrides = parse_sets(args.sets)
     base = load_config(args.config, overrides)
     configs = select_rows(base, args, overrides)
+    for name, cfg in configs.items():  # 프롬프트·label_mode 짝은 LLM을 만들기 전에 모든 행에서 본다
+        try:
+            load_prompt(cfg, "input_judge")
+        except ValueError as e:
+            raise ValueError(f"설정 행 {name}: {e}") from e
     public = load_public(base.paths.public)
     split = cv.load_splits()
     if missing := {r.id for r in public} - split.cluster.keys():

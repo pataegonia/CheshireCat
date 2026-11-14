@@ -128,3 +128,20 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
         assert {"finish_reason", "completion_tokens"} <= call.keys()
     assert all(r["llm"] == [] for r in recs if r["source"] == "low_signal")
     assert "입력 단독" in (out / "report.md").read_text("utf-8").splitlines()[0]
+
+
+async def test_mismatched_prompt_in_a_late_ablation_row_stops_before_any_llm(tmp_path, capsys):
+    abl = tmp_path / "abl"
+    abl.mkdir()
+    (abl / "a_ok.yaml").write_text("toggles: {lr: false}\n", "utf-8")
+    (abl / "z_bad.yaml").write_text("input: {label_mode: act}\n", "utf-8")  # v1 프롬프트는 mode용
+    made = []
+
+    def make_llm(cfg_llm):
+        made.append(cfg_llm)
+        raise AssertionError("LLM을 만들면 안 된다")
+
+    argv = ["--input-only", "--ablation", str(abl), "--name", "t", "--out", str(tmp_path / "runs")]
+    assert await run.amain(argv, make_llm=make_llm) == run.EXIT_USAGE
+    assert not made and "z_bad" in capsys.readouterr().err
+    assert not (tmp_path / "runs" / "t").exists()

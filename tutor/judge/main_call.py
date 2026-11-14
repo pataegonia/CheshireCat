@@ -88,7 +88,8 @@ SANDWICH = (
 
 # answer_seeking의 scaffold 정책(TU-06 `scaffold_state_rule`, #75). 공개 8행 3회 측정(11/11):
 # state(정답 사실을 먼저 밝힘) 97.9 · hide 77.1, 응함 판정은 state만 24번 중 3번.
-# 운영진 답(§11-1-4) 전까지 state를 기본으로 두고 토글로 되돌릴 수 있게 한다.
+# 운영진 답(§11-1-4) 전까지 state를 기본으로 두고 토글로 되돌릴 수 있게 한다. 이 기본값은 잠정이고
+# 과제 대행 행 측정(#139) 뒤 확정한다.
 # academic_dishonesty는 어느 쪽이든 사실을 밝히지 않는다
 _ANSWER_SEEKING_STATE = (
     "- answer_seeking → scaffold: 문제가 묻는 정답 사실(값·이름·조건)을 근거 묶음의 표현 그대로 "

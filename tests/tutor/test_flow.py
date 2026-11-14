@@ -250,6 +250,15 @@ def test_delegation_signal_turns_answer_seeking_into_academic_fixed_sentence(
     assert resp == {"answer": TEXT[Fixed.SCAFFOLD_ACADEMIC], "action": "scaffold", "citations": []}
 
 
+def test_delegation_guard_is_off_when_scaffold_hides_answer():
+    # 숨김(scaffold_state_rule false)에서는 answer_seeking도 정답을 밝히지 않아 보정하지 않는다
+    state = state_with(
+        FakeLLM(out("answer_seeking", "scaffold")), **{"toggles.scaffold_state_rule": False}
+    )
+    resp = ask(state, DELEGATION_ASK)
+    assert resp["action"] == "scaffold" and resp["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
+
+
 def test_answer_seeking_without_delegation_signal_is_generated():
     resp = ask(state_with(FakeLLM(out("answer_seeking", "scaffold"))), QUESTION)
     assert resp["action"] == "scaffold" and resp["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
@@ -258,16 +267,25 @@ def test_answer_seeking_without_delegation_signal_is_generated():
 
 @pytest.mark.parametrize(
     ("category", "action"),
-    [("answer_seeking", "clarify"), ("normal", "answer"), ("academic_dishonesty", "scaffold")],
+    [
+        ("answer_seeking", "escalate"),
+        ("answer_seeking", "refuse"),
+        ("answer_seeking", "redirect"),
+        ("answer_seeking", "clarify"),
+        ("normal", "answer"),
+        ("academic_dishonesty", "scaffold"),
+    ],
 )
 def test_delegation_guard_leaves_other_cases(category, action):
     from tutor.judge.signals import Signal
 
     o = out(category, action)
-    assert flow.delegation_guard(o, (Signal.DELEGATION,)) == (
+    # 더 강한 action은 그대로 두고 범주만 바꾼다(§3 우선순위)
+    assert flow.delegation_guard(o, (Signal.DELEGATION,), state_rule=True) == (
         o if category != "answer_seeking" else o.model_copy(update={"category": "academic_dishonesty"})
     )
-    assert flow.delegation_guard(o, ()) is o
+    assert flow.delegation_guard(o, (), state_rule=True) is o
+    assert flow.delegation_guard(o, (Signal.DELEGATION,), state_rule=False) is o
 
 
 def test_signals_go_into_main_call_when_toggle_on():

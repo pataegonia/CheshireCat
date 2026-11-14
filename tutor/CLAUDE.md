@@ -118,6 +118,7 @@
 - 생성 실패 시 기본 action 값(`fallback_action`, 잠정 clarify): TU-12
 - CSV 표현(원문 CSV / "열: 값" 문장): TU-03, 통합 I4
 - 생성에 넣는 섹션 수 K(`retrieval.k`): TU-03, 통합 I5
+- answer_seeking scaffold 기본값(밝힘 잠정, 과제 대행 행 측정 뒤 확정, 운영진 답 §11-1-4): TU-06
 - 설정 파일 위치·형식(루트 `config/` 안): TU-14
 - 빠른 질문 버튼 문구만 있는 1턴의 기대 action(clarify `[가설]`): §3, §11-1-1
 - 팀 provenance 합본·시연 체크리스트 위치: §11-3-2

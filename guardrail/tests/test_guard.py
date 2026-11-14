@@ -4,6 +4,7 @@ import asyncio
 import functools
 import itertools
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -815,3 +816,171 @@ async def test_short_quote_is_not_emitted_as_a_span(no_rule):
     j = await guard.judge(req())
     assert (j.answer_quote_ok, j.output_tier) == (False, 3)
     assert j.response.output.unsupported == ()
+
+
+# --- santa 2라운드(S2.8 머지 관문) 반영: 분기마다 뜻을 고정한다 ---
+
+
+async def test_low_signal_goes_direct_only_when_there_is_history(no_rule):
+    """GR-06: 1턴 저신호 발화는 nano에 보낸다. 앞에 발화가 하나라도 있으면 직접 판정한다."""
+    guard, fake = await make()
+    j = await guard.judge(req(None, (Message("user", "ㅋㅋㅋ"),), has=False))
+    assert (j.input_source, j.signals.low_signal) == ("nano", False)
+    assert len(calls(fake, "input")) == 1
+    two = (Message("assistant", "네"), Message("user", "ㅋㅋㅋ"))
+    j = await guard.judge(req(None, two, has=False))
+    assert (j.input_source, j.response.category) == ("low_signal", "low_signal_input")
+    assert len(calls(fake, "input")) == 1  # 늘지 않았다
+
+
+async def test_low_signal_direct_off_sends_low_signal_turns_to_nano(no_rule):
+    msgs = (Message("user", "안녕"), Message("assistant", "네"), Message("user", "ㅋㅋㅋ"))
+    guard, fake = await make(toggles__low_signal_direct=False)
+    j = await guard.judge(req(None, msgs, has=False))
+    assert (j.input_source, j.signals.low_signal) == ("nano", False)
+    assert len(calls(fake, "input")) == 1
+
+
+async def test_kb_query_uses_learner_turns_only(no_rule):
+    kb, knn, lr = _indexes()
+    kb_spy = Spy(kb, "rank")
+    guard, _ = await make(indexes=(kb_spy, knn, lr))
+    msgs = (
+        Message("user", "리스트에 값을 더하려면 어떻게 해요?"),
+        Message("assistant", "조수발화표시 문구예요"),
+        Message("user", "끝에 붙이려면요?"),
+    )
+    await guard.judge(req(ANSWER, msgs))
+    (query,) = kb_spy.seen
+    assert "조수발화표시" not in query
+    assert "리스트에 값을" in query and "끝에 붙이려면요" in query
+
+
+async def test_build_indexes_makes_knn_for_the_vote_alone_and_skips_unused_helpers():
+    rows = labeled_rows(_public())
+    off = {"toggles.knn_fewshot": False, "toggles.knn_vote": False, "toggles.lr": False}
+    _, knn, lr = build_indexes(load_config(DEFAULT, overrides=off), rows)
+    assert knn is None and lr is None
+    vote_only = {"toggles.knn_fewshot": False, "toggles.lr": False}
+    indexes = build_indexes(load_config(DEFAULT, overrides=vote_only), rows)
+    assert indexes[1] is not None and indexes[2] is None
+    guard, _ = await make(
+        responder(input_step=ServerError()),
+        indexes=indexes,
+        toggles__knn_fewshot=False,
+        toggles__lr=False,
+    )
+    j = await guard.judge(req(None, has=False))
+    assert j.knn_major is not None and j.lr_pred is None
+    assert (j.response.category, j.input_source) == (j.knn_major, "fallback")
+
+
+async def test_request_without_candidate_has_no_output_on_every_default_path(no_rule, monkeypatch):
+    guard, _ = await make()
+    j = await guard.judge(req(None, (), has=False))
+    assert j.response.output is None and j.errors == ("no_user_message",)
+    monkeypatch.setattr(Guard, "_prepare", _boom)
+    j = await guard.judge(req(None, has=False))
+    assert j.response.output is None and j.errors == ("guard:RuntimeError",)
+
+
+@pytest.mark.parametrize(
+    ("config", "missing", "fails"),
+    [
+        (BASELINE, "output_judge_baseline.md", True),
+        (DEFAULT, "output_judge.md", True),
+        (DEFAULT, "input_judge.md", True),
+        (BASELINE, "output_judge.md", False),  # 그 모드가 쓰지 않는 프롬프트는 읽지 않는다
+        (DEFAULT, "output_judge_baseline.md", False),
+    ],
+)
+async def test_build_preloads_the_prompts_its_output_mode_uses(tmp_path, config, missing, fails):
+    prompts = tmp_path / "prompts"
+    shutil.copytree(ROOT / "prompts", prompts)
+    (prompts / missing).unlink()
+    if fails:
+        with pytest.raises(OSError):  # noqa: PT011 - 경로가 든 메시지는 보지 않는다
+            await make(config=config, paths__prompts=str(prompts))
+    else:
+        guard, _ = await make(config=config, paths__prompts=str(prompts))
+        assert guard.cfg.paths.prompts == str(prompts)
+
+
+async def test_escaped_quote_from_nano_is_emitted_as_the_original_text(no_rule):
+    answer = "a < b 이면 리스트 끝에 값이 붙어요."
+    escaped = {**UNGROUNDED, "answer_quote": "a &lt; b 이면 리스트 끝에"}
+    guard, _ = await make(responder(output=escaped), toggles__nano_span=True)
+    j = await guard.judge(req(answer))
+    assert j.answer_quote_ok and j.output_tier == 3
+    assert j.response.output.unsupported == ("a < b 이면 리스트 끝에",)
+
+
+async def test_literal_rule_gets_the_top_hits_and_the_margin_of_the_kb_ranking(monkeypatch):
+    kb, knn, lr = _indexes()
+    kb_spy = Spy(kb, "rank")
+    seen = []
+    monkeypatch.setattr(guard_module, "literal_rule", lambda *a: seen.append(a))
+    guard, _ = await make(indexes=(kb_spy, knn, lr))
+    await guard.judge(req())
+    ((answer, top, margin, rule_kb, cfg),) = seen
+    ranking = kb.rank(kb_spy.seen[0])
+    assert len(ranking.hits) > cfg.kb.top_k  # 자르기가 뜻이 있는 입력
+    assert list(top) == list(ranking.hits[: cfg.kb.top_k])
+    assert margin == ranking.margin and ranking.margin != 0
+    assert (answer, rule_kb, cfg) == (ANSWER, kb_spy, guard.cfg)
+
+
+@pytest.mark.parametrize("fewshot", [True, False])
+async def test_input_call_carries_knn_examples_only_when_fewshot_is_on(no_rule, fewshot):
+    guard, fake = await make(toggles__knn_fewshot=fewshot)
+    await guard.judge(req(None, has=False))
+    (in_call,) = calls(fake, "input")
+    assert ("<example" in in_call["messages"][1]["content"]) is fewshot
+
+
+async def test_knn_and_lr_get_the_normalized_target_within_the_query_cap(no_rule):
+    kb, knn, lr = _indexes()
+    knn_spy, lr_spy = Spy(knn, "majority", "fewshot"), Spy(lr, "predict")
+    guard, _ = await make(indexes=(kb, knn_spy, lr_spy), retrieval__max_query_chars=40)
+    # 숨긴 문자는 clip이 이미 지운다. normalize가 더하는 것(풀어 쓴 자모 합치기)으로 본다
+    for t in ("리스트에 값을 더하려면 어떻게 해요?", "ㄹㅣㅅㅡㅌㅡ에 값을 더하려면 어떻게 해요?"):
+        await guard.judge(req(None, (Message("user", t),), has=False))
+    assert len(knn_spy.seen) == 4 and len(lr_spy.seen) == 2
+    assert knn_spy.seen[:2] == knn_spy.seen[2:] and lr_spy.seen[0] == lr_spy.seen[1]
+    long = "".join(f"문장{i} " for i in range(100))
+    await guard.judge(req(None, (Message("user", long),), has=False))
+    assert len(knn_spy.seen[-1]) == len(lr_spy.seen[-1]) == 40
+
+
+async def test_refusal_is_read_within_the_answer_cap(no_rule):
+    """GR-02: 거절 정규식은 `input.max_answer_chars`로 자른 답변을 본다(숨긴 태그만 전체)."""
+    guard, _ = await make(responder("harmful_content"))
+    cap = guard.cfg.input.max_answer_chars
+    j = await guard.judge(req("가" * cap + REFUSAL))
+    assert j.signals.refusal is False and j.response.output.safe is False
+    j = await guard.judge(req(REFUSAL + "가" * cap))
+    assert j.signals.refusal is True and j.response.output.safe is True
+
+
+async def test_output_side_prepare_failure_still_sees_hidden_tags(monkeypatch):
+    monkeypatch.setattr(guard_module, "literal_rule", _boom)
+    guard, _ = await make()
+    j = await guard.judge(req(ANSWER + TAG))
+    assert j.errors == ("output:RuntimeError",) and j.signals.hidden_tags
+    assert j.response == GuardResponse("normal", OutputVerdict(True, (), False))
+
+
+async def test_call_finishing_within_the_grace_after_the_deadline_is_used(no_rule, monkeypatch):
+    # 여유를 넓혀 실측 시간에 덜 흔들리게 한다(마감 + 0.3초에 끝나는 호출, 여유 0.6초)
+    monkeypatch.setattr(guard_module, "DEADLINE_GRACE_S", 0.6)
+
+    async def just_late(*a, deadline, **k):
+        await asyncio.sleep(max(deadline - time.monotonic(), 0) + 0.3)
+        return "harmful_content"
+
+    monkeypatch.setattr(guard_module, "judge_input", just_late)
+    guard, _ = await make(budget_s=0.1)
+    t0 = time.monotonic()
+    j = await guard.judge(req(None, has=False))
+    assert time.monotonic() - t0 < 1
+    assert (j.input_source, j.response.category, j.errors) == ("nano", "harmful_content", ())

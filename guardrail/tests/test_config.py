@@ -327,3 +327,24 @@ def test_load_prompt_rejects_bad_front_matter(monkeypatch, tmp_path, text):
 def test_load_prompt_rejects_unmapped_name():
     with pytest.raises(ValueError, match="prompts"):
         load_prompt(load_config(DEFAULT), "not_registered")
+
+
+# v1 프롬프트(input_judge.md)는 "가장 비슷한 예시가 마지막에 있다"고 적는다
+def test_nearest_first_with_order_stating_prompt_is_rejected():
+    with pytest.raises(ValidationError, match="nearest_first"):
+        load_config(DEFAULT, overrides={"input.knn.order": "nearest_first"})
+
+
+def test_nearest_first_with_v2a_prompt_loads():
+    cfg = load_config(
+        DEFAULT,
+        overrides={
+            "input.knn.order": "nearest_first",
+            "prompts.input_judge": "input_judge_v2a.md",
+        },
+    )
+    assert cfg.input.knn.order == "nearest_first"
+
+
+def test_default_order_with_v1_prompt_loads():
+    assert load_config(DEFAULT).input.knn.order == "nearest_last"

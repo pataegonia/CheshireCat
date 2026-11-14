@@ -1,6 +1,7 @@
 """S2.10 부하 도구: 요청 만들기·분류·집계·접근 로그 집계 (C2 §S2.10, GR-10). API 0회."""
 
 import json
+import socket
 import time
 
 import pytest
@@ -116,8 +117,13 @@ def test_kb_bench_runs_without_api():
     assert rep["queries"] > 200 and 0 < rep["p50_ms"] <= rep["p95_ms"]
 
 
+FULL = json.dumps(
+    json.loads(OK) | {"output": {"grounded": True, "unsupported": [], "safe": True}}
+).encode()
+
+
 def _main_out(monkeypatch, capsys, argv):
-    monkeypatch.setattr(load, "http_sender", lambda url, token: lambda p: (200, OK))
+    monkeypatch.setattr(load, "http_sender", lambda url, token: lambda p: (200, FULL))
     load.main(["--n", "3", "--concurrency", "2", *argv])
     return capsys.readouterr()
 
@@ -128,5 +134,48 @@ def test_main_warns_without_access_log(monkeypatch, capsys):
 
 def test_main_no_warning_with_access_log(monkeypatch, capsys, tmp_path):
     log = tmp_path / "access.log"
-    log.write_text("", "utf-8")
+    log.write_text("2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 -\n" * 3, "utf-8")
     assert _main_out(monkeypatch, capsys, ["--access-log", str(log)]).err == ""
+
+
+def _closed_url() -> str:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    return f"http://127.0.0.1:{port}/guard"  # 닫힌 로컬 포트
+
+
+def test_main_exits_1_when_all_requests_fail(capsys, tmp_path):
+    out = tmp_path / "r.json"
+    args = ["--url", _closed_url(), "--n", "3", "--concurrency", "2", "--out", str(out)]
+    with pytest.raises(SystemExit) as e:
+        load.main(args)
+    assert e.value.code == 1
+    rep = json.loads(out.read_text("utf-8"))
+    assert json.loads(capsys.readouterr().out) == rep
+    assert rep["all_ok"] is False and rep["access_log"] is False
+    assert rep["counts"]["ok"] == 0 and rep["latency_ok_s"] is None
+    assert rep["latency_s"]["n"] == 3  # 기존 키는 실패 요청도 포함
+
+
+def test_main_all_ok_flags(monkeypatch, capsys, tmp_path):
+    rep = json.loads(_main_out(monkeypatch, capsys, []).out)
+    assert rep["all_ok"] is True and rep["access_log"] is False
+    assert rep["latency_ok_s"]["n"] == 3
+    log = tmp_path / "a.log"
+    log.write_text("", "utf-8")
+    assert (
+        json.loads(_main_out(monkeypatch, capsys, ["--access-log", str(log)]).out)["access_log"]
+        is True
+    )
+
+
+def test_latency_ok_excludes_failed_requests():
+    def send(p):
+        if p["session_id"].endswith("0"):
+            raise ConnectionError("refused")
+        return 200, OK
+
+    payloads = [{"session_id": f"load_{i:04d}", "messages": []} for i in range(10)]
+    rep = load.run_load(send, payloads, concurrency=4)
+    assert rep["latency_s"]["n"] == 10 and rep["latency_ok_s"]["n"] == 9

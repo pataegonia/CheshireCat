@@ -122,6 +122,7 @@ def run_load(
     with ThreadPoolExecutor(concurrency) as ex:
         results = list(ex.map(one, payloads))
     counts = Counter(k for k, _, _ in results)
+    ok_dt = [dt for k, dt, _ in results if k == "ok"]
     return {
         "requests": len(payloads),
         "with_candidate": sum("candidate_answer" in p for p in payloads),
@@ -130,7 +131,9 @@ def run_load(
         "counts": {
             k: counts.get(k, 0) for k in ("ok", "timeout", "http", "json", "format", "error")
         },
+        "all_ok": counts["ok"] == len(payloads),
         "latency_s": _latency([dt for _, dt, big in results if not big]),
+        "latency_ok_s": _latency(ok_dt) if ok_dt else None,  # ok 요청만(없으면 null)
         "latency_big_s": _latency([dt for _, dt, big in results if big]),
     }
 
@@ -212,6 +215,7 @@ def main(argv: list[str] | None = None) -> None:
         report = run_load(
             http_sender(args.url, os.environ["TEAM_TOKEN"]), payloads, args.concurrency
         )
+        report["access_log"] = bool(args.access_log)
         if args.access_log:
             lines = Path(args.access_log).read_text("utf-8", errors="replace").splitlines()
             report["failures"] = log_failures(lines, report["requests"], report["with_candidate"])
@@ -219,6 +223,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.out:
         Path(args.out).write_text(text + "\n", "utf-8")
     sys.stdout.write(text + "\n")
+    if not args.kb_bench and not report["all_ok"]:
+        sys.exit(1)  # 결과는 이미 썼다. 실패한 요청이 있다
 
 
 if __name__ == "__main__":

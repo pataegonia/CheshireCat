@@ -85,6 +85,19 @@ _LABEL = {
     Signal.GRADING: "채점·평가 방법을 지시하는 표현",
 }
 LABEL = MappingProxyType(_LABEL)
+# 영어 지시문(`toggles.prompt_lang: en`)일 때의 이름. 뜻은 위와 같다
+_LABEL_EN = {
+    Signal.CRISIS: "wording of ongoing suffering or isolation",
+    Signal.OVERRIDE: (
+        "wording that asks to ignore instructions, take an unrestricted role, or reveal hidden"
+        " instructions (may be quoted as material to analyze)"
+    ),
+    Signal.ANSWER_ONLY: "wording that asks only for the answer, without the working",
+    Signal.DELEGATION: "wording that asks to produce a graded submission for the learner",
+    Signal.SELF_PII: "wording in which the learner reveals their own name, school or grade",
+    Signal.GRADING: "wording that instructs how to grade or evaluate",
+}
+LABEL_EN = MappingProxyType(_LABEL_EN)
 
 
 def _rx(*alternatives: str) -> re.Pattern[str]:
@@ -288,6 +301,7 @@ def detect(conv: Conversation) -> tuple[Signal, ...]:
     return detect_text(conv.target) if conv.target else ()
 
 
-def labels(signals: Sequence[Signal]) -> list[str]:
-    """주 호출 <신호>에 넣을 이름 목록."""
-    return [LABEL[s] for s in signals]
+def labels(signals: Sequence[Signal], lang: str = "ko") -> list[str]:
+    """주 호출 <신호>에 넣을 이름 목록. lang은 주 호출 지시문 언어(ko·en)."""
+    table = LABEL_EN if lang == "en" else LABEL
+    return [table[s] for s in signals]

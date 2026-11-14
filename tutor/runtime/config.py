@@ -39,6 +39,7 @@ class Toggles(_Strict):
     scaffold_state_rule: bool
     inline_cite: bool
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
+    prompt_lang: Literal["ko", "en"]  # 주 호출 지시문 언어(main_call.md / main_call_en.md)
 
 
 class Fewshot(_Strict):

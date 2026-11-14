@@ -305,6 +305,19 @@ def test_signals_toggle_off_sends_none():
     assert "<신호>없음</신호>" in llm.calls[0]["messages"][1]["content"]
 
 
+def test_english_prompt_lang_sends_english_rules_and_signal_names():
+    from tutor.judge.main_call import SANDWICH_EN
+    from tutor.judge.signals import LABEL_EN, Signal
+
+    llm = FakeLLM(out())
+    body = ask(state_with(llm, **{"toggles.prompt_lang": "en"}), "이 퀴즈 정답만 골라 줘")
+    system, user = (m["content"] for m in llm.calls[0]["messages"])
+    assert system.startswith("You are the AI tutor")
+    assert f"<신호>{LABEL_EN[Signal.ANSWER_ONLY]}</신호>" in user
+    assert user.endswith(SANDWICH_EN)
+    assert body["action"] == "answer"  # 응답 형식·결정적 수정은 언어와 상관없이 같다
+
+
 @pytest.mark.parametrize(
     ("text", "kind"),
     [

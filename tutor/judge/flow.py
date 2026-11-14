@@ -72,7 +72,8 @@ def prepare_judge(app_state: Any) -> None:
     `tutor.startup.prepare`가 부른다. 공개 세트 파일을 못 읽으면 예외가 나서 서버가 뜨지 않는다
     (KB와 같다). 예시를 끈 설정에서는 파일을 읽지 않는다."""
     app_state.tutor_prompt = MainCallPrompt.from_rules(
-        scaffold_state_rule=app_state.tutor_cfg.toggles.scaffold_state_rule
+        scaffold_state_rule=app_state.tutor_cfg.toggles.scaffold_state_rule,
+        lang=app_state.tutor_cfg.toggles.prompt_lang,
     )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
     cfg = getattr(app_state, "tutor_cfg", None)
@@ -87,7 +88,9 @@ def examples_block(state: Any, conv: Conversation) -> str:
     if cfg.toggles.fewshot == "off" or index is None:
         return ""
     picked = index.pick(cfg.toggles.fewshot, normalize(conv.target_raw))
-    return render_examples(picked, with_answer=cfg.fewshot.with_answer)
+    return render_examples(
+        picked, with_answer=cfg.fewshot.with_answer, lang=cfg.toggles.prompt_lang
+    )
 
 
 def _messages(req: TutorRequest) -> list[dict[str, str]]:
@@ -258,7 +261,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             complete=_complete(state),
             deadline=deadline,
             k=cfg.retrieval.k,
-            signals=labels(signals) if cfg.toggles.signals else (),
+            signals=labels(signals, cfg.toggles.prompt_lang) if cfg.toggles.signals else (),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)

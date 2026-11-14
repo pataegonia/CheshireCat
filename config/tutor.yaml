@@ -17,6 +17,7 @@ toggles:
   scaffold_state_rule: false   # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다. 11/14 측정으로 숨김(전체 이득 없음, 과제 대행 행 0점 증가). T3에서 운영진 답(§11-1-4)과 함께 다시 본다
   inline_cite: false           # 답변 끝 (섹션 ID) 표기
   max_citations: 1             # 1 | 2. 2는 "두 대상 비교" 문항 수를 센 뒤 ablation(TU-07)
+  prompt_lang: ko              # ko | en. 주 호출 지시문 언어. en은 지시문만 영어(태그·범주 id·고정 문장·답변은 한국어). 가드 #173처럼 런박스 번갈아 3회 비교 뒤 정한다
 fewshot:                       # 판단 예시 고르기(TU-08). 가드 GR-05 input.knn과 같은 값
   ngram: [1, 3]                # 문자 n-gram(char_wb) 범위
   max_examples: 8              # knn 전체 상한(4–8)

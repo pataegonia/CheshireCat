@@ -385,7 +385,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
 | **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output(messages, candidate_answer, category=None)`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
 | **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`tier3_trust`(저장된 응답으로, R14-D2)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
-| **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과. 절차는 R14-D7: 변형마다 1회 선별 → 하나의 v2로 합쳐 3회 확정 1회. v2는 `gr/s3.2-input-tuning`의 새 PR에서 `input_judge.md`의 `version`을 2로 올린다. S2.6 PR은 v1 그대로 머지한다(기준선 보존, §10) |
+| **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과. 절차는 R14-D7: 변형마다 1회 선별 → 하나의 v2로 합쳐 3회 확정 1회. v2는 `gr/s3.2-input-v2`의 새 PR에서 `input_judge.md`의 `version`을 2로 올린다. S2.6 PR은 v1 그대로 머지한다(기준선 보존, §10) |
 | **S3.3** | OOM용 KB 조각 ablation | 04 / 0010 | P1 | 3h | Sonnet | S2.9 | `with_oom_kb_snippet` 순이득(3회 분산 밖에서 > 0이면 켬, 부트스트랩 구간은 보고)과 켜기 결정 |
 | **S3.4** | 3번째 호출 ablation | 05 / 0011·0013 | P2 | 4h | Sonnet → Opus 판정 | S2.9 | **동결 전 미실행(R14-D6).** v1 응답에서 "nano가 kNN·LR 둘 다와 엇갈린 행"의 nano 정답률만 호출 없이 계산해 남긴다. 0.5보다 낮을 때만 다시 올린다 |
 | **S3.5** | nano 구간·임베딩 ablation | 07·03·05 / 0014·0010 | P2 | 5h | Sonnet | S3.1 | 각 순이득과 켜기 결정, 임베딩은 기동 시간·호출 수 함께 |

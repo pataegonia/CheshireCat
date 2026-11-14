@@ -174,9 +174,13 @@ _PATTERNS: dict[Signal, re.Pattern[str]] = {
         r"(?:수행평가|숙제|과제)(?:에|로|으로|용)?(?:낼|내야할|제출할|넣을)"
         r"(?!\w{0,12}?(?:주제|추천|아이디어|방법|팁|조언|어떻게))",
         r"(?:제출할|제출용)\w{0,20}?(?:완성|전체|전부|대신|써|작성|만들어|답안)",
-        r"(?:답안|정답)(?:을|를)?(?:전체|전부|통째로)",
-        # 영어: 일반 어휘 조합(대행 동사 + 제출물, 제출물 + 나 대신)
-        r"(?:do|write|finish|complete|solve)(?:this|my|the|a)?\w{0,12}?"
+        # 답안(제출물)을 통째로 써 달라는 것.
+        # "정답 전부"·작성 동사 없는 "답안 전부"는 제출 의도 없는
+        # 정답 요구(answer_seeking)도 잡아 뺐다(#139 리뷰)
+        r"답안(?:을|를)?(?:전체|전부|통째로)\w{0,6}?(?:써|작성|만들)",
+        # 영어: 일반 어휘 조합(대행 동사 + 제출물, 제출물 + 나 대신). 공백을 지운 원문이라 `do`는
+        # 단어 안(window·random)에서도 걸리니 목적어(this·my·the)를 붙여야만 본다
+        r"(?:do(?:this|my|the)|(?:write|finish|complete|solve)(?:this|my|the|a)?)\w{0,12}?"
         r"(?:homework|assignment|essay|report|assessment)",
         r"(?:homework|assignment|essay|report|assessment)\w{0,24}?(?:forme|onmybehalf|tosubmit)",
         r"(?:answer|solution|essay|report|submission)\w{0,12}?for(?:my|a|the)(?:graded)?"

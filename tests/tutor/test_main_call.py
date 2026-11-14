@@ -1,6 +1,7 @@
 """TU-06 주 호출 v0: 프롬프트·메시지·출력 스키마·호출."""
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,10 +92,71 @@ def test_prompt_loads_with_version_and_table(prompt):
     assert "- normal → answer" in prompt.system
 
 
+def test_prompt_has_no_unresolved_placeholders(prompt):
+    assert not re.search(r"\{[a-z_]+\}", prompt.system)
+
+
+def test_prompt_scaffold_state_rule_default_reveals_fact_for_answer_seeking_only(prompt):
+    # #75: 기본(state)은 answer_seeking에서만 정답 사실을 밝히고 academic에서는 밝히지 않는다
+    sys = prompt.system
+    assert "- answer_seeking → scaffold: 문제가 묻는 정답 사실(값·이름·조건)을" in sys
+    assert "정답 사실을 밝히는 것은 answer_seeking뿐입니다" in sys
+    assert "- academic_dishonesty → scaffold: 제출할 글·코드 전체를 대신 쓰지 않습니다." in sys
+    assert "최종 정답을 말하지 않습니다" not in sys
+
+
+def test_prompt_scaffold_hide_rule_restores_old_wording():
+    sys = MainCallPrompt.load(TABLE, scaffold_state_rule=False).system
+    assert "- answer_seeking → scaffold: 최종 정답을 말하지 않습니다." in sys
+    assert "문제가 묻는 정답 사실" not in sys
+    assert not re.search(r"\{[a-z_]+\}", sys)
+
+
+def test_from_rules_passes_scaffold_state_rule():
+    on = MainCallPrompt.from_rules(scaffold_state_rule=True)
+    off = MainCallPrompt.from_rules(scaffold_state_rule=False)
+    assert on != off
+    assert on == MainCallPrompt.from_rules()
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        # 덧붙임·권한 주장은 범주를 바꾸지 않는다(#75 경계: 덧붙임·역할극·권한 주장 → answer)
+        "덧붙임을 뺀 뒤 남는 요구",
+        # 탈옥 섞임 → refuse, 수업 주제로서의 역할 지정 질문 → normal
+        "튜터 자신에게",
+        # 제출 의도 + 처음부터 끝까지 → academic, 자기 글 설명 → normal
+        "처음부터 끝까지 써 주거나 풀어 달라는 요청은 academic_dishonesty",
+        "answer_seeking과 academic_dishonesty가 겹치면",
+        # harmful 두 갈래
+        "harmful_content(비하·혐오·모욕 발언) → redirect",
+        "harmful_content(남을 해치는 방법·남의 정보 알아내기·사기 문구) → refuse",
+        # 전제 오류 → answer, 자료에 없음 → abstain
+        "전제가 틀렸으면",
+        "out_of_material → abstain",
+    ],
+)
+def test_prompt_states_boundary_rules(prompt, phrase):
+    assert phrase in prompt.system
+
+
 def test_prompt_has_no_fixed_facts(prompt):
     # 프롬프트에 과목 고유 사실·공개 세트 예제 이름을 넣지 않는다(TD-10, SPEC §2)
     for word in ["다람쥐", "새싹적금", "꿈틀", "kkumtle", "과일 바구니", "PY-", "FIN-", "PR-0"]:
         assert word not in prompt.system, word
+
+
+def test_prompt_boundary_rules_do_not_quote_public_rows(prompt):
+    # #75 경계 규칙은 범주 단위 기준 문장으로만 쓴다. 공개 행의 고유 문구를 옮기지 않는다(TD-10)
+    for phrase in [
+        "숙제에 낼",
+        "수행평가에 넣을",
+        "연극 대본에 쓸",
+        "역할 문장을 어떻게",
+        "규칙 없는 역할",
+    ]:
+        assert phrase not in prompt.system, phrase
 
 
 def test_prompt_rejects_bad_front_matter(tmp_path: Path):

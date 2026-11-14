@@ -64,3 +64,37 @@
 | 12 | gpt-5-nano API: temperature 미지원, `max_completion_tokens`, Structured Outputs `json_schema` strict, `verbosity` | 부분 확인 | 확인된 것: 모델 페이지에 Deprecated, 스냅샷 `gpt-5-nano-2025-08-07`, 컨텍스트 400,000, Structured outputs·Function calling·Streaming 지원. 쿡북에 `verbosity` 값 low/medium/high, Responses에서는 `text={"verbosity": ...}`, `reasoning` effort 기본 medium, `minimal` 존재. Structured Outputs 문서에 Responses `text.format: {type: "json_schema", strict: true, schema}` 확인. 실측으로 nano에서 json_schema(B')가 동작함(#3). 확인 못 한 것: temperature·top_p 미지원은 1차 문서에서 못 찾았고 커뮤니티 글의 코드 주석("Reasoning models forbid sampling params")뿐이다. `max_completion_tokens`는 열어 본 어느 OpenAI 페이지에도 없었다(가이드는 해당 언급 없음). Chat Completions의 `verbosity` 경로도 쿡북에 없다. 모델 페이지의 "prompt caching" 지원도 페이지에서 언급을 찾지 못했다. Structured Outputs 문서는 GPT-5 계열을 구체적으로 지명하지 않는다(문서 일부 미열람). | https://developers.openai.com/api/docs/models/gpt-5-nano ; https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_new_params_and_tools ; https://developers.openai.com/api/docs/guides/structured-outputs ; https://community.openai.com/t/gpt-5-nano-accepted-parameters/1355086 |
 
 미검증으로 남긴 것: R13-B가 근거로 든 S32·S33(추론 모델의 예시 수 효과), S25·S28·S29(순서 효과), S37–S39(분류기 결합), S54–S56(비튼 답 합성), S3·S6·S7(구간 프롬프트 비교)은 이번 범위 밖이라 열지 않았다. 환경 제약으로 Firecrawl 일일 한도에 걸려 `max_completion_tokens`와 temperature의 1차 확인은 WebFetch 결과(해당 문구 없음)까지만 했다.
+
+## R14 (2026-11-13)
+
+검증일 2026-11-13. 대상은 `R14-B1-input-prompting.md`와 `R14-B2-grounding-eval-injection.md`의 핵심 외부 주장 23개다. 조사한 에이전트와 다른 에이전트(Sonnet)가 1차 출처를 직접 열어 대조했다. 판정은 확인 / 부분 확인 / 상충 / 확인 불가. 결과: 확인 13, 부분 확인 9, 상충 1. 상충과 부분 확인은 두 메모 본문에 반영했다. 대조는 WebFetch의 요약 모델을 거쳤으므로 인용문은 요약 기준이다.
+
+| # | 주장 | 판정 | 정확한 값/메모 | 출처 |
+|---|---|---|---|---|
+| 1 | Z-ICL: 입력이 같은 예시의 라벨을 베낌(맞으면 90% 초과, 틀려도 70% 초과) | 확인 | Table 2: 맞는 라벨 90.8/94.2%, 틀린 라벨 73.9/81.7%(GPT-J/GPT-NeoX, CR 데이터셋, channel 방식). 비추론 구형 모델 | https://arxiv.org/html/2212.09865 |
+| 2 | 경계 모호성 논문: gpt-3.5 0샷 60지 32.5% 대 2지 94.3% | 확인 | 32.51%, 94.29% | https://arxiv.org/html/2406.07001 |
+| 3 | 같은 논문: PC-CoT 평균 40.2 → 62.0 | 확인 | Table 2: 40.24 → 62.01. 모델 gpt-3.5-turbo·LLaMA2-70B·Qwen-72B, 데이터 Banking77·HWU64·LIU54·Clinc150(영어) | 위와 같음 |
+| 4 | 같은 논문 절제: 공통점 제거 55.7, 차이점 제거 52.5 | **상충** | Table 3 평균: 전체 62.01 / 유사점(S) 제거 52.49 / 차이점(D) 제거 55.71 / 둘 다 제거 52.59. 초안이 두 값을 뒤바꿨다. 본문 수정함 | 위와 같음 |
+| 5 | 같은 논문: 자기 일관성 +0.19(약 24호출), 후보 축소 + PC-CoT +8.74(약 12호출) | 부분 확인 | Table 4 수치는 맞음. 무엇 대비 증가인지 표에 명시가 없다 | 위와 같음 |
+| 6 | GPT-5 프롬프트 가이드: 모순·모호한 지시가 더 해롭다, minimal에서 프롬프트 변동이 크다 | 확인 | 두 문장 모두 원문에 있음 | https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_prompting_guide |
+| 7 | 추론 모델 지침: 0샷 먼저, 예시는 지시와 맞춰야, "단계별로" 불필요, developer 메시지 | 부분 확인 | 예시가 어긋나면 "may produce poor results"(초안의 "나빠진다"보다 약함). "replace"라는 말은 없고 developer 메시지를 지원한다고만 함. 본문 수정함 | https://developers.openai.com/api/docs/guides/reasoning-best-practices |
+| 8 | gpt-oss-safeguard 가이드: 400–600토큰, 경계 사례 쌍, 얼버무림 금지·우선순위, 정책을 더 넣으면 소폭 하락 | 부분 확인 | 400–600토큰은 "early testing". "거의 같은 쌍"이라는 표현은 없고 "판정 경계 근처의 짧고 구체적인 사례". 나머지는 있음. 본문 수정함 | https://developers.openai.com/cookbook/articles/gpt-oss-safeguard-guide |
+| 9 | KMMLU-Redux/Pro: o4-mini 영/한 프롬프트 75.80/76.17, 69.65/69.10. Llama-4-Scout −33.3%·−50.6% | 확인 | Table 3 수치 일치. Llama-4 하락에는 형식 이탈이 섞여 있다 | https://arxiv.org/html/2507.08924 |
+| 10 | MoT 캐스케이드: 약한 모델 답 일관성으로 넘김, 비슷한 정확도에 비용 약 40% | 확인 | 초록 수준. 모델·과제 범위는 본문 미확인 | https://arxiv.org/abs/2310.03094 |
+| 11 | Lampinen 2022: 예시 설명은 작은 이득, 큰 모델에서만 | 부분 확인 | 다듬지 않은 설명도 이득, 다듬은 설명은 "substantially larger". 큰 모델에서만은 맞음. 본문 수정함 | https://arxiv.org/abs/2204.02329 |
+| 12 | Structure Tax: 근거 먼저 ≥ 자유 형식, 답 먼저는 큰 하락(작은 모델에서 더) | 확인 | 초록. 수치 없음 | https://aclanthology.org/2026.aacl-long.209/ |
+| 13 | Structured Outputs: 속성 순서 보존, 중요 키에 제목·설명 권고, 정확도 주장 없음 | 부분 확인 | 순서 보존 문구는 예제 코드 주석 한 곳. 문서 뒤쪽 약 46,000자는 읽지 않음 | https://developers.openai.com/api/docs/guides/structured-outputs |
+| 14 | Spotlighting: 구분자 약 60 → 30%, 데이터마킹 50 → 3.1%, 인코딩 0.0–1.8% | 부분 확인 | 구분자는 "절반으로"만 있고 30%는 원문에 없음. 3.1%는 요약 과제, 문서 QA는 8.0%. 인코딩은 GPT-3.5 과제 성능을 떨어뜨림. 지시문만 추가는 "거의 이득 없음". 본문 수정함 | https://arxiv.org/html/2403.14720 |
+| 15 | RobustJudge: 구분자·샌드위치·지시형 예방 ΔASR −1.4/−4.1/−2.1, 탐지기 −32.4, 재토큰화 −42.9 | 확인(부호 주의) | Table V의 ΔASR은 무방어 대비 감소폭이라 양수가 개선이다. 앞의 셋은 −1.37/−4.08/−2.06(소폭 악화), 탐지기 +32.40(효용 66.67), 재토큰화 +42.94(효용 29.67). Mistral-7B 37.50% 대 96.25%(Table VI). 기계번역 평가 과제. 본문 부호 수정함 | https://arxiv.org/html/2506.09443 |
+| 16 | 모의 도구 호출: 경고 문구 GPT-5.4 0.28→0.02, mini 0.71→0.65, Qwen3-8B 0.89→0.81. 도구 결과로 감싸면 전 모델 악화 | 확인 | Table 1(GSM8K 이진). ToolWrapped 0.60/0.91/0.97/1.00. 과제 하나 | https://arxiv.org/html/2605.30521 |
+| 17 | MAGE: gpt-4o-mini, 학습 30건, 시드 62.4 → GEPA 34.0, 고정 CoT 70.0 | 부분 확인 | Table 1(5시드): 62.4±2.7, 34.0±7.0, CoT-math 70.0±2.5. 70.0은 과제 특화 프롬프트. 학습 정확도 33.3→40.0은 시드 하나. 모델 이름·시험 50건은 가져온 본문에서 직접 확인 못함. 본문 수정함 | https://arxiv.org/html/2607.11944 |
+| 18 | More Debate, Same Evidence: 개발 24건 동점, 시험 120건 59.17 대 50.83, 반복 약 3.3점 변동, McNemar p 0.0156 → 보정 뒤 약 0.11 | 확인 | | https://arxiv.org/html/2608.00243 |
+| 19 | 근거 구간 추출: 무효 출력 Mixtral 61.8%, Gemma3-4B 50% 초과 | 부분 확인 | 61.8%는 맞음. 소형 모델 "50% 초과"만 있고 Gemma3-4B 값은 그림에만. 본문 수정함 | https://arxiv.org/html/2511.21401 |
+| 20 | Miller: 짝 차이 분석 권고, 묶음 표준오차가 단순 표준오차의 3배 넘을 수 있음 | 확인 | Table 4 캡션 | https://arxiv.org/html/2411.00640 |
+| 21 | HaluCheck: 분류 재현율 87.5/76.7/81.6%, Moderate 구간 F1 39.5% | 확인 | 모델 평균값 | https://arxiv.org/html/2611.08231 |
+| 22 | WildGuard: 거절 탐지 F1 GPT-4 약 98, WildGuard 약 93, 키워드 약 70 | 확인 | Table 2 XSTest-Resp: 98.1 / 92.8 / 71.0(유해 프롬프트만 95.4 / 93.4 / 70.2) | https://arxiv.org/html/2406.18495 |
+| 23 | 숫자 환각 논문: gpt-4o-mini 판정기 숫자 오류 재현 25.7%, 규칙 100%(F1 0.616) | 부분 확인 | ACM 403으로 원문을 열지 못함. 25.7%만 검색된 초록 요약에서 확인. 100%와 0.616은 확인 못함 | https://doi.org/10.1145/3805712.3809882 |
+
+산수 대조(차이가 없는 두 프롬프트, 실행 잡음이 독립): 후보 1회가 기준 3회 최댓값을 넘을 확률은 1/4, 후보 3회 최솟값이 기준 3회 최댓값을 넘을 확률은 1/C(6,3) = 1/20, 후보 3회 평균이 기준 3회 최댓값을 넘을 확률은 정규 잡음 모의실험으로 약 0.185다. R14-B2 §2-3의 25%·5%·19%와 맞는다.
+
+미검증으로 남긴 것: R14-B1의 T9(대조 CoT 수치), T14(확신 값 해상도, 요약 사이트), T17–T19, T21–T24와 R14-B2의 B4, B6–B8, B12–B13, B15, B20–B21, B23–B31은 열지 않았다. 두 메모에 "약"·"미검증"으로 표시돼 있다. gpt-5-nano를 직접 잰 출처는 하나도 없다.

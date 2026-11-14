@@ -94,6 +94,14 @@ def out(s: str = "") -> None:
     sys.stdout.write(s + "\n")
 
 
+def refuse_holdout(rec_ids) -> None:
+    """입력 기록에 홀드아웃 묶음 행이 있으면 집계하지 않고 멈춘다(행 수만 알린다)."""
+    held = set(split.holdout)
+    n = sum(1 for i in rec_ids if i in by and split.cluster[i] in held)
+    if n:
+        raise SystemExit(f"오류: 입력 기록에 홀드아웃 행 {n}개가 있어 집계하지 않는다")
+
+
 SHORT = {
     "normal": "N", "answer_seeking": "AS", "academic_dishonesty": "AD", "off_topic": "OT",
     "out_of_material": "OOM", "jailbreak_injection": "JB", "pii_disclosure": "PII",
@@ -203,6 +211,7 @@ if "--evidence-stats" in sys.argv:
     other = re.compile("타인|다른 |친구|선생|남의|애들|교사|학생의")  # 타인 지칭
     ment = re.compile("검토|분석|비교|묻|방법|예시|가상의 예|설명")  # 언급형 동사
     apply_ = re.compile("우회|무시하라|무시하도록|적용")  # 적용형 낱말
+    refuse_holdout(i for g in ("v1", "nofs") for run in runs[g] for i in run)
     st: dict[str, dict[str, int]] = {}
     used = Counter()
     for g in ("v1", "nofs"):
@@ -259,6 +268,10 @@ if "--per-run" in sys.argv:
         " 열: F1 오탐 미탐 N>JB JB+HC미탐 범주정확도 튜터F1"
     )
     names = ("F1", "fp", "fn", "N>JB", "JB+HC miss", "cat", "tutorF1")
+    for g in ("v1", "nofs"):
+        for n, k in GROUPS[g]:
+            _ = load(n, k)
+            refuse_holdout(r["id"] for r in cache[n] if r["repeat"] == k)
     for g in ("v1", "nofs"):
         tab = []
         for n, k in GROUPS[g]:

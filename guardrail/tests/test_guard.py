@@ -654,13 +654,15 @@ async def test_long_user_message_tail_reaches_the_kb_query(no_rule):
     assert "꼬리표시문구" in query
 
 
-async def test_prepare_hands_the_judges_text_that_is_already_cut():
+@pytest.mark.parametrize("answer", [ANSWER, None])  # 답변 없는 경로도 같은 글을 넘긴다
+async def test_prepare_hands_the_judges_text_that_is_already_cut(answer):
     """큰 발화는 스레드(`_prepare`)에서 줄인다. 판정기가 이벤트 루프에서 다시 줄이지 않게."""
     guard, _ = await make()
     n = guard.cfg.input.max_chars
     big = "".join(f"문장{i} " for i in range(n))
     msgs = (Message("user", big), Message("assistant", big), Message("user", big + "끝"))
-    p = guard._prepare(req(ANSWER, msgs))
+    p = guard._prepare(req(answer, msgs, has=answer is not None))
+    assert p.answer == answer
     limit = n + 8  # 자른 표시 몫
     assert len(p.target) <= limit and p.target.endswith("끝")
     assert [m.role for m in p.window] == ["user", "assistant", "user"]
@@ -700,3 +702,46 @@ async def test_output_side_failures_all_keep_tier1_and_else_use_failure_default(
     }
     assert seen == dict.fromkeys(got, want)
     assert got["prepare"].errors == got["assemble"].errors == ("output:RuntimeError",)
+
+
+def _stubbed(knn_major, lr_pred):
+    """kNN 다수·LR 예측을 고정한 색인(색인 객체는 바꿀 수 없어 Spy로 감싼다)."""
+    kb, knn, lr = _indexes()
+    knn_stub, lr_stub = Spy(knn), Spy(lr)
+    knn_stub.majority = lambda text: knn_major
+    lr_stub.predict = lambda text: lr_pred
+    return kb, knn_stub, lr_stub
+
+
+async def test_input_failure_with_disagreeing_knn_and_lr_uses_lr(no_rule):
+    indexes = _stubbed("answer_seeking", "harmful_content")
+    guard, _ = await make(responder(input_step=ServerError()), indexes=indexes)
+    j = await guard.judge(req())
+    assert (j.knn_major, j.lr_pred) == ("answer_seeking", "harmful_content")
+    assert (j.response.category, j.input_source) == ("harmful_content", "fallback")
+
+
+async def test_value_returned_after_the_deadline_is_not_used(no_rule, monkeypatch):
+    async def late(*a, **k):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return "harmful_content"  # 취소를 받고도 값을 돌려준다
+
+    monkeypatch.setattr(guard_module, "judge_input", late)
+    guard, _ = await make(budget_s=0.1, indexes=_stubbed("answer_seeking", "answer_seeking"))
+    t0 = time.monotonic()
+    j = await guard.judge(req(None, has=False))
+    assert time.monotonic() - t0 < 0.1 + 1
+    assert (j.input_source, j.response.category) == ("fallback", "answer_seeking")
+    assert j.errors == ("input_judge",)
+
+
+async def test_short_quote_is_not_emitted_as_a_span(no_rule):
+    short = {**UNGROUNDED, "answer_quote": "붙어요"}  # 원문에 있지만 quote_min_chars보다 짧다
+    guard, _ = await make(
+        responder(output=short), output__tier3_trust="all", toggles__nano_span=True
+    )
+    j = await guard.judge(req())
+    assert (j.answer_quote_ok, j.output_tier) == (False, 3)
+    assert j.response.output.unsupported == ()

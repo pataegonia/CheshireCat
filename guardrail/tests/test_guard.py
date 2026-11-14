@@ -903,8 +903,8 @@ async def test_request_without_candidate_has_no_output_on_every_default_path(no_
     ("config", "missing", "fails"),
     [
         (BASELINE, "output_judge_baseline.md", True),
-        (DEFAULT, "output_judge.md", True),
-        (DEFAULT, "input_judge.md", True),
+        (DEFAULT, "output_judge_en.md", True),
+        (DEFAULT, "input_judge_en.md", True),
         (BASELINE, "output_judge.md", False),  # 그 모드가 쓰지 않는 프롬프트는 읽지 않는다
         (DEFAULT, "output_judge_baseline.md", False),
     ],

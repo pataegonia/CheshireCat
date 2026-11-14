@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.2"
+    assert cfg.version == "6.0.3"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -61,8 +61,8 @@ def test_default_loads_section_4_4_model():
         "off_topic",
     ]
     assert cfg.prompts == {  # S2.6·S2.7
-        "input_judge": "input_judge.md",
-        "output_judge": "output_judge.md",
+        "input_judge": "input_judge_en.md",  # R14-D9 채택
+        "output_judge": "output_judge_en.md",
         "output_judge_baseline": "output_judge_baseline.md",
     }
     assert cfg.output.tier3_trust == "answer_quote" and cfg.output.quote_min_chars == 8
@@ -330,9 +330,12 @@ def test_load_prompt_rejects_unmapped_name():
 
 
 # v1 프롬프트(input_judge.md)는 "가장 비슷한 예시가 마지막에 있다"고 적는다
-def test_nearest_first_with_order_stating_prompt_is_rejected():
+@pytest.mark.parametrize("prompt", ["input_judge.md", "input_judge_en.md"])
+def test_nearest_first_with_order_stating_prompt_is_rejected(prompt):
     with pytest.raises(ValidationError, match="nearest_first"):
-        load_config(DEFAULT, overrides={"input.knn.order": "nearest_first"})
+        load_config(
+            DEFAULT, overrides={"input.knn.order": "nearest_first", "prompts.input_judge": prompt}
+        )
 
 
 def test_nearest_first_with_v2a_prompt_loads():

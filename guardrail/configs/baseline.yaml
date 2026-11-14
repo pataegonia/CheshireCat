@@ -2,9 +2,9 @@
 # 입력: input_judge.md에서 예시 블록만 비워 쓴다(범주 정의·짝 대조 문구는 그대로, 따로 파일 없음). 실패하면 normal.
 # 출력: output_judge_baseline.md의 nano 값을 grounded·safe에 바로 쓰고 unsupported=[]. decision은 범주에서 도출.
 # output.failure_default는 토글이 아니다.
-version: "6.0.2"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.3"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
-prompts: {input_judge: input_judge.md, output_judge: output_judge.md, output_judge_baseline: output_judge_baseline.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
+prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en.md, output_judge_baseline: output_judge_baseline.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
 block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, off_topic]   # 범주 → decision 표(ADR-0012)
 llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다

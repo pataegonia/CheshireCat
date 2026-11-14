@@ -31,6 +31,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.guard_classify == "parallel"  # TU-14 기본 parallel
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
     assert toggles.max_citations == 1  # TU-07 기본 1
+    assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     assert cfg.llm.max_completion_tokens == 1600  # 주 호출 상한(가드 판정 호출과 따로)
     assert cfg.eval.max_calls == 5000  # TU-14

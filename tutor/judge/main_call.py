@@ -58,6 +58,20 @@ class MainCallOut(_Out):
     sentences: list[SentenceOut]
 
 
+class CheckedMainCallOut(_Out):
+    """`toggles.evidence_check`(TU-06, #162): 범주보다 먼저 근거 대조 결과를 쓰게 한다.
+
+    필드 순서대로 생성하므로, 범주를 고르기 전에 묻는 내용이 근거 묶음에 있는지 대조를 거친다.
+    `asked_in_evidence`는 범주 판단을 돕는 칸일 뿐이고 action을 덮지 않는다(오차단 위험, 측정 뒤
+    정한다). `clean`이 이 칸을 버리고 `MainCallOut`으로 바꾼다.
+    """
+
+    asked_in_evidence: bool
+    category: Category
+    action: Action
+    sentences: list[SentenceOut]
+
+
 # --- 프롬프트 ---
 
 _FRONT = re.compile(r"\A---\n(?P<head>.*?)\n---\n", re.S)
@@ -126,6 +140,18 @@ def render_scaffold_rules(state_rule: bool) -> dict[str, str]:
     }
 
 
+# 근거 대조 칸(`toggles.evidence_check`, #162). 켜면 출력 목록의 category 앞에 이 줄이 들어가고,
+# 끄면 자리 줄째 지워 프롬프트가 칸이 없던 때와 글자까지 같다
+_EVIDENCE_CHECK_SLOT = "{evidence_check_field}\n"
+_EVIDENCE_CHECK_FIELD = (
+    "- asked_in_evidence: category보다 먼저 씁니다. 학습자가 묻는 구체적인 값·규칙·기능·기준이 "
+    "근거 묶음의 문장으로 확인되면 true입니다. 근거 묶음에 질문 대상을 다루는 섹션이 있어도 "
+    "묻는 그 내용 자체가 없으면 false입니다. 자료 내용을 묻는 질문이 아니면 false로 두고 "
+    "범주는 위 정의대로 고릅니다. 자료 내용을 묻는 질문인데 false이고 자료에 반대되는 사실도 "
+    "없으면 out_of_material입니다."
+)
+
+
 def render_action_table(table: Mapping[str, Sequence[str]]) -> str:
     """통합 표(범주 → 허용 action)를 프롬프트 줄로 그린다. 표 순서를 그대로 쓴다."""
     lines = []
@@ -140,6 +166,12 @@ class MainCallPrompt:
 
     version: str
     system: str
+    evidence_check: bool = False  # 근거 대조 칸을 쓰는 출력 스키마인가(#162)
+
+    @property
+    def schema(self) -> type[MainCallOut] | type[CheckedMainCallOut]:
+        """이 프롬프트가 요구하는 출력 스키마. 프롬프트 출력 목록과 늘 같이 바뀐다."""
+        return CheckedMainCallOut if self.evidence_check else MainCallOut
 
     @classmethod
     def load(
@@ -148,6 +180,7 @@ class MainCallPrompt:
         prompt_dir: Path = PROMPT_DIR,
         *,
         scaffold_state_rule: bool = False,
+        evidence_check: bool = False,
     ) -> "MainCallPrompt":
         # Windows 체크아웃(autocrlf)의 CRLF도 같은 프롬프트로 읽는다(런박스는 LF)
         raw = (prompt_dir / f"{PROMPT_ID}.md").read_text(encoding="utf-8")
@@ -163,7 +196,11 @@ class MainCallPrompt:
         body = text[m.end() :].replace("{action_table}", render_action_table(action_table))
         for key, rule in render_scaffold_rules(scaffold_state_rule).items():
             body = body.replace("{" + key + "}", rule)
-        return cls(version=str(head["version"]), system=body.strip())
+        if _EVIDENCE_CHECK_SLOT not in body:
+            raise ValueError("main_call 프롬프트에 근거 대조 칸 자리가 없다")
+        field = _EVIDENCE_CHECK_FIELD + "\n" if evidence_check else ""
+        body = body.replace(_EVIDENCE_CHECK_SLOT, field)
+        return cls(version=str(head["version"]), system=body.strip(), evidence_check=evidence_check)
 
     @classmethod
     def from_rules(
@@ -172,6 +209,7 @@ class MainCallPrompt:
         prompt_dir: Path = PROMPT_DIR,
         *,
         scaffold_state_rule: bool = False,
+        evidence_check: bool = False,
     ) -> "MainCallPrompt":
         """통합 표(`integration.actions.load_actions()`, 기본은 `config/actions.yaml`)로 만든다.
 
@@ -183,6 +221,7 @@ class MainCallPrompt:
             {c: r.actions for c, r in table.items()},
             prompt_dir,
             scaffold_state_rule=scaffold_state_rule,
+            evidence_check=evidence_check,
         )
 
 
@@ -283,8 +322,10 @@ class Complete(Protocol):
     ) -> CompleteResult: ...
 
 
-def clean(out: MainCallOut) -> MainCallOut:
+def clean(out: MainCallOut | CheckedMainCallOut) -> MainCallOut:
     """형식만 다듬는다: 공백 정리, 빈 문장 제거, non_claim의 evidence 비우기, evidence 중복 제거.
+
+    근거 대조 칸(`CheckedMainCallOut.asked_in_evidence`)은 버린다. 뒤 단계는 `MainCallOut`만 본다.
 
     인용 문구가 원문에 있는지, sid가 근거 묶음 안인지는 통합 결정적 수정(IN-04)이 본다.
     """
@@ -316,9 +357,10 @@ async def run_main_call(
     examples: str = "",
 ) -> MainCallOut | None:
     """nano 주 호출 1회(재시도는 런타임). 실패·형식 오류면 None → 호출 쪽이 TU-12 기본값."""
+    schema = prompt.schema
     result = await complete(
-        build_messages(prompt, conv, sections, signals, examples), MainCallOut, deadline=deadline
+        build_messages(prompt, conv, sections, signals, examples), schema, deadline=deadline
     )
-    if result.error is not None or not isinstance(result.parsed, MainCallOut):
+    if result.error is not None or not isinstance(result.parsed, schema):
         return None
     return clean(result.parsed)

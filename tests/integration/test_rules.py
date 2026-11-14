@@ -24,11 +24,14 @@ import pytest
 from tests.integration.applib import (
     ANSWER_WORD,
     AUTH,
+    GUARD_BUDGET_HINT,
     MAX_LLM_CALLS_PER_REQUEST,
     ROOT,
     as_bytes,
     cache_sizes,
     find_text,
+    guard_call_budget,
+    guard_calls_per_request,
     state_roots,
     user,
 )
@@ -60,11 +63,16 @@ def test_same_request_twice_calls_the_llm_twice(llm_client, llm_mode, fake_send)
     assert dict(llm_client.app.state.tutor_llm.calls) == {LLM_ROLE[llm_mode]: 2}
 
 
-def test_one_request_makes_one_llm_call(llm_client, llm_mode, fake_send):
+def test_one_request_makes_one_llm_call(llm_client, llm_mode, fake_send, fake_guard_send):
     for sent in range(1, 4):
+        guard_before = fake_guard_send.count
         r = post(llm_client, "/tutor", user(f"{QUESTION_B} {sent}"))
         assert r.json()["answer"].startswith(ANSWER_WORD)  # 기본값이 아니라 LLM의 답이다
         assert fake_send.count == sent * CALLS_PER_REQUEST[llm_mode]
+        # 튜터가 가드에 맡긴 판정(가드 LLM)도 이 요청 하나가 상한 안이고, 합계도 상한 안이다
+        guard_used = fake_guard_send.count - guard_before
+        assert guard_used <= guard_calls_per_request("/tutor"), GUARD_BUDGET_HINT
+        assert fake_guard_send.count <= guard_call_budget(tutor=sent), GUARD_BUDGET_HINT
     assert dict(llm_client.app.state.tutor_llm.calls) == {LLM_ROLE[llm_mode]: 3}
 
 

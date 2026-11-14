@@ -169,7 +169,8 @@ class OutputOnlyGuard:
             return self._result(output, None)
         answer = req.candidate_answer[: cfg.input.max_answer_chars]
         half = cfg.retrieval.max_query_chars // 2
-        query = "\n".join(users)[-half:] + "\n" + answer[:half]  # 학습자 쪽은 최근 발화를 남긴다
+        # 학습자 쪽은 최근 발화를 남긴다. KbIndex.scores는 normalize를 거친 질의를 받는다
+        query = normalize("\n".join(users))[-half:] + "\n" + normalize(answer)[:half]
         hits = output_context(self.kb.rank(query), self.kb, cfg)
         out = await ask_grounded(
             users[-1],

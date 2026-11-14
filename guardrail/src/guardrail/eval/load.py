@@ -6,6 +6,7 @@
 `--access-log 파일`을 주면 서버 접근 로그의 오류 칸에서 기본값으로 떨어진 판정을 역할별로 센다.
 접근 로그 없이는 모두 ok여도 모델 호출이 성공 여부를 알 수 없다(실패해도 서버는 200+기본값).
 먼저 `--n 20`으로 짧게 돌려 접근 로그의 오류 칸을 확인한 뒤 전체를 돌린다.
+혼합(+probe): `... --tutor-url http://127.0.0.1:8000/tutor --tutor-n 200 --probe`
 `--kb-bench`는 서버 없이 KB 검색 시간만 잰다(API 0회).
 """
 
@@ -15,11 +16,12 @@ import os
 import random
 import statistics
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from pathlib import Path
@@ -43,12 +45,20 @@ WARN_NO_LOG = (
 Send = Callable[[dict], tuple[int, bytes]]
 
 
-def guard_rows() -> list[PublicRow]:
-    """홀드아웃 묶음을 뺀 가드 행."""
+def _rows(endpoint: str) -> list[PublicRow]:
+    """홀드아웃 묶음을 뺀 행."""
     split = load_splits()
     held = set(split.holdout)
     rows = load_public(load_config().paths.public)
-    return [r for r in rows if r.endpoint == "guard" and split.cluster[r.id] not in held]
+    return [r for r in rows if r.endpoint == endpoint and split.cluster[r.id] not in held]
+
+
+def guard_rows() -> list[PublicRow]:
+    return _rows("guard")
+
+
+def tutor_rows() -> list[PublicRow]:
+    return _rows("tutor")
 
 
 def build_payloads(rows: list[PublicRow], n: int, big: int = 0, seed: int = 13) -> list[dict]:
@@ -77,8 +87,17 @@ def _block() -> frozenset[Category]:
     return frozenset(load_config().block_categories)
 
 
+def mix(guard: list[dict], tutor: list[dict], seed: int = 13) -> list[tuple[str, dict]]:
+    """(엔드포인트, payload)를 섞는다. 표시는 payload 밖에 둔다(전송 본문 그대로)."""
+    jobs = [("guard", p) for p in guard] + [("tutor", p) for p in tutor]
+    random.Random(seed).shuffle(jobs)  # noqa: S311 — 순서 섞기일 뿐이다
+    return jobs
+
+
 def classify(payload: dict, status: int, body: bytes) -> str:
-    """ok | http | json | format. 형식은 계약(guard.schema.json)의 채점 필드만 본다."""
+    """ok | redirect | http | json | format. 형식은 계약(guard.schema.json)의 채점 필드만 본다."""
+    if 300 <= status < 400:
+        return "redirect"  # 채점기는 따라가지 않는다
     if status != 200:
         return "http"
     try:
@@ -98,6 +117,28 @@ def classify(payload: dict, status: int, body: bytes) -> str:
     return "ok" if ok else "format"
 
 
+TUTOR_ACTIONS = ("answer", "scaffold", "clarify", "abstain", "redirect", "refuse", "escalate")
+MAX_ANSWER_CHARS = 4000  # SPEC §4
+
+
+def classify_tutor(status: int, body: bytes) -> str:
+    """ok | redirect | http | json | format (SPEC §4)."""
+    if 300 <= status < 400:
+        return "redirect"
+    if status != 200:
+        return "http"
+    try:
+        d = json.loads(body)
+    except ValueError:
+        return "json"
+    if not isinstance(d, dict):
+        return "format"
+    a, c = d.get("answer"), d.get("citations")
+    ok = isinstance(a, str) and len(a) <= MAX_ANSWER_CHARS and d.get("action") in TUTOR_ACTIONS
+    ok = ok and isinstance(c, list) and all(isinstance(x, str) for x in c)
+    return "ok" if ok else "format"
+
+
 def _pct(values: list[float], q: float) -> float:
     s = sorted(values)
     return round(s[min(len(s) - 1, int(q * len(s)))], 3) if s else 0.0
@@ -112,16 +153,47 @@ def _latency(values: list[float]) -> dict:
     }
 
 
-def run_load(
-    send: Send, payloads: list[dict], concurrency: int = 64, timeout_s: float = SPEC_TIMEOUT_S
-) -> dict:
-    """모두 보내고 집계한다. timeout_s를 넘겨 온 응답도 시간 초과로 센다(채점기는 0점)."""
+KINDS = ("ok", "timeout", "redirect", "http", "json", "format", "error")
 
-    def one(p: dict) -> tuple[str, float, bool]:
+
+def _summary(rs: list[tuple[str, float, bool]]) -> dict:
+    counts = Counter(k for k, _, _ in rs)
+    ok_dt = [dt for k, dt, _ in rs if k == "ok"]
+    return {
+        "requests": len(rs),
+        "counts": {k: counts.get(k, 0) for k in KINDS},
+        "all_ok": bool(rs) and counts["ok"] == len(rs),  # 0건은 통과가 아니다
+        "latency_s": _latency([dt for _, dt, big in rs if not big]),
+        "latency_ok_s": _latency(ok_dt) if ok_dt else None,  # ok 요청만(없으면 null)
+        "latency_big_s": _latency([dt for _, dt, big in rs if big]),
+    }
+
+
+def _ms_stats(ms: list[float]) -> dict:
+    return {
+        "n": len(ms),
+        "p50_ms": round(statistics.median(ms), 3) if ms else 0.0,
+        "p95_ms": _pct(ms, 0.95),
+        "max_ms": round(max(ms, default=0.0), 3),
+    }
+
+
+def run_mixed(
+    sends: Mapping[str, Send],
+    jobs: list[tuple[str, dict]],
+    concurrency: int = 64,
+    timeout_s: float = SPEC_TIMEOUT_S,
+    probe: Callable[[], int] | None = None,
+    probe_interval_s: float = 1.0,
+) -> dict:
+    """모두 보내고 엔드포인트별로 집계한다. timeout_s를 넘긴 응답도 시간 초과다(채점기는 0점)."""
+
+    def one(job: tuple[str, dict]) -> tuple[str, float, bool]:
+        ep, p = job
         t0 = time.perf_counter()
         try:
-            status, body = send(p)
-            kind = classify(p, status, body)
+            status, body = sends[ep](p)
+            kind = classify_tutor(status, body) if ep == "tutor" else classify(p, status, body)
         except TimeoutError:
             kind = "timeout"
         except Exception as exc:  # 연결 실패 등. 종류만 센다
@@ -129,24 +201,62 @@ def run_load(
         dt = time.perf_counter() - t0
         return ("timeout" if dt > timeout_s else kind), dt, len(p["messages"]) > 100
 
+    probes: list[tuple[int, float]] = []
+    stop = threading.Event()
+
+    def probe_loop() -> None:
+        while not stop.wait(probe_interval_s):
+            t0 = time.perf_counter()
+            try:
+                status = probe()  # type: ignore[misc]
+            except Exception:  # 서버가 죽어도 부하 보고는 계속한다
+                status = 0
+            probes.append((status, time.perf_counter() - t0))
+
+    th = threading.Thread(target=probe_loop, daemon=True) if probe else None
     t0 = time.perf_counter()
-    with ThreadPoolExecutor(concurrency) as ex:
-        results = list(ex.map(one, payloads))
-    counts = Counter(k for k, _, _ in results)
-    ok_dt = [dt for k, dt, _ in results if k == "ok"]
-    return {
-        "requests": len(payloads),
-        "with_candidate": sum("candidate_answer" in p for p in payloads),
+    if th:
+        th.start()
+    try:
+        with ThreadPoolExecutor(concurrency) as ex:
+            results = list(ex.map(one, jobs))
+        wall = round(time.perf_counter() - t0, 1)  # probe가 끝나기를 기다린 시간은 빼고
+    finally:
+        stop.set()
+        if th:
+            th.join()
+    report = {
+        **_summary(results),
+        "with_candidate": sum("candidate_answer" in p for _, p in jobs),
         "concurrency": concurrency,
-        "wall_s": round(time.perf_counter() - t0, 1),
-        "counts": {
-            k: counts.get(k, 0) for k in ("ok", "timeout", "http", "json", "format", "error")
+        "wall_s": wall,
+        "by_endpoint": {
+            ep: _summary([r for (e, _), r in zip(jobs, results, strict=True) if e == ep])
+            for ep in sends
         },
-        "all_ok": counts["ok"] == len(payloads),
-        "latency_s": _latency([dt for _, dt, big in results if not big]),
-        "latency_ok_s": _latency(ok_dt) if ok_dt else None,  # ok 요청만(없으면 null)
-        "latency_big_s": _latency([dt for _, dt, big in results if big]),
+        "probe": {
+            "statuses": dict(Counter(str(s) for s, _ in probes)),
+            **_ms_stats([dt * 1000 for _, dt in probes]),
+        }
+        if probe
+        else None,
     }
+    report["total_sent"] = report["requests"] + len(probes)
+    return report
+
+
+def run_load(
+    send: Send, payloads: list[dict], concurrency: int = 64, timeout_s: float = SPEC_TIMEOUT_S
+) -> dict:
+    return run_mixed({"guard": send}, [("guard", p) for p in payloads], concurrency, timeout_s)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a: object, **k: object) -> None:  # POST 3xx를 GET으로 따라가지 않게
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def http_sender(url: str, token: str, timeout_s: float = SPEC_TIMEOUT_S) -> Send:
@@ -157,12 +267,30 @@ def http_sender(url: str, token: str, timeout_s: float = SPEC_TIMEOUT_S) -> Send
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout_s) as r:  # noqa: S310
+            with _OPENER.open(req, timeout=timeout_s) as r:
                 return r.status, r.read(MAX_RESPONSE_BYTES)
         except urllib.error.HTTPError as exc:
             return exc.code, b""
 
     return send
+
+
+def probe_sender(url: str, timeout_s: float = 5.0) -> Callable[[], int]:
+    """토큰 없이 {}를 보내 상태 코드를 돌려준다(거절 경로의 지연). 연결 실패는 0."""
+
+    def probe() -> int:
+        req = urllib.request.Request(  # noqa: S310
+            url, data=b"{}", headers={"Content-Type": "application/json"}
+        )
+        try:
+            with _OPENER.open(req, timeout=timeout_s) as r:
+                return r.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+        except OSError:
+            return 0
+
+    return probe
 
 
 def log_failures(lines: list[str], requests: int, with_candidate: int) -> dict:
@@ -182,6 +310,34 @@ def log_failures(lines: list[str], requests: int, with_candidate: int) -> dict:
         "by_role": dict(roles),
         "rate": {r: round(n / (denom.get(r) or requests), 4) for r, n in roles.items()},
     }
+
+
+def log_latency(lines: list[str]) -> dict:
+    """접근 로그에서 status 200인 /guard·/tutor 줄의 서버 처리 시간(ms)."""
+    ms: dict[str, list[float]] = {"/guard": [], "/tutor": []}
+    for line in lines:
+        f = line.split(" ")
+        if len(f) >= 7 and f[-6] in ms and f[-3] == "200":  # log_failures와 같이 끝에서 센다
+            try:
+                ms[f[-6]].append(float(f[-2]))
+            except ValueError:
+                continue  # 깨진 줄 하나로 보고서를 잃지 않는다
+    return {path: _ms_stats(v) for path, v in ms.items()}
+
+
+def log_errors(lines: list[str], path: str) -> dict:
+    """path의 200 줄 오류 칸. /tutor는 실패해도 200 + 기본 답변이라 여기서만 보인다."""
+    codes: Counter[str] = Counter()
+    seen = failed = 0
+    for line in lines:
+        f = line.split(" ")
+        if len(f) < 7 or f[-6] != path or f[-3] != "200":
+            continue
+        seen += 1
+        if f[-1] != "-":
+            failed += 1
+            codes.update(f[-1].split(","))
+    return {"lines": seen, "failed": failed, "by_code": dict(codes)}
 
 
 def kb_bench() -> dict:
@@ -214,33 +370,59 @@ def main(argv: list[str] | None = None) -> None:
         help="이력을 부풀릴 요청 수(글자 수로 약 1MB, \\uXXXX 이스케이프로 전송은 약 2.1MB)",
     )
     ap.add_argument("--access-log", help="서버 접근 로그 파일(오류 칸 집계)")
+    ap.add_argument("--tutor-url", help="/tutor 주소(--tutor-n > 0이면 필수)")
+    ap.add_argument("--tutor-n", type=int, default=0, help="섞어 보낼 튜터 요청 수")
+    ap.add_argument("--probe", action="store_true", help="무토큰 요청(401) 지연도 잰다")
     ap.add_argument("--kb-bench", action="store_true")
     ap.add_argument("--out")
     args = ap.parse_args(argv)
     if args.kb_bench:
         report = {"kb": kb_bench()}
     else:
+        if (args.tutor_n > 0) != bool(args.tutor_url):
+            sys.stderr.write("사용법 오류: --tutor-n > 0과 --tutor-url은 함께 준다\n")
+            sys.exit(2)  # 보내기 전에 막는다
         if args.access_log and not Path(args.access_log).is_file():
             sys.stderr.write(f"사용법 오류: --access-log 파일이 없다: {args.access_log}\n")
             sys.exit(2)  # 보내기 전에 막는다
         if not args.access_log:
             sys.stderr.write(WARN_NO_LOG)
-        payloads = build_payloads(guard_rows(), args.n, args.big)
-        report = run_load(
-            http_sender(args.url, os.environ["TEAM_TOKEN"]), payloads, args.concurrency
+        token = os.environ["TEAM_TOKEN"]
+        sends = {"guard": http_sender(args.url, token)}
+        guard = build_payloads(guard_rows(), args.n, args.big)
+        jobs = [("guard", p) for p in guard]
+        if args.tutor_n > 0:
+            sends["tutor"] = http_sender(args.tutor_url, token)
+            jobs = mix(guard, build_payloads(tutor_rows(), args.tutor_n))
+        report = run_mixed(
+            sends,
+            jobs,
+            args.concurrency,
+            probe=probe_sender(args.url) if args.probe else None,
         )
+        n_guard = report["by_endpoint"]["guard"]["requests"]
         report["access_log"] = bool(args.access_log)
         if args.access_log:
             lines = Path(args.access_log).read_text("utf-8", errors="replace").splitlines()
-            report["failures"] = log_failures(lines, report["requests"], report["with_candidate"])
+            report["failures"] = log_failures(lines, n_guard, report["with_candidate"])
             seen = report["failures"]["guard_lines"]
-            report["log_mismatch"] = seen != report["requests"]
+            report["server_latency"] = log_latency(lines)
+            report["log_mismatch"] = seen != n_guard
             if report["log_mismatch"]:
                 sys.stderr.write(
                     f"경고: 접근 로그의 /guard 200 줄 {seen}개가 보낸 요청 "
-                    f"{report['requests']}개와 다르다"
+                    f"{n_guard}개와 다르다"
                     "(다른 로그이거나 이전 실행이 섞였다). 오류 칸 집계를 믿지 마라.\n"
                 )
+            if "tutor" in sends:
+                tf = report["tutor_failures"] = log_errors(lines, "/tutor")
+                n_tutor = report["by_endpoint"]["tutor"]["requests"]
+                if tf["lines"] != n_tutor:
+                    report["log_mismatch"] = True
+                    sys.stderr.write(
+                        f"경고: 접근 로그의 /tutor 200 줄 {tf['lines']}개가 보낸 요청 "
+                        f"{n_tutor}개와 다르다. 튜터 오류 칸 집계를 믿지 마라.\n"
+                    )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text + "\n", "utf-8")

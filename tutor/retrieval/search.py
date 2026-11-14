@@ -17,7 +17,8 @@ def build_index(cfg: GuardConfig) -> KbIndex:
 
     서버는 `tutor.startup`이 가드가 기동 때 읽은 설정(`app.state.cfg`)으로 한 번 부른다. 설정
     값이 `default_index()`를 만든 값과 같으면 그 색인을 같이 쓴다(테스트처럼 앱을 여러 번 띄울
-    때 다시 만들지 않는다). 배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18).
+    때 다시 만들지 않는다). 그래서 cfg가 기본 설정과 다르면 기본 색인도 한 번 만든다(배포에서는
+    두 설정이 같아 한 번만 만든다). 배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18).
     """
     settings, index = _default()
     if _settings(cfg) == settings:

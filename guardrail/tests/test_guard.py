@@ -664,6 +664,52 @@ async def test_kb_query_ignores_hidden_chars_interleaved_in_the_answer(no_rule):
     assert plain == hidden
 
 
+async def test_kb_query_normalizes_the_user_message(no_rule):
+    # 숨긴 문자는 clip이 이미 지운다. normalize가 더하는 것(풀어 쓴 자모 합치기)으로 본다
+    kb, knn, lr = _indexes()
+    kb_spy = Spy(kb, "rank")
+    guard, _ = await make(indexes=(kb_spy, knn, lr))
+    for t in ("리스트에 값을 더하려면 어떻게 해요?", "ㄹㅣㅅㅡㅌㅡ에 값을 더하려면 어떻게 해요?"):
+        await guard.judge(req(ANSWER, (Message("user", t),)))
+    plain, jamo = kb_spy.seen
+    assert plain == jamo
+
+
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_no_user_message_output_follows_failure_default(no_rule, setting, want):
+    guard, _ = await make(output__failure_default=setting)
+    j = await guard.judge(req(ANSWER, ()))
+    assert j.response == GuardResponse("normal", OutputVerdict(want, (), True))
+
+
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_unexpected_exception_output_follows_failure_default(
+    no_rule, monkeypatch, setting, want
+):
+    guard, _ = await make(output__failure_default=setting)
+    monkeypatch.setattr(Guard, "_prepare", _boom)
+    j = await guard.judge(req())
+    assert j.response == GuardResponse("normal", OutputVerdict(want, (), True))
+    assert j.errors == ("guard:RuntimeError",)
+
+
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_baseline_output_side_failure_follows_failure_default(setting, want):
+    """baseline 모드는 3단을 타지 않는다. 출력 쪽 준비가 실패하면 failure_default 그대로다."""
+    kb, knn, lr = _indexes()
+    kb_stub = Spy(kb)
+    kb_stub.rank = _boom  # 출력 쪽 준비(KB 검색)에서 실패
+    guard, _ = await make(
+        responder("harmful_content"),
+        BASELINE,
+        indexes=(kb_stub, knn, lr),
+        output__failure_default=setting,
+    )
+    j = await guard.judge(req())
+    assert j.response.output.grounded is want and j.output_tier is None
+    assert j.errors == ("output:RuntimeError",)
+
+
 @pytest.mark.parametrize("answer", [ANSWER, None])  # 답변 없는 경로도 같은 글을 넘긴다
 async def test_prepare_hands_the_judges_text_that_is_already_cut(answer):
     """큰 발화는 스레드(`_prepare`)에서 줄인다. 판정기가 이벤트 루프에서 다시 줄이지 않게."""

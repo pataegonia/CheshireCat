@@ -8,7 +8,8 @@
 - reference: 공개 정답 답변·action·근거를 그대로 낸다(상한, PRD §7)
 - reference_top1: 정답 답변·action에, 근거가 있는 행은 검색 1위 섹션을 인용한다
 `--responses` 파일(JSONL, 줄마다 {"id", "response"})을 주면 그 응답(통합 하네스 결과 등)으로
-파일에 있는 행만 잰다.
+파일에 있는 행만 잰다(홀드아웃 행은 아래처럼 뺀다). `--cases team`이면 공개 세트 대신 팀 작성
+점검 세트(case_set, 홀드아웃 없음)를 재고 축별 action 정확도·응함을 더 낸다(TU-19).
 
 판정(사실·충실·응함)은 `--judge`를 줄 때만 켠다. 운영진 API를 부르므로 OPENAI_BASE_URL·
 OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 action·인용만 채점한다.
@@ -19,12 +20,22 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 튜터 LLM 호출의 429(판정은 최종 실패)가 연달아 RATE_LIMIT_STREAK회 이어지면 뒤의 호출(임베딩
 포함)을 보내지 않고, 결과를 무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드
 하네스와 같은 규칙).
-튜터 점수는 모든 행과, 공유 분할(가드 splits/v1.json)의 홀드아웃 묶음을 뺀 교차 검증 행으로 따로
-낸다. 설정을 비교할 때는 교차 검증 점수를 본다(홀드아웃은 설정을 고정한 뒤 최대 3회만 본다, TU-16).
-실행별 항목·응함 문항도 교차 검증 행으로만 낸다. 모든 행 점수(첫 줄)와 그 밖의 지표(항목별
-평균·범주별 점수·오차단·혼동표·흔들리는 문항·--compare의 새로 틀린 문항, 결과 JSON의 행별
-points)에는 홀드아웃 행이 섞여 있다.
+공유 분할(가드 splits/v1.json)의 홀드아웃 묶음 행(공개 튜터 40행)은 재지 않는다. 모든 프리셋과
+--responses에서 예상 호출 수를 세기 전, 튜터·판정·임베딩을 부르기 전에 뺀다. 홀드아웃은 설정을
+고정한 뒤 통합 하네스(#61)에서 최대 3회만 보므로(TU-16·#84) 넣는 옵션은 두지 않는다. 그래서 모든
+지표가 교차 검증 행 값이고, 교차 검증 행 줄(설정 비교용)은 첫 줄 점수와 같다. 뺀 행 수는 결과
+JSON의 holdout_excluded에 남는다. 홀드아웃 행이 섞인 이전 결과(200행)와도 --compare할 수 있다:
+이번에 재지 않은 행은 새로 틀린 문항으로 세지 않는다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
+결과 JSON의 report.cv_emitted_by_run에는 실행마다 행 id → 낸 action·인용 수·응함 판정을 남긴다
+(형식이 틀린 응답이면 action·인용 수가 null, 판정하지 않았거나 판정 오류면 응함이 null, 본문은
+남기지 않는다, TU-15). 화면에는 정답이 abstain·refuse인데 answer를 낸 행 id와 그중 인용 0인 수를
+실행별로 낸다(#162·#163). 이 필드가 없는 이전 결과와도 --compare할 수 있다.
+프리셋 실행 결과 JSON의 guard_config에는 튜터 검색에 닿는 가드 설정(읽은 파일, KB 폴더, kb
+ngram·k1·b, retrieval.max_query_chars, config_hash)을 남기고, 설정 파일(GUARD_CONFIG)이나 KB
+폴더(GUARD_KB_DIR)가 저장소 기본과 다르면 API를 부르기 전에 화면에 무엇이 다른지 한 줄 낸다
+(--responses는 이 프로세스가 답을 만들지 않아 남기지 않는다). 이 필드가 없는 이전 결과와도
+--compare할 수 있다.
 tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
 결과 JSON의 tutor_llm에 남긴다.
 """
@@ -33,6 +44,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import secrets
 import sys
 import threading
@@ -45,11 +57,14 @@ from types import SimpleNamespace
 from typing import Any, TextIO
 
 import yaml
+from guardrail.config import DEFAULT_CONFIG as GUARD_DEFAULT_CONFIG
+from guardrail.config import config_hash, resolve_path
+from guardrail.config import load_config as load_guard_config
 from guardrail.eval.cv import load_splits
 
 import tutor
 from tutor import pipeline
-from tutor.eval import metrics
+from tutor.eval import case_set, metrics
 from tutor.eval.grader import KB_DIR, PUBLIC_DIR, judge_from_env, score_local, scoring
 from tutor.eval.recall import (
     CountedEmbed,
@@ -61,7 +76,7 @@ from tutor.eval.recall import (
 from tutor.judge.examples import build_index, load_examples
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
-from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig, load_config
+from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, ROOT, TutorConfig, load_config
 from tutor.runtime.llm import TOKEN_BUCKET, missing_api_env
 from tutor.startup import build_embedding, prepare
 
@@ -84,7 +99,7 @@ def public_tutor_rows() -> list[dict[str, Any]]:
 
 
 def holdout_ids(rows: Sequence[dict[str, Any]] = ()) -> frozenset[str]:
-    """공유 분할(가드 splits/v1.json)의 홀드아웃 묶음에 든 행 id. 교차 검증 점수에서 뺀다.
+    """공유 분할(가드 splits/v1.json)의 홀드아웃 묶음에 든 행 id. 잴 행에서 뺀다(TU-16·#84).
 
     rows를 주면 모두 분할에 있는지 본다. 없는 행이 조용히 교차 검증 행으로 들어가지 않게 한다.
     """
@@ -189,8 +204,10 @@ def load_responses(path: Path) -> dict[str, Any]:
     return out
 
 
-def load_previous(path: Path, *, judge: bool) -> dict[str, list[float | None]]:
-    """--compare 결과 파일의 행별 문항 점수. 판정 모드가 다르면 비교하지 않는다(ValueError)."""
+def load_previous(
+    path: Path, *, judge: bool, cases: str = "public"
+) -> dict[str, list[float | None]]:
+    """--compare 결과 파일의 행별 문항 점수. 판정 모드나 잰 세트가 다르면 비교하지 않는다."""
     data = json.loads(path.read_text(encoding="utf-8"))
     report = data.get("report") if isinstance(data, dict) else None
     points = report.get("points") if isinstance(report, dict) else None
@@ -198,6 +215,8 @@ def load_previous(path: Path, *, judge: bool) -> dict[str, list[float | None]]:
         raise ValueError(f"비교 파일에 report.points가 없다: {path}")
     if data.get("judge") is not judge:
         raise ValueError("판정 모드(--judge)가 다른 결과와는 비교하지 않는다")
+    if data.get("cases", "public") != cases:
+        raise ValueError("공개 세트와 점검 세트(--cases) 결과는 서로 비교하지 않는다")
     if data.get("tainted"):
         raise ValueError("비교 파일은 기본값이나 BM25가 섞인 결과다(tainted): 기준으로 쓰지 않는다")
     return points
@@ -330,20 +349,30 @@ def _write(
     tainted: bool,
     embedding: "EmbeddingUse | None",
     invalid: str | None,
+    holdout_excluded: int,
+    guard: dict[str, Any] | None = None,
     llm: Any = None,
+    team: Mapping[str, Any] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
     invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
+    holdout_excluded는 재지 않고 뺀 홀드아웃 행 수다(행 id는 남기지 않는다).
+    guard는 guard_config_used()의 값이다(없으면 남기지 않는다).
     llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
-    읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다.
+    읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다. team(점검 세트)이면 cases=team도 남긴다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = out_dir / f"{name}-{stamp}.json"
     data: dict[str, Any] = {"preset": name, "judge": judge, "created": stamp, "tainted": tainted}
+    data["holdout_excluded"] = holdout_excluded
+    if guard is not None:
+        data["guard_config"] = guard
     if invalid is not None:
         data["invalid"] = invalid
+    if team is not None:
+        data["cases"], data["team"] = "team", dict(team)
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
     if llm is not None:
@@ -356,6 +385,42 @@ def _write(
     data["report"] = asdict(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return path
+
+
+def _shown_path(path: Path) -> str:
+    """저장소 안이면 저장소 루트 기준 상대 경로, 밖이면 절대 경로."""
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def guard_config_used() -> tuple[dict[str, Any], list[str]]:
+    """튜터에 닿는 가드 설정(숫자·경로만)과, 저장소 기본과 다른 것(설정 파일·KB 폴더, 값과 함께).
+
+    서버와 같은 로더(가드 load_config, GUARD_CONFIG·GUARD_KB_DIR를 따른다)로 읽는다. #158부터 튜터
+    검색이 KB 폴더(paths.kb), kb(ngram·k1·b), retrieval.max_query_chars를 이 설정에서 읽는다.
+    GUARD_KB_DIR는 설정 파일을 그대로 두고 KB 폴더만 바꾸므로 따로 본다(#168 리뷰). 기본 KB
+    폴더는 저장소 기본 설정 파일이 적은 paths.kb다.
+    """
+    used = resolve_path(os.environ.get("GUARD_CONFIG", GUARD_DEFAULT_CONFIG)).resolve()
+    cfg = load_guard_config()
+    kb_dir = resolve_path(cfg.paths.kb).resolve()
+    guard = {
+        "path": _shown_path(used),
+        "kb_dir": _shown_path(kb_dir),
+        "kb": {"ngram": cfg.kb.ngram, "k1": cfg.kb.k1, "b": cfg.kb.b},
+        "max_query_chars": cfg.retrieval.max_query_chars,
+        "config_hash": config_hash(cfg),
+    }
+    default_file = resolve_path(GUARD_DEFAULT_CONFIG)
+    default_kb = yaml.safe_load(default_file.read_text(encoding="utf-8"))["paths"]["kb"]
+    changed = []
+    if used != default_file.resolve():
+        changed.append(f"설정 파일 {guard['path']}")
+    if kb_dir != resolve_path(default_kb).resolve():
+        changed.append(f"KB 폴더 {guard['kb_dir']}")
+    return guard, changed
 
 
 def _by_role(counts: Mapping[tuple[str, Any], int]) -> dict[str, dict[Any, int]]:
@@ -423,11 +488,10 @@ def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
     out.write(f"튜터 점수(실행별): {scores}, 범위 {min(report.tutor):.2f}~{max(report.tutor):.2f}")
     out.write(f" (문항 {report.rows}개, 실행 {report.runs}회")
     out.write(f", 판정 오류 {sum(report.judge_errors)})\n")
-    held = report.rows - report.cv_rows
     # 교차 검증 행이 없으면 0.00이 아니라 -로 낸다(재서 0인 것처럼 읽히지 않게)
     cv_score = _per_run(report.cv_tutor, ".2f") if report.cv_rows else "- (측정 없음)"
     out.write(f"교차 검증 행 튜터 점수(실행별, 설정 비교용): {cv_score}")
-    out.write(f", 문항 {report.cv_rows}개(홀드아웃 {held}개 뺌)")
+    out.write(f", 문항 {report.cv_rows}개")
     out.write(f", 판정 오류 {sum(report.cv_judge_errors)}\n")
     parts = ", ".join(
         f"{name} {'-' if value is None else f'{value:.3f}'}"
@@ -458,6 +522,13 @@ def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
     out.write("action 혼동행렬(정답 → 낸 것):\n")
     for gold, preds in report.confusion.items():
         out.write(f"- {gold}: " + ", ".join(f"{p} {n}" for p, n in preds.items()) + "\n")
+    # 인용 0인 answer는 claim이 모두 지워진 answer 경로 후보다(#162 가설 3)
+    for gold, by_run in report.cv_answered_by_run.items():
+        out.write(f"정답 {gold} → 낸 answer인 행(실행별, 괄호는 그중 인용 0인 수):\n")
+        runs = zip(by_run, report.cv_emitted_by_run, strict=True)
+        for number, (ids, emitted) in enumerate(runs, 1):
+            bare = sum(emitted[i]["citations"] == 0 for i in ids)
+            out.write(f"- {number}회 {len(ids)}개(인용 0 {bare}개){_ids(ids)}\n")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -465,6 +536,7 @@ def _parser() -> argparse.ArgumentParser:
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--preset", choices=PRESETS)
     source.add_argument("--responses", type=Path, help="JSONL: 줄마다 {id, response}")
+    ap.add_argument("--cases", default="public", help="public(기본) | team | 점검 세트 JSONL 경로")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--judge", action="store_true", help="운영진 API로 사실·충실·응함 판정")
     ap.add_argument(
@@ -528,6 +600,8 @@ class FoldStates:
 
     폴드 k의 행은 폴드 k와 홀드아웃 묶음을 뺀 색인을, 홀드아웃 행은 홀드아웃 묶음만 뺀 색인을
     쓴다(가드 `train_rows`와 같은 규칙, TU-16·TD-14). 나머지 기동 결과(LLM 호출기 등)는 같이 쓴다.
+    `main`은 홀드아웃 행을 재지 않으므로(#84) 홀드아웃 분기는 지금 쓰이지 않는다. 가드 규칙과
+    맞춰 두는 방어용이다.
     """
 
     by_row: Mapping[str, Any]
@@ -621,32 +695,86 @@ def embedding_summary(use: EmbeddingUse, out: TextIO) -> None:
         out.write(f"질의 임베딩이 예상({use.queries}회)보다 많다: 예상 호출 수 계산을 다시 본다\n")
 
 
+def _measured_rows(
+    ap: argparse.ArgumentParser, fixed: Mapping[str, Any] | None
+) -> tuple[list[dict[str, Any]], int]:
+    """잴 공개 튜터 행과 뺀 홀드아웃 행 수. 예상 호출 수를 세기 전에 홀드아웃 행을 뺀다.
+
+    홀드아웃은 설정을 고정한 뒤 통합 하네스(#61)에서 최대 3회만 본다(TU-16·#84). 로컬 측정이 돌
+    때마다 그 행을 보지 않게, 그리고 운영진 API 호출을 아끼게 모든 프리셋과 --responses에서 뺀다.
+    """
+    public = public_tutor_rows()
+    try:
+        held = holdout_ids(public)  # 분할에 없는 행이 있으면 API를 부르기 전에 멈춘다
+    except ValueError as exc:
+        ap.error(str(exc))
+    rows = public if fixed is None else [row for row in public if row["id"] in fixed]
+    measured = [row for row in rows if row["id"] not in held]
+    excluded = len(rows) - len(measured)
+    sys.stdout.write(f"홀드아웃 {excluded}행은 재지 않는다(통합 하네스에서 최대 3회, TU-16·#84)\n")
+    if fixed is not None:
+        unknown = len(set(fixed) - {row["id"] for row in public})
+        sys.stdout.write(f"응답 파일: 공개 튜터 행 {len(measured)}개를 잰다")
+        sys.stdout.write(f"(공개 세트에 없는 id {unknown}개는 뺀다)\n")
+        if not measured:
+            ap.error("응답 파일에 잴 공개 튜터 행 id가 없다(홀드아웃 행은 재지 않는다)")
+    return measured, excluded
+
+
+def _case_rows(
+    ap: argparse.ArgumentParser,
+    cases: list[dict[str, Any]],
+    fixed: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """잴 점검 세트 행. --responses면 그 파일에 있는 행만 잰다."""
+    if fixed is None:
+        return cases
+    unknown = len(set(fixed) - {row["id"] for row in cases})
+    rows = [row for row in cases if row["id"] in fixed]
+    sys.stdout.write(f"응답 파일: 점검 세트 행 {len(rows)}개를 잰다")
+    sys.stdout.write(f"(점검 세트에 없는 id {unknown}개는 뺀다)\n")
+    if not rows:
+        ap.error("응답 파일에 점검 세트 행 id가 없다")
+    return rows
+
+
 def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any, ...]:
     """API를 부르기 전에 입력을 모두 읽고 검사한다.
 
-    돌려주는 것: (행, 저장 응답, 판정기, 비교 점수, 튜터 설정, 덮은 설정, 임베딩 예상 호출).
+    돌려주는 것: (행, 저장 응답, 판정기, 비교 점수, 튜터 설정, 덮은 설정, 임베딩 예상 호출,
+    뺀 홀드아웃 행 수, 가드 설정). 행에는 홀드아웃 행이 없다. 가드 설정은 프리셋 실행에만 있다.
     """
     if args.runs < 1:
         ap.error("--runs는 1 이상이어야 한다")
     cfg, overrides = _tutor_config(ap, args)
+    guard = None
+    if args.preset is not None:  # --responses의 답은 다른 프로세스가 만들었다
+        try:
+            guard, changed = guard_config_used()
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            ap.error(f"가드 설정을 읽지 못했다: {type(exc).__name__}")
+        if changed:  # ablation 설정·다른 KB 폴더면 튜터 검색 순위가 바뀐다. 놓치지 않게 알린다
+            sys.stdout.write(f"가드 설정 기본 아님: {' · '.join(changed)}\n")
     if args.max_calls is None:
         args.max_calls = cfg.eval.max_calls
     judge = judge_from_env() if args.judge else None
     if args.judge and judge is None:
         ap.error("--judge에는 OPENAI_BASE_URL·OPENAI_MODEL·OPENAI_API_KEY가 모두 필요하다")
+    kind = "public" if args.cases == "public" else "team"
+    if kind == "team" and args.preset not in (None, "tutor"):  # reference는 정답 답변을 낸다
+        ap.error("--cases는 --preset tutor나 --responses와 쓴다(점검 세트에는 정답 답변이 없다)")
     try:
         fixed = load_responses(args.responses) if args.responses else None
-        previous = load_previous(args.compare, judge=args.judge) if args.compare else None
+        previous = (
+            load_previous(args.compare, judge=args.judge, cases=kind) if args.compare else None
+        )
+        cases = case_set.load_for_run(args.cases) if kind == "team" else None
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
-    rows = public_tutor_rows()
-    if fixed is not None:
-        unknown = len(set(fixed) - {row["id"] for row in rows})
-        rows = [row for row in rows if row["id"] in fixed]
-        sys.stdout.write(f"응답 파일: 공개 튜터 행 {len(rows)}개를 잰다")
-        sys.stdout.write(f"(공개 세트에 없는 id {unknown}개는 뺀다)\n")
-        if not rows:
-            ap.error("응답 파일에 공개 튜터 행 id가 없다")
+    if cases is None:
+        rows, excluded = _measured_rows(ap, fixed)
+    else:  # 점검 세트는 공개 세트 행이 아니라 홀드아웃이 없다
+        rows, excluded = _case_rows(ap, cases, fixed), 0
     calls = expected_calls(
         rows,
         preset=args.preset,
@@ -667,17 +795,14 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         sys.stdout.write(f"임베딩 예상 호출 {embedding}회(기동 KB 묶음 + 실행마다 영어 질의)\n")
     if calls + embedding > args.max_calls:
         ap.error(f"예상 호출 {calls + embedding}회가 상한 {args.max_calls}회를 넘는다")
-    return rows, fixed, judge, previous, cfg, overrides, embedding
+    return rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
-    rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
-    try:
-        held = holdout_ids(rows)  # API를 부르기 전에 읽는다
-    except ValueError as exc:
-        ap.error(str(exc))
+    rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard = _inputs(ap, args)
+    team = args.cases != "public"
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
     stop = RateLimitStop()  # 튜터 LLM·판정이 같이 쓴다(같은 팀 키)
@@ -693,7 +818,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
         if own is not None and cfg.toggles.fewshot != "off":
-            own = fold_states(own, cfg, rows)  # 평가 묶음을 예시 색인에서 뺀다(TU-08·TU-16)
+            # 평가 묶음(점검 세트는 홀드아웃 묶음)을 예시 색인에서 뺀다(TU-08·TU-16)
+            own = (
+                FoldStates(case_set.example_states(own, cfg, rows))
+                if team
+                else fold_states(own, cfg, rows)
+            )
         if (
             args.preset == "tutor"
             and cfg.toggles.fewshot != "off"
@@ -708,16 +838,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     stop.next_stage()
     kb = score_local.load_kb_dir(KB_DIR)
     scorer = stop.watch_judge(judge) if judge is not None else None
-    report = metrics.build_report(
-        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses],
-        holdout=held,
-    )
+    scored = [
+        metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses
+    ]
+    report = metrics.build_report(scored)  # 홀드아웃 행은 이미 뺐다: 교차 검증 행 = 모든 행
+    by_axis = case_set.axis_scores(scored, rows, judged=judge is not None) if team else None
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
     invalid = stop.reason()
-    name = args.preset or args.responses.stem
+    name = (args.preset or args.responses.stem) + ("-team" if team else "")
     path = _write(
         report,
         name=name,
@@ -726,9 +857,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         tainted=tainted,
         embedding=use,
         invalid=invalid,
+        holdout_excluded=excluded,
+        guard=guard,
         llm=state.tutor_llm if state is not None else None,
+        team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
     )
     _show(report, sys.stdout, judged=judge is not None)
+    if by_axis is not None:
+        case_set.show_axes(by_axis, args.runs, sys.stdout)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
         _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)
@@ -737,6 +873,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if previous is not None and invalid is None:  # 멈춘 실행은 기본값이 섞여 비교하지 않는다
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
+        skipped = len(previous.keys() - report.points.keys())
+        if skipped:  # 홀드아웃 행이 섞인 이전 결과(200행) 등. 재지 않은 행은 틀린 것이 아니다
+            sys.stdout.write(f"이전 결과에만 있는 행 {skipped}개는 비교하지 않는다\n")
     sys.stdout.write(f"저장: {path}\n")
     if invalid is not None:
         sys.stderr.write(f"{invalid}. 결과는 무효다\n")

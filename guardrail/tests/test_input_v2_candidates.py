@@ -29,6 +29,9 @@ MSGS = [Message("user", "질문")]
 # (필드별 최댓값, 프롬프트 파일 전체 기준: 학습자 발화 11, 튜터 턴 11, reference_answer 11,
 # 후보 답 9, gold_facts 6. 학습자·튜터·reference는 문턱과 같아 여유가 없다)
 MAX_SHARED_CHARS = 11
+# 영문 프롬프트(S2.11 기본값)는 한글 한 음절이 로마자 두세 자라 같은 문턱이 두세 단어에 걸린다
+# ("only the answer" 13자). ASCII로만 된 겹침은 이 길이까지 허용한다(영문판 최댓값 13)
+MAX_SHARED_ASCII_CHARS = 24
 # SPEC §2 빠른 질문 버튼 문구. 프롬프트가 일부러 그대로 인용하므로(범주 1) 겹침 비교에서만 뺀다
 QUICK_BUTTONS = (
     "실습 도중 어려운 부분이 있어요. 도움을 받을 수 있을까요?",
@@ -129,7 +132,10 @@ def test_only_mode_variants_ask_for_the_mode_field(name, has_mode):
 
 
 def test_c2_changes_only_the_output_section_of_v1():
-    v1 = load_prompt(load_config(), "input_judge")[1]
+    # 기본값은 영문판이라 한글 v1 파일을 이름으로 고른다
+    v1 = load_prompt(
+        load_config(overrides={"prompts.input_judge": "input_judge.md"}), "input_judge"
+    )[1]
     c2 = load_prompt(load_config(overrides=C2), "input_judge")[1]
     assert c2.split("## 출력")[0] == v1.split("## 출력")[0]
     assert c2.split("## 다시 확인할 규칙")[1] == v1.split("## 다시 확인할 규칙")[1]
@@ -169,12 +175,20 @@ def test_no_input_prompt_copies_public_item_wording():
     k = MAX_SHARED_CHARS + 1
     # 문항 쪽 k-gram을 한 번만 만든다
     items = {t[i : i + k] for t in texts for i in range(len(t) - k + 1)}
+    ka = MAX_SHARED_ASCII_CHARS + 1
+    items_ascii = {t[i : i + ka] for t in texts for i in range(len(t) - ka + 1)}
     for path in sorted(resolve_path(cfg.paths.prompts).glob("input_judge*.md")):
         body = prep(path.read_text("utf-8"))
         for q in quick:
             body = body.replace(q, "")
         copied = next(
-            (body[i : i + k] for i in range(len(body) - k + 1) if body[i : i + k] in items), None
+            (
+                body[i : i + k]
+                for i in range(len(body) - k + 1)
+                if body[i : i + k] in items
+                and (not body[i : i + k].isascii() or body[i : i + ka] in items_ascii)
+            ),
+            None,
         )
         assert copied is None, f"{path.name}: 공개 문항과 {k}자 이상 겹친다"
 

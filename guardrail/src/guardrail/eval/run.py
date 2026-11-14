@@ -398,8 +398,8 @@ class Tap:
     def attach(self, llm: LLM) -> None:
         inner = llm.complete
 
-        async def complete(role, messages, schema, *, deadline):  # type: ignore[no-untyped-def]
-            res = await inner(role, messages, schema, deadline=deadline)
+        async def complete(role, messages, schema, *, deadline, **kw):  # type: ignore[no-untyped-def]
+            res = await inner(role, messages, schema, deadline=deadline, **kw)
             self.records.append((role, res.error, res.finish_reason))
             if res.error == "rate_limit":
                 self.streak += 1

@@ -174,12 +174,12 @@ class GuardConfig(_Strict):
         if o.rule_require_same_kind:
             raise ValueError("output.rule_require_same_kind: true는 미구현이다")
         # shortcut: 파일 이름으로 판별. 순서를 말하는 프롬프트가 늘면 머리말 필드로
-        if (
-            self.input.knn.order == "nearest_first"
-            and self.prompts.get("input_judge") == "input_judge.md"
+        if self.input.knn.order == "nearest_first" and self.prompts.get("input_judge") in (
+            "input_judge.md",
+            "input_judge_en.md",
         ):
             raise ValueError(
-                "input.knn.order: nearest_first는 input_judge.md와 쓸 수 없다"
+                "input.knn.order: nearest_first는 input_judge.md·input_judge_en.md와 쓸 수 없다"
                 "(프롬프트가 가장 비슷한 예시가 마지막에 있다고 적는다)"
             )
         return self

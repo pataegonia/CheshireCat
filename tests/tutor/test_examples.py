@@ -292,7 +292,8 @@ def measure_recording_states(monkeypatch, tmp_path, *argv):
 def assert_no_eval_row_in_examples(seen):
     split = load_splits()
     holdout = set(split.holdout)
-    assert set(seen) == {row["id"] for row in run_local.public_tutor_rows()}
+    held = run_local.holdout_ids()  # 홀드아웃 행은 재지 않는다(TU-16·#84)
+    assert set(seen) == {row["id"] for row in run_local.public_tutor_rows()} - held
     for row_id, state in seen.items():
         assert state is not None and state.tutor_examples is not None
         clusters = {split.cluster[e.id] for e in state.tutor_examples.rows}

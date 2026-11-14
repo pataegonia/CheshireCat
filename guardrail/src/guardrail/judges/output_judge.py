@@ -7,16 +7,18 @@
 """
 
 import html
+import re
 from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut
 from guardrail.kb import Hit, KbIndex, Ranking, normalize
 from guardrail.llm import LLM
-from guardrail.preprocess import decode_tags
+from guardrail.preprocess import decode_tags, reveal_hidden, strip_tags
 
 # 프로세스당 한 번 읽는다. 키 = (프롬프트 폴더, 파일 이름)
 _SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
+_MARK = re.compile(r"<U\+[0-9A-F]{4,6}>", re.I)  # reveal_hidden이 숨긴 문자를 드러낸 표기
 
 
 def _system_prompt(cfg: GuardConfig, name: str) -> str:
@@ -40,17 +42,27 @@ def output_context(ranking: Ranking, kb: KbIndex, cfg: GuardConfig) -> list[Hit]
     return [Hit(first.section_id, whole, first.score), *others]
 
 
+def _marks(s: str) -> set[str]:
+    return {m.upper() for m in _MARK.findall(s)}
+
+
 def quote_ok(quote: str, text: str, min_chars: int) -> bool:
     """인용이 text의 부분 문자열인가. 둘 다 채점 정규화(NFKC·소문자·공백·문장부호 제거) 뒤에 본다.
 
     nano는 `html.escape`된 글을 보고 옮기므로 인용의 엔티티(`&gt;` 등)를 먼저 되돌린다. text는
     이스케이프 전 원문(자른 답변, nano에 준 문맥)을 넘긴다. 답변은 `reveal_hidden`을 거치기 전
-    원문이다. nano는 숨긴 문자가 `<U+200B>` 같은 표시로 바뀐 글을 보므로 숨긴 문자에 걸친 인용은
-    원문과 맞지 않아 False다(확인하지 못한 인용은 구간으로 내지 않는다). 정규화 뒤 빈 인용과
-    `min_chars`자 미만 인용은 False다.
+    원문이다. nano는 숨긴 문자가 `<U+200B>` 같은 표기로 바뀐 글을 보므로 양쪽을 `reveal_hidden`으로
+    같은 모양으로 만든 뒤 `<U+XXXX>` 표기를 지우고 대조한다. 그래서 숨긴 문자에 걸친 인용은 표기를
+    넣어 옮기든 빼고 옮기든 맞다. 태그 문자는 드러낸 ASCII를 넣은 인용도, 뺀 인용도 맞다.
+    text에 없는 숨긴 문자 표기를 지어낸 인용, 정규화 뒤 빈 인용, `min_chars`자 미만 인용은 False다.
     """
-    q = normalize(html.unescape(quote))
-    return bool(q) and len(q) >= min_chars and q in normalize(text)
+    q = reveal_hidden(html.unescape(quote))
+    shown = reveal_hidden(text)
+    if not _marks(q) <= _marks(shown):
+        return False
+    q = normalize(_MARK.sub("", q))
+    views = (shown, reveal_hidden(strip_tags(text)))  # 태그를 드러낸 글, 뺀 글
+    return bool(q) and len(q) >= min_chars and any(q in normalize(_MARK.sub("", v)) for v in views)
 
 
 def build_messages(

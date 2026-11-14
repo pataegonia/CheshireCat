@@ -9,8 +9,8 @@ toggles:
   fewshot: "off"               # "off" | fixed | knn. 공개 세트 판단 예시(TU-08). 끔 / 고정 / kNN을 3회씩 비교해 순이득이 있을 때만 켠다
   action_from_category: false  # 범주 → action 표 강제. 기본 끔, 켜도 answer 쪽으로는 덮지 않음(TU-06)
   signals: true                # 결정적 신호 힌트(TU-05)
-  verify: guard                # off | guard. 가드 judge_output 검증, v1 기본 켬(TU-09). self(자체 검증)는 만들지 않음(#83, 로드에서 거부)
-  guard_classify: parallel     # off | serial | parallel. 가드 classify 합치기, 기본 parallel(TU-10)
+  verify: "off"                # off | guard. 가드 judge_output 검증(TU-09). self(자체 검증)는 만들지 않음(#83, 로드에서 거부). 11/14 리더 결정으로 #170(S2.11) 머지 뒤 런박스 켬/끔 3회 비교 전까지 끔: 모의 부하·#170 리뷰 측정에서 지연이 크게 늘고 튜터 5초 제한으로 대부분 건너뛰는데, 건너뛴 호출도 nano는 이미 나간다
+  guard_classify: "off"        # off | serial | parallel. 가드 classify 합치기(TU-10). 11/14 리더 결정으로 verify와 같은 까닭에 같은 비교 전까지 끔(켜면 parallel)
   embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
   rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한(TU-13)을 넘어 만들지 않음(#83, true는 로드에서 거부)
@@ -28,7 +28,7 @@ answer:
   max_sentences: 3             # 1–3문장 기본(상한 아님, TU-06)
 llm:
   reasoning_effort: low        # low | medium. minimal 금지(TU-13). 가드 probe가 끈 파라미터는 보내지 않는다
-  max_completion_tokens: 1600  # 주 호출 상한(추론 토큰 포함). 가드 판정 호출(800)과 따로, 주 호출 실측(finish_reason=length 비율) 뒤 정함. 운영진 프록시 상한 2000(넘기면 400, 로드에서 실패)
+  max_completion_tokens: 1600  # 주 호출 상한(추론 토큰 포함). 가드 판정 호출 상한(가드 설정, 지금 1600, #149)과 따로 정하는 값이고, 주 호출 실측(finish_reason=length 비율) 뒤 정함. 운영진 프록시 상한 2000(넘기면 400, 로드에서 실패)
   timeout_s:                   # 호출당 시간 제한(TU-13). 주 호출은 T1 실측으로 정함
     main: 15                   # 주 호출. T1 실측으로 8초에서 올림(#73): 8초는 v2 출력이 길어 재시도 36%, 15초는 재시도 0·동시 8 지연 최대 14.45초. 보낸 시각부터 센다
     classify: 5                # 가드 classify(주 호출과 병렬). 부른 때부터 센다, 게이트 대기 포함

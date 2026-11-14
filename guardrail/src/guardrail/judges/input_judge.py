@@ -106,16 +106,21 @@ async def judge_input(
     *,
     deadline: float,
     kb_snippet: str | None = None,
+    retries: int | None = None,
 ) -> Category | None:
     """마지막 학습자 발화의 범주. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
 
     window는 대화 전체를 넘겨도 된다(`build_window`로 자른다). 재시도는 `LLM.complete`가
-    일시적 오류에만 1회 한다.
+    일시적 오류에만 `retries`회(None이면 `llm.retries`) 한다.
     """
     messages = build_messages(window, target, examples, cfg, kb_snippet)
     if cfg.input.label_mode == "act":  # 요청 유형을 받아 범주로 대응시킨다(S3.2 선별용 변형)
-        result = await llm.complete("input_judge", messages, InputActOut, deadline=deadline)
+        result = await llm.complete(
+            "input_judge", messages, InputActOut, deadline=deadline, retries=retries
+        )
         parsed = result.parsed
         return ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
-    result = await llm.complete("input_judge", messages, InputOut, deadline=deadline)
+    result = await llm.complete(
+        "input_judge", messages, InputOut, deadline=deadline, retries=retries
+    )
     return result.parsed.category if isinstance(result.parsed, InputOut) else None

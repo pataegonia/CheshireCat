@@ -6,9 +6,11 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -18,6 +20,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
+from guardrail.config import config_hash
+from guardrail.config import load_config as load_guard_config
 
 from tests.tutor import tutor_testlib
 from tests.tutor.tutor_testlib import (
@@ -292,6 +297,55 @@ def test_components_and_complied_rows_per_run_leave_out_holdout_rows():
     assert everything.cv_judge_errors == (1, 1)
 
 
+def test_emitted_rows_per_run_keep_only_labels_and_counts():
+    """#162·#163: 실행마다 교차 검증 행 → 낸 action·인용 수·응함 판정, 정답 abstain·refuse인데
+    answer를 낸 행. 다시 재지 않고 결과 JSON으로 센다. 본문은 남기지 않는다(TU-15).
+    """
+    body = "결과에 남으면 안 되는 답변 문장"
+
+    def judge(_kind, payload):
+        if payload["answer"] == "판정 실패":
+            raise RuntimeError("판정 실패")
+        return {"ok": True, "complied": payload["answer"] == body}
+
+    def emit(gold, action, row_id, *, attack=False, answer=body, citations=(), judged=True):
+        resp = {"answer": answer, "action": action, "citations": list(citations)}
+        category = "jailbreak_injection" if attack else "out_of_material"
+        target = row(gold, category=category, row_id=row_id)
+        return metrics.score_one(target, resp, judge=judge if judged else None, kb={})
+
+    run1 = [
+        emit("refuse", "answer", "comply", attack=True),
+        emit("refuse", "refuse", "held", attack=True, answer="no"),
+        emit("refuse", "answer", "error", attack=True, answer="판정 실패"),
+        emit("refuse", "answer", "unjudged", attack=True, judged=False),
+        emit("abstain", "answer", "cited", citations=["A", "B"]),  # 공격 문항이 아니라 응함 None
+        emit("abstain", "abstain", "abstained"),
+        metrics.score_one(row("abstain", row_id="missing"), None, judge=judge, kb={}),
+        emit("abstain", "answer", "h"),  # 홀드아웃 행
+    ]
+    run2 = [emit("abstain", "answer", "abstained"), emit("refuse", "answer", "h", attack=True)]
+    report = metrics.build_report([run1, run2], holdout={"h"})
+    assert report.cv_emitted_by_run == (
+        {
+            "comply": {"action": "answer", "citations": 0, "complied": True},
+            "held": {"action": "refuse", "citations": 0, "complied": False},
+            "error": {"action": "answer", "citations": 0, "complied": None},  # 판정 오류
+            "unjudged": {"action": "answer", "citations": 0, "complied": None},  # 판정 없음
+            "cited": {"action": "answer", "citations": 2, "complied": None},
+            "abstained": {"action": "abstain", "citations": 0, "complied": None},
+            "missing": {"action": None, "citations": None, "complied": None},  # 응답 없음
+        },
+        {"abstained": {"action": "answer", "citations": 0, "complied": None}},
+    )
+    assert report.cv_answered_by_run == {
+        "abstain": (("cited",), ("abstained",)),
+        "refuse": (("comply", "error", "unjudged"), ()),  # 홀드아웃 h는 내지 않는다
+    }
+    assert report.confusion["abstain"] == {"abstain": 1, "answer": 3, "invalid": 1}  # 모든 행
+    assert body not in json.dumps(dataclasses.asdict(report), ensure_ascii=False)
+
+
 def test_cv_score_leaves_out_holdout_rows():
     run1 = [scored("answer", "answer", row_id="a"), scored("answer", "refuse", row_id="b")]
     run2 = [scored("answer", "refuse", row_id="a"), scored("answer", "refuse", row_id="b")]
@@ -310,8 +364,7 @@ def test_cv_score_is_unmeasured_without_cv_rows():
     out = io.StringIO()
     run_local._show(report, out, judged=False)
     assert (
-        "교차 검증 행 튜터 점수(실행별, 설정 비교용): - (측정 없음)"
-        ", 문항 0개(홀드아웃 1개 뺌), 판정 오류 0\n"
+        "교차 검증 행 튜터 점수(실행별, 설정 비교용): - (측정 없음), 문항 0개, 판정 오류 0\n"
     ) in out.getvalue()
 
 
@@ -507,6 +560,99 @@ def test_cli_reads_responses_from_a_file(tmp_path, rows, capsys):
     assert "공개 튜터 행 5개" in capsys.readouterr().out
     data = json.loads(next(tmp_path.glob("harness-*.json")).read_text(encoding="utf-8"))
     assert data["report"]["rows"] == 5 and data["report"]["tutor"] == [100.0]  # 파일에 있는 행만
+    assert "guard_config" not in data  # 응답 파일의 답은 이 프로세스의 가드 설정과 상관없다
+
+
+GUARD_DEFAULT = ROOT / "guardrail" / "configs" / "default.yaml"
+
+
+def _guard_config(tmp_path, capsys) -> tuple[dict, str]:
+    """reference 프리셋을 돌려 결과 JSON의 guard_config와 화면 출력을 돌려준다."""
+    assert run_local.main(["--preset", "reference", "--out", str(tmp_path)]) == 0
+    data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
+    return data["guard_config"], capsys.readouterr().out
+
+
+def test_cli_records_the_default_guard_settings(monkeypatch, tmp_path, capsys):
+    """#158 리뷰: 튜터 검색에 닿는 가드 설정을 결과 JSON에 남긴다. 기본 설정이면 화면에 안 낸다."""
+    expected = {
+        "path": "guardrail/configs/default.yaml",
+        "kb_dir": "competition/kb",
+        "kb": {"ngram": 2, "k1": 1.2, "b": 0.75},
+        "max_query_chars": 4000,
+        "config_hash": config_hash(load_guard_config(GUARD_DEFAULT)),
+    }
+    guard, out = _guard_config(tmp_path / "unset", capsys)  # GUARD_CONFIG 없음(conftest가 지움)
+    assert guard == expected and "가드 설정" not in out
+    monkeypatch.setenv("GUARD_CONFIG", str(GUARD_DEFAULT))  # 같은 파일을 절대 경로로 줘도 기본이다
+    guard, out = _guard_config(tmp_path / "absolute", capsys)
+    assert guard == expected and "가드 설정" not in out
+
+
+def test_cli_records_guard_settings_from_guard_config_env(monkeypatch, tmp_path, capsys):
+    """셸 GUARD_CONFIG가 ablation 설정을 가리키면 그 값이 결과 JSON에 남고 화면에 한 줄 나온다."""
+    raw = yaml.safe_load(GUARD_DEFAULT.read_text(encoding="utf-8"))
+    raw["kb"] = {**raw["kb"], "ngram": 3, "k1": 1.5, "b": 0.5}
+    raw["retrieval"] = {"max_query_chars": 2000}
+    ablation = tmp_path / "ablation.yaml"
+    ablation.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    default_hash = _guard_config(tmp_path / "before", capsys)[0]["config_hash"]
+    monkeypatch.setenv("GUARD_CONFIG", str(ablation))
+    guard, out = _guard_config(tmp_path / "runs", capsys)
+    assert Path(guard["path"]) == ablation.resolve()  # 저장소 밖 파일은 절대 경로
+    assert guard["kb"] == {"ngram": 3, "k1": 1.5, "b": 0.5} and guard["max_query_chars"] == 2000
+    assert guard["config_hash"] != default_hash
+    assert guard["kb_dir"] == "competition/kb"  # KB 폴더는 기본 그대로
+    assert f"가드 설정 기본 아님: 설정 파일 {guard['path']}\n" in out
+
+
+def test_cli_records_and_flags_a_guard_kb_dir_override(monkeypatch, tmp_path, capsys):
+    """#168 리뷰: GUARD_KB_DIR는 설정 파일을 그대로 두고 튜터 검색 KB를 바꾼다. 결과 JSON에 KB
+    폴더를 남기고, 기본 KB 폴더와 다르면 API를 부르기 전에 화면에 무엇이 다른지 낸다."""
+    kb_copy = tmp_path / "kb"
+    shutil.copytree(KB_DIR, kb_copy)
+    monkeypatch.setenv("GUARD_KB_DIR", str(kb_copy))
+    guard, out = _guard_config(tmp_path / "runs", capsys)
+    assert guard["path"] == "guardrail/configs/default.yaml"  # 설정 파일은 기본이다
+    assert Path(guard["kb_dir"]) == kb_copy.resolve()  # 저장소 밖 폴더는 절대 경로
+    line = f"가드 설정 기본 아님: KB 폴더 {guard['kb_dir']}\n"
+    assert line in out and out.index(line) < out.index("운영진 API 예상 호출")
+    assert "설정 파일" not in out
+    monkeypatch.setenv("GUARD_CONFIG", str(GUARD_DEFAULT.parent / "baseline.yaml"))  # 둘 다 다르면
+    guard, out = _guard_config(tmp_path / "both", capsys)
+    shown = f"설정 파일 {guard['path']} · KB 폴더 {guard['kb_dir']}"
+    assert f"가드 설정 기본 아님: {shown}\n" in out
+    monkeypatch.delenv("GUARD_CONFIG")
+    monkeypatch.setenv("GUARD_KB_DIR", str(KB_DIR))  # 기본 폴더를 절대 경로로 줘도 기본이다
+    guard, out = _guard_config(tmp_path / "same", capsys)
+    assert guard["kb_dir"] == "competition/kb" and "가드 설정" not in out
+
+
+def _file(path, text):
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    "env, make",
+    [
+        ("GUARD_CONFIG", lambda d: d / "없는 파일.yaml"),  # OSError
+        ("GUARD_CONFIG", lambda d: _file(d / "broken.yaml", "a: [")),  # yaml.YAMLError
+        ("GUARD_CONFIG", lambda d: _file(d / "unknown.yaml", "version: x\n")),  # 검증 ValueError
+        ("GUARD_PROMPTS_DIR", lambda d: d),  # 프롬프트 파일이 없어 config_hash가 못 읽는다(OSError)
+    ],
+)
+def test_cli_stops_before_any_call_when_the_guard_config_cannot_be_read(
+    monkeypatch, tmp_path, capsys, env, make
+):
+    """가드 설정을 못 읽으면 튜터를 부르기 전에 종료 코드 2로 멈춘다(오류 클래스 이름만 낸다)."""
+    sent = answer_openai(monkeypatch)  # 가짜 전송: 부르면 여기에 남는다
+    monkeypatch.setenv(env, str(make(tmp_path)))
+    with pytest.raises(SystemExit) as stop:
+        run_local.main(["--preset", "tutor", "--out", str(tmp_path / "runs")])
+    err = capsys.readouterr().err
+    assert stop.value.code == 2 and "가드 설정을 읽지 못했다" in err and str(tmp_path) not in err
+    assert sent == [] and not (tmp_path / "runs").exists()
 
 
 # 이 변경 전부터 있던 결과 JSON 필드와 출력 줄(다른 사람이 쓰는 --compare·비교가 읽는다)
@@ -538,10 +684,52 @@ SUMMARY_LINES = (
 )
 
 
-def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys):
+def test_cli_never_sends_holdout_rows_to_the_tutor_or_the_judge(
+    monkeypatch, tmp_path, capsys, rows
+):
+    """TU-16·#84: 홀드아웃 40행은 예상 호출 수를 세기 전, 튜터·판정을 부르기 전에 뺀다.
+
+    홀드아웃은 설정을 고정한 뒤 통합 하네스에서 최대 3회만 본다. 가짜 튜터가 행 id를 답으로 내서
+    판정기가 받은 답으로 어느 행을 판정했는지 안다(운영진 API는 부르지 않는다).
+    """
+    held = run_local.holdout_ids()
+    cv = {r["id"] for r in rows if r["id"] not in held}
+    block_openai(monkeypatch)  # tutor 프리셋이 요구하는 환경변수 자리(보내지 않는다)
+    sent, judged = [], []
+
+    async def respond(_preset, row, _state=None):
+        sent.append(row["id"])
+        labels = row["labels"]
+        cited = list(labels.get("evidence") or [])
+        return {"answer": row["id"], "action": labels["action"], "citations": cited}
+
+    def judge(kind, payload):
+        judged.append(payload["answer"])
+        return fake_judge(kind, payload)
+
+    monkeypatch.setattr(run_local, "_respond", respond)
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    argv = ["--preset", "tutor", "--judge", "--out", str(tmp_path), "--max-calls"]
+    # 예상 803회 = (튜터 3 × 160 + 판정 250) × 1.1. 홀드아웃까지 재면 (600 + 310) × 1.1 = 1001회
+    with pytest.raises(SystemExit):
+        run_local.main([*argv, "802"])
+    assert sent == [] and judged == []  # 넘으면 아무것도 부르지 않는다
+    assert run_local.main([*argv, "803"]) == 0
+    assert len(sent) == 160 and set(sent) == cv  # 튜터는 교차 검증 행만 받는다
+    assert len(judged) == 250 and set(judged) <= cv  # 판정도 교차 검증 행만(실행당 250회)
+    out = capsys.readouterr().out
+    assert "홀드아웃 40행은 재지 않는다(통합 하네스에서 최대 3회, TU-16·#84)\n" in out
+    assert "운영진 API 예상 호출 803회" in out
+    data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
+    assert data["holdout_excluded"] == 40  # 뺀 행 수만 남긴다(행 id는 남기지 않는다)
+    assert data["report"]["rows"] == 160 and set(data["report"]["points"]) == cv
+
+
+def test_cli_leaves_out_holdout_rows_of_a_responses_file(tmp_path, rows, capsys):
+    """--responses도 홀드아웃 행을 채점하지 않는다. 교차 검증 행 줄은 첫 줄 점수와 같다."""
     held = run_local.holdout_ids()
     responses = run_local.responses_for("reference", rows)
-    path = tmp_path / "harness.jsonl"  # 홀드아웃 행만 형식 오류(응답 없음)
+    path = tmp_path / "harness.jsonl"  # 홀드아웃 행만 형식 오류(응답 없음): 채점하면 80점
     lines = [
         json.dumps({"id": i, "response": None if i in held else r}, ensure_ascii=False)
         for i, r in responses.items()
@@ -549,10 +737,12 @@ def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert run_local.main(["--responses", str(path), "--out", str(tmp_path)]) == 0
     out = capsys.readouterr().out
-    assert "튜터 점수(실행별): 80.00, 범위 80.00~80.00 (문항 200개" in out  # 기존 줄은 200행
+    assert "홀드아웃 40행은 재지 않는다" in out
+    assert "응답 파일: 공개 튜터 행 160개를 잰다(공개 세트에 없는 id 0개는 뺀다)\n" in out
+    assert "튜터 점수(실행별): 100.00, 범위 100.00~100.00 (문항 160개" in out
     assert (
         "교차 검증 행 튜터 점수(실행별, 설정 비교용): 100.00 (범위 100.00~100.00)"
-        ", 문항 160개(홀드아웃 40개 뺌), 판정 오류 0\n"
+        ", 문항 160개, 판정 오류 0\n"
     ) in out
     # 판정 없이 돌리면 응함을 0이 아니라 "판정 없음"으로 낸다(재서 0인 것처럼 읽히지 않게)
     assert "- 응함 - (판정 없음)\n" in out
@@ -560,10 +750,37 @@ def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys)
     shown = out.splitlines()
     assert [p for p in SUMMARY_LINES if not any(x.startswith(p) for x in shown)] == []
     saved = next(tmp_path.glob("harness-*.json"))
-    report = json.loads(saved.read_text(encoding="utf-8"))["report"]
-    assert REPORT_FIELDS <= set(report)
-    assert report["tutor"] == [80.0] and report["cv_tutor"] == [100.0] and report["cv_rows"] == 160
-    assert len(run_local.load_previous(saved, judge=False)) == 200  # --compare 기준으로 읽힌다
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    report = data["report"]
+    assert REPORT_FIELDS <= set(report) and data["holdout_excluded"] == 40
+    assert report["tutor"] == report["cv_tutor"] == [100.0]
+    assert report["rows"] == report["cv_rows"] == 160
+    assert len(run_local.load_previous(saved, judge=False)) == 160  # --compare 기준으로 읽힌다
+
+
+def test_cli_compares_with_an_older_result_that_has_other_rows(tmp_path, rows, capsys):
+    """홀드아웃 행이 섞인 이전 결과(200행)와 비교해도 재지 않은 행을 새로 틀린 문항으로 세지 않는다.
+
+    이번에만 있는 행(이전 결과가 일부 행만 잰 경우)도 비교하지 않고 멈추지 않는다.
+    """
+    held = run_local.holdout_ids()
+    cv = [r for r in rows if r["id"] not in held]
+    lost = next(r for r in cv if r["labels"]["action"] == "answer")
+    responses = run_local.responses_for("reference", rows)
+    responses[lost["id"]] = {**responses[lost["id"]], "action": "refuse"}  # 이 행만 틀린다
+    path = tmp_path / "now.jsonl"
+    lines = [json.dumps({"id": i, "response": r}, ensure_ascii=False) for i, r in responses.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    old = tmp_path / "old.json"  # 이 변경 전의 결과: 200행 모두 만점
+    for points, skipped in (({r["id"]: [1.0] for r in rows}, 40), ({lost["id"]: [1.0]}, 0)):
+        data = {"judge": False, "report": {"points": points}}
+        old.write_text(json.dumps(data), encoding="utf-8")
+        argv = ["--responses", str(path), "--out", str(tmp_path / "runs"), "--compare", str(old)]
+        assert run_local.main(argv) == 0
+        out = capsys.readouterr().out
+        assert f"새로 틀린 문항 1개 {lost['id']}\n" in out  # 홀드아웃 행은 틀린 것으로 세지 않는다
+        said = f"이전 결과에만 있는 행 {skipped}개는 비교하지 않는다"
+        assert (said in out) is bool(skipped)
 
 
 def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys, rows):
@@ -582,30 +799,33 @@ def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys
             and sum(x["messages"] == r["messages"] for x in rows) == 1
         ]
 
-    (cv_comply, cv_fail), (held_comply, held_fail) = attacks(False)[:2], attacks(True)[:2]
-    lock, seen = threading.Lock(), set()
+    cv_comply, cv_fail = attacks(False)[:2]
+    held_messages = [r["messages"] for r in attacks(True)]
+    lock, seen, judged_held = threading.Lock(), set(), []
 
     def judge(kind, payload):
         if kind != "complied":
             return fake_judge(kind, payload)
-        if payload["messages"] in (cv_fail["messages"], held_fail["messages"]):
+        if payload["messages"] in held_messages:
+            judged_held.append(kind)
+        if payload["messages"] == cv_fail["messages"]:
             raise RuntimeError("판정 실패")
-        comply = [r["id"] for r in (cv_comply, held_comply) if r["messages"] == payload["messages"]]
-        if not comply:
+        if payload["messages"] != cv_comply["messages"]:
             return fake_judge(kind, payload)
         with lock:
-            first = comply[0] not in seen
-            seen.add(comply[0])
+            first = not seen
+            seen.add(cv_comply["id"])
         return {"complied": first}  # 1회차에만 응한다
 
     monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
     argv = ["--preset", "reference", "--judge", "--runs", "2", "--out", str(tmp_path)]
     assert run_local.main(argv) == 0
+    assert held_messages and judged_held == []  # 홀드아웃 공격 행은 판정하지 않는다(TU-16·#84)
     out = capsys.readouterr().out
-    # 기존 줄(모든 행)은 그대로: 판정 오류는 실행마다 2개, 응함은 1회차에 두 행
-    assert "(문항 200개, 실행 2회, 판정 오류 4)\n" in out
-    assert "항목별 평균: " in out and ", 응함 2\n" in out
-    assert ", 문항 160개(홀드아웃 40개 뺌), 판정 오류 2\n" in out  # 교차 검증 행의 판정 오류
+    # 홀드아웃 행을 재지 않아 첫 줄과 교차 검증 행 줄이 같다: 판정 오류는 실행마다 1개
+    assert "(문항 160개, 실행 2회, 판정 오류 2)\n" in out
+    assert "항목별 평균: " in out and ", 응함 1\n" in out
+    assert ", 문항 160개, 판정 오류 2\n" in out  # 교차 검증 행의 판정 오류
     assert "\n교차 검증 행 항목별(실행별):\n- action 1.000, 1.000 (범위 1.000~1.000)\n" in out
     assert "\n- facts 0.500, 0.500 (범위 0.500~0.500)\n" in out
     assert "\n- 응함 1, 0 (범위 0~1)\n" in out
@@ -618,13 +838,88 @@ def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys
     report = json.loads(saved.read_text(encoding="utf-8"))["report"]
     assert report["cv_complied_by_run"] == [[cv_comply["id"]], []]
     assert [c["facts"] for c in report["cv_components_by_run"]] == [0.5, 0.5]
-    assert report["cv_judge_errors"] == [1, 1] and report["judge_errors"] == [2, 2]
+    assert report["cv_judge_errors"] == report["judge_errors"] == [1, 1]
     added = json.dumps({k: v for k, v in report.items() if k not in REPORT_FIELDS})
     assert [i for i in held if i in added] == []  # 새 필드에도 홀드아웃 행 id가 없다
 
 
-def test_cli_without_cv_rows_writes_no_cv_score(tmp_path, rows, capsys):
-    # 홀드아웃 행만 재면 교차 검증 점수는 0이 아니라 측정 없음(-, JSON null)이다
+def test_cli_lists_rows_that_answered_instead_of_abstaining_or_refusing(
+    monkeypatch, tmp_path, rows, capsys
+):
+    """#162·#163: 정답 abstain·refuse인데 answer를 낸 행 id(실행별)와 그중 인용 0인 수를 낸다.
+
+    결과 JSON에는 실행마다 행 → 낸 action·인용 수·응함 판정을 남긴다. 본문은 남기지 않고(TU-15),
+    홀드아웃 행은 재지 않는다(#84). 이 필드가 없는 이전 결과와도 --compare할 수 있다.
+    """
+    held = run_local.holdout_ids()
+    cv = [r for r in rows if r["id"] not in held]
+
+    def gold(action, *, attack=False):
+        return sorted(
+            r["id"]
+            for r in cv
+            if r["labels"]["action"] == action
+            and (r["labels"]["category"] in score_local.ATTACK_CATEGORIES) is attack
+        )
+
+    abstain, refuse = gold("abstain")[:3], gold("refuse", attack=True)[:2]
+    missing = gold("answer")[0]
+    complied_not = next(i for i in gold("refuse", attack=True) if i not in refuse)
+    body = "이 답변 문장은 화면에도 결과 파일에도 남으면 안 된다"
+    responses = run_local.responses_for("reference", rows)
+    for i in abstain + refuse:
+        cited = ["FIN-01-01"] if i == abstain[0] else []  # 나머지는 인용 0
+        responses[i] = {"answer": body, "action": "answer", "citations": cited}
+    responses[missing] = None
+    path = tmp_path / "harness.jsonl"
+    lines = [json.dumps({"id": i, "response": r}, ensure_ascii=False) for i, r in responses.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def judge(kind, payload):
+        if kind == "complied":
+            return {"complied": payload["answer"] == body}
+        return fake_judge(kind, payload)
+
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    monkeypatch.setattr(run_local, "SHOW_IDS", 2)  # 화면의 행 id는 SHOW_IDS개까지만
+    argv = ["--responses", str(path), "--judge", "--runs", "2", "--out", str(tmp_path / "runs")]
+    assert run_local.main(argv) == 0
+    out = capsys.readouterr().out
+    header = "→ 낸 answer인 행(실행별, 괄호는 그중 인용 0인 수):\n"
+    assert (
+        f"정답 abstain {header}"
+        + f"- 1회 3개(인용 0 2개) {abstain[0]} {abstain[1]} …\n"
+        + f"- 2회 3개(인용 0 2개) {abstain[0]} {abstain[1]} …\n"
+        + f"정답 refuse {header}"
+        + f"- 1회 2개(인용 0 2개) {refuse[0]} {refuse[1]}\n"
+        + f"- 2회 2개(인용 0 2개) {refuse[0]} {refuse[1]}\n"
+    ) in out
+    saved = next((tmp_path / "runs").glob("harness-*.json"))
+    text = saved.read_text(encoding="utf-8")
+    data = json.loads(text)
+    first, second = data["report"]["cv_emitted_by_run"]
+    assert first == second and set(first) == {r["id"] for r in cv}  # 홀드아웃 행은 없다
+    assert first[abstain[0]] == {"action": "answer", "citations": 1, "complied": None}
+    assert first[abstain[1]] == {"action": "answer", "citations": 0, "complied": None}
+    assert first[refuse[0]] == {"action": "answer", "citations": 0, "complied": True}
+    assert first[complied_not]["complied"] is False
+    assert first[missing] == {"action": None, "citations": None, "complied": None}
+    assert data["report"]["cv_answered_by_run"] == {
+        "abstain": [abstain, abstain],  # 화면과 달리 모든 행 id
+        "refuse": [refuse, refuse],
+    }
+    assert body not in out + text
+
+    for key in ("cv_emitted_by_run", "cv_answered_by_run"):  # 이 변경 전의 결과 파일
+        del data["report"][key]
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert run_local.main([*argv, "--compare", str(old)]) == 0
+    assert "새로 틀린 문항 0개\n" in capsys.readouterr().out
+
+
+def test_cli_refuses_a_responses_file_with_only_holdout_rows(monkeypatch, tmp_path, rows, capsys):
+    # 홀드아웃 행만 든 응답 파일은 잴 행이 없다. 판정을 부르지 않고 결과도 남기지 않는다
     held = run_local.holdout_ids()
     responses = run_local.responses_for("reference", rows)
     path = tmp_path / "harness.jsonl"
@@ -634,12 +929,16 @@ def test_cli_without_cv_rows_writes_no_cv_score(tmp_path, rows, capsys):
         if i in held  # 공유 분할의 홀드아웃에는 가드 행도 있다
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    assert run_local.main(["--responses", str(path), "--out", str(tmp_path)]) == 0
-    out = capsys.readouterr().out
-    assert "설정 비교용): - (측정 없음), 문항 0개(홀드아웃 40개 뺌), 판정 오류 0\n" in out
-    report = json.loads(next(tmp_path.glob("harness-*.json")).read_text(encoding="utf-8"))["report"]
-    assert report["tutor"] == [100.0]  # 기존 점수는 그대로
-    assert report["cv_tutor"] == [None] and report["cv_rows"] == 0
+    calls = []
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: counting(calls))
+    with pytest.raises(SystemExit) as stopped:
+        run_local.main(["--responses", str(path), "--judge", "--out", str(tmp_path / "runs")])
+    assert stopped.value.code == 2 and calls == [] and not (tmp_path / "runs").exists()
+    captured = capsys.readouterr()
+    assert (
+        "홀드아웃 40행은 재지 않는다" in captured.out
+        and "홀드아웃 행은 재지 않는다" in captured.err
+    )
 
 
 @pytest.mark.parametrize(
@@ -672,11 +971,11 @@ def test_cli_budget_counts_every_judge_call(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(run_local, "judge_from_env", lambda: counting(calls))
     argv = ["--preset", "reference", "--judge", "--out", str(tmp_path), "--max-calls"]
-    with pytest.raises(SystemExit):
-        run_local.main([*argv, "340"])  # 예상 341회(310 × 1.1)가 상한을 넘으면
+    with pytest.raises(SystemExit):  # 홀드아웃 40행은 재지 않는다(TU-16·#84)
+        run_local.main([*argv, "274"])  # 예상 275회(교차 검증 160행 판정 250 × 1.1)가 넘으면
     assert calls == [] and not list(tmp_path.iterdir())  # 판정기를 한 번도 부르지 않는다
-    assert run_local.main([*argv, "341"]) == 0
-    assert len(calls) == 310  # 실제 판정 수는 예상 안이다
+    assert run_local.main([*argv, "275"]) == 0
+    assert len(calls) == 250  # 실제 판정 수는 예상 안이다
     data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
     assert data["judge"] is True and data["report"]["components"]["facts"] == 0.5
 
@@ -725,7 +1024,7 @@ def test_cli_stops_calling_after_a_streak_of_rate_limits(monkeypatch, tmp_path, 
     monkeypatch.setattr(run_local, "judge_from_env", lambda: counting(judged))
     code = run_local.main(["--preset", "tutor", "--judge", "--out", str(tmp_path)])
     assert code == run_local.EXIT_RATE_LIMITED == 6  # 가드 하네스와 같은 값
-    assert len(sent) <= 2 * (run_local.RATE_LIMIT_STREAK + metrics.WORKERS)  # 다 돌면 약 400회
+    assert len(sent) <= 2 * (run_local.RATE_LIMIT_STREAK + metrics.WORKERS)  # 다 돌면 약 320회
     # 호출 단위로 센다: 최종 429 20회(각 1회 재전송) 전에는 멈추지 않는다(#153 리뷰)
     assert len(sent) >= 2 * run_local.RATE_LIMIT_STREAK
     assert judged == []
@@ -862,7 +1161,7 @@ def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):
 
     monkeypatch.setattr(run_local.tutor, "handle", handle)
     assert run_local.main(["--preset", "tutor", "--runs", "2", "--out", str(tmp_path)]) == 0
-    assert len(loops) == 400 and all(loop is loops[0] for loop in loops)
+    assert len(loops) == 320 and all(loop is loops[0] for loop in loops)  # 160행 × 2회
 
 
 def test_collect_timed_measures_every_request_of_every_run(rows):
@@ -881,7 +1180,7 @@ def test_cli_prints_tutor_request_latency(monkeypatch, tmp_path, capsys):  # TU-
     monkeypatch.setattr(run_local.tutor, "handle", slow)
     assert run_local.main(["--preset", "tutor", "--out", str(tmp_path)]) == 0
     line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("튜터 요청 지연"))
-    assert "p50" in line and "p95" in line and "최대" in line and "요청 200개" in line
+    assert "p50" in line and "p95" in line and "최대" in line and "요청 160개" in line
     assert run_local.main(["--preset", "reference", "--out", str(tmp_path)]) == 0
     assert "튜터 요청 지연" not in capsys.readouterr().out  # 튜터를 부르지 않는 프리셋
 

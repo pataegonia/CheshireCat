@@ -54,7 +54,7 @@ from tutor.eval.recall import (
 )
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
-from tutor.runtime.config import TutorConfig, load_config
+from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig, load_config
 from tutor.runtime.llm import TOKEN_BUCKET, missing_api_env
 from tutor.startup import build_embedding, prepare
 
@@ -380,7 +380,11 @@ def _token_line(buckets: Mapping[tuple[str, int], int]) -> str:
         parts.append(f"{role} p50 {p50:.0f} · p95 {p95:.0f} · 최대 {max(values)} ({len(values)}회)")
     if not parts:
         return ""
-    head = f"성공한 시도의 completion_tokens(추론 포함, {TOKEN_BUCKET} 단위로 올린 구간)"
+    # 상한 구간은 그보다 큰 값도 담고, usage가 없는 시도는 빠진다(괄호 안 횟수는 구간에 든 수)
+    head = (
+        f"성공한 시도의 completion_tokens(추론 포함, {TOKEN_BUCKET} 단위로 올린 구간"
+        f", {PROXY_MAX_COMPLETION_TOKENS}은 초과 포함, 토큰 수 없는 시도 제외)"
+    )
     return f"{head}: {', '.join(parts)}\n"
 
 

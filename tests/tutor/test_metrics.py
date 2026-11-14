@@ -307,7 +307,8 @@ def test_tutor_call_summary_shows_failed_attempts_and_token_distribution(capsys)
     lines = capsys.readouterr().out.splitlines()
     assert lines[-2] == "실패한 시도(갈래별, 재시도 포함): main length 2회, main timeout 1회"
     assert lines[-1] == (  # 최종 실패 다음. 가까운 순위: p50은 10번째, p95는 19번째 값
-        "성공한 시도의 completion_tokens(추론 포함, 100 단위로 올린 구간): "
+        "성공한 시도의 completion_tokens(추론 포함, 100 단위로 올린 구간"
+        ", 2000은 초과 포함, 토큰 수 없는 시도 제외): "
         "baseline p50 300 · p95 300 · 최대 300 (1회), main p50 400 · p95 900 · 최대 1200 (20회)"
     )
     empty = SimpleNamespace(calls={}, failures={}, attempt_errors={}, completion_buckets={})

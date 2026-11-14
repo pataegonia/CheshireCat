@@ -78,7 +78,7 @@ def test_prepare_judge_builds_prompt_from_real_action_table():
 
 @pytest.mark.parametrize("state_rule", [True, False])
 def test_prepare_judge_follows_scaffold_state_rule_toggle(state_rule):
-    # #75: answer_seeking scaffold 정책은 설정 토글이 정한다(기본 켬 = 정답 사실을 먼저 밝힘)
+    # #75: answer_seeking scaffold 정책은 설정 토글이 정한다(기본 끔 = 숨김, 11/14 측정)
     s = types.SimpleNamespace(
         tutor_cfg=load_config(overrides={"toggles.scaffold_state_rule": state_rule})
     )
@@ -264,7 +264,10 @@ def test_delegation_signal_turns_answer_seeking_into_academic_fixed_sentence(
 ):
     # #139 리뷰: 밝힘에서 과제 대행을 answer_seeking으로 보면 정답 사실이 나간다. 신호가 잡히면
     # 과목 사실 없는 academic 고정 문장으로 바꾼다(신호 힌트 토글과 상관없이)
-    state = state_with(FakeLLM(out("answer_seeking", action)), **{"toggles.signals": signals_toggle})
+    state = state_with(
+        FakeLLM(out("answer_seeking", action)),
+        **{"toggles.signals": signals_toggle, "toggles.scaffold_state_rule": True},
+    )
     resp = ask(state, DELEGATION_ASK)
     assert resp == {"answer": TEXT[Fixed.SCAFFOLD_ACADEMIC], "action": "scaffold", "citations": []}
 
@@ -301,7 +304,9 @@ def test_delegation_guard_leaves_other_cases(category, action):
     o = out(category, action)
     # 더 강한 action은 그대로 두고 범주만 바꾼다(§3 우선순위)
     assert flow.delegation_guard(o, (Signal.DELEGATION,), state_rule=True) == (
-        o if category != "answer_seeking" else o.model_copy(update={"category": "academic_dishonesty"})
+        o
+        if category != "answer_seeking"
+        else o.model_copy(update={"category": "academic_dishonesty"})
     )
     assert flow.delegation_guard(o, (), state_rule=True) is o
     assert flow.delegation_guard(o, (Signal.DELEGATION,), state_rule=False) is o

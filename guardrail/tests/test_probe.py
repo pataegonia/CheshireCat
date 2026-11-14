@@ -87,7 +87,7 @@ def test_main_refuses_over_cap(calls, monkeypatch):
 def _respond(kwargs):
     rf = kwargs.get("response_format")
     if rf is None or rf["json_schema"]["name"] == "OutputOut":
-        body = '{"reason": "r", "grounded": true}'
+        body = '{"answer_quote": "", "kb_quote": "", "grounded": true, "refuses": false}'
     else:
         body = '{"evidence": "e", "category": "normal"}'
     finish = "length" if kwargs.get("max_completion_tokens") == 800 else "stop"
@@ -158,10 +158,10 @@ async def test_run_never_exceeds_cap_with_retries():
 
 
 async def test_run_truncated_json_retries_stay_under_cap():
-    # 800에서 잘린 본문. 길이 칸은 재시도 0, ③ 지연 칸은 bad_json 재시도(재시도 설정 복원).
-    # 그래도 총합은 cap 이하, 소진은 보고에 드러난다
+    # 800과 설정 기본값(1600)에서 잘린 본문. 길이 칸은 재시도 0, ③ 지연 칸(설정 기본값으로 부른다)은
+    # bad_json 재시도(재시도 설정 복원). 그래도 총합은 cap 이하, 소진은 보고에 드러난다
     def truncated(kwargs):
-        if kwargs.get("max_completion_tokens") == 800 and "response_format" in kwargs:
+        if kwargs.get("max_completion_tokens") in (800, 1600) and "response_format" in kwargs:
             return Ok(content='{"evid', finish_reason="length", completion_tokens=800)
         return _respond(kwargs)
 

@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, PositiveFloat, PositiveInt, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    NonNegativeInt,
+    PositiveFloat,
+    PositiveInt,
+    model_validator,
+)
 
 from guardrail.schema import Category
 
@@ -123,6 +130,11 @@ class OutputCfg(_Strict):
     rule_span: Literal["pm4", "eojeol"]
     rule_extra_tokens: list[Literal["value_norm", "units_extra", "bare_numeral", "backtick_latin"]]
     rule_require_same_kind: bool
+    # R14-D2·D4(ADR-0014 R14 수정). nano "근거 없음" 가운데 ③에 쓰는 범위, 인용 확인의 최소 글자 수,
+    # 출력 nano에 주는 1위 섹션 전체의 길이 상한
+    tier3_trust: Literal["all", "answer_quote", "both_quotes"]
+    quote_min_chars: NonNegativeInt
+    context_max_chars: PositiveInt
 
 
 class EmbeddingCfg(_Strict):
@@ -154,8 +166,6 @@ class GuardConfig(_Strict):
         t = self.toggles
         if t.third_call and not (t.knn_vote and t.lr):
             raise ValueError("toggles.third_call은 knn_vote·lr이 둘 다 켜졌을 때만 켤 수 있다")
-        if t.nano_span and not t.literal_rule:
-            raise ValueError("toggles.nano_span은 literal_rule이 켜졌을 때만 켤 수 있다")
         # rules.py는 요청 때 NotImplementedError를 낸다. 기동 때 막는다(rules를 import하면 순환)
         o = self.output
         if "bare_numeral" in o.rule_extra_tokens:

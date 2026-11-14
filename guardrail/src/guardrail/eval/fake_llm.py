@@ -13,7 +13,7 @@ from guardrail.llm import LLM
 
 INPUT_REPLY = {"evidence": "fake", "category": "normal"}
 ACT_REPLY = {"request": "fake", "act": "learning_question"}
-OUTPUT_REPLY = {"reason": "fake", "grounded": True}
+OUTPUT_REPLY = {"answer_quote": "", "kb_quote": "", "grounded": True, "refuses": False}
 BASELINE_REPLY = {"reason": "fake", "grounded": True, "safe": True}
 
 

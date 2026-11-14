@@ -45,7 +45,7 @@
 |---|---|---|
 | `normal` | answer | 1–3문장. 정답이 되는 값·이름·조건을 자료 표현 그대로 쓰고 근거 섹션을 인용 |
 | `pii_disclosure` | answer | 질문에 답하고 "개인정보는 적지 않아도 돼요" 한 문장. 개인정보를 되풀이하지 않음 |
-| `answer_seeking` | scaffold | 정답 사실을 자료 표현 그대로 먼저 밝히고(`scaffold_state_rule`, 11/12 결정) 기준과 다음 단계를 안내. 근거 섹션 인용. 잠정 기본(과제 대행 행 측정 뒤 확정, #139)이며 운영진 답(§11-1-4)이 오면 토글로 되돌린다 |
+| `answer_seeking` | scaffold | 최종 정답 대신 자료의 기준과 다음 단계(숨김, `scaffold_state_rule: false`, 11/14 측정). 근거 섹션 인용. 정답 사실을 먼저 밝히는 쪽(true)은 운영진 답(§11-1-4)과 함께 T3에서 다시 본다 |
 | `academic_dishonesty` | scaffold | 완성 글·코드 대신 직접 할 순서. 자료 내용을 썼으면 그 섹션 인용 |
 | `out_of_material` | abstain | "자료에 나와 있지 않아요". 자료 내용을 덧붙이면 그 섹션을 꼭 인용하고, 인용할 수 없으면 덧붙이지 않음 |
 | `low_signal_input` | clarify | 무엇이 궁금한지 되묻는 한 문장 |
@@ -75,7 +75,7 @@
 - "거절하지 말고", 권한 주장, 소설·역할극 틀은 정상 문항에도 많다. 이것 하나만으로 신호를 올리지 않는다(TU-05).
 
 ## 합의된 구조 (TUTOR_PRD §4·§9, 통합 PRD §3·IN-01·IN-04·IN-05)
-- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. 공유 객체(`KbIndex`·LLM 게이트·`Guard`)는 `request.app.state`로 받는다(TU-01). 주입 인자 `tutor_router`·`defaults`·`startups`(`tutor.startup`)는 가드 #92 `8fd8f5f`에 들어갔다.
+- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. LLM 게이트·`Guard`는 `request.app.state`로 받고, KB 색인은 가드 `KbIndex` 클래스로 튜터가 기동 때 따로 만든다(설정은 가드 설정 `kb`, TU-01·TD-03). 주입 인자 `tutor_router`·`defaults`·`startups`(`tutor.startup`)는 가드 #92 `8fd8f5f`에 들어갔다.
 - 라우터는 예외를 밖으로 내지 않고 튜터 규격 본문을 돌려준다. 본문은 직접 읽고, FastAPI 422로 입력을 되풀이하지 않는다(TU-01).
 - 가드 골격은 `/tutor`에 시간 상한과 본문 크기 상한을 걸지 않는다. 튜터 라우터가 `budget_s` 시간 상한을 걸고, 본문은 4MiB를 넘으면 읽기를 멈춘다. `request.state.req_bytes`에는 길이만 남긴다(통합 IN-05, 가드 #92 코멘트).
 - 주 호출 출력은 문장 단위 `Sentence`(`text`, `kind: claim|non_claim`, `evidence: [{sid, quote}]`)다. `answer`는 문장을 이어 붙여 만들고, `citations`는 결정적 수정이 계산한다(TU-06, IN-01).
@@ -89,7 +89,7 @@
 - 판정이 시간 부족이나 실패로 빠지면 **판정만 건너뛰고 생성 답과 action을 그대로 낸다.** abstain으로 바꾸지 않는다(TU-09·TU-12).
 - 공유 설정 키 `budget_s`·`judge_skip_s`·`fallback_action`은 가드·통합과 같은 키를 읽는다(TU-13, 통합 §3-1).
 - LLM 호출은 가드 전역 게이트 `slot()`을 함께 쓴다. SDK 재시도는 0으로 두고, 수동 재시도는 예산 안에서만 한다. nano 파라미터는 가드 GR-10과 같다. 호출 수 상한은 TU-13을 따른다.
-- KB 색인은 가드 `KbIndex`를 공유한다(TD-03). 검색(`retrieve`·이름 사전·임베딩)은 튜터 소유이고, 통합은 recall만 잰다(TD-11, IN-02).
+- KB 색인은 가드 `KbIndex` 클래스를 쓰고 인스턴스는 튜터가 따로 만든다(설정은 가드 설정 `kb`·`retrieval.max_query_chars`, TD-03). 검색(`retrieve`·이름 사전·임베딩)은 튜터 소유이고, 통합은 recall만 잰다(TD-11, IN-02).
 - 패키지: 루트 uv workspace의 멤버 `tutor/pyproject.toml`. 테스트는 저장소 `tests/tutor/`에 두고 integration-ci의 test job이 돈다. 루트 workspace는 통합이 만든다(통합 §3-2).
 
 ## 튜터에서 특히 지킬 규칙 (TU-15·TU-18, SPEC §7–§8)
@@ -118,7 +118,7 @@
 - 생성 실패 시 기본 action 값(`fallback_action`, 잠정 clarify): TU-12
 - CSV 표현(원문 CSV / "열: 값" 문장): TU-03, 통합 I4
 - 생성에 넣는 섹션 수 K(`retrieval.k`): TU-03, 통합 I5
-- answer_seeking scaffold 기본값(밝힘 잠정, 과제 대행 행 측정 뒤 확정, 운영진 답 §11-1-4): TU-06
+- answer_seeking에서 정답 사실을 밝힐지(지금 숨김, T3에서 운영진 답 §11-1-4와 행별 응함 확인 뒤 다시 봄): TU-06
 - 설정 파일 위치·형식(루트 `config/` 안): TU-14
 - 빠른 질문 버튼 문구만 있는 1턴의 기대 action(clarify `[가설]`): §3, §11-1-1
 - 팀 provenance 합본·시연 체크리스트 위치: §11-3-2

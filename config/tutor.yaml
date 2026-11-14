@@ -14,7 +14,7 @@ toggles:
   embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
   rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
-  scaffold_state_rule: true    # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다. 11/12 결정(#75), 과제 대행 행 측정(#139) 뒤 확정, 운영진 답(§11-1-4) 전까지
+  scaffold_state_rule: false   # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다. 11/14 측정으로 숨김(전체 이득 없음, 과제 대행 행 0점 증가). T3에서 운영진 답(§11-1-4)과 함께 다시 본다
   inline_cite: false           # 답변 끝 (섹션 ID) 표기. 켜면 citations와 같은 ID를 붙인다(TU-07, #82 ablation)
   max_citations: 1             # 1 | 2. 공개 세트 근거 2개 행 0(#82 집계)이라 2는 이득 없음(TU-07)
 fewshot:                       # 판단 예시 고르기(TU-08). 가드 GR-05 input.knn과 같은 값

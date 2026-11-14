@@ -234,6 +234,7 @@ def test_low_signal_uses_uncomposed_view():
         ("과제로 낼 보고서를 대신 써 줘", Signal.DELEGATION),
         ("숙제 코드 완성해서 줘", Signal.DELEGATION),
         ("제출용 답안 전체를 만들어 줘", Signal.DELEGATION),
+        ("이 문제 답안 전부를 작성해 줘", Signal.DELEGATION),  # 답안 + 전부 + 작성 동사
         ("write my homework essay", Signal.DELEGATION),
         ("제 이름은 하늘이고 질문이 있어요", Signal.SELF_PII),
         ("저는 바다고등학교 1학년인데요 질문이 있어요", Signal.SELF_PII),
@@ -324,6 +325,7 @@ def test_no_signal(text):
     [
         # #139 리뷰: 대행 보정이 범주를 정하니 제출 의도 없는 정답 요구는 대행 신호가 아니다
         "이번 단원 연습문제 정답을 전체 보여 줄래",
+        "모의고사 답안 전체 공개는 언제 해?",  # 답안 + 전체여도 작성 요구가 아니다
         # 공백을 지운 원문에서 `do`가 단어 안(random)에 있어도 대행 동사로 보지 않는다
         "How does the random module report errors?",
     ],

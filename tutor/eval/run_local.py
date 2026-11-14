@@ -21,7 +21,8 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 하네스와 같은 규칙).
 튜터 점수는 모든 행과, 공유 분할(가드 splits/v1.json)의 홀드아웃 묶음을 뺀 교차 검증 행으로 따로
 낸다. 설정을 비교할 때는 교차 검증 점수를 본다(홀드아웃은 설정을 고정한 뒤 최대 3회만 본다, TU-16).
-모든 행 점수(첫 줄)와 그 밖의 행 단위 지표에는 홀드아웃 행이 섞여 있다.
+실행별 항목·응함 문항도 교차 검증 행으로만 낸다. 모든 행 점수(첫 줄)와 그 밖의 행 단위 지표
+(항목별 평균·범주별 점수·흔들리는 문항 등)에는 홀드아웃 행이 섞여 있다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 """
 
@@ -379,24 +380,27 @@ def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
     out.write(f" (문항 {report.rows}개, 실행 {report.runs}회")
     out.write(f", 판정 오류 {sum(report.judge_errors)})\n")
     held = report.rows - report.cv_rows
-    out.write(f"교차 검증 행 튜터 점수(실행별, 설정 비교용): {_per_run(report.cv_tutor, '.2f')}")
-    out.write(f", 문항 {report.cv_rows}개(홀드아웃 {held}개 뺌)\n")
+    # 교차 검증 행이 없으면 0.00이 아니라 -로 낸다(재서 0인 것처럼 읽히지 않게)
+    cv_score = _per_run(report.cv_tutor, ".2f") if report.cv_rows else "- (측정 없음)"
+    out.write(f"교차 검증 행 튜터 점수(실행별, 설정 비교용): {cv_score}")
+    out.write(f", 문항 {report.cv_rows}개(홀드아웃 {held}개 뺌)")
+    out.write(f", 판정 오류 {sum(report.cv_judge_errors)}\n")
     parts = ", ".join(
         f"{name} {'-' if value is None else f'{value:.3f}'}"
         for name, value in report.components.items()
     )
     out.write(f"항목별 평균: {parts}, 응함 {report.complied}\n")
-    out.write("항목별(실행별):\n")
+    out.write("교차 검증 행 항목별(실행별):\n")
     for name in report.components:
-        values = [run[name] for run in report.components_by_run]
+        values = [run[name] for run in report.cv_components_by_run]
         out.write(f"- {name} {_per_run(values, '.3f')}\n")
     if not judged:  # 응함은 판정이 있어야 잰다. 0으로 내면 재서 0인 것처럼 읽힌다
         out.write("- 응함 - (판정 없음)\n")
-        out.write("응함으로 잡힌 문항(실행별): 판정 없음\n")
+        out.write("교차 검증 행에서 응함으로 잡힌 문항(실행별): 판정 없음\n")
     else:
-        out.write(f"- 응함 {_per_run([len(ids) for ids in report.complied_by_run], 'd')}\n")
-        out.write("응함으로 잡힌 문항(실행별):\n")
-        for number, ids in enumerate(report.complied_by_run, 1):
+        out.write(f"- 응함 {_per_run([len(ids) for ids in report.cv_complied_by_run], 'd')}\n")
+        out.write("교차 검증 행에서 응함으로 잡힌 문항(실행별):\n")
+        for number, ids in enumerate(report.cv_complied_by_run, 1):
             out.write(f"- {number}회 {len(ids)}개{_ids(ids)}\n")
     out.write(f"오차단(실행별): {', '.join(map(str, report.false_blocks))}\n")
     categories = ", ".join(f"{c} {v:.1f}" for c, v in report.by_category.items())

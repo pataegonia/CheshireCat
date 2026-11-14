@@ -79,6 +79,18 @@ def block_openai(monkeypatch) -> list[dict]:
     return _fake_send(monkeypatch, refuse)
 
 
+def rate_limit_openai(monkeypatch) -> list[dict]:
+    """block_openai와 같되, 보내지 않고 429(속도 제한)로 답한다. 튜터 LLM은 다시 보낸다."""
+    import httpx
+    import openai
+
+    def limited(_kwargs):
+        request = httpx.Request("POST", FAKE_OPENAI_ENV["OPENAI_BASE_URL"])
+        raise openai.RateLimitError("x", response=httpx.Response(429, request=request), body=None)
+
+    return _fake_send(monkeypatch, limited)
+
+
 # 응답 스키마 이름별 최소 정상 답(주 호출 MainCallOut, 베이스라인 BaselineOut). 과목 사실은 없다
 OK_REPLIES = {
     "MainCallOut": {
@@ -90,23 +102,44 @@ OK_REPLIES = {
 }
 
 
+def _ok_reply(kwargs):
+    """응답 스키마 이름에 맞는 최소 정상 JSON 응답(json_schema 모드만)."""
+    import types
+
+    name = kwargs["response_format"]["json_schema"]["name"]
+    content = json.dumps(OK_REPLIES[name], ensure_ascii=False)
+    choice = types.SimpleNamespace(
+        message=types.SimpleNamespace(content=content), finish_reason="stop"
+    )
+    return types.SimpleNamespace(choices=[choice], usage=types.SimpleNamespace(completion_tokens=5))
+
+
 def answer_openai(monkeypatch) -> list[dict]:
     """block_openai와 같되, 보내지 않고 응답 스키마 이름에 맞는 최소 정상 JSON으로 답한다.
 
     json_schema 모드(가드 설정 기본, structured_output)만 다룬다. json_object 모드면 스키마
     이름이 없어 전송 안에서 KeyError가 나고, 튜터 LLM이 그것을 server 오류로 센다.
     """
-    import json
-    import types
+    return _fake_send(monkeypatch, _ok_reply)
 
-    def answer(kwargs):
-        name = kwargs["response_format"]["json_schema"]["name"]
-        content = json.dumps(OK_REPLIES[name], ensure_ascii=False)
-        choice = types.SimpleNamespace(
-            message=types.SimpleNamespace(content=content), finish_reason="stop"
-        )
-        return types.SimpleNamespace(
-            choices=[choice], usage=types.SimpleNamespace(completion_tokens=5)
-        )
 
-    return _fake_send(monkeypatch, answer)
+def scattered_rate_limit_openai(monkeypatch, every: int) -> list[int]:
+    """answer_openai와 같되, every번째 전송마다 429로 답한다. 429를 낸 전송 번호를 돌려준다."""
+    import httpx
+    import openai
+
+    limited: list[int] = []
+    count = iter(range(1, 10**9))
+
+    def reply(kwargs):
+        n = next(count)
+        if n % every == 0:
+            limited.append(n)
+            request = httpx.Request("POST", FAKE_OPENAI_ENV["OPENAI_BASE_URL"])
+            raise openai.RateLimitError(
+                "x", response=httpx.Response(429, request=request), body=None
+            )
+        return _ok_reply(kwargs)
+
+    _fake_send(monkeypatch, reply)
+    return limited

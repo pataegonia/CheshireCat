@@ -1,9 +1,8 @@
 """TU-05 결정적 신호: 저신호 직접 판정과 판단 힌트 신호.
 
 - 저신호 직접 판정(`direct_clarify`): LLM 없이 `clarify` 고정 문장을 낼지 정한다.
-  마지막 학습자 발화(태그 문자만 지운 원문, 자모 조합 전)가 자모·문장부호·기호·이모티콘만으로
-  되어 있고(숫자·라틴·완성 음절 없음, 숨긴 텍스트 없음) 앞에 대화가 있으면 참이다(가드 GR-06 기준).
-  빈 발화·공백뿐인 발화는 1턴이어도 참이다. 1턴 자모 입력은 주 호출이 판단한다.
+  가드 `is_low_signal`(GR-06)을 그대로 쓰고 튜터 고유 조건만 더한다. 빈 발화·공백뿐인 발화는
+  1턴이어도 참이고, 튜터가 바로 앞에서 질문했으면 거짓이다. 1턴 자모 입력은 주 호출이 판단한다.
 - 판단 힌트(`detect`): 위기, 지시 무력화, 정답 요구, 과제 대행, 자기 개인정보, 채점 조작.
   action을 정하지 않는다. 주 호출 입력의 <신호>에 이름만 넘기고 판단은 범주 정의로 한다.
 
@@ -18,56 +17,16 @@
 """
 
 import re
-import unicodedata
 from collections.abc import Sequence
 from enum import StrEnum
 from types import MappingProxyType
 
 from guardrail.preprocess import skeleton
+from guardrail.signals import is_low_signal
 
 from tutor.judge.conversation import Conversation, normalize_fast
 
 # --- 저신호 ---
-
-_JAMO_RANGES = (
-    (0x1100, 0x11FF),  # 한글 자모(조합형)
-    (0x3131, 0x318E),  # 호환 자모
-    (0xA960, 0xA97F),  # 자모 확장 A
-    (0xD7B0, 0xD7FF),  # 자모 확장 B
-    (0xFFA0, 0xFFDC),  # 반각 자모
-)
-
-
-def _is_jamo(ch: str) -> bool:
-    cp = ord(ch)
-    return any(lo <= cp <= hi for lo, hi in _JAMO_RANGES)
-
-
-def _ignorable(ch: str) -> bool:
-    """보이지 않는 문자: 공백, 서식 문자(ZWJ·방향 제어 등), 결합 표시(변형 선택자 등)."""
-    return ch.isspace() or unicodedata.category(ch) in ("Cf", "Mn", "Me", "Cc")
-
-
-def _low_char(ch: str) -> bool:
-    """자모·문장부호·기호(이모지 포함). 숫자·라틴·완성 음절·한자 등 글자(L*·N*)는 아니다."""
-    if _is_jamo(ch):
-        return True
-    return unicodedata.category(ch)[0] in ("P", "S")
-
-
-def is_blank(text: str) -> bool:
-    """보이는 글자가 하나도 없는가(빈 문자열, 공백·보이지 않는 문자뿐)."""
-    return all(_ignorable(ch) for ch in text)
-
-
-def is_low_signal_text(text: str) -> bool:
-    """보이는 글자가 있고 모두 자모·문장부호·기호인가.
-
-    숫자·라틴·완성 음절이 하나라도 있으면 아니다.
-    """
-    visible = [ch for ch in text if not _ignorable(ch)]
-    return bool(visible) and all(_low_char(ch) for ch in visible)
-
 
 # 튜터가 대답을 청하는 끝말(물음표 없이 "1번과 2번 중 골라 주세요." 처럼 끝나도 질문이다)
 _ASKING_END = re.compile(r"(?:주세요|줘요|줘|래요|할래|볼래|까요|나요)[.!。~\s]*$")
@@ -87,17 +46,19 @@ def _tutor_asked(conv: Conversation) -> bool:
 def direct_clarify(conv: Conversation) -> bool:
     """LLM 없이 clarify 고정 문장을 낼 입력인가(TU-05).
 
-    - 빈 발화(보이지 않는 문자뿐 포함)는 1턴이어도 참이다.
-      판단은 `Conversation.is_empty` 하나로 한다.
-    - 앞 대화가 있고 자모·문장부호·기호만 있으면 참이다. 다만 튜터가 바로 앞에서 질문했다면
-      짧은 대답("ㅇㅇ")일 수 있으니 주 호출로 보낸다(공개 세트 저신호 8행은 모두 해당 없음).
     - 숨긴 텍스트가 있으면 거짓이다.
+    - 빈 발화(보이지 않는 문자뿐 포함)는 1턴이어도 참이다(튜터 고유).
+      판단은 `Conversation.is_empty` 하나로 한다.
+    - 그 밖은 가드 `is_low_signal`(GR-06) 그대로다. 조건은 그 docstring에 있다.
+    - 다만 튜터가 바로 앞에서 질문했다면 짧은 대답("ㅇㅇ")일 수 있으니 주 호출로 보낸다(튜터 고유,
+      공개 세트 저신호 8행은 모두 해당 없음).
     """
-    if conv.target_hidden:
+    if conv.target_hidden:  # 가드도 거짓을 내지만, 가드 기준이 바뀌어도 튜터는 지킨다
         return False
     if conv.is_empty:
         return True
-    return conv.has_history and is_low_signal_text(conv.target_raw) and not _tutor_asked(conv)
+    low = is_low_signal(conv.target_raw, conv.has_history, conv.target_hidden)
+    return low and not _tutor_asked(conv)
 
 
 # --- 판단 힌트 신호 ---

@@ -158,7 +158,7 @@ async def test_rule_span_comes_back_as_a_substring_of_the_answer(monkeypatch):
 
 
 async def test_given_category_wins_over_a_low_signal_turn(no_rule):
-    guard, fake = await make(responder(output=UNGROUNDED))
+    guard, fake = await make(responder(output=UNGROUNDED), toggles__nano_span=False)
     ok = await guard.judge_output(LOW_SIGNAL, ANSWER, category="normal")
     assert ok == OutputVerdict(False, (), True)  # 입력 쪽 low-signal 직행이 범주를 덮지 않는다
     blocked = await guard.judge_output(LOW_SIGNAL, ANSWER, category="harmful_content")
@@ -273,6 +273,42 @@ def test_classify_equals_the_category_of_judge(raw, nano_fails):
         assert await guard.classify(raw) == want
 
     anyio.run(run)
+
+
+@pytest.mark.parametrize("hidden", [False, True])
+async def test_given_category_without_learner_turn_is_the_default_output(hidden):
+    guard, fake = await make(responder(output=UNGROUNDED), output__failure_default="ungrounded")
+    answer = ANSWER + TAG if hidden else ANSWER
+    v = await guard.judge_output([], answer, category="harmful_content")
+    assert v == OutputVerdict(False, (), not hidden)  # 숨긴 태그는 그래도 본다(GR-08)
+    assert not calls(fake, "input") and not calls(fake, "output")
+
+
+async def test_mixed_messages_and_dicts_read_like_the_guard_body():
+    guard, fake = await make(responder("off_topic"))
+    mixed = [
+        {"role": "user", "content": 7},  # content가 문자열이 아니면 버린다
+        Message("assistant", "네"),
+        {"role": None, "content": "역할 없음"},  # role이 문자열이 아니면 ""(학습자 아님)
+        {"role": "user", "content": QUESTION},
+    ]
+    assert await guard.classify(mixed) == "off_topic"
+    sent = calls(fake, "input")[0]["messages"][-1]["content"]
+    assert '<message role="assistant">네</message>' in sent
+    assert '<message role="other">역할 없음</message>' in sent
+    assert ">7</message>" not in sent and f"<target>{QUESTION}</target>" in sent
+    only_odd = [{"role": "user", "content": 7}, {"role": 1, "content": "x"}, "user", None]
+    assert await guard.classify(only_odd) == "normal"  # 남는 학습자 발화가 없다
+    assert len(calls(fake, "input")) == 1
+
+
+@pytest.mark.parametrize("bad", [None, "안녕하세요", 3, {"role": "user", "content": "q"}])
+async def test_non_sequence_messages_are_an_empty_conversation(bad):
+    guard, fake = await make(responder("harmful_content"))
+    assert await guard.classify(bad) == "normal"
+    v = await guard.judge_output(bad, ANSWER, category="normal")
+    assert isinstance(v, OutputVerdict) and v.unsupported == () and v.safe
+    assert not calls(fake, "input") and not calls(fake, "output")
 
 
 @pytest.mark.parametrize("category", CATEGORIES)

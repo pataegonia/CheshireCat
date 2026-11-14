@@ -195,7 +195,7 @@ class Guard:
     async def classify(self, messages: Sequence[Message]) -> Category   # judge의 입력 부분. /tutor 제안(PRD §9 T1)
     async def judge_output(self, messages: Sequence[Message], candidate_answer: str,
                            category: Category | None = None) -> OutputVerdict
-        # None이면 classify(messages)를 먼저 부른다(nano +1회). 3단 ①과 safe는 그 범주를 쓴다. /tutor 제안(PRD §9 T1-2)
+        # None이면 입력·출력 nano를 병렬로 부른다(최대 2회). 3단 ①과 safe는 그 범주를 쓴다. /tutor 제안(PRD §9 T1-2)
 ```
 
 `judge()` 순서(요청 마감 = 시작 + `budget_s`):
@@ -384,7 +384,7 @@ uv run python -m guardrail.eval.probe --calls 200               # 런박스 실�
 | **S2.8** | 판정 조립: decision·3단·safe·기본값·예산 | 07·08·09·01 / 0012·0014·0009 | P0 | 5h | Opus | S1.2·S2.3·S2.4·S2.6·S2.7 | GR-07 표 ①–④·GR-08·GR-09 표 전 행 테스트, 장애 주입에서 형식 오류 0·30초 안, 서버 연결, 입력 판정 KB 발췌에서 score==0 조각 제외(테스트), 규칙 ②·발췌가 hits[0]을 쓰기 전 hits[0].score > 0 확인, KB 로드 ValueError가 /tutor 기동까지 막으므로 제출 전 자가 점검이 잡는지 확인 |
 | **S2.9** | 평가 하네스 v1·베이스라인 | 13·11 / 0006·0013 | P0 | 6h | Sonnet | S1.4·S2.8 | §4.6 `report.md` 전 항목, 3회 분산, nano 단독·kNN·LR 단독 점수(PRD §11-2-2), 설정만으로 ablation 실행. R14: `--input-only`로 입력 v1 단독 1회를 S2.8보다 먼저 잰다(D1), 역할별 실패율과 2% 관문(D8), nano 파싱 출력을 `runs/`에 저장, 저장된 두 실행을 호출 없이 비교하는 `--diff` |
 | **S2.10** | 부하 시험·v1 제출 | 10·09 / 0011 | P0 | 3h | 본인(코드 초안은 Sonnet) | S1.6·S2.8 | 동시 64·약 600요청 시간 초과 0, 가드 p50·p95(목표 ≤8s), 전체 시간 약 2분 수준, v1 제출 기록 |
-| **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `Guard.classify`·`Guard.judge_output(messages, candidate_answer, category=None)`·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
+| **S2.11** | 튜터 공유 API(제안 T1·T2·T4) | 10 / — | P1 | 2h | Sonnet | S2.8 | `async Guard.classify`·`async Guard.judge_output(messages, candidate_answer, category=None)`(nano 재시도 0, 구현됨)·`KbIndex`·`LLM.slot` import 예제와 테스트, 리더에게 전달 |
 | **S3.1** | 출력 측정·켜기 결정(③ 정밀도, 규칙 폭·점수 차) | 07 / 0014 | P0 | 4h | Opus | S2.9 | PRD §11-2-3·5 수치, `nano_tier3`·출력 실패 기본값(4조합 비교)·`tier3_trust`(저장된 응답으로, R14-D2)·`rule_span`·`rule_min_margin`(G∪T 기준)·규칙 정밀도 P → `rule_emit_spans`/규칙 끔 결정과 근거 |
 | **S3.2** | 입력 오류 분석·프롬프트·예시 조정 | 04·05 / 0012·0013 | P0 | 8h | Opus + santa | S2.9 | 짝 묶음 교차 검증 block F1·짝 정확도 개선이 3회 분산 밖, 바뀐 프롬프트 santa 통과. 절차는 R14-D7: 변형마다 1회 선별 → 하나의 v2로 합쳐 3회 확정 1회. v2는 `gr/s3.2-input-tuning`의 새 PR에서 `input_judge.md`의 `version`을 2로 올린다. S2.6 PR은 v1 그대로 머지한다(기준선 보존, §10) |
 | **S3.3** | OOM용 KB 조각 ablation | 04 / 0010 | P1 | 3h | Sonnet | S2.9 | `with_oom_kb_snippet` 순이득(3회 분산 밖에서 > 0이면 켬, 부트스트랩 구간은 보고)과 켜기 결정 |

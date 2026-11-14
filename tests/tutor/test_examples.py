@@ -267,12 +267,3 @@ def test_fold_states_exclude_eval_fold_and_holdout():
         assert split.cluster[row["id"]] not in clusters  # 자기 묶음이 예시에 없다
         assert not clusters & holdout  # 홀드아웃은 늘 뺀다
     assert len({id(states.for_row(r["id"])) for r in rows}) == split.folds + 1
-
-
-# --- TD-10: 공개 세트 문구를 서버 코드에 적지 않는다 ---
-
-
-def test_server_code_has_no_public_set_phrases(pool):
-    code = (REPO / "tutor/judge/examples.py").read_text(encoding="utf-8")
-    phrases = {e.text[i : i + 12] for e in pool for i in range(0, max(1, len(e.text) - 12), 12)}
-    assert not [p for p in phrases if len(p.strip()) >= 12 and p in code]

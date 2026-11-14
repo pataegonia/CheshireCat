@@ -32,7 +32,6 @@ from tests.integration.applib import (
     AUTH,
     GUARD_BUDGET_HINT,
     GUARD_RESPONSE_SCHEMA,
-    MAX_GUARD_LLM_CALLS_PER_REQUEST,
     MAX_LLM_CALLS_PER_REQUEST,
     ROOT,
     EvidenceLog,
@@ -41,6 +40,7 @@ from tests.integration.applib import (
     cache_sizes,
     find_text,
     guard_call_budget,
+    guard_calls_per_request,
     scoring,
     state_roots,
     user,
@@ -179,7 +179,7 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
             assert response.status_code == 200, (row["id"], response.status_code)
             # 가드 nano 호출은 요청마다 그 경로의 상한 안이다(합계만 보면 서로 상쇄된다)
             guard_used = fake_guard_send.count - guard_before
-            assert guard_used <= MAX_GUARD_LLM_CALLS_PER_REQUEST[path], GUARD_BUDGET_HINT
+            assert guard_used <= guard_calls_per_request(path), GUARD_BUDGET_HINT
             body = response.json()
             if path == "/tutor":
                 assert_tutor_response(body)
@@ -279,7 +279,7 @@ def fuzz(
         check(client, path, raw)
         if guard_send is not None:
             used = guard_send.count - before
-            assert used <= MAX_GUARD_LLM_CALLS_PER_REQUEST[path], GUARD_BUDGET_HINT
+            assert used <= guard_calls_per_request(path), GUARD_BUDGET_HINT
 
     run()
     assert len(sent) >= examples

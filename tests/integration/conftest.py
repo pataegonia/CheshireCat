@@ -147,7 +147,8 @@ REAL_GUARD_KEY = "fake-real-guard-key"
 
 @pytest.fixture
 def real_guard_env(monkeypatch, app_env):
-    """`app_env`에 가짜 OPENAI_API_KEY만 더한다. 루트 앱이 진짜 판정기(`Guard.build`)로 뜬다.
+    """`app_env`에 가짜 OPENAI_API_KEY와 닫힌 주소 OPENAI_BASE_URL을 넣는다. 루트 앱이 진짜
+    판정기(`Guard.build`)로 뜬다.
 
     기존 테스트(`app_env` · `client`)는 키가 없어 상수 판정기로 돈다. 진짜 판정기로 여는 앱은
     `test_real_guard.py`에서만 쓴다(전부 진짜 판정기로 돌리면 몇 분이 걸린다).
@@ -158,18 +159,30 @@ def real_guard_env(monkeypatch, app_env):
 
 
 @pytest.fixture
-def real_guard_client(real_guard_env, fake_send, caplog):
-    """`real_guard_env`로 루트 app.py를 연 TestClient. 진짜 판정기가 아니면 열자마자 실패한다.
+def open_real_guard_app(real_guard_env, fake_send):
+    """`real_guard_env`로 루트 app.py를 여는 함수(부를 때마다 새 앱). 진짜 판정기가 아니면 열자마자
+    실패한다. 튜터 설정을 바꾼 앱이 필요하면 부르기 전에 TUTOR_CONFIG를 넣는다."""
+    from fastapi.testclient import TestClient
+
+    @contextlib.contextmanager
+    def _open():
+        module = importlib.reload(importlib.import_module("app"))
+        with TestClient(module.app) as c:
+            # 기동이 실패하면 가드는 앱을 살리려고 상수 판정기로 조용히 내린다. 여기서 드러낸다
+            assert type(c.app.state.guard).__name__ == "Guard", type(c.app.state.guard).__name__
+            yield c
+
+    return _open
+
+
+@pytest.fixture
+def real_guard_client(open_real_guard_app, caplog):
+    """저장소 설정 그대로 진짜 판정기로 연 TestClient.
 
     기동 로그를 보려고 caplog를 DEBUG로 둔다(기동 기록은 `caplog.get_records("setup")`).
     """
-    from fastapi.testclient import TestClient
-
     caplog.set_level(logging.DEBUG)
-    module = importlib.reload(importlib.import_module("app"))
-    with TestClient(module.app) as c:
-        # 기동이 실패하면 가드는 앱을 살리려고 상수 판정기로 조용히 내린다. 여기서 드러낸다
-        assert type(c.app.state.guard).__name__ == "Guard", type(c.app.state.guard).__name__
+    with open_real_guard_app() as c:
         yield c
 
 

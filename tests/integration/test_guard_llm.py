@@ -8,7 +8,7 @@
 - 가짜는 가드 판정 스키마 셋을 두 출력 방식(json_schema · json_object) 모두에서 알아본다.
 - 판정기가 nano를 부르는 앱(대역 `llm_guard`)이 뜨고, 두 경로가 규격대로 답하고, 호출 수가 세어지고,
   판정 글과 요청 내용이 응답 · 로그 · 앱 상태에 남지 않는다.
-- 루트 앱의 가드 nano 호출 수는 `applib.MAX_GUARD_LLM_CALLS_PER_REQUEST` 안이다.
+- 키 없이 띄운 루트 앱은 상수 판정기이고 가드 nano를 부르지 않는다(`applib.guard_call_budget` 0).
 """
 
 import asyncio
@@ -20,6 +20,7 @@ from typing import Literal
 
 import pytest
 from guardrail.config import load_config
+from guardrail.guard import ConstantGuard
 from guardrail.judges.input_judge import judge_input
 from guardrail.judges.schemas import ACT_TO_CATEGORY, InputOut, OutputOut, strict_schema
 from guardrail.llm import LLM
@@ -34,7 +35,6 @@ from tests.integration.applib import (
     GUARD_BUDGET_HINT,
     GUARD_MODELS,
     GUARD_WORD,
-    MAX_GUARD_LLM_CALLS_PER_REQUEST,
     MAX_LLM_CALLS_PER_REQUEST,
     UNKNOWN_JSON_OBJECT,
     FakeGuardSend,
@@ -47,6 +47,7 @@ from tests.integration.applib import (
     cache_sizes,
     find_text,
     guard_call_budget,
+    guard_calls_per_request,
     patched_guard_llm,
     state_roots,
     user,
@@ -242,7 +243,7 @@ class ListFieldOut(_StrictOut):
 
 
 class NewLiteralOut(_StrictOut):
-    """기본값 표에 없는 문자열 Literal 필드가 있는 스키마(첫 값이 튜터 답을 바꿀 수도 있다)."""
+    """기본값 표에 없는 문자열 Literal 필드가 있는 스키마(가드가 새 판정 스키마를 올린 경우)."""
 
     verdict: Literal["block", "allow"]
 
@@ -264,17 +265,29 @@ def test_fake_reply_that_fails_the_models_validation_is_recorded(app_env, monkey
     assert dict(llm.unexpected) == {UnknownSchema.__name__: 1}
 
 
-@pytest.mark.parametrize("model", [ListFieldOut, NewLiteralOut], ids=lambda m: m.__name__)
-def test_fake_cannot_build_a_field_it_does_not_know(app_env, monkeypatch, model):
-    """bool · str 밖의 타입, 기본값 표에 없는 문자열 Literal 필드가 있으면 지어내지 않고
-    `unknown`에 남긴다."""
-    name = model.__name__
-    monkeypatch.setitem(GUARD_MODELS, name, model)
-    assert _guard_reply(model, "x", iter(()), vary=False) is None
+def test_fake_cannot_build_a_field_type_it_does_not_know(app_env, monkeypatch):
+    """bool · str · 문자열 Literal 밖의 타입이 있으면 지어내지 않고 `unknown`에 남긴다."""
+    monkeypatch.setitem(GUARD_MODELS, "ListFieldOut", ListFieldOut)
+    assert _guard_reply(ListFieldOut, "x", iter(()), vary=False) is None
     fake = FakeGuardSend()
-    _, result = complete_once(lambda: LLM(load_config().llm, send=fake), model)
+    _, result = complete_once(lambda: LLM(load_config().llm, send=fake), ListFieldOut)
     assert result.parsed is None
-    assert fake.unknown == [f"{name}: 가짜 응답이 스키마와 맞지 않음"]
+    assert fake.unknown == ["ListFieldOut: 가짜 응답이 스키마와 맞지 않음"]
+
+
+def test_fake_fills_a_literal_field_missing_from_the_defaults_with_its_first_value(
+    app_env, monkeypatch
+):
+    """기본값 표에 없는 문자열 Literal 필드는 첫 값으로 채우고, 응답은 검증을 통과한다.
+
+    가드가 새 판정 스키마(예: 입력 v2 InputModeOut)를 올려도 tests/를 고치지 않고 돈다.
+    """
+    monkeypatch.setitem(GUARD_MODELS, "NewLiteralOut", NewLiteralOut)
+    assert _guard_reply(NewLiteralOut, "x", iter(()), vary=False) == {"verdict": "block"}
+    fake = FakeGuardSend()
+    _, result = complete_once(lambda: LLM(load_config().llm, send=fake), NewLiteralOut)
+    assert result.parsed == NewLiteralOut(verdict="block")
+    assert fake.unknown == []
 
 
 def test_guard_schema_name_reads_only_the_appended_schema():
@@ -429,6 +442,11 @@ def test_same_guard_request_twice_calls_nano_twice(open_llm_guard_app, fake_guar
 # ── 루트 앱 ───────────────────────────────────────────────────────────────
 
 
+def test_root_app_without_a_key_uses_the_constant_judge(client):
+    # 키가 없으면 상수 판정기다(`default_factory`). 아래 상한 0과 다른 통합 테스트가 이 전제에 선다
+    assert isinstance(client.app.state.guard, ConstantGuard), type(client.app.state.guard)
+
+
 def test_root_app_guard_nano_calls_stay_within_the_budget(client, fake_send, fake_guard_send):
     bodies = [
         guard_body(QUESTION),
@@ -441,6 +459,6 @@ def test_root_app_guard_nano_calls_stay_within_the_budget(client, fake_send, fak
         assert post(client, "/guard", body).status_code == 200
         # 요청마다 본다: 합계만 보면 한 요청이 넘어도 다른 요청이 적게 쓰면 통과한다
         used = fake_guard_send.count - before
-        assert used <= MAX_GUARD_LLM_CALLS_PER_REQUEST["/guard"], GUARD_BUDGET_HINT
+        assert used <= guard_calls_per_request("/guard"), GUARD_BUDGET_HINT
         assert fake_guard_send.count <= guard_call_budget(guard=sent), GUARD_BUDGET_HINT
     assert fake_send.count == 0  # 가드는 튜터 전송을 쓰지 않는다

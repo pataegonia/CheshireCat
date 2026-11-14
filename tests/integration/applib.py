@@ -81,9 +81,10 @@ MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
 
 # 요청 하나에 가드 LLM(`guardrail.llm.LLM`)이 nano를 부르는 횟수의 상한(경로별). probe는 세지
 # 않는다(기동 때). 요청당 전체 nano 호출 상한은 위 표와 이 표의 합이다.
-# - 기본 판정기는 가드 `default_factory`다: OPENAI_API_KEY가 없으면 상수 판정기(0회)라, 키를
-#   지우는 `app_env`로 띄우는 기존 테스트는 상수 판정기로 돈다. 진짜 판정기 경로는
-#   test_real_guard.py가 본다.
+# 이 표는 진짜 판정기의 상한이다. 상한은 `guard_call_budget`으로만 읽는다.
+# - 기본 판정기는 가드 `default_factory`다: OPENAI_API_KEY가 없으면 상수 판정기라, 키를 지우는
+#   `app_env`로 띄우는 기존 테스트의 상한은 0이다(`real_guard=False`). 진짜 판정기 경로는
+#   test_real_guard.py가 `real_guard=True`로 본다.
 # - `/guard` 2: 입력 판정 1 + 출력 판정 1(후보 답변이 있을 때).
 # - `/tutor` 3: 가드가 튜터용 메서드를 올린 뒤(이슈 #119) classify 1 + judge_output 1,
 #   judge_output에 범주를 넘기지 않으면 classify +1(가드 interface.md의 judge_output 설명).
@@ -92,14 +93,26 @@ MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
 MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 2}
 GUARD_BUDGET_HINT = (
     "가드 nano 호출이 상한을 넘었다. 판정기를 바꿨으면 "
-    "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST를 고친다"
+    "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST · guard_call_budget을 고친다. "
+    "가드 PR에서 이 실패가 나면 통합 담당(pyr27)에게 알린다(tests/는 통합 트랙이 고친다)"
 )
 
 
-def guard_call_budget(*, tutor: int = 0, guard: int = 0) -> int:
-    """`/tutor` 요청 tutor개와 `/guard` 요청 guard개에 허용되는 가드 nano 호출 수."""
+def guard_call_budget(*, tutor: int = 0, guard: int = 0, real_guard: bool = False) -> int:
+    """`/tutor` 요청 tutor개와 `/guard` 요청 guard개에 허용되는 가드 nano 호출 수.
+
+    키 없이 띄운 앱(상수 판정기, `real_guard=False`)은 nano를 부르지 않으므로 0이다.
+    """
+    if not real_guard:
+        return 0
     limits = MAX_GUARD_LLM_CALLS_PER_REQUEST
     return tutor * limits["/tutor"] + guard * limits["/guard"]
+
+
+def guard_calls_per_request(path: str, *, real_guard: bool = False) -> int:
+    """`path` 요청 하나에 허용되는 가드 nano 호출 수(`guard_call_budget`을 거친다)."""
+    counts = {"/tutor": {"tutor": 1}, "/guard": {"guard": 1}}[path]
+    return guard_call_budget(**counts, real_guard=real_guard)
 
 
 CATEGORIES: tuple[str, ...] = get_args(Category)
@@ -322,9 +335,10 @@ _TRUE_BY_DEFAULT = frozenset({"grounded", "safe"})
 # vary=True일 때 해시로 고르는 bool: 이름 → 나눌 수(0이 아니면 true). grounded는 반반, safe는 3/4
 _VARIED_BOOLS = {"grounded": 2, "safe": 4}
 # 문자열 Literal 필드의 기본값: 튜터 답을 건드리지 않는 값(입력 판정 normal). act는 가드
-# ACT_TO_CATEGORY로 normal이 된다(첫 값 no_meaningful_content는 low_signal_input이다). 표에 없는
-# Literal 필드는 기본값을 지어내지 않고 모르는 스키마로 남긴다
-_LITERAL_DEFAULTS = {"category": "normal", "act": "learning_question"}
+# ACT_TO_CATEGORY로 normal이 된다(첫 값 no_meaningful_content는 low_signal_input이다). mode는 가드
+# 입력 v2(InputModeOut)의 필드다. 모델에 없는 이름은 쓰이지 않을 뿐이다. 표에 없는 Literal 필드는
+# 첫 값으로 채운다(가드가 새 판정 스키마를 올려도 tests/를 고치지 않고 돈다. 검증은 그대로 한다)
+_LITERAL_DEFAULTS = {"category": "normal", "act": "learning_question", "mode": "none"}
 
 
 def _guard_reply(
@@ -334,7 +348,7 @@ def _guard_reply(
 
     - bool: grounded · safe는 true, 그 밖은 false. vary면 grounded · safe를 해시로 고른다.
     - str: 이름이 "_quote"로 끝나면 ""(인용할 구절 없음), 아니면 `note`(판정 글 표식 + 해시).
-    - 문자열 Literal: `_LITERAL_DEFAULTS`의 값. 표에 없는 필드면 None. vary면 해시로 고른다.
+    - 문자열 Literal: `_LITERAL_DEFAULTS`의 값, 표에 없으면 첫 값. vary면 해시로 고른다.
     """
     reply: dict[str, Any] = {}
     for field, info in model.model_fields.items():
@@ -350,10 +364,9 @@ def _guard_reply(
             values = get_args(kind)
             if vary:
                 reply[field] = values[next(picks) % len(values)]
-            elif _LITERAL_DEFAULTS.get(field) in values:
-                reply[field] = _LITERAL_DEFAULTS[field]
-            else:  # 기본값을 모르는 Literal 필드: 첫 값으로 지어내지 않는다
-                return None
+            else:
+                default = _LITERAL_DEFAULTS.get(field)
+                reply[field] = default if default in values else values[0]
         else:
             return None
     return reply

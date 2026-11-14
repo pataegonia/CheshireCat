@@ -312,6 +312,8 @@ def test_http_sender_does_not_follow_redirect(code):
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
             hits.append(self.path)
+            # 본문을 읽지 않고 닫으면 Windows에서 연결 재설정이 3xx보다 먼저 온다
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
             self.send_response(code)
             self.send_header("Location", "/followed")
             self.send_header("Content-Length", "0")
@@ -398,6 +400,8 @@ def test_log_latency_uses_only_200_lines():
     assert rep["/guard"] == {"n": 4, "p50_ms": 2.5, "p95_ms": 4.0, "max_ms": 4.0}
     assert rep["/tutor"] == {"n": 1, "p50_ms": 50.0, "p95_ms": 50.0, "max_ms": 50.0}
     assert load.log_latency([])["/tutor"] == {"n": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
+    # 로거 머리말이 붙어도 끝에서 센다(log_failures와 같다)
+    assert load.log_latency(["INFO guardrail.access " + ln("/guard", 200, 7.0)])["/guard"]["n"] == 1
 
 
 def test_main_tutor_n_without_tutor_url_sends_nothing(monkeypatch, capsys):

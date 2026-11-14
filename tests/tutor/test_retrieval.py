@@ -117,6 +117,17 @@ def test_index_scores_are_the_guard_kb_index_scores():
         assert index.chunk_scores(query) == guard.scores(query)
 
 
+def test_guard_default_kb_settings_are_the_tu03_values():
+    """튜터 검색은 가드 설정 kb·retrieval을 같이 쓴다(TD-03). 값이 바뀌면 튜터 순위·인용도 바뀐다.
+
+    TU-03은 문자 2-gram BM25(k1 1.2, b 0.75), 질의 상한 4,000자다. 가드 기본 설정에서 이 값을
+    바꾸려면 튜터 검색(recall·인용)도 다시 재고 두 트랙이 같이 정한 뒤 이 테스트를 고친다.
+    """
+    cfg = load_config(GUARD_DEFAULT)  # 셸의 GUARD_CONFIG와 상관없이 저장소의 가드 기본 설정
+    assert (cfg.kb.ngram, cfg.kb.k1, cfg.kb.b) == (2, 1.2, 0.75)
+    assert cfg.retrieval.max_query_chars == 4000
+
+
 def test_bm25_settings_follow_the_guard_config(tmp_path, monkeypatch):
     query = heading("PY-01-01")
     before = GuardKbIndex.load(KB).scores(query)

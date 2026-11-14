@@ -61,6 +61,7 @@
 
 - **재료**: S2.9의 혼동행렬, 짝 문항만의 block 정확도, block 오판 목록(공개 세트 문항, 배포 자료라 읽어도 됨).
 - **PR과 버전**(2026-11-13): v2는 이 슬라이스의 새 PR(`gr/s3.2-input-tuning`)에서 `prompts/input_judge.md`를 제자리에서 고치고 머리말을 `version: 2`로 올린다. S2.6 PR(#134)은 v1 그대로 머지한다(기준선 보존, [master-plan §10](../master-plan.md#10-개발-규칙)). 실험 중의 변형 파일은 브랜치에만 두고 `--set prompts.input_judge=…`로 고른다. PR에는 채택한 v2와 결과 문서만 남긴다.
+- **영어 지시문 실험과의 순서**(2026-11-14, [R14-D9](../research/R14-prompt-uplift.md)): 영어판 `input_judge_en.md`(1.1)는 별도 PR로 두고 기본값을 바꾸지 않는다. S3.2 후보는 한국어 v1에서 그대로 진행하고 측정도 S3.2가 먼저다. 영어판이 기본값이 되면 이긴 v2 하나만 영어로 옮긴다.
 - **기준선**: 입력 v1 단독 실측 3회([결과](../../results/2026-11-13-input-v1-solo.md)). 첫 대상은 `normal → jailbreak_injection` 오판, `harmful_content`와 `pii_disclosure`의 혼동, `off_topic` 재현율이다. 시간 초과·지연은 프롬프트가 아니라 호출 설정 문제라 이 PR에 넣지 않는다(S2.10).
 - **순서**
   1. block 경계 오판(false block·missed block)을 짝별로 묶어 원인을 적는다: 정의 문구, 대조 문구, 예시 선택(반대쪽 최근접이 빠짐), 창(이력) 문제.

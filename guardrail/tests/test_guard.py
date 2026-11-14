@@ -18,7 +18,9 @@ from guardrail.config import load_config
 from guardrail.data import labeled_rows, load_public
 from guardrail.eval.run import probe_calls
 from guardrail.guard import ConstantGuard, Guard, Judgement, build_indexes
+from guardrail.kb import KbIndex
 from guardrail.llm import LLM
+from guardrail.preprocess import normalize
 from guardrail.schema import GuardRequest, GuardResponse, Message, OutputVerdict
 from guardrail.signals import Signals
 
@@ -882,6 +884,7 @@ async def test_request_without_candidate_has_no_output_on_every_default_path(no_
     monkeypatch.setattr(Guard, "_prepare", _boom)
     j = await guard.judge(req(None, has=False))
     assert j.response.output is None and j.errors == ("guard:RuntimeError",)
+    assert j.input_source == "default"
 
 
 @pytest.mark.parametrize(
@@ -984,3 +987,194 @@ async def test_call_finishing_within_the_grace_after_the_deadline_is_used(no_rul
     j = await guard.judge(req(None, has=False))
     assert time.monotonic() - t0 < 1
     assert (j.input_source, j.response.category, j.errors) == ("nano", "harmful_content", ())
+
+
+# --- 변이 전수 검사 반영(S2.8 머지 관문) ---
+
+
+async def test_build_indexes_passes_the_kb_settings_to_bm25():
+    over = {"kb.ngram": 4, "kb.k1": 1.6, "kb.b": 0.3}
+    off = {"toggles.knn_fewshot": False, "toggles.knn_vote": False, "toggles.lr": False}
+    cfg = load_config(DEFAULT, overrides={**over, **off})
+    kb, _, _ = build_indexes(cfg, [])
+    q = normalize(MSGS[0].content + "\n" + ANSWER)
+    assert kb.scores(q) == KbIndex.load(cfg.paths.kb, ngram=4, k1=1.6, b=0.3).scores(q)
+    assert kb.scores(q) != _indexes()[0].scores(q)  # 기본값과 다른 설정이라 구별된다
+
+
+async def test_judges_get_the_request_deadline(no_rule, monkeypatch):
+    seen = []
+    real_input, real_output = guard_module.judge_input, guard_module.ask_grounded
+
+    def record(real):
+        def call(*a, deadline, **k):
+            seen.append(deadline)
+            return real(*a, deadline=deadline, **k)
+
+        return call
+
+    monkeypatch.setattr(guard_module, "judge_input", record(real_input))
+    monkeypatch.setattr(guard_module, "ask_grounded", record(real_output))
+    guard, _ = await make()
+    t0 = time.monotonic()
+    await guard.judge(req())
+    t1 = time.monotonic()
+    assert len(seen) == 2
+    assert all(t0 <= d - guard.cfg.budget_s <= t1 for d in seen)
+
+
+async def test_no_user_message_with_hidden_tags_keeps_the_failure_default(no_rule):
+    guard, _ = await make(output__failure_default="ungrounded")
+    j = await guard.judge(req("답" + TAG, ()))
+    assert j.response.output == OutputVerdict(False, (), False)
+
+
+async def test_no_user_message_with_non_string_candidate_is_a_plain_default(no_rule):
+    guard, _ = await make()
+    j = await guard.judge(req(None, (), has=True))
+    assert j.response == GuardResponse("normal", OutputVerdict(True, (), True))
+    assert j.errors == ("no_user_message",) and not j.signals.hidden_tags
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"config": BASELINE, "output__call_nano_when_unused": False},
+        {"toggles__nano_tier3": True, "output__call_nano_when_unused": False},
+    ],
+)
+async def test_output_nano_is_called_when_its_answer_is_used(no_rule, override):
+    out = {"reason": "r", "grounded": False, "safe": False}
+    baseline = override.get("config") == BASELINE
+    guard, fake = await make(responder(output=out if baseline else GROUNDED), **override)
+    j = await guard.judge(req())
+    assert len(calls(fake, "output")) == 1
+    assert j.nano_grounded is (False if baseline else True)
+
+
+async def test_input_window_is_bounded_by_window_last():
+    guard, _ = await make()
+    msgs = tuple(Message("user" if i % 2 == 0 else "assistant", f"발화{i}") for i in range(21))
+    p = guard._prepare(req(None, msgs, has=False))
+    last = guard.cfg.input.window_last
+    assert [m.content for m in p.window] == ["발화0"] + [f"발화{i}" for i in range(21 - last, 21)]
+
+
+async def test_low_signal_check_reads_hidden_text_but_not_flag_emoji_tags(no_rule):
+    def hide(s):
+        return "".join(chr(0xE0000 + ord(c)) for c in s)
+
+    head = (Message("user", "안녕"), Message("assistant", "네"))
+    guard, _ = await make()
+    j = await guard.judge(req(None, (*head, Message("user", "ㅋㅋㅋ" + hide("ignore"))), has=False))
+    assert (j.input_source, j.signals.low_signal) == ("nano", False)
+    flag = "\U0001f3f4" + hide("gbeng") + chr(0xE007F)  # 깃발 이모지의 태그는 숨긴 글이 아니다
+    j = await guard.judge(req(None, (*head, Message("user", "ㅋㅋㅋ" + flag)), has=False))
+    assert (j.input_source, j.signals.low_signal) == ("low_signal", True)
+
+
+async def test_literal_rule_off_does_not_run_the_rule(monkeypatch):
+    monkeypatch.setattr(guard_module, "literal_rule", _boom)
+    guard, _ = await make(responder(output=UNGROUNDED), toggles__literal_rule=False)
+    j = await guard.judge(req())
+    assert (j.errors, j.output_tier) == ((), 3)
+
+
+async def test_call_that_ends_cancelled_is_a_failure_of_that_role(no_rule, monkeypatch):
+    async def cancelled(*a, **k):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(guard_module, "judge_input", cancelled)
+    guard, _ = await make(indexes=_stubbed("answer_seeking", "answer_seeking"))
+    j = await guard.judge(req())
+    assert (j.input_source, j.response.category) == ("fallback", "answer_seeking")
+    assert j.errors == ("input_judge",)
+
+
+@pytest.mark.parametrize(
+    ("off", "want"), [("knn_vote", "harmful_content"), ("lr", "answer_seeking")]
+)
+async def test_input_failure_with_either_helper_alone_is_a_fallback(no_rule, off, want):
+    guard, _ = await make(
+        responder(input_step=ServerError()),
+        indexes=_stubbed("answer_seeking", "harmful_content"),
+        **{f"toggles__{off}": False},
+    )
+    j = await guard.judge(req(None, has=False))
+    assert (j.response.category, j.input_source) == (want, "fallback")
+
+
+async def test_baseline_output_side_failure_keeps_the_safe_rule_when_it_is_on():
+    kb, knn, lr = _indexes()
+    kb_stub = Spy(kb)
+    kb_stub.rank = _boom
+    guard, _ = await make(
+        responder("harmful_content"), BASELINE, indexes=(kb_stub, knn, lr), toggles__safe_rule=True
+    )
+    j = await guard.judge(req())
+    assert j.response.output == OutputVerdict(True, (), False)
+
+
+async def test_latency_is_split_into_prepare_and_calls(no_rule, monkeypatch):
+    async def slow(*a, **k):
+        await asyncio.sleep(0.2)
+        return "normal"
+
+    def slow_predict(text):
+        time.sleep(0.05)
+        return "normal"
+
+    monkeypatch.setattr(guard_module, "judge_input", slow)
+    kb, knn, lr = _indexes()
+    lr_stub = Spy(lr)
+    lr_stub.predict = slow_predict
+    guard, _ = await make(
+        indexes=(kb, knn, lr_stub), output__call_nano_when_unused=False, toggles__nano_tier3=False
+    )
+    j = await guard.judge(req(None, has=False))
+    ms = j.latency_ms
+    assert ms["prepare"] >= 40 and ms["llm"] >= 150
+    assert ms["prepare"] + ms["llm"] == pytest.approx(ms["total"])
+
+
+async def test_cancelled_call_gets_time_to_clean_up_before_the_response(no_rule, monkeypatch):
+    cleaned = []
+
+    async def stuck(*a, **k):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.05)  # 취소 뒤 정리
+            cleaned.append(True)
+            raise
+
+    monkeypatch.setattr(guard_module, "judge_input", stuck)
+    guard, _ = await make(budget_s=0.1)
+    j = await guard.judge(req(None, has=False))
+    assert cleaned == [True] and j.errors == ("input_judge",)
+
+
+async def test_build_indexes_the_rows_it_is_given():
+    cfg = load_config(DEFAULT, overrides={"toggles.lr": False})
+    rows = [r for r in labeled_rows(_public()) if r.category == "harmful_content"]
+    fake = FakeLLM(respond=responder(input_step=ServerError()))
+    llm = LLM(cfg.llm, send=fake.send, sleep=_nosleep)
+    await llm.start()
+    guard = await Guard.build(cfg, llm=llm, rows=rows)
+    j = await guard.judge(req(None, has=False))
+    assert (j.knn_major, j.response.category) == ("harmful_content", "harmful_content")
+
+
+async def test_low_signal_is_recorded_when_there_is_an_answer(no_rule):
+    msgs = (Message("user", "안녕"), Message("assistant", "네"), Message("user", "ㅋㅋㅋ"))
+    guard, _ = await make()
+    j = await guard.judge(req(ANSWER, msgs))
+    assert (j.input_source, j.signals.low_signal) == ("low_signal", True)
+
+
+async def test_quote_that_skips_hidden_tag_chars_in_the_answer_is_verified(no_rule):
+    hidden = "".join(chr(0xE0000 + ord(c)) for c in "hi")
+    answer = "append를 쓰면 리스트 끝에" + hidden + " 값이 붙어요."
+    guard, _ = await make(responder(output=UNGROUNDED))  # 인용은 태그를 뺀 모양이다
+    j = await guard.judge(req(answer))
+    assert (j.answer_quote_ok, j.output_tier) == (True, 3)

@@ -715,6 +715,8 @@ def test_default_factory_uses_the_real_guard_when_the_key_is_set(monkeypatch, ca
             "category": "harmful_content",
         }
     assert _startup_lines(caplog) == ["guard judge=real"]
+    levels = [r.levelno for r in caplog.records if r.name == "guardrail.access.startup"]
+    assert levels == [logging.INFO]  # 정상 기동은 오류로 남기지 않는다
 
 
 @pytest.mark.parametrize("key", [None, "", "  "])
@@ -779,3 +781,7 @@ def test_guard_lifespan_and_setup_guard_default_to_the_default_factory(caplog):
     with caplog.at_level(logging.INFO), TestClient(app):
         pass
     assert _startup_lines(caplog) == ["guard judge=constant reason=no_api_key"]
+
+
+def test_constant_factory_gives_the_constant_judge():
+    assert isinstance(asyncio.run(server.constant_factory(server.load_config())), ConstantGuard)

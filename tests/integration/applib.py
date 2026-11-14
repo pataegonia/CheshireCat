@@ -18,6 +18,7 @@ import guardrail.judges.schemas as guard_schemas
 import jsonschema
 import openai
 import pytest
+import yaml
 from guardrail.judges.schemas import strict_schema
 from guardrail.schema import Category
 from pydantic import BaseModel, ValidationError
@@ -72,6 +73,19 @@ def user(content: str) -> dict[str, Any]:
         "session_id": "s_x",
         "messages": [{"role": "user", "content": content}],
     }
+
+
+# 튜터의 가드 단계(classify 합치기 · judge_output 검증)를 켠 값. 배포 설정(config/tutor.yaml)은
+# 둘 다 끈다(11/14 리더 결정, 가드 #170(S2.11) 뒤 런박스 켬/끔 비교 전까지)
+TUTOR_GUARD_STAGES_ON = {"guard_classify": "parallel", "verify": "guard"}
+
+
+def write_tutor_config(path: Path, **toggles: str) -> Path:
+    """config/tutor.yaml에서 `toggles` 아래 값만 바꾼 사본을 path에 쓴다(주석은 빠진다)."""
+    raw = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
+    raw["toggles"] = {**raw["toggles"], **toggles}
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")  # "off"는 따옴표로
+    return path
 
 
 # 요청 하나에 튜터가 **자기 전송 함수로** LLM을 부르는 횟수의 상한(모드별). 튜터가 자기 호출을

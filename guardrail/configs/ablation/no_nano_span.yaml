@@ -1,0 +1,2 @@
+# ablation: 기본 설정에서 toggles.nano_span만 끈다(GR-11). S2.9에서 기본이 켬이 됐다
+toggles: {nano_span: false}

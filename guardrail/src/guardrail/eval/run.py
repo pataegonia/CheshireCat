@@ -23,6 +23,7 @@ from typing import Any, Protocol
 import yaml
 
 from guardrail import guard as guard_module
+from guardrail.classifier import LrClassifier
 from guardrail.config import ROOT, GuardConfig, Llm, config_hash, load_config
 from guardrail.data import LabeledRow, PublicRow, labeled_rows, load_public
 from guardrail.eval import cv
@@ -30,8 +31,12 @@ from guardrail.eval.fake_llm import make_fake_llm
 from guardrail.eval.score import as_scoring_input, score_responses, scoring
 from guardrail.eval.stats import cluster_bootstrap_ci
 from guardrail.guard import ConstantGuard, Judgement
+from guardrail.judges.input_judge import judge_input
+from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
-from guardrail.schema import GuardRequest
+from guardrail.preprocess import clip, decode_tags, normalize, strip_tags
+from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict
+from guardrail.signals import Signals, is_low_signal
 
 CONCURRENCY = 16
 HOLDOUT_OPEN_LIMIT = 3  # 4회째 거부(ADR-0013: 홀드아웃은 거의 보지 않는다)
@@ -39,6 +44,8 @@ RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
 EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT = 2, 3, 4, 5
+EXIT_INPUT_FAIL_RATE = 8  # 6·7은 위 브랜치(#151)의 연속 429 멈춤·probe 실패가 쓴다
+INPUT_FAIL_RATE_LIMIT = 0.02  # R14-D8: 역할별 호출 실패율 2% 초과면 무효
 BASELINE, DEFAULT = "baseline", "default"
 
 
@@ -56,6 +63,86 @@ async def default_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]) -
     if Guard is None:  # S2.8 전: 안의 ImportError를 삼키지 않도록 속성 유무로만 가른다
         return ConstantGuard()
     return await Guard.build(cfg, llm=llm, rows=train)
+
+
+class InputOnlyGuard:
+    """입력 판정만 잰다(R14-D1): 저신호 직접 판정 + kNN few-shot + judge_input. 출력은 상수다.
+
+    S2.8 Guard 전에 입력 프롬프트를 재는 하네스 전용 판정기다. nano가 실패하면 kNN·LR 기본값을
+    쓰지 않고 normal로 두고 오류로 센다(재려는 것이 프롬프트라서다).
+    """
+
+    UNSUPPORTED = ("third_call", "oom_kb_snippet", "embedding")  # 구현하지 않은 스위치
+
+    @classmethod
+    def check(cls, cfg: GuardConfig) -> None:
+        """구현하지 않은 스위치가 켜져 있으면 거부한다(조용히 무시하면 다른 것을 잰다)."""
+        if on := [f"toggles.{k}" for k in cls.UNSUPPORTED if getattr(cfg.toggles, k)]:
+            raise ValueError(f"--input-only는 {', '.join(on)}을 지원하지 않는다")
+
+    def __init__(self, cfg: GuardConfig, llm: LLM, train: Sequence[LabeledRow]) -> None:
+        self.check(cfg)
+        self.cfg, self.llm = cfg, llm
+        self.knn = KnnIndex(train, cfg)
+        self.lr = LrClassifier(train, cfg)
+
+    async def judge(self, req: GuardRequest) -> Judgement:
+        cfg = self.cfg
+        raw = next((m.content for m in reversed(req.messages) if m.role == "user"), None)
+        if raw is None:
+            return self._result(req, "normal", "default")
+        raw = clip(raw, cfg.input.max_chars)  # 서버처럼 전처리 전에 앞 + 뒤로 자른다(§4.2)
+        text = normalize(raw)[: cfg.retrieval.max_query_chars]
+        side = {
+            "knn_major": self.knn.majority(text) if cfg.toggles.knn_vote else None,
+            "lr_pred": self.lr.predict(text) if cfg.toggles.lr else None,
+        }
+        if cfg.toggles.low_signal_direct and is_low_signal(
+            strip_tags(raw), len(req.messages) > 1, decode_tags(raw)[1]
+        ):
+            return self._result(req, "low_signal_input", "low_signal", low=True, **side)
+        examples = self.knn.fewshot(text) if cfg.toggles.knn_fewshot else []
+        category = await judge_input(
+            list(req.messages),
+            raw,
+            examples,
+            self.llm,
+            cfg,
+            deadline=time.monotonic() + cfg.budget_s,
+        )
+        if category is None:
+            return self._result(req, "normal", "default", calls=1, errors=("input_judge",), **side)
+        return self._result(req, category, "nano", calls=1, **side)
+
+    @staticmethod
+    def _result(
+        req: GuardRequest,
+        category: Category,
+        source: str,
+        *,
+        low: bool = False,
+        calls: int = 0,
+        errors: tuple[str, ...] = (),
+        knn_major: Category | None = None,
+        lr_pred: Category | None = None,
+    ) -> Judgement:
+        output = OutputVerdict(True, (), True) if req.has_candidate else None
+        return Judgement(
+            response=GuardResponse(category, output),
+            input_source=source,  # type: ignore[arg-type]
+            output_tier=None,
+            nano_grounded=None,
+            signals=Signals(low, False, False),
+            knn_major=knn_major,
+            lr_pred=lr_pred,
+            calls=calls,
+            errors=errors,
+            latency_ms={},
+        )
+
+
+async def input_only_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]) -> Judge:
+    return InputOnlyGuard(cfg, llm, train)
 
 
 # --- 설정 -----------------------------------------------------------------
@@ -128,11 +215,19 @@ def calls_per_row(cfg: GuardConfig, has_candidate: bool) -> int:
 
 
 def estimate_calls(
-    configs: Mapping[str, GuardConfig], rows: Sequence[PublicRow], repeat: int, llm: Llm
+    configs: Mapping[str, GuardConfig],
+    rows: Sequence[PublicRow],
+    repeat: int,
+    llm: Llm,
+    *,
+    input_only: bool = False,
 ) -> int:
-    """probe는 실행당 한 번, 나머지는 설정 행 × 반복 × 행."""
+    """probe는 실행당 한 번, 나머지는 설정 행 × 반복 × 행. input_only면 행당 입력 1회뿐이다."""
     total = 0
     for cfg in configs.values():
+        if input_only:
+            total += len(rows)
+            continue
         total += sum(calls_per_row(cfg, r.candidate_answer is not None) for r in rows)
     return probe_calls(llm) + total * repeat
 
@@ -430,10 +525,23 @@ def add_variance(summary: dict) -> None:
     }
 
 
+def input_call_failures(summary: dict) -> tuple[int, int]:
+    """입력 판정 호출 (실패 수, 시도 수). 모든 설정·반복의 합이다."""
+    scores = [s for c in summary["configs"].values() for s in c["scores"]]
+    return (
+        sum(s["errors"].get("input_judge", 0) for s in scores),
+        sum(s["calls"]["total"] for s in scores),
+    )
+
+
 def _banner(summary: dict) -> list[str]:
     lines = []
     if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
         lines.append("# FAKE/상수 판정기 — 점수 무효 (results/로 옮기지 않는다)")
+    if summary.get("input_only"):
+        lines.append("# 입력 단독 실행 — 출력·가드 점수는 상수 출력 기준이라 비교에 쓰지 않는다")
+    if f := summary.get("input_fail"):
+        lines.append(f"# 입력 판정 호출 실패 {f['failed']}/{f['calls']}")
     if summary.get("invalid"):
         lines.append(f"# 무효 실행 — {summary['invalid']}")
     return lines
@@ -553,6 +661,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--ablation", metavar="DIR", help="토글별 yaml 폴더")
     ap.add_argument("--only", help="--ablation 중 이 이름만(쉼표). baseline·default는 늘 포함")
     ap.add_argument("--holdout", action="store_true", help="홀드아웃도 잰다(열람 기록, 4회째 거부)")
+    ap.add_argument(
+        "--input-only", action="store_true", help="입력 판정만 잰다(출력은 상수, 행당 호출 ≤1)"
+    )
     ap.add_argument("--out", default=str(RUNS_DIR))
     return ap
 
@@ -596,6 +707,8 @@ def _usage_error(args: argparse.Namespace) -> str | None:
         )
     if args.holdout and (args.ablation or args.repeat > 1):
         return "--holdout은 단일 설정·--repeat 1에서만 쓴다(설정 비교에 홀드아웃을 쓰지 않는다)"
+    if args.holdout and args.input_only:
+        return "--input-only와 --holdout은 함께 쓰지 않는다(홀드아웃 열람은 전체 판정기에만 쓴다)"
     if not re.fullmatch(r"[\w.-]+", args.name) or args.name in {".", ".."}:
         return "--name은 영문·숫자·_.-만 쓴다"
     return None
@@ -605,6 +718,9 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     overrides = parse_sets(args.sets)
     base = load_config(args.config, overrides)
     configs = select_rows(base, args, overrides)
+    if args.input_only:  # 못 쓰는 스위치는 호출 전에 거부한다
+        for cfg in configs.values():
+            InputOnlyGuard.check(cfg)
     public = load_public(base.paths.public)
     split = cv.load_splits()
     if missing := {r.id for r in public} - split.cluster.keys():
@@ -612,7 +728,7 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     held = set(split.holdout)
     judged = [r for r in public if args.holdout or split.cluster[r.id] not in held]
     limit = args.max_calls if args.max_calls is not None else base.eval.max_calls
-    est = estimate_calls(configs, judged, args.repeat, base.llm)
+    est = estimate_calls(configs, judged, args.repeat, base.llm, input_only=args.input_only)
     _say(
         f"estimate_calls={est} probe={probe_calls(base.llm)} max_calls={limit} "
         f"configs={','.join(configs)} judged_rows={len(judged)} repeat={args.repeat}"
@@ -651,6 +767,8 @@ async def _measure(
                     "tier": j.output_tier,
                     "calls": j.calls,
                     "errors": list(j.errors),
+                    "knn_major": j.knn_major,
+                    "lr_pred": j.lr_pred,
                 }
                 for rid, j in out.judgements.items()
             ]
@@ -687,7 +805,8 @@ async def amain(
     except HoldoutRefused as e:
         _err(str(e))
         return EXIT_HOLDOUT
-    if judge_factory is None and not hasattr(guard_module, "Guard"):
+    factory = judge_factory or (input_only_factory if args.input_only else default_factory)
+    if factory is default_factory and not hasattr(guard_module, "Guard"):
         sys.stderr.write("note: guardrail.guard.Guard가 아직 없어 ConstantGuard로 돈다\n")
     llm = make_fake_llm(plan.base.llm) if args.fake else (make_llm or LLM)(plan.base.llm)
     tap = Tap()
@@ -701,17 +820,30 @@ async def amain(
     if args.holdout:  # 열람은 start()가 성공한 뒤에만 센다
         record_holdout_open(args.name, config_hash(plan.base))
 
-    summary, records = await _measure(plan, args, llm, tap, judge_factory or default_factory)
+    summary, records = await _measure(plan, args, llm, tap, factory)
     summary["fake"] = args.fake
+    summary["input_only"] = args.input_only
     spent = sum(e == "budget" for _, e, _ in tap.records)
+    failed, tried = input_call_failures(summary) if args.input_only else (0, 0)
+    too_flaky = tried > 0 and failed / tried > INPUT_FAIL_RATE_LIMIT
+    if args.input_only:
+        summary["input_fail"] = {"failed": failed, "calls": tried}
     if spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
+    elif too_flaky:  # 종료 코드 우선순위: budget이 먼저다
+        summary["invalid"] = (
+            f"입력 판정 호출 실패율 {failed}/{tried} = {failed / tried:.1%}가 "
+            f"{INPUT_FAIL_RATE_LIMIT:.0%}를 넘는다: 결과를 비교에 쓰지 않는다"
+        )
     out_dir = Path(args.out) / args.name
     _write(out_dir, records, summary, render_report(args.name, summary))
     _say(f"wrote {out_dir}")
     if spent:
         _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT
+    if too_flaky:
+        _err(f"입력 판정 호출 실패율 {failed}/{tried}가 상한 초과. 결과는 무효다")
+        return EXIT_INPUT_FAIL_RATE
     return 0
 
 

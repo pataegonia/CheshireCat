@@ -9,7 +9,7 @@ import pytest
 from tutor import baseline, pipeline
 from tutor.eval import run_local
 from tutor.request import parse_request
-from tutor.retrieval import default_index
+from tutor.retrieval import KbIndex, default_index
 from tutor.runtime import llm as llm_mod
 from tutor.runtime.config import load_config
 from tutor.runtime.llm import Result
@@ -76,6 +76,23 @@ def test_one_call_with_the_top_three_sections_and_spec_actions():
         "action": "answer",
         "citations": ["FIN-02-04"],
     }
+
+
+def test_baseline_searches_the_startup_index_in_state(tmp_path):
+    """검색은 기동 때 만든 state.tutor_kb로 한다(서버는 가드 설정으로 만든 색인, TU-03)."""
+    (tmp_path / "finance").mkdir()
+    md = "# FIN-09-09 다른 KB\n## 예금\n다람쥐 꿈모으기 정기예금은 최소 금액부터 가입"
+    (tmp_path / "finance" / "FIN-09-09.md").write_text(md, "utf-8")
+    llm = FakeLLM(out(citations=("FIN-09-09",)))
+    state = types.SimpleNamespace(
+        tutor_cfg=load_config(overrides={"mode": "baseline"}),
+        tutor_kb=KbIndex.from_dir(tmp_path),
+        tutor_llm=llm,
+    )
+    resp = ask(state, QUESTION)
+    system = llm.calls[0]["messages"][0]["content"]
+    assert [line for line in system.splitlines() if line.startswith("[")] == ["[FIN-09-09] 다른 KB"]
+    assert resp["citations"] == ["FIN-09-09"]
 
 
 def test_citations_keep_only_retrieved_sections_once():

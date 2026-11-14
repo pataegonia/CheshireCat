@@ -14,7 +14,7 @@ from guardrail.config import GuardConfig, load_prompt
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut
 from guardrail.kb import Hit, KbIndex, Ranking, normalize
 from guardrail.llm import LLM
-from guardrail.preprocess import decode_tags, reveal_hidden, strip_tags
+from guardrail.preprocess import clip, decode_tags, reveal_hidden, strip_tags
 
 # 프로세스당 한 번 읽는다. 키 = (프롬프트 폴더, 파일 이름)
 _SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
@@ -77,7 +77,7 @@ def build_messages(
     target은 마지막 학습자 발화 원문(여기서 자르고 정규화한다). answer_revealed는 호출하는 쪽이
     `input.max_answer_chars`로 자르고 `reveal_hidden`으로 숨긴 문자를 드러낸 답변이다.
     """
-    question = html.escape(decode_tags(target[: cfg.input.max_chars])[0], quote=False)
+    question = html.escape(decode_tags(clip(target, cfg.input.max_chars))[0], quote=False)
     parts = [
         f"<question>{question}</question>",
         f"<answer>{html.escape(answer_revealed, quote=False)}</answer>",

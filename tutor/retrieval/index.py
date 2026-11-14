@@ -1,7 +1,8 @@
 """KB 색인(TU-03). BM25는 가드 `KbIndex`(GR-03)를 그대로 쓰고(TD-03) 튜터는 섹션으로 접는다.
 
 조각·토큰·점수는 가드 색인이 정하고, n-gram·k1·b와 질의 상한은 가드 설정(`kb`·`retrieval`)을
-따른다. 튜터는 섹션 정보(과목·제목·표)를 따로 들고 조각 점수를 섹션 최고 점수로 접는다.
+따른다. 서버는 가드가 기동 때 읽은 설정 객체(`app.state.cfg`)를 넘긴다(`tutor.startup`).
+튜터는 섹션 정보(과목·제목·표)를 따로 들고 조각 점수를 섹션 최고 점수로 접는다.
 색인은 기동 때 한 번 만들고 요청 처리 중에는 바뀌지 않는다(TU-18).
 """
 
@@ -9,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 
-from guardrail.config import load_config
+from guardrail.config import GuardConfig, load_config
 from guardrail.kb import KbIndex as GuardKbIndex
 
 from tutor.retrieval.kb import Section, load_sections
@@ -18,9 +19,13 @@ from tutor.retrieval.kb import Section, load_sections
 class KbIndex:
     """KB 섹션과 가드 BM25 색인. `search`는 조각 점수를 섹션 최고 점수로 접는다."""
 
-    def __init__(self, sections: Mapping[str, Section]) -> None:
-        """섹션이 없거나 색인할 2-gram이 없으면 가드 색인이 ValueError를 낸다."""
-        cfg = load_config()
+    def __init__(self, sections: Mapping[str, Section], cfg: GuardConfig | None = None) -> None:
+        """BM25 값과 질의 상한은 가드 설정 cfg에서, 없으면 `load_config()`로 읽어서 쓴다.
+
+        섹션이 없거나 색인할 2-gram이 없으면 가드 색인이 ValueError를 낸다.
+        """
+        if cfg is None:
+            cfg = load_config()
         self.sections: Mapping[str, Section] = MappingProxyType(dict(sections))
         self._bm25 = GuardKbIndex(
             {sid: section.full_text() for sid, section in self.sections.items()},
@@ -35,12 +40,12 @@ class KbIndex:
             raise ValueError("retrieval.max_query_chars는 1 이상")
 
     @classmethod
-    def from_dir(cls, kb_dir: Path) -> "KbIndex":
+    def from_dir(cls, kb_dir: Path, cfg: GuardConfig | None = None) -> "KbIndex":
         """KB 폴더에서 만든다. 섹션이 하나도 없으면 기동을 멈추도록 예외를 낸다."""
         sections = load_sections(kb_dir)
         if not sections:
             raise FileNotFoundError(f"KB 섹션(*.md)을 찾지 못했다: {kb_dir}")
-        return cls(sections)
+        return cls(sections, cfg)
 
     def chunk_scores(self, query: str) -> list[float]:
         """조각마다 BM25 점수(조각 순서). 가드 `KbIndex.scores` 그대로다."""

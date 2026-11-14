@@ -58,6 +58,29 @@ class _Attempt:
     headers: Mapping[str, str] | None = None
     finish_reason: str | None = None
     completion_tokens: int | None = None
+    cause: str | None = None  # bad_json의 갈래(_bad_json_cause)
+
+
+def _bad_json_cause(resp: Any) -> str:
+    """형식 오류의 갈래. 본문은 읽어 남기지 않고 모양만 본다.
+
+    length: 토큰 상한에 잘림, content_filter: 내용 필터에 걸림, refusal: 모델 거절,
+    no_content: 내용이 문자열이 아님, schema: 그 밖(빈 문자열·JSON 아님·스키마 불일치),
+    no_choice: choices가 없음.
+    """
+    try:
+        choice = resp.choices[0]
+    except (AttributeError, IndexError, TypeError):
+        return "no_choice"
+    finish = getattr(choice, "finish_reason", None)
+    if finish in ("length", "content_filter"):
+        return finish
+    message = getattr(choice, "message", None)
+    if getattr(message, "refusal", None):
+        return "refusal"
+    if not isinstance(getattr(message, "content", None), str):
+        return "no_content"
+    return "schema"
 
 
 def _status_code(status: int) -> tuple[ErrorCode, bool]:
@@ -108,6 +131,8 @@ class TutorLLM:
         # 재시도 뒤 최종 오류·게이트 대기 초과도 1회(calls는 보낸 시도 수라 단위가 다르다).
         # 예산 막힘은 blocked에만 센다
         self.failures: Counter[tuple[str, str]] = Counter()
+        # 형식 오류(bad_json)로 돌아온 시도 수((역할, 갈래)별). 재시도로 살아난 시도도 센다
+        self.bad_json: Counter[tuple[str, str]] = Counter()
         self._base = base
         self._overrides = dict(overrides or {})
         self._send = send
@@ -213,7 +238,10 @@ class TutorLLM:
                     resp = await self._send({**kwargs, "timeout": cap})
             except Exception as exc:  # noqa: BLE001 - 코드로만 돌려준다(메시지·본문은 보지 않는다)
                 return "sent", self._fail(exc)
-        return "sent", self._parse(resp, schema)
+        a = self._parse(resp, schema)
+        if a.cause is not None:
+            self.bad_json[(role, a.cause)] += 1
+        return "sent", a
 
     def _request(self, messages: list[dict[str, str]], schema: type[BaseModel]) -> dict[str, Any]:
         msgs = [dict(m) for m in messages]
@@ -252,7 +280,7 @@ class TutorLLM:
                 raise ValueError
             return _Attempt(parsed=schema.model_validate_json(content), **meta)
         except (AttributeError, IndexError, TypeError, ValueError):  # ValidationError도 ValueError
-            return _Attempt(error="bad_json", retry=True, **meta)
+            return _Attempt(error="bad_json", retry=True, cause=_bad_json_cause(resp), **meta)
 
     def _fail(self, exc: Exception) -> _Attempt:
         """예외 → 오류 코드(가드 llm과 같은 규칙). 메시지·body는 보지 않는다."""

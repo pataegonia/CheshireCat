@@ -260,6 +260,40 @@ def test_truncated_answer_shows_as_length():
     assert result.completion_tokens == 1600  # 상한(max_completion_tokens)을 정할 때 본다
 
 
+def refused():
+    message = types.SimpleNamespace(content=None, refusal="거절 문장")
+    choice = types.SimpleNamespace(message=message, finish_reason="stop")
+    return types.SimpleNamespace(choices=[choice], usage=None)
+
+
+@pytest.mark.parametrize(
+    "reply, cause",
+    [
+        (ok('{"answer": "a', finish_reason="length", tokens=1600), "length"),
+        (ok('{"answer": "a', finish_reason="content_filter"), "content_filter"),
+        (refused(), "refusal"),
+        (ok(None), "no_content"),
+        (ok("not json"), "schema"),
+        (ok('{"other": "a"}'), "schema"),  # JSON이지만 스키마에 안 맞음
+        (types.SimpleNamespace(choices=[]), "no_choice"),
+    ],
+)
+def test_bad_json_attempts_are_counted_by_cause(reply, cause):
+    """형식 오류 원인을 시도마다 갈래로 센다(재시도로 살아나도). 본문은 남기지 않는다."""
+    llm, clock = make(Send(reply, ok()))
+    assert run(llm, clock).error is None
+    assert llm.bad_json == {("main", cause): 1} and not llm.failures
+    llm, clock = make(Send(reply, reply))
+    assert run(llm, clock).error == "bad_json"
+    assert llm.bad_json == {("main", cause): 2} and llm.failures == {("main", "bad_json"): 1}
+    assert "거절 문장" not in repr(llm.bad_json)
+
+
+def test_other_failures_leave_bad_json_causes_empty():
+    llm, clock = make(Send(status(503), ok()))
+    assert run(llm, clock).error is None and not llm.bad_json
+
+
 @pytest.mark.parametrize(
     "failure, code",
     [

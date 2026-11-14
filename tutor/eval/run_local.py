@@ -628,6 +628,10 @@ def _show_tutor_calls(
         # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다
         failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
         sys.stdout.write(f"튜터 LLM 최종 실패: {failed}: 기본값이 섞인 결과다\n")
+    causes = state.tutor_llm.bad_json
+    if causes:  # 형식 오류 시도의 갈래(시도 단위, 재시도로 살아난 것 포함). 본문은 내지 않는다
+        shown = ", ".join(f"{role} {cause} {n}회" for (role, cause), n in sorted(causes.items()))
+        sys.stdout.write(f"형식 오류 시도(갈래별, 재시도 포함): {shown}\n")
     if blocked and stopped:
         sys.stdout.write(f"속도 제한(429)으로 멈춰 보내지 못한 튜터 호출 {blocked}회")
         sys.stdout.write(": 기본값이 섞인 결과다\n")

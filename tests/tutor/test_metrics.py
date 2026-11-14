@@ -12,7 +12,9 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -283,6 +285,30 @@ def test_cli_flags_a_run_whose_tutor_llm_calls_failed(monkeypatch, tmp_path, cap
     assert at == sorted(at)  # 호출 → 지연 → 최종 실패
     data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
     assert data["tainted"] is True
+
+
+def test_tutor_call_summary_shows_bad_json_causes_without_bodies(capsys):
+    """형식 오류 시도를 갈래별로 낸다(시도 단위). 없으면 줄을 내지 않는다."""
+    llm = SimpleNamespace(
+        calls=Counter({"main": 3}),
+        failures=Counter({("main", "bad_json"): 1}),
+        bad_json=Counter({("main", "length"): 2, ("main", "refusal"): 1}),
+    )
+    run_local._show_tutor_calls(
+        SimpleNamespace(tutor_llm=llm), 0, [1.0], cap=(0, 0, 0, 0), stopped=False
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert (
+        lines[-1] == "형식 오류 시도(갈래별, 재시도 포함): main length 2회, main refusal 1회"
+    )  # 최종 실패 다음
+    run_local._show_tutor_calls(
+        SimpleNamespace(tutor_llm=SimpleNamespace(calls={}, failures={}, bad_json={})),
+        0,
+        [],
+        cap=(0, 0, 0, 0),
+        stopped=False,
+    )
+    assert "형식 오류" not in capsys.readouterr().out
 
 
 def test_cli_compare_needs_points_and_the_same_judge_mode(tmp_path):

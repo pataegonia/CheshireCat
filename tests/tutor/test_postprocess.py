@@ -320,5 +320,17 @@ def test_inline_cite_leaves_answers_without_citations_and_is_idempotent():
 def test_inline_cite_stays_within_the_answer_limit():
     long = "가" * 30 + ". " + "나" * (MAX_ANSWER_CHARS - 10) + "."
     out = inline_cite({"answer": long, "action": "answer", "citations": ["PY-01-01"]})
-    assert len(out["answer"]) <= MAX_ANSWER_CHARS
-    assert out["answer"].endswith(" (PY-01-01)")
+    # 문장 경계에서 잘라 첫 문장만 남는다(중간에서 자르는 회귀를 잡는다).
+    assert out["answer"] == "가" * 30 + ". (PY-01-01)"
+
+
+def test_inline_cite_limit_counts_the_joining_space():
+    tail = " (PY-01-01)"
+    room = MAX_ANSWER_CHARS - len(tail)
+    fits = {"answer": "가" * room, "action": "answer", "citations": ["PY-01-01"]}
+    assert inline_cite(fits)["answer"] == "가" * room + tail
+    # 1자 넘치면 마침표 없는 본문이라 글자 수로 잘라 한도를 정확히 채운다.
+    over = {"answer": "가" * (room + 1), "action": "answer", "citations": ["PY-01-01"]}
+    out = inline_cite(over)["answer"]
+    assert out == "가" * room + tail
+    assert len(out) == MAX_ANSWER_CHARS

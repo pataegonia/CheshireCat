@@ -768,7 +768,7 @@ async def _measure(
                     "errors": list(j.errors),
                     "knn_major": j.knn_major,
                     "lr_pred": j.lr_pred,
-                    "llm": llm_out.get(rid, []),
+                    "llm": [] if plan.split.cluster[rid] in held else llm_out.get(rid, []),
                 }
                 for rid, j in out.judgements.items()
             ]

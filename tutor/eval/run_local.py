@@ -604,6 +604,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         own = state if _own_state(cfg, overrides) else None
         if own is not None and cfg.toggles.fewshot != "off":
             own = fold_states(own, cfg, rows)  # 평가 묶음을 예시 색인에서 뺀다(TU-08·TU-16)
+        if (
+            args.preset == "tutor"
+            and cfg.toggles.fewshot != "off"
+            and not isinstance(own, FoldStates)
+        ):
+            # 행별 색인이 아니면 평가 행 자신이 예시 풀에 든다. 조용히 부풀린 점수를 내지 않는다
+            ap.error("판단 예시를 켠 측정은 행마다 평가 묶음을 뺀 예시 색인을 써야 한다(TU-16)")
         all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs

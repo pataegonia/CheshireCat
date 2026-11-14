@@ -15,6 +15,8 @@ from guardrail.config import load_config as load_guard_config
 from guardrail.eval.cv import load_splits
 from guardrail.knn import select_fewshot
 
+from tests.tutor.tutor_testlib import block_openai
+from tutor import TUTOR_DEFAULT
 from tutor.eval import run_local
 from tutor.judge import examples as ex
 from tutor.judge import flow
@@ -267,3 +269,64 @@ def test_fold_states_exclude_eval_fold_and_holdout():
         assert split.cluster[row["id"]] not in clusters  # 자기 묶음이 예시에 없다
         assert not clusters & holdout  # 홀드아웃은 늘 뺀다
     assert len({id(states.for_row(r["id"])) for r in rows}) == split.folds + 1
+
+
+def measure_recording_states(monkeypatch, tmp_path, *argv):
+    """run_local.main을 끝까지 돌리고, 행마다 응답을 만들 때 받은 state를 모은다.
+
+    운영진 API는 부르지 않는다(환경변수 자리만 채우고 `_respond`를 가짜로 바꾼다). 실행 경로의
+    연결부(`_own_state` → `fold_states` → `_collect`의 `for_row`)를 그대로 지난다.
+    """
+    block_openai(monkeypatch)
+    seen = {}
+
+    async def respond(preset, row, state=None):
+        seen[row["id"]] = state
+        return dict(TUTOR_DEFAULT)
+
+    monkeypatch.setattr(run_local, "_respond", respond)
+    code = run_local.main(["--preset", "tutor", "--out", str(tmp_path), *argv])
+    return code, seen
+
+
+def assert_no_eval_row_in_examples(seen):
+    split = load_splits()
+    holdout = set(split.holdout)
+    assert set(seen) == {row["id"] for row in run_local.public_tutor_rows()}
+    for row_id, state in seen.items():
+        assert state is not None and state.tutor_examples is not None
+        clusters = {split.cluster[e.id] for e in state.tutor_examples.rows}
+        assert split.cluster[row_id] not in clusters, row_id  # 자기 묶음이 예시 풀에 없다
+        assert not clusters & holdout, row_id  # 홀드아웃은 늘 뺀다
+
+
+def test_cli_measurement_with_examples_never_shows_a_row_its_own_cluster(monkeypatch, tmp_path):
+    # pyr27·pataegonia #141 리뷰: `own = fold_states(...)` 연결이나 `_collect`의 `for_row`를
+    # 끊으면 이 테스트가 실패해야 한다(끊긴 상태에서는 200행 전체 색인이 쓰인다)
+    code, seen = measure_recording_states(
+        monkeypatch, tmp_path, "--tutor-set", "toggles.fewshot=knn"
+    )
+    assert code == 0
+    assert_no_eval_row_in_examples(seen)
+
+
+def test_cli_examples_on_in_the_config_file_alone_still_use_per_row_index(monkeypatch, tmp_path):
+    # --tutor-set 없이 설정 파일에서만 knn을 켜도 행별 색인을 쓴다(`_own_state`의 fewshot 조건)
+    real = run_local.load_config
+
+    def config_file_with_knn(overrides=None, **kw):
+        return real(overrides={"toggles.fewshot": "knn", **(overrides or {})}, **kw)
+
+    monkeypatch.setattr(run_local, "load_config", config_file_with_knn)
+    code, seen = measure_recording_states(monkeypatch, tmp_path)
+    assert code == 0
+    assert_no_eval_row_in_examples(seen)
+
+
+def test_cli_refuses_a_measurement_with_examples_but_no_per_row_index(monkeypatch, tmp_path):
+    # 연결이 끊겨도 부풀린 점수를 조용히 내지 않고, 튜터를 부르기 전에 멈춘다
+    monkeypatch.setattr(run_local, "fold_states", lambda state, _cfg, _rows: state)
+    with pytest.raises(SystemExit) as stopped:
+        measure_recording_states(monkeypatch, tmp_path, "--tutor-set", "toggles.fewshot=knn")
+    assert stopped.value.code == 2
+    assert not list(tmp_path.glob("tutor-*.json"))  # 결과도 남기지 않는다

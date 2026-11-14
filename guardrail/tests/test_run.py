@@ -409,7 +409,7 @@ async def test_streak_resets_on_other_errors_and_holds_on_budget():
         return llm, tap
 
     rl = ["rate_limit"] * (run.RATE_LIMIT_STREAK - 1)
-    for last in (None, "timeout"):  # 성공이든 다른 오류든 0으로 되돌린다
+    for last in (None, "bad_json"):  # 성공이든 응답이 온 오류든 0으로 되돌린다
         llm, tap = await feed([*rl, last])
         assert tap.streak == 0 and not tap.tripped and llm.max_calls == 100
     llm, tap = await feed([*rl, "budget"])  # budget은 세지도 되돌리지도 않는다
@@ -417,6 +417,114 @@ async def test_streak_resets_on_other_errors_and_holds_on_budget():
     script[:] = ["rate_limit"]
     await llm.complete("r", [], None, deadline=None)  # 한 번 더 429면 멈춘다
     assert tap.tripped and llm.max_calls == 0
+
+
+# --- 429가 아닌 실패에서도 멈추고 무효로 남긴다(#151 리뷰) ---
+
+
+async def _feed(errors):
+    from guardrail.llm import LLMResult
+
+    script = list(errors)
+
+    async def inner(role, messages, schema, *, deadline):
+        return LLMResult(None, script.pop(0), 1, 1.0, None, None)  # type: ignore[arg-type]
+
+    llm = SimpleNamespace(complete=inner, max_calls=100)
+    tap = run.Tap()
+    tap.attach(llm)  # type: ignore[arg-type]
+    for _ in errors:
+        await llm.complete("r", [{"role": "user", "content": "BODY-MARK"}], None, deadline=None)
+    return llm, tap
+
+
+async def test_auth_error_stops_at_once():
+    llm, tap = await _feed([None, "auth"])  # 키가 회수되면(SPEC §7.1) 더 보내지 않는다
+    assert tap.stop == "auth" and llm.max_calls == 0
+
+
+async def test_mixed_transport_failures_in_a_row_stop_the_run():
+    n = run.RATE_LIMIT_STREAK
+    mixed = ["server", "timeout"] * (n // 2)
+    llm, tap = await _feed(mixed[:-1])
+    assert tap.stop is None and llm.max_calls == 100
+    llm, tap = await _feed(mixed)
+    assert tap.stop == "errors" and llm.max_calls == 0
+    llm, tap = await _feed([*mixed[:-1], "bad_json", "server"])  # 응답이 한 번 오면 다시 센다
+    assert tap.stop is None
+    llm, tap = await _feed(["rate_limit"] * n)  # 전부 429면 사유는 그대로 429다
+    assert tap.stop == "rate_limit"
+
+
+async def test_call_records_hold_no_request_text():
+    # 행 기록에는 숫자·오류 코드·파싱된 출력만 남긴다. 요청 본문을 넣는 변이를 잡는다
+    _, tap = await _feed([None, "server"])
+    assert "BODY-MARK" not in json.dumps([tap.records, tap.parsed], ensure_ascii=False)
+    assert {k for _, call in tap.parsed for k in call} == {
+        "role", "parsed", "latency_ms", "attempts", "error", "finish_reason", "completion_tokens",
+    }  # fmt: skip
+
+
+def _failing_llm(status_error, every=1):
+    """probe는 통과, 그 뒤 판정 요청은 `every`번에 한 번꼴로 실패하는 LLM."""
+    from guardrail.llm import LLM
+
+    probes = run.probe_calls(load_config(DEFAULT).llm)
+    made = []
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        def respond(kw):
+            n = len(fake.requests)
+            if n > probes and n % every == 0:
+                return status_error
+            if "OutputBaselineOut" in json.dumps(kw.get("response_format", {})):
+                return Ok('{"reason": "r", "grounded": true, "safe": true}')
+            return Ok('{"evidence": "e", "category": "normal"}')
+
+        fake = FakeLLM(respond=respond)
+        made.append(fake)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    return make_llm, made, probes
+
+
+@pytest.mark.parametrize("status", [401, 500])
+async def test_non_429_failures_stop_and_invalidate(tmp_path, status):
+    from fakes import HttpStatus
+
+    make_llm, made, probes = _failing_llm(HttpStatus(status))
+    code = await run.amain(_args(tmp_path, config=DEFAULT), make_llm=make_llm)
+    assert code == run.EXIT_CALLS_FAILED == 9
+    assert len(made[0].requests) < probes + 150  # 약 375호출을 다 보내지 않는다
+    summary = json.loads((tmp_path / "runs" / "t" / "summary.json").read_text(encoding="utf-8"))
+    assert "멈췄다" in summary["invalid"]
+
+
+async def test_scattered_failures_over_the_gross_limit_invalidate(tmp_path):
+    from fakes import RateLimited
+
+    make_llm, _, _ = _failing_llm(RateLimited("0"), every=2)  # 요청의 절반이 429
+    code = await run.amain(_args(tmp_path, config=DEFAULT), make_llm=make_llm)
+    assert code == run.EXIT_FAIL_RATE == 8
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert "실패율" in summary["invalid"]
+    assert any(f["failed"] for f in summary["call_fail"].values())
+
+
+def test_fail_rate_between_warn_and_gross_only_warns():
+    records = [("output_judge", "timeout", None)] * 8 + [("output_judge", None, "stop")] * 376
+    records += [("input_judge", "budget", None)]  # 보내지 않은 호출은 세지 않는다
+    fails = run.call_failures(records)
+    assert fails == {"output_judge": {"failed": 8, "calls": 384}}
+    assert run.worst_fail_rate(fails) == pytest.approx(8 / 384)
+    assert run.WARN_FAIL_RATE < 8 / 384 < run.GROSS_FAIL_RATE
+    lines = run._banner({"call_fail": fails})
+    assert any("output_judge" in x and "8/384" in x for x in lines)
+    assert not run._banner({"call_fail": {"output_judge": {"failed": 1, "calls": 384}}})
 
 
 # --- probe의 맨 요청이 막혀 있으면 측정을 시작하지 않는다 ---

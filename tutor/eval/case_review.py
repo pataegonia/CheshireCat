@@ -39,7 +39,6 @@ class Goal(NamedTuple):
 class Context(NamedTuple):
     kb: Mapping[str, str]
     table: Mapping[str, ActionRule]
-    public: Mapping[str, Mapping[str, Any]]  # 공개 튜터 행 id → 행(씨앗 발화를 보여 준다)
 
 
 def _next_axis(queues: Mapping[str, deque[Any]], kept: Mapping[str, int]) -> str | None:
@@ -72,11 +71,8 @@ def _show(
     out.write(f"남긴 수: {counts} (목표 축마다 {goal.per_axis}, 모두 {goal.total})\n")
     meta = draft.get("draft") or {}
     if meta.get("form"):
-        out.write(f"꼴: {meta['form']}\n")
-    seed = ctx.public.get(draft.get("seed") or "")
-    if seed is not None:
-        original = next(m["content"] for m in reversed(seed["messages"]) if m["role"] == "user")
-        out.write(f"원래 발화(공개 세트 교차 검증 행): {_indent(original)}\n")
+        asked = f" · 정해 준 범주 {meta['category']}" if meta.get("category") else ""
+        out.write(f"꼴: {meta['form']}{asked}\n")
     out.write("대화:\n")
     for number, m in enumerate(draft["messages"], 1):
         out.write(f"  [{number}] {m['role']}: {_indent(m['content'])}\n")
@@ -208,8 +204,7 @@ def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if not drafts:
         ap.error("초안이 없다: 먼저 python -m tutor.eval.team_cases generate --yes")
     _utf8_stdio()
-    public = {row["id"]: row for row in case_set.public_rows()}
-    ctx = Context(score_local.load_kb_dir(KB_DIR), load_actions(), public)
+    ctx = Context(score_local.load_kb_dir(KB_DIR), load_actions())
     review(
         drafts,
         done={row["id"] for row in [*reviewed, *final]},

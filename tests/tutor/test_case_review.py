@@ -15,11 +15,10 @@ from tutor.eval import case_set, team_cases
 from tutor.eval.grader import KB_DIR, score_local
 
 KB = score_local.load_kb_dir(KB_DIR)
-PUBLIC = {row["id"]: row for row in case_set.public_rows()}
-CTX = cr.Context(KB, load_actions(), PUBLIC)
+CTX = cr.Context(KB, load_actions())
 
 
-def draft(row_id, axis, category="normal", action="answer", evidence=(), seed=None, by="table"):
+def draft(row_id, axis, category="normal", action="answer", evidence=(), asked=None, by="table"):
     row = {
         "id": row_id,
         "endpoint": "tutor",
@@ -28,9 +27,8 @@ def draft(row_id, axis, category="normal", action="answer", evidence=(), seed=No
         "labels": {"action": action, "category": category, "evidence": list(evidence)},
         "draft": {"form": "꼴 자리", "sections": ["PY-01-01"], "evidence": list(evidence)},
     }
+    row["draft"]["category"] = asked
     row["draft"]["action_by"] = by
-    if seed is not None:
-        row["seed"] = seed
     return row
 
 
@@ -99,15 +97,18 @@ def test_keep_drop_and_change_action_until_the_goal(files):
     assert "p2" not in out  # 목표를 채워서 더 보이지 않았다
 
 
-def test_screen_shows_axis_dialog_labels_and_seed(files):
-    seed = next(iter(PUBLIC))
-    original = [m["content"] for m in PUBLIC[seed]["messages"] if m["role"] == "user"][-1]
-    row = draft("h1", "paraphrase", "harmful_content", "redirect", seed=seed, by="nano")
-    _counts, out = run_review([row], "q")
-    assert "[paraphrase] h1" in out and "꼴: 꼴 자리" in out and "질문 자리 h1" in out
+def test_screen_shows_axis_form_asked_category_dialog_and_labels(files):
+    row = draft(
+        "h1", "paraphrase", "harmful_content", "redirect", asked="harmful_content", by="nano"
+    )
+    _counts, out = run_review([row, draft("m1", "mixed")], "q")
+    assert "[paraphrase] h1" in out and "꼴: 꼴 자리 · 정해 준 범주 harmful_content" in out
+    assert "질문 자리 h1" in out and "1 answer" in out and "7 escalate" in out
     assert "action redirect (nano가 고름) · 표의 action: refuse 또는 redirect" in out
-    assert original.splitlines()[0] in out and "1 answer" in out and "7 escalate" in out
+    assert "공개" not in out  # 공개 세트 행은 화면에도 없다
     assert not files.final.exists() and not files.reviewed.exists()  # q는 그 초안을 남기지 않는다
+    _counts, out = run_review([draft("m1", "mixed")], "q")
+    assert "꼴: 꼴 자리\n" in out  # 범주를 정해 주지 않은 축
 
 
 def test_changing_the_category_resets_action_and_evidence_from_the_table(files):

@@ -1,8 +1,10 @@
 """팀 작성 점검 세트 형식·축별 지표(TU-16·TU-19, #80). 문항은 tutor/eval/team_cases/에 둔다.
 
-- 줄마다 공개 세트 튜터 행과 같은 꼴에 축(axis)을 더한다. 근거(labels.evidence)와 씨앗(seed: 이
-  문항을 바꿔 쓴 공개 세트 교차 검증 행 id)은 있을 때만 둔다. 채점은 공개 세트와 같은 채점기로 한다
+- 줄마다 공개 세트 튜터 행과 같은 꼴에 축(axis)을 더한다. 근거(labels.evidence)는 있을 때만
+  둔다. 채점은 공개 세트와 같은 채점기로 한다
 - 팀이 직접 쓰거나 운영진 gpt-5-nano로 만든 문항만 둔다(다른 LLM 금지). 서버는 읽지 않는다
+- 공개 세트 문항을 바꿔 쓴 문항은 두지 않는다(TD-10. 가드 kNN이 공개 행을 들고 있어 점수가
+  부푼다). 마지막 학습자 발화가 공개 행과 같은 문항은 검사에서 막는다
 - 정답 사실·정답 답변 라벨이 없어서 채점기는 action·인용(근거가 있을 때)과, 판정을 켜면
   충실(내용 action)·응함(공격 범주)만 본다
 """
@@ -16,7 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TextIO
 
-from guardrail.eval.cv import Split, load_splits
+from guardrail.eval.cv import load_splits
 
 from tutor.eval.grader import KB_DIR, PUBLIC_DIR, score_local, scoring
 from tutor.eval.metrics import Scored
@@ -37,7 +39,7 @@ AXES = {  # TU-19 축(이름 → 내용)
 }
 MIN_PER_AXIS = 10  # TU-19 각 축 최소 10개
 TARGET_TOTAL = 50  # 튜터 몫(TU-16)
-FIELDS = frozenset({"id", "endpoint", "axis", "messages", "labels", "seed"})  # seed는 있을 때만
+FIELDS = frozenset({"id", "endpoint", "axis", "messages", "labels"})
 LABELS = frozenset({"action", "category", "evidence"})  # action·응함(범주)만, 근거는 있을 때만
 ROLES = ("user", "assistant")
 ANSWERING = ("answer", "scaffold")  # 근거를 라벨에 두는 action
@@ -75,8 +77,6 @@ def problem(row: Any, kb_ids: Collection[str]) -> str | None:
         return "axis"
     if not _messages_ok(row.get("messages")):
         return "messages"
-    if "seed" in row and (not isinstance(row["seed"], str) or not row["seed"]):
-        return "seed"
     labels = row.get("labels")
     if not isinstance(labels, dict):
         return "labels"
@@ -104,23 +104,21 @@ def public_rows() -> list[dict[str, Any]]:
     return score_local._read_jsonl(PUBLIC_DIR / "tutor.jsonl")
 
 
-def cv_rows(public: Sequence[Mapping[str, Any]], split: Split) -> list[Mapping[str, Any]]:
-    """공유 분할의 홀드아웃 묶음 밖 공개 튜터 행(씨앗 후보). 분할에 없는 행이 있으면 ValueError."""
-    if missing := [row["id"] for row in public if row["id"] not in split.cluster]:
-        raise ValueError(f"공유 분할에 없는 공개 행 {len(missing)}개: 씨앗을 고를 수 없다")
-    held = set(split.holdout)
-    return [row for row in public if split.cluster[row["id"]] not in held]
+def last_user(messages: Sequence[Mapping[str, Any]]) -> str:
+    """마지막 학습자 발화(공백을 모두 지운 것). 공개 행·앞 문항과 겹치는지 볼 때 쓴다."""
+    text = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+    return "".join(text.split())
 
 
 def load_cases(path: Path, kb_ids: Collection[str]) -> list[dict[str, Any]]:
     """점검 세트 파일을 읽고 검사한다. 틀린 줄이 있으면 줄 번호와 필드를 모두 모아 ValueError.
 
-    씨앗(seed)은 공개 세트 교차 검증 행 id여야 한다(홀드아웃 행을 바꿔 쓴 문항을 막는다).
+    마지막 학습자 발화가 공개 튜터 행과 같은(공백만 다른) 문항도 막는다(공개 문항을 옮긴 문항).
     """
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     seen: set[str] = set()
-    seeded: list[tuple[int, str]] = []
+    numbers: list[int] = []
     for number, line in read_lines(path):
         try:
             row = json.loads(line)
@@ -135,11 +133,13 @@ def load_cases(path: Path, kb_ids: Collection[str]) -> list[dict[str, Any]]:
             continue
         seen.add(row["id"])
         rows.append(row)
-        if "seed" in row:
-            seeded.append((number, row["seed"]))
-    if seeded:
-        allowed = {row["id"] for row in cv_rows(public_rows(), load_splits())}
-        errors += [f"{n}번째 줄: seed(교차 검증 행이 아님)" for n, s in seeded if s not in allowed]
+        numbers.append(number)
+    public = {last_user(row["messages"]) for row in public_rows()}
+    errors += [
+        f"{n}번째 줄: messages(마지막 학습자 발화가 공개 문항과 같음)"
+        for n, row in zip(numbers, rows, strict=True)
+        if last_user(row["messages"]) in public
+    ]
     if errors:
         raise ValueError(f"{path.name} 형식 오류 {len(errors)}곳: " + "; ".join(errors))
     if not rows:
@@ -276,22 +276,13 @@ def axes_json(scores: Mapping[str, AxisScore]) -> dict[str, dict[str, Any]]:
 def example_states(
     state: Any, cfg: TutorConfig, rows: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
-    """점검 세트 행마다 쓸 state: 홀드아웃 묶음과, 씨앗이 있으면 그 묶음을 뺀 예시 색인.
+    """점검 세트 행마다 쓸 state: 모든 행이 홀드아웃 묶음을 뺀 예시 색인 하나를 같이 쓴다.
 
-    점검 세트 행은 공유 분할에 없다. 개발 중에는 홀드아웃을 예시로도 쓰지 않고(가드 `train_rows`와
-    같은 규칙), 공개 행을 바꿔 쓴 문항은 원래 행이 예시로 들어가 점수가 부풀지 않게 그 묶음을 뺀다.
-    씨앗이 교차 검증 행인지는 load_cases가 이미 봤다.
+    점검 세트 행은 공유 분할에 없고 공개 행을 바꿔 쓴 문항도 없다(load_cases). 개발 중에는
+    홀드아웃을 예시로도 쓰지 않는다(가드 `train_rows`와 같은 규칙).
     """
     split = load_splits()
-    pool = load_examples()
     held = frozenset(split.holdout)
-
-    def excluded(row: Mapping[str, Any]) -> frozenset[str]:
-        seed = row.get("seed")
-        return held if seed is None else held | {split.cluster[seed]}
-
-    per_key: dict[frozenset[str], Any] = {}
-    for key in {excluded(row) for row in rows}:
-        index = build_index(cfg.fewshot, [e for e in pool if split.cluster[e.id] not in key])
-        per_key[key] = SimpleNamespace(**{**vars(state), "tutor_examples": index})
-    return {row["id"]: per_key[excluded(row)] for row in rows}
+    pool = [e for e in load_examples() if split.cluster[e.id] not in held]
+    shared = SimpleNamespace(**{**vars(state), "tutor_examples": build_index(cfg.fewshot, pool)})
+    return {row["id"]: shared for row in rows}

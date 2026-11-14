@@ -9,20 +9,17 @@ from collections import Counter
 from types import SimpleNamespace
 
 import pytest
-from guardrail.eval.cv import Split, load_splits
 
 from integration.actions import load_actions
 from tutor.eval import case_drafts as cd
 from tutor.eval import case_set, run_local, team_cases
-from tutor.eval.grader import KB_DIR, score_local
+from tutor.eval.grader import KB_DIR, score_local, scoring
 from tutor.runtime.config import load_config
 
 KB = score_local.load_kb_dir(KB_DIR)
 PUBLIC = case_set.public_rows()
 UNSEEN = case_set.uncovered_sections(PUBLIC, KB)
 TABLE = load_actions()
-CV = case_set.cv_rows(PUBLIC, load_splits())
-BY_ID = {row["id"]: row for row in CV}
 PROXY_CEILING = 2000  # 운영진 프록시: 스트리밍이 아닌 응답의 출력 상한(넘기면 400, 11/12 런박스)
 
 
@@ -33,17 +30,26 @@ def case(text="질문 자리", category="normal", action="answer", evidence=(), 
     )
 
 
-def all_jobs(seeds=CV, per_axis=40):
-    return cd.plan_jobs(per_axis, random.Random(0), KB, UNSEEN, seeds)
+def all_jobs(per_axis=40):
+    return cd.plan_jobs(per_axis, random.Random(0), KB, UNSEEN)
 
 
-def prompt_text(jobs, seeds):
-    return "".join(m["content"] for job in jobs for m in cd.messages_for(job, KB, TABLE, seeds))
+def prompt_text(jobs):
+    return "".join(m["content"] for job in jobs for m in cd.messages_for(job, KB, TABLE))
 
 
 def dialog_only(texts):
     """KB 원문(프롬프트에 섹션으로 들어간다)에 그대로 있는 문구를 뺀 대화 발화(12자 이상)."""
     return {t for t in texts if len(t) >= 12 and not any(t in text for text in KB.values())}
+
+
+PUBLIC_TEXTS = dialog_only(m["content"] for row in PUBLIC for m in row["messages"])
+
+
+def public_in(prompt):
+    """프롬프트에 든 공개 튜터 행 id·대화 발화(KB 원문에도 있는 문구는 뺀다)."""
+    ids = [row["id"] for row in PUBLIC if row["id"] in prompt]
+    return ids + [t for t in PUBLIC_TEXTS if t in prompt]
 
 
 # --- 호출 계획 ---
@@ -55,7 +61,7 @@ def test_default_generate_asks_sixteen_drafts_per_axis():
 
 
 def test_jobs_cycle_forms_and_sections_per_axis():
-    jobs = cd.plan_jobs(15, random.Random(0), KB, UNSEEN, CV)
+    jobs = cd.plan_jobs(15, random.Random(0), KB, UNSEEN)
     assert len(jobs) == 5 * 15 == cd.expected_calls(15)  # 호출 하나에 초안 하나
     by_axis = {axis: [j for j in jobs if j.axis == axis] for axis in case_set.AXES}
     for axis, forms in cd.AXIS_FORMS.items():  # 꼴은 축 안에서 차례로 돈다
@@ -63,91 +69,57 @@ def test_jobs_cycle_forms_and_sections_per_axis():
     unseen_jobs = by_axis["unseen_section"]
     assert [j.sections for j in unseen_jobs] == [(UNSEEN[i % len(UNSEEN)],) for i in range(15)]
     assert {j.sections[0] for j in unseen_jobs} == set(UNSEEN)  # 7개 모두
-    for axis in ("structure", "premise"):  # 같은 단원의 두 섹션, 씨앗 없음
-        assert all(j.seed is None and len(set(j.sections)) == 2 for j in by_axis[axis])
+    for axis in ("paraphrase", "mixed", "structure", "premise"):  # 같은 단원의 두 섹션
+        assert all(len(set(j.sections)) == 2 for j in by_axis[axis])
         assert all(len({s.rsplit("-", 1)[0] for s in j.sections}) == 1 for j in by_axis[axis])
     assert all(sid in KB for j in jobs for sid in j.sections)
-    assert cd.plan_jobs(15, random.Random(0), KB, UNSEEN, CV) == jobs  # 시드가 같으면 같다
+    assert cd.plan_jobs(15, random.Random(0), KB, UNSEEN) == jobs  # 시드가 같으면 같다
 
 
-def test_seeded_axes_use_cross_validation_rows_and_their_evidence():
-    jobs = all_jobs()
-    paraphrase = [j for j in jobs if j.axis == "paraphrase"]
-    categories = Counter(BY_ID[j.seed]["labels"]["category"] for j in paraphrase)
-    assert set(categories) == {r["labels"]["category"] for r in CV}  # 범주를 돌려 가며 고른다
-    for j in paraphrase:
-        assert j.sections == tuple(BY_ID[j.seed]["labels"]["evidence"])
-    for j in (j for j in jobs if j.axis == "mixed"):
-        seed = BY_ID[j.seed]
-        assert seed["labels"]["category"] == "normal" and seed["labels"]["evidence"]
-        evidence = tuple(seed["labels"]["evidence"])
-        if j.form == cd.COMPARE_FORM:  # 비교 꼴은 같은 단원의 다른 섹션 하나를 더 준다
-            assert j.sections[:-1] == evidence and j.sections[-1] not in evidence
-            assert j.sections[-1].rsplit("-", 1)[0] == evidence[0].rsplit("-", 1)[0]
-        else:
-            assert j.sections == evidence
-    assert all(j.seed is None for j in jobs if j.axis not in cd.SEEDED_AXES)
+def test_only_paraphrase_jobs_name_a_category_and_they_cycle_through_all():
+    jobs = all_jobs(per_axis=20)
+    paraphrase = [j.category for j in jobs if j.axis == "paraphrase"]
+    assert paraphrase == [scoring.CATEGORIES[i % 10] for i in range(20)]  # SPEC 10범주를 차례로
+    assert set(paraphrase) == set(TABLE)
+    assert all(j.category is None for j in jobs if j.axis != "paraphrase")
 
 
 def test_top_up_runs_continue_the_form_rotation_and_pick_only_some_axes():
-    jobs = cd.plan_jobs(2, random.Random(0), KB, UNSEEN, CV, axes=["premise"], start={"premise": 3})
+    jobs = cd.plan_jobs(2, random.Random(0), KB, UNSEEN, axes=["premise"], start={"premise": 3})
     forms = cd.AXIS_FORMS["premise"]
     assert [(j.axis, j.form) for j in jobs] == [("premise", forms[1]), ("premise", forms[0])]
+    jobs = cd.plan_jobs(
+        2, random.Random(0), KB, UNSEEN, axes=["paraphrase"], start={"paraphrase": 9}
+    )
+    assert [j.category for j in jobs] == [scoring.CATEGORIES[9], scoring.CATEGORIES[0]]
 
 
 # --- 프롬프트 ---
 
 
-def test_prompt_carries_the_table_the_form_the_seed_dialog_and_the_sections():
-    seed = next(r for r in CV if len(r["messages"]) > 1 and r["labels"]["evidence"])
-    job = cd.Job("paraphrase", cd.AXIS_FORMS["paraphrase"][0], ("FIN-03-01",), seed["id"])
-    system, user = cd.messages_for(job, KB, TABLE, BY_ID)
+def test_prompt_carries_the_table_the_form_the_category_and_the_sections():
+    job = cd.Job("paraphrase", cd.AXIS_FORMS["paraphrase"][0], ("FIN-03-01",), "off_topic")
+    system, user = cd.messages_for(job, KB, TABLE)
     assert (system["role"], user["role"]) == ("system", "user")
     assert all(category in system["content"] for category in TABLE)
     assert TABLE["harmful_content"].variants[0].when in system["content"]  # 표에서 읽는다
     assert job.form in user["content"] and KB["FIN-03-01"][:40] in user["content"]
-    assert all(m["content"] in user["content"] for m in seed["messages"])  # 씨앗 대화
-    assert seed["labels"]["category"] in user["content"]
-    assert seed["id"] not in user["content"] + system["content"]  # 행 id는 넣지 않는다
-    assert seed["labels"]["reference_answer"] not in user["content"]  # 정답 답변도 넣지 않는다
+    assert "범주: off_topic" in user["content"]
+    _system, plain = cd.messages_for(job._replace(category=None), KB, TABLE)
+    assert "범주:" not in plain["content"]  # 범주는 정해 준 축(표현 변형)에서만
 
 
-def fake_split(every=3) -> Split:
-    """공개 튜터 행마다 묶음 하나, every번째 행마다 홀드아웃인 가짜 분할."""
-    cluster = {row["id"]: f"c{i}" for i, row in enumerate(PUBLIC)}
-    holdout = tuple(f"c{i}" for i in range(0, len(PUBLIC), every))
-    return Split("test", 0.5, 5, 0, cluster, {}, holdout)
-
-
-@pytest.mark.parametrize("split", [fake_split(), fake_split(2), load_splits()])
-def test_no_holdout_row_reaches_any_prompt(split):
-    cv = case_set.cv_rows(PUBLIC, split)
-    held = [r for r in PUBLIC if split.cluster[r["id"]] in set(split.holdout)]
-    assert held and cv and len(held) + len(cv) == len(PUBLIC)
-    jobs = all_jobs(cv)
-    used = {j.seed for j in jobs if j.seed is not None}
-    prompt = prompt_text(jobs, {r["id"]: r for r in cv})
-    assert len(used) > 30 and used <= {r["id"] for r in cv}
-    assert not [r["id"] for r in PUBLIC if r["id"] in prompt]  # 행 id는 하나도 없다
-    seeded = [m["content"] for r in cv if r["id"] in used for m in r["messages"]]
-    assert [t for t in dialog_only(seeded) if t in prompt]  # 교차 검증 씨앗은 들어간다
-    # 홀드아웃 발화 중 씨앗 대화에도 들어 있는 문구(같은 버튼 문구·튜터 답 문장)는 빼고 본다
-    held_texts = dialog_only(m["content"] for r in held for m in r["messages"])
-    hidden = {t for t in held_texts if not any(t in s for s in seeded)}
-    assert len(hidden) > 20 and not [t for t in hidden if t in prompt]
-
-
-def test_unseeded_axes_carry_no_public_dialog():
-    jobs = [j for j in all_jobs() if j.axis not in cd.SEEDED_AXES]
-    prompt = prompt_text(jobs, BY_ID)
-    texts = dialog_only(m["content"] for row in PUBLIC for m in row["messages"])
-    assert len(texts) > 200 and not [t for t in texts if t in prompt]
+def test_no_public_row_reaches_any_prompt():
+    # 공개 행(교차 검증·홀드아웃 모두)의 행 id·대화는 어느 축 프롬프트에도 없다(TD-10)
+    jobs = all_jobs()
+    assert {j.axis for j in jobs} == set(case_set.AXES)
+    assert len(PUBLIC_TEXTS) > 200 and public_in(prompt_text(jobs)) == []
 
 
 def test_prompt_forbids_leaking_ids_and_labels_into_the_dialog():
     for forms in cd.AXIS_FORMS.values():  # 꼴 설명에 라벨 이름이 없다(대화로 새어 나왔다)
         assert not [f for f in forms if any(name in f for name in [*TABLE, "answer", "scaffold"])]
-    system, user = cd.messages_for(cd.Job("premise", "꼴", ("FIN-02-04",)), KB, TABLE, BY_ID)
+    system, user = cd.messages_for(cd.Job("premise", "꼴", ("FIN-02-04",)), KB, TABLE)
     assert "섹션 ID" in system["content"] and "꼴 설명" in user["content"]
 
 
@@ -168,7 +140,7 @@ def test_action_comes_from_the_table_and_nano_picks_only_between_variants():
 
 
 def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
-    job = cd.Job("paraphrase", "꼴", ("PY-01-01", "PY-01-03"), CV[0]["id"])
+    job = cd.Job("paraphrase", "꼴", ("PY-01-01", "PY-01-03"), "normal")
     public_text = [m["content"] for m in PUBLIC[0]["messages"] if m["role"] == "user"][-1]
     copied = cd.DraftCase(
         messages=[cd.DraftMessage(role="user", content=f" {public_text} ")],
@@ -198,7 +170,7 @@ def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
         case("def my_var_name(): 코드", evidence=["PY-01-01"]),  # 코드의 밑줄 이름은 메타 아님
         copied,  # 공개 세트 문항을 그대로 옮김(공백만 다름)
     ]
-    public = [cd.last_user(row["messages"]) for row in PUBLIC]
+    public = [case_set.last_user(row["messages"]) for row in PUBLIC]
     rows, dropped = cd.assemble(
         [(job, d) for d in drafts],
         KB,
@@ -210,7 +182,8 @@ def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
     assert [r["id"] for r in rows] == [f"team-paraphrase-{n:03d}" for n in (8, 9, 10, 11)]
     # 근거는 그 호출에 준 섹션만, 겹침 없이 남긴다(준 적 없는 PY-01-02와 모르는 ID는 뺀다)
     assert rows[0]["labels"] == {"action": "answer", "category": "normal", "evidence": ["PY-01-01"]}
-    assert rows[0]["seed"] == CV[0]["id"] and rows[0]["draft"]["form"] == "꼴"
+    assert rows[0]["draft"]["form"] == "꼴" and rows[0]["draft"]["category"] == "normal"
+    assert set(rows[0]) == {"id", "endpoint", "axis", "messages", "labels", "draft"}  # seed 없음
     assert rows[1]["labels"]["evidence"] == [] and rows[1]["draft"]["evidence"] == ["PY-01-03"]
     assert [m["role"] for m in rows[2]["messages"]] == ["user", "assistant", "user"]
     assert rows[3]["messages"][0]["content"].startswith("def my_var_name")
@@ -285,7 +258,7 @@ def api_env(monkeypatch):
 def one_section_jobs(monkeypatch):
     """근거가 남도록 모든 호출에 PY-01-01을 준다(축 지정은 그대로 따른다)."""
 
-    def plan(per_axis, rng, kb, unseen, seeds, *, axes, start):
+    def plan(per_axis, rng, kb, unseen, *, axes, start):
         return [cd.Job(axis, "꼴", ("PY-01-01",)) for axis in axes for _ in range(per_axis)]
 
     monkeypatch.setattr(cd, "plan_jobs", plan)
@@ -343,25 +316,16 @@ def test_generate_appends_and_continues_numbers_without_repeating_drafts(monkeyp
 
 
 @pytest.mark.usefixtures("api_env")
-def test_generate_sends_nano_only_cross_validation_seeds(monkeypatch, files):
-    # 실제 plan_jobs·messages_for를 거쳐 nano에 간 프롬프트를 본다(가짜 분할로 홀드아웃을 늘린다)
-    split = fake_split(2)
-    monkeypatch.setattr(cd, "load_splits", lambda: split)
+def test_generate_sends_nano_no_public_row(monkeypatch, files):
+    # 실제 plan_jobs·messages_for를 거쳐 nano에 간 프롬프트를 본다(다섯 축 모두)
     sent = []
     llm = _fake_llm(label=("jailbreak_injection", "refuse"), sent=sent)  # 근거 없이 남는 라벨
     monkeypatch.setattr(cd, "make_llm", lambda cfg: llm)
-    argv = ["--axis", "paraphrase", "--axis", "mixed", "--per-axis", "12", "--yes"]
-    assert generate(*argv) == 0
+    assert generate("--per-axis", "12", "--yes") == 0
     drafts = case_set.read_jsonl(files.draft)
-    cv_ids = {r["id"] for r in case_set.cv_rows(PUBLIC, split)}
-    seeds = {d["seed"] for d in drafts}
-    assert len(drafts) == len(sent) == 24 and len(seeds) > 12 and seeds <= cv_ids
-    prompt = "".join(m["content"] for messages in sent for m in messages)
-    seeded = [m["content"] for r in PUBLIC if r["id"] in seeds for m in r["messages"]]
-    held = dialog_only(m["content"] for r in PUBLIC if r["id"] not in cv_ids for m in r["messages"])
-    hidden = {t for t in held if not any(t in s for s in seeded)}
-    assert len(hidden) > 20 and not [t for t in hidden if t in prompt]
-    assert not [r["id"] for r in PUBLIC if r["id"] in prompt]
+    assert len(drafts) == len(sent) == 60 and {d["axis"] for d in drafts} == set(case_set.AXES)
+    assert not [d for d in drafts if "seed" in d]  # 초안에도 공개 행 id가 없다
+    assert public_in("".join(m["content"] for messages in sent for m in messages)) == []
 
 
 @pytest.mark.usefixtures("api_env", "one_section_jobs", "files")

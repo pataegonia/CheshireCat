@@ -709,7 +709,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
         if own is not None and cfg.toggles.fewshot != "off":
-            # 평가 묶음(점검 세트는 홀드아웃과 씨앗 행 묶음)을 예시 색인에서 뺀다(TU-08·TU-16)
+            # 평가 묶음(점검 세트는 홀드아웃 묶음)을 예시 색인에서 뺀다(TU-08·TU-16)
             own = (
                 FoldStates(case_set.example_states(own, cfg, rows))
                 if team

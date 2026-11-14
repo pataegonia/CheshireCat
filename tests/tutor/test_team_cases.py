@@ -23,7 +23,6 @@ SPLIT = load_splits()
 _HELD = set(SPLIT.holdout)
 PUBLIC = case_set.public_rows()
 CV_ID = next(r["id"] for r in PUBLIC if SPLIT.cluster[r["id"]] not in _HELD)
-HOLDOUT_ID = next(r["id"] for r in PUBLIC if SPLIT.cluster[r["id"]] in _HELD)
 
 
 def case(row_id="c-1", axis="paraphrase", action="answer", category="normal", **extra):
@@ -50,8 +49,7 @@ def write(tmp_path, rows, name="cases.jsonl"):
 def test_valid_cases_load_in_order(tmp_path):
     rows = [case("c-1"), case("c-2", axis="premise", action="abstain", category="out_of_material")]
     rows[1]["labels"]["evidence"] = ["FIN-03-01"]
-    rows.append(case("c-3", seed=CV_ID))  # 공개 교차 검증 행을 바꿔 쓴 문항
-    assert case_set.load_cases(write(tmp_path, [rows[0], "", rows[1], rows[2]]), KB) == rows
+    assert case_set.load_cases(write(tmp_path, [rows[0], "", rows[1]]), KB) == rows
 
 
 @pytest.mark.parametrize(
@@ -67,8 +65,7 @@ def test_valid_cases_load_in_order(tmp_path):
         (lambda r: r["messages"].insert(0, {"role": "assistant", "content": "a"}), "messages"),
         (lambda r: r["messages"].append({"role": "assistant", "content": "a"}), "messages"),
         (lambda r: r["messages"][0].update(content=None), "messages"),
-        (lambda r: r.update(seed=""), "seed"),
-        (lambda r: r.update(seed=["x"]), "seed"),
+        (lambda r: r.update(seed=CV_ID), "seed"),  # 공개 행을 바꿔 쓴 표시는 두지 않는다(TD-10)
         (lambda r: r.update(labels=[]), "labels"),
         (lambda r: r["labels"].update(action="answers"), "labels.action"),
         (lambda r: r["labels"].update(category="attack"), "labels.category"),
@@ -86,14 +83,21 @@ def test_each_broken_field_is_named_without_the_text(tmp_path, broken, field):
     assert BODY not in str(err.value)
 
 
-def test_a_seed_must_be_a_cross_validation_row(tmp_path):
-    # 홀드아웃 행을 바꿔 쓴 문항은 홀드아웃을 들여다본 것이라 받지 않는다(TU-16)
-    rows = [case("c-1", seed=CV_ID), case("c-2", seed=HOLDOUT_ID), case("c-3", seed="pub-none")]
+def test_rows_whose_last_message_copies_a_public_row_are_rejected(tmp_path):
+    # 교차 검증·홀드아웃 행 어느 것이든, 공백만 다르게 옮긴 마지막 발화도 막는다(TD-10)
+    held = next(r for r in PUBLIC if SPLIT.cluster[r["id"]] in _HELD)
+    copies = []
+    for row_id, public in (("c-2", PUBLIC[0]), ("c-3", held)):
+        copied = case(row_id)
+        text = case_set.last_user(public["messages"])
+        copied["messages"] = [{"role": "user", "content": f"  {text[:3]} {text[3:]}\n"}]
+        copies.append(copied)
     with pytest.raises(ValueError) as err:
-        case_set.load_cases(write(tmp_path, rows), KB)
+        case_set.load_cases(write(tmp_path, [case("c-1"), *copies]), KB)
     message = str(err.value)
-    assert "2번째 줄: seed" in message and "3번째 줄: seed" in message and "1번째" not in message
-    assert HOLDOUT_ID not in message
+    assert "2번째 줄: messages(마지막 학습자 발화가 공개 문항과 같음)" in message
+    assert "3번째 줄: messages" in message and "1번째" not in message
+    assert not [t for t in (c["messages"][0]["content"].strip() for c in copies) if t in message]
 
 
 def test_duplicate_ids_bad_json_and_empty_files_are_rejected(tmp_path):
@@ -130,14 +134,6 @@ def test_public_set_leaves_seven_sections_without_evidence():
     assert len(missing) == 7 and not set(missing) & cited and set(missing) <= set(KB)  # PRD §1
 
 
-def test_cv_rows_leave_out_every_holdout_row():
-    cv = case_set.cv_rows(PUBLIC, SPLIT)
-    assert {r["id"] for r in cv} == {r["id"] for r in PUBLIC if SPLIT.cluster[r["id"]] not in _HELD}
-    assert 0 < len(cv) < len(PUBLIC)
-    with pytest.raises(ValueError, match="공유 분할에 없는"):
-        case_set.cv_rows([*PUBLIC, case("not-in-split")], SPLIT)
-
-
 # --- check ---
 
 
@@ -159,6 +155,30 @@ def test_check_defaults_to_the_team_file_and_fails_on_broken_or_missing_files(
     assert team_cases.main(["check", str(write(tmp_path, [case(axis="x")]))]) == 1
     assert "axis" in capsys.readouterr().out
     assert team_cases.main(["check", str(tmp_path / "none.jsonl")]) == 1
+    assert "읽지 못했다" in capsys.readouterr().out
+
+
+def test_show_prints_only_the_kept_rows_and_one_count_line(monkeypatch, tmp_path, capsys):
+    rows = [case("c-1"), case("c-2", axis="mixed", action="refuse", category="jailbreak_injection")]
+    rows[0]["labels"]["evidence"] = ["PY-01-01"]
+    path = write(tmp_path, [rows[0], "", rows[1]], name="tutor.jsonl")
+    monkeypatch.setattr(case_set, "FINAL_PATH", path)
+    assert team_cases.main(["show"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [json.loads(line) for line in lines[:-1]] == rows  # 붙여 넣으면 그대로 점검 세트 파일
+    assert lines[-1] == (
+        "tutor.jsonl 문항 2개 · 축 unseen_section 0, paraphrase 1, mixed 1, structure 0, premise 0"
+        " · action answer 1, refuse 1"
+    )
+
+
+def test_show_fails_without_text_on_a_broken_or_missing_file(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(case_set, "FINAL_PATH", write(tmp_path, [case(axis="x")], "tutor.jsonl"))
+    assert team_cases.main(["show"]) == 1
+    out = capsys.readouterr().out
+    assert "1번째 줄: axis" in out and BODY not in out
+    monkeypatch.setattr(case_set, "FINAL_PATH", tmp_path / "none.jsonl")
+    assert team_cases.main(["show"]) == 1
     assert "읽지 못했다" in capsys.readouterr().out
 
 
@@ -278,19 +298,17 @@ def test_team_and_public_results_are_never_compared(monkeypatch, tmp_path):
     assert run_local.load_previous(team, judge=False, cases="team") == data["report"]["points"]
 
 
-def test_examples_leave_out_the_holdout_and_each_seed_cluster():
+def test_examples_leave_out_only_the_holdout_and_one_index_serves_every_row():
     cfg = load_config(overrides={"toggles.fewshot": "knn"})
-    rows = [case("c-1"), case("c-2", seed=CV_ID), case("c-3", seed=CV_ID)]
+    rows = [case("c-1"), case("c-2", axis="mixed")]
     base = SimpleNamespace(tutor_cfg=cfg, tutor_llm=object())
     states = case_set.example_states(base, cfg, rows)
-    clusters = {
-        row_id: {SPLIT.cluster[e.id] for e in state.tutor_examples.rows}
-        for row_id, state in states.items()
-    }
-    assert all(not c & _HELD for c in clusters.values())  # 홀드아웃은 예시로도 쓰지 않는다
-    assert SPLIT.cluster[CV_ID] in clusters["c-1"]  # 씨앗이 없는 문항은 교차 검증 행 전부
-    assert SPLIT.cluster[CV_ID] not in clusters["c-2"]  # 바꿔 쓴 원래 행은 예시에 없다
-    assert states["c-2"] is states["c-3"] and states["c-1"].tutor_llm is base.tutor_llm
+    assert list(states) == ["c-1", "c-2"] and states["c-1"] is states["c-2"]
+    clusters = {SPLIT.cluster[e.id] for e in states["c-1"].tutor_examples.rows}
+    assert not clusters & _HELD  # 홀드아웃은 예시로도 쓰지 않는다
+    cv_clusters = {SPLIT.cluster[r["id"]] for r in PUBLIC} - _HELD
+    assert SPLIT.cluster[CV_ID] in clusters and clusters == cv_clusters  # 교차 검증 행 전부
+    assert states["c-1"].tutor_llm is base.tutor_llm
 
 
 def test_cli_with_examples_uses_per_row_index_for_case_files(monkeypatch, tmp_path):
@@ -302,11 +320,11 @@ def test_cli_with_examples_uses_per_row_index_for_case_files(monkeypatch, tmp_pa
         return dict(TUTOR_DEFAULT)
 
     monkeypatch.setattr(run_local, "_respond", respond)
-    path = write(tmp_path, [case("c-1", seed=CV_ID)])
+    path = write(tmp_path, [case("c-1")])
     argv = ["--preset", "tutor", "--cases", str(path), "--tutor-set", "toggles.fewshot=knn"]
     assert run_cli(tmp_path, *argv) == 0
     clusters = {SPLIT.cluster[e.id] for e in seen["c-1"].tutor_examples.rows}
-    assert SPLIT.cluster[CV_ID] not in clusters and not clusters & _HELD
+    assert SPLIT.cluster[CV_ID] in clusters and not clusters & _HELD
 
 
 # --- 서버와의 분리(TU-16: 서버에 넣지 않는다) ---

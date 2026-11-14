@@ -17,6 +17,7 @@
 
 import re
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -70,6 +71,14 @@ class CheckedMainCallOut(_Out):
     category: Category
     action: Action
     sentences: list[SentenceOut]
+
+
+# 측정 전용 근거 대조 칸 기록(#162). `run_local`이 요청(행)마다 새 목록을 넣으면 주 호출이 받은
+# `asked_in_evidence`를 덧붙인다. 서버는 넣지 않는다(기본 None → 아무것도 하지 않음). 목록은
+# 요청 하나의 컨텍스트에만 있어 요청 사이에 공유되지 않고, 어디에도 기록하지 않는다(TU-15·TU-18)
+EVIDENCE_CHECK_PROBE: ContextVar[list[bool] | None] = ContextVar(
+    "evidence_check_probe", default=None
+)
 
 
 # --- 프롬프트 ---
@@ -363,4 +372,7 @@ async def run_main_call(
     )
     if result.error is not None or not isinstance(result.parsed, schema):
         return None
+    probe = EVIDENCE_CHECK_PROBE.get()
+    if probe is not None and isinstance(result.parsed, CheckedMainCallOut):
+        probe.append(result.parsed.asked_in_evidence)
     return clean(result.parsed)

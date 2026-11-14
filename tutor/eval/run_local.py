@@ -27,6 +27,8 @@ points)에는 홀드아웃 행이 섞여 있다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
 결과 JSON의 tutor_llm에 남긴다.
+근거 대조 칸(`toggles.evidence_check`, #162)을 켜면 행마다 주 호출이 쓴 칸 값을 결과 JSON의
+evidence_check에 남기고, 정답 범주별 분포와 "칸 false인 answer를 abstain으로 바꾸면" 모의 수를 낸다.
 """
 
 import argparse
@@ -59,6 +61,7 @@ from tutor.eval.recall import (
     query_parts,
 )
 from tutor.judge.examples import build_index, load_examples
+from tutor.judge.main_call import EVIDENCE_CHECK_PROBE
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig, load_config
@@ -123,20 +126,33 @@ async def _respond(preset: str, row: dict[str, Any], state: Any = None) -> Any:
 
 
 async def _collect(
-    preset: str, rows: Sequence[dict[str, Any]], state: Any
+    preset: str,
+    rows: Sequence[dict[str, Any]],
+    state: Any,
+    checks: dict[str, bool | None] | None = None,
 ) -> tuple[dict[str, Any], list[float]]:
-    """한 실행의 (행 id → 응답, 요청마다 걸린 시간(초)). 실패한 요청도 시간을 잰다."""
+    """한 실행의 (행 id → 응답, 요청마다 걸린 시간(초)). 실패한 요청도 시간을 잰다.
+
+    checks가 있으면 행마다 주 호출이 쓴 근거 대조 칸 값(#162)을 담는다. 주 호출이 칸을 내지
+    않았으면(주 호출 실패, 주 호출 전에 끝난 요청, 칸 끔) None이다.
+    """
     gate = asyncio.Semaphore(metrics.WORKERS)
 
     async def one(row: dict[str, Any]) -> tuple[str, Any, float]:
         async with gate:
             started = time.perf_counter()
             own = state.for_row(row["id"]) if isinstance(state, FoldStates) else state
+            seen: list[bool] = []  # 이 행(요청) 하나의 컨텍스트에만 있다
+            token = EVIDENCE_CHECK_PROBE.set(seen if checks is not None else None)
             try:
                 response = await _respond(preset, row, own)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
                 sys.stderr.write(f"{row['id']}: {type(exc).__name__}\n")  # 메시지는 내지 않는다
                 response = None
+            finally:
+                EVIDENCE_CHECK_PROBE.reset(token)
+            if checks is not None:
+                checks[row["id"]] = seen[-1] if seen else None
             return row["id"], response, time.perf_counter() - started
 
     done = await asyncio.gather(*(one(row) for row in rows))
@@ -144,18 +160,29 @@ async def _collect(
 
 
 def collect_timed(
-    preset: str, rows: Sequence[dict[str, Any]], runs: int, state: Any = None
+    preset: str,
+    rows: Sequence[dict[str, Any]],
+    runs: int,
+    state: Any = None,
+    checks: list[dict[str, bool | None]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[float]]:
     """실행마다 응답을, 그리고 요청마다 걸린 시간(초, 모든 실행)을 모은다(TU-16 지연).
 
     튜터가 루프에 묶인 클라이언트를 써도 되게 루프 하나에서 돈다. 동시 요청은 metrics.WORKERS개다.
     state가 없으면 tutor 프리셋은 tutor.handle(기본 설정)로, 있으면 그 state로 부른다.
+    checks(목록)를 주면 실행마다 행 → 근거 대조 칸 값(#162)을 하나씩 덧붙인다.
     """
     if preset not in PRESETS:
         raise ValueError(f"모르는 프리셋: {preset}")
 
     async def every_run() -> list[tuple[dict[str, Any], list[float]]]:
-        return [await _collect(preset, rows, state) for _ in range(runs)]
+        out = []
+        for _ in range(runs):
+            seen: dict[str, bool | None] | None = None if checks is None else {}
+            out.append(await _collect(preset, rows, state, seen))
+            if checks is not None and seen is not None:
+                checks.append(seen)
+        return out
 
     results = asyncio.run(every_run())
     return [responses for responses, _t in results], [t for _r, ts in results for t in ts]
@@ -331,12 +358,15 @@ def _write(
     embedding: "EmbeddingUse | None",
     invalid: str | None,
     llm: Any = None,
+    checks: Sequence[Mapping[str, bool | None]] | None = None,
+    check_summary: "EvidenceCheckSummary | None" = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
     invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
     llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
     읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다.
+    checks가 있으면(근거 대조 칸을 켠 측정, #162) 실행마다 행 → 칸 값과 그 진단을 남긴다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -344,6 +374,11 @@ def _write(
     data: dict[str, Any] = {"preset": name, "judge": judge, "created": stamp, "tainted": tainted}
     if invalid is not None:
         data["invalid"] = invalid
+    if checks is not None:
+        data["evidence_check"] = {
+            "by_run": [dict(sorted(seen.items())) for seen in checks],
+            "summary": asdict(check_summary) if check_summary is not None else None,
+        }
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
     if llm is not None:
@@ -458,6 +493,76 @@ def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
     out.write("action 혼동행렬(정답 → 낸 것):\n")
     for gold, preds in report.confusion.items():
         out.write(f"- {gold}: " + ", ".join(f"{p} {n}" for p, n in preds.items()) + "\n")
+
+
+def _check_key(value: bool | None) -> str:
+    return "none" if value is None else ("true" if value else "false")
+
+
+@dataclass(frozen=True)
+class EvidenceCheckSummary:
+    """근거 대조 칸(`toggles.evidence_check`, #162) 진단. 모든 실행을 합친 응답 수다.
+
+    칸이 범주 판단을 못 바꾼 까닭을 가른다: out_of_material 행에 true를 쓰면 대조 자체가 안 되고,
+    false를 쓰고도 answer를 내면 칸과 범주가 어긋난다. 뒤의 경우는 "칸 false인 answer를 abstain으로
+    바꾸는" 결정적 처리를 모의로 센다(바꾸지는 않는다).
+    """
+
+    by_category: dict[str, dict[str, int]]  # 정답 범주 → {"true"·"false"·"none" → 수}
+    abstain_answered: dict[str, int]  # 정답 abstain에 answer를 낸 응답의 칸 값 분포
+    flip_gain: int  # 칸 false인 answer 중 정답 abstain(바꾸면 맞게 바뀜)
+    flip_loss: dict[str, int]  # 칸 false인 answer 중 정답이 abstain이 아닌 것: 정답 action → 수
+
+
+def evidence_check_summary(
+    rows: Sequence[dict[str, Any]],
+    all_responses: Sequence[Mapping[str, Any]],
+    checks: Sequence[Mapping[str, bool | None]],
+) -> EvidenceCheckSummary:
+    by_category: dict[str, dict[str, int]] = {}
+    answered: dict[str, int] = {}
+    gain, loss = 0, {}
+    for responses, seen in zip(all_responses, checks, strict=True):
+        for row in rows:
+            labels = row["labels"]
+            value = seen.get(row["id"])
+            key = _check_key(value)
+            counts = by_category.setdefault(labels["category"], {})
+            counts[key] = counts.get(key, 0) + 1
+            response = responses.get(row["id"])
+            action = response.get("action") if isinstance(response, dict) else None
+            if action != "answer":
+                continue
+            if labels["action"] == "abstain":
+                answered[key] = answered.get(key, 0) + 1
+            if value is False:
+                if labels["action"] == "abstain":
+                    gain += 1
+                else:
+                    loss[labels["action"]] = loss.get(labels["action"], 0) + 1
+    return EvidenceCheckSummary(
+        by_category={c: dict(sorted(v.items())) for c, v in sorted(by_category.items())},
+        abstain_answered=dict(sorted(answered.items())),
+        flip_gain=gain,
+        flip_loss=dict(sorted(loss.items())),
+    )
+
+
+def show_evidence_check(summary: EvidenceCheckSummary, out: TextIO) -> None:
+    """근거 대조 칸 진단(#162). 행 id·본문 없이 수만 낸다."""
+
+    def triple(counts: Mapping[str, int]) -> str:
+        return " / ".join(str(counts.get(k, 0)) for k in ("true", "false", "none"))
+
+    out.write("근거 대조 칸(asked_in_evidence, 모든 실행 합) 정답 범주별 true / false / 없음:\n")
+    for category, counts in summary.by_category.items():
+        out.write(f"- {category} {triple(counts)}\n")
+    out.write("정답 abstain에 answer를 낸 응답의 칸 true / false / 없음: ")
+    out.write(f"{triple(summary.abstain_answered)}\n")
+    lost = sum(summary.flip_loss.values())
+    detail = ", ".join(f"{a} {n}" for a, n in summary.flip_loss.items()) or "없음"
+    out.write("칸 false인 answer를 abstain으로 바꾸면(모의, 바꾸지 않음): 정답 abstain ")
+    out.write(f"{summary.flip_gain}개가 맞게 바뀌고, 정답이 다른 {lost}개가 바뀐다({detail})\n")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -690,6 +795,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if counted is not None:  # KB 임베딩(기동)은 이미 끝났다. 질의 임베딩만 막는다
         state.tutor_emb = stop.watch_embed(state.tutor_emb)
     latency: list[float] = []
+    checks: list[dict[str, bool | None]] | None = None
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
         if own is not None and cfg.toggles.fewshot != "off":
@@ -701,7 +807,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             # 행별 색인이 아니면 평가 행 자신이 예시 풀에 든다. 조용히 부풀린 점수를 내지 않는다
             ap.error("판단 예시를 켠 측정은 행마다 평가 묶음을 뺀 예시 색인을 써야 한다(TU-16)")
-        all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
+        if args.preset == "tutor" and cfg.toggles.evidence_check:
+            checks = []  # 실행마다 행 → 근거 대조 칸 값(#162)
+            all_responses, latency = collect_timed(args.preset, rows, args.runs, own, checks)
+        else:
+            all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs
     llm_stopped = stop.tripped  # 튜터 단계에서 멈췄나(판정 단계에서 멈춘 것과 가른다)
@@ -718,6 +828,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
     invalid = stop.reason()
     name = args.preset or args.responses.stem
+    check_summary = (
+        evidence_check_summary(rows, all_responses, checks) if checks is not None else None
+    )
     path = _write(
         report,
         name=name,
@@ -727,8 +840,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         embedding=use,
         invalid=invalid,
         llm=state.tutor_llm if state is not None else None,
+        checks=checks,
+        check_summary=check_summary,
     )
     _show(report, sys.stdout, judged=judge is not None)
+    if check_summary is not None:
+        show_evidence_check(check_summary, sys.stdout)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
         _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)

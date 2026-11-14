@@ -87,7 +87,7 @@ async def test_check_is_off_by_default():
 
 def test_check_prompt_keeps_the_contract():
     version, body = load_prompt(load_config(), "jb_check")
-    assert version == "1.0"
+    assert version == "1.1"
     assert "<target>" in body and "apply" in body and "study" in body
     assert "data" in body.lower()
     json.dumps(body)  # 직렬화 가능한 평문

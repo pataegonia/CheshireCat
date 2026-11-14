@@ -1,47 +1,36 @@
-"""문자 2-gram BM25 KB 색인(TU-03). 가드 R13 `BM25`와 같은 점수를 낸다(테스트가 맞춰 본다).
+"""KB 색인(TU-03). BM25는 가드 `KbIndex`(GR-03)를 그대로 쓰고(TD-03) 튜터는 섹션으로 접는다.
 
-질의 2-gram은 종류만 센다(같은 2-gram이 여러 번 나와도 한 번). 조각마다 2-gram 가중치를 미리 계산해
-두어 질의 때는 덧셈만 한다. 색인은 기동 때 한 번 만들고 요청 처리 중에는 바뀌지 않는다(TU-18).
+조각·토큰·점수는 가드 색인이 정하고, n-gram·k1·b와 질의 상한은 가드 설정(`kb`·`retrieval`)을
+따른다. 튜터는 섹션 정보(과목·제목·표)를 따로 들고 조각 점수를 섹션 최고 점수로 접는다.
+색인은 기동 때 한 번 만들고 요청 처리 중에는 바뀌지 않는다(TU-18).
 """
 
-import math
-from collections import Counter, defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 
-from tutor.retrieval.kb import Section, bigrams, load_sections, split_chunks
+from guardrail.config import load_config
+from guardrail.kb import KbIndex as GuardKbIndex
 
-K1 = 1.2  # 가드 설정 kb.k1과 같다
-B = 0.75  # 가드 설정 kb.b와 같다
+from tutor.retrieval.kb import Section, load_sections
 
 
 class KbIndex:
-    """KB 섹션과 그 조각의 BM25 색인. `search`는 조각 점수를 섹션 최고 점수로 접는다."""
+    """KB 섹션과 가드 BM25 색인. `search`는 조각 점수를 섹션 최고 점수로 접는다."""
 
-    def __init__(self, sections: Mapping[str, Section], *, k1: float = K1, b: float = B) -> None:
-        if not sections:
-            raise ValueError("KB 섹션이 없다")
+    def __init__(self, sections: Mapping[str, Section]) -> None:
+        """섹션이 없거나 색인할 2-gram이 없으면 가드 색인이 ValueError를 낸다."""
+        cfg = load_config()
         self.sections: Mapping[str, Section] = MappingProxyType(dict(sections))
-        self.chunks: tuple[tuple[str, str], ...] = tuple(
-            (sid, part)
-            for sid, section in self.sections.items()
-            for part in split_chunks(section.full_text())
+        self._bm25 = GuardKbIndex(
+            {sid: section.full_text() for sid, section in self.sections.items()},
+            ngram=cfg.kb.ngram,
+            k1=cfg.kb.k1,
+            b=cfg.kb.b,
         )
-        tfs = [Counter(bigrams(text)) for _sid, text in self.chunks]
-        lens = [sum(tf.values()) for tf in tfs]
-        avg = sum(lens) / len(lens) or 1.0
-        df = Counter(gram for tf in tfs for gram in tf)
-        n = len(tfs)
-        postings: dict[str, list[tuple[int, float]]] = defaultdict(list)
-        for i, (tf, length) in enumerate(zip(tfs, lens, strict=True)):
-            norm = k1 * (1 - b + b * length / avg)
-            for gram, f in tf.items():
-                idf = math.log(1 + (n - df[gram] + 0.5) / (df[gram] + 0.5))
-                postings[gram].append((i, idf * f * (k1 + 1) / (f + norm)))
-        self._postings: Mapping[str, tuple[tuple[int, float], ...]] = MappingProxyType(
-            {gram: tuple(entries) for gram, entries in postings.items()}
-        )
+        self.chunks: tuple[tuple[str, str], ...] = self._bm25.chunks
+        # 가드 색인은 질의를 자르지 않는다(호출자 몫). 넘으면 뒤쪽(최근 발화)을 남긴다
+        self.max_query_chars: int = cfg.retrieval.max_query_chars
 
     @classmethod
     def from_dir(cls, kb_dir: Path) -> "KbIndex":
@@ -52,12 +41,8 @@ class KbIndex:
         return cls(sections)
 
     def chunk_scores(self, query: str) -> list[float]:
-        """조각마다 BM25 점수(조각 순서). 질의 2-gram은 처음 나온 순서로 한 번씩 더한다."""
-        scores = [0.0] * len(self.chunks)
-        for gram in dict.fromkeys(bigrams(query)):
-            for i, weight in self._postings.get(gram, ()):
-                scores[i] += weight
-        return scores
+        """조각마다 BM25 점수(조각 순서). 가드 `KbIndex.scores` 그대로다."""
+        return self._bm25.scores(query)
 
     def search(self, query: str, *, subject: str | None = None) -> list[tuple[str, float]]:
         """점수가 0보다 큰 섹션을 (섹션 ID, 최고 조각 점수)로 점수 높은 순(같으면 ID 순)."""

@@ -10,14 +10,27 @@ import math
 import re
 
 import pytest
+import yaml
+from guardrail.config import load_config
+from guardrail.kb import KbIndex as GuardKbIndex
 
 import tutor
 from tests.tutor.tutor_testlib import COMPETITION, REPO, scoring
-from tutor.retrieval import KbIndex, Section, default_index, retrieve
+from tutor.retrieval import KbIndex, Section, default_index, retrieve, search
 from tutor.retrieval.kb import load_sections, normalize
 
 KB = COMPETITION / "kb"
 R13 = REPO / "guardrail" / "scripts" / "r13" / "common.py"
+GUARD_DEFAULT = REPO / "guardrail" / "configs" / "default.yaml"
+
+
+def use_guard_config(tmp_path, monkeypatch, **changes):
+    """가드 기본 설정에서 최상위 항목 몇 개만 바꾼 파일을 GUARD_CONFIG로 쓴다."""
+    raw = yaml.safe_load(GUARD_DEFAULT.read_text("utf-8"))
+    assert all(key in raw for key in changes)
+    path = tmp_path / "guard.yaml"
+    path.write_text(yaml.safe_dump({**raw, **changes}, allow_unicode=True), "utf-8")
+    monkeypatch.setenv("GUARD_CONFIG", str(path))
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +105,35 @@ def test_chunk_scores_match_the_r13_bm25(r13):
             math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-12)
             for a, b in zip(ours, theirs, strict=True)
         )
+
+
+def test_index_scores_are_the_guard_kb_index_scores():
+    """가드 KbIndex(GR-03, 가드 설정의 kb 값)와 조각·점수가 비트 단위로 같다(TD-03)."""
+    kb = load_config().kb
+    guard = GuardKbIndex.load(KB, ngram=kb.ngram, k1=kb.k1, b=kb.b)
+    index = default_index()
+    assert index.chunks == guard.chunks
+    for query in [heading(sid) for sid in index.sections] + ["변수", "", "ab", "!!"]:
+        assert index.chunk_scores(query) == guard.scores(query)
+
+
+def test_bm25_settings_follow_the_guard_config(tmp_path, monkeypatch):
+    query = heading("PY-01-01")
+    before = GuardKbIndex.load(KB).scores(query)
+    use_guard_config(tmp_path, monkeypatch, kb={"top_k": 3, "ngram": 2, "k1": 2.0, "b": 0.3})
+    got = KbIndex(load_sections(KB)).chunk_scores(query)
+    assert got == GuardKbIndex.load(KB, k1=2.0, b=0.3).scores(query)
+    assert got != before
+
+
+def test_query_limit_follows_the_guard_config(tmp_path, monkeypatch):
+    """질의 상한은 가드 설정 retrieval.max_query_chars다. 넘으면 뒤쪽(최근 발화)을 남긴다."""
+    tail, earlier = heading("PY-01-01"), [heading("FIN-01-01")]
+    whole = [s.id for s in run(retrieve(tail, earlier))]
+    assert whole != [s.id for s in run(retrieve(tail, []))]  # 상한 안이면 앞 발화도 질의에 든다
+    use_guard_config(tmp_path, monkeypatch, retrieval={"max_query_chars": len(tail)})
+    monkeypatch.setattr(search, "default_index", lambda: KbIndex.from_dir(KB))
+    assert [s.id for s in run(retrieve(tail, earlier))] == [s.id for s in run(retrieve(tail, []))]
 
 
 def test_search_folds_chunk_scores_to_the_section_max():

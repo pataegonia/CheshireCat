@@ -264,7 +264,10 @@ class Guard:
         try:  # 출력 쪽 준비가 실패해도 입력 판정은 그대로 간다(GR-09: 출력 실패는 출력만 바꾼다)
             half = cfg.retrieval.max_query_chars // 2
             users = [m.content for m in window if m.role == "user"]
-            ranking = self.kb.rank("\n".join(users)[-half:] + "\n" + answer[:half])
+            # KbIndex는 normalize를 거친 질의를 받는다(숨긴 문자를 끼운 답변도 같은 조각을 찾게)
+            ranking = self.kb.rank(
+                normalize("\n".join(users))[-half:] + "\n" + normalize(answer)[:half]
+            )
             rule_spans = None
             if t.literal_rule:
                 top = list(ranking.hits[: cfg.kb.top_k])

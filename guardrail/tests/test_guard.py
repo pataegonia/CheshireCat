@@ -654,6 +654,16 @@ async def test_long_user_message_tail_reaches_the_kb_query(no_rule):
     assert "꼬리표시문구" in query
 
 
+async def test_kb_query_ignores_hidden_chars_interleaved_in_the_answer(no_rule):
+    kb, knn, lr = _indexes()
+    kb_spy = Spy(kb, "rank")
+    guard, _ = await make(indexes=(kb_spy, knn, lr))
+    for a in (ANSWER, "​".join(ANSWER)):
+        await guard.judge(req(a))
+    plain, hidden = kb_spy.seen
+    assert plain == hidden
+
+
 @pytest.mark.parametrize("answer", [ANSWER, None])  # 답변 없는 경로도 같은 글을 넘긴다
 async def test_prepare_hands_the_judges_text_that_is_already_cut(answer):
     """큰 발화는 스레드(`_prepare`)에서 줄인다. 판정기가 이벤트 루프에서 다시 줄이지 않게."""

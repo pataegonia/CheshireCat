@@ -10,12 +10,17 @@ import json
 import re
 import sys
 import types
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple, get_args
+from typing import Any, Literal, NamedTuple, get_args, get_origin
 
+import guardrail.judges.schemas as guard_schemas
 import jsonschema
+import openai
+import pytest
+from guardrail.judges.schemas import strict_schema
 from guardrail.schema import Category
+from pydantic import BaseModel, ValidationError
 
 from integration.contracts import ACTIONS
 
@@ -30,6 +35,8 @@ _GUARD_CONTRACT = json.loads(
 GUARD_RESPONSE_SCHEMA = {"$ref": "#/$defs/response", "$defs": _GUARD_CONTRACT["$defs"]}
 
 ANSWER_WORD = "가짜답변표식"  # 가짜 LLM이 답변에 넣는 단어(로그에 나오면 답변 본문이 샌 것)
+# 가짜 가드 LLM이 판정 글(evidence · reason)에 넣는 단어(응답 · 로그에 나오면 판정 글이 샌 것)
+GUARD_WORD = "가짜판정표식"
 
 
 def _load_scoring():
@@ -67,9 +74,46 @@ def user(content: str) -> dict[str, Any]:
     }
 
 
-# 요청 하나에 튜터가 LLM을 부르는 횟수의 상한(모드별). 튜터가 판정 호출을 붙이면(#88) 여기 한
-# 곳과 FakeSend의 응답(스키마 이름별 분기)을 고친다. 가드(지금은 상수 판정기)는 부르지 않는다.
+# 요청 하나에 튜터가 **자기 전송 함수로** LLM을 부르는 횟수의 상한(모드별). 튜터가 자기 호출을
+# 늘리면 여기 한 곳과 FakeSend의 응답(스키마 이름별 분기)을 고친다. 튜터가 가드에 맡기는 판정
+# (classify · judge_output, #88)은 튜터 전송 함수를 지나지 않는다: 아래 가드 쪽 상한에서 센다.
 MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
+
+# 요청 하나에 가드 LLM(`guardrail.llm.LLM`)이 nano를 부르는 횟수의 상한(경로별). probe는 세지
+# 않는다(기동 때). 요청당 전체 nano 호출 상한은 위 표와 이 표의 합이다.
+# 이 표는 진짜 판정기의 상한이다. 상한은 `guard_call_budget`으로만 읽는다.
+# - 기본 판정기는 가드 `default_factory`다: OPENAI_API_KEY가 없으면 상수 판정기라, 키를 지우는
+#   `app_env`로 띄우는 기존 테스트의 상한은 0이다(`real_guard=False`). 진짜 판정기 경로는
+#   test_real_guard.py가 `real_guard=True`로 본다.
+# - `/guard` 2: 입력 판정 1 + 출력 판정 1(후보 답변이 있을 때).
+# - `/tutor` 3: 가드가 튜터용 메서드를 올린 뒤(이슈 #119) classify 1 + judge_output 1,
+#   judge_output에 범주를 넘기지 않으면 classify +1(가드 interface.md의 judge_output 설명).
+#   지금 main의 Guard에는 두 메서드가 없어 0회다.
+# - 가짜 전송은 실패를 내지 않아 재시도 몫은 없다.
+MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 2}
+GUARD_BUDGET_HINT = (
+    "가드 nano 호출이 상한을 넘었다. 판정기를 바꿨으면 "
+    "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST · guard_call_budget을 고친다. "
+    "가드 PR에서 이 실패가 나면 통합 담당(pyr27)에게 알린다(tests/는 통합 트랙이 고친다)"
+)
+
+
+def guard_call_budget(*, tutor: int = 0, guard: int = 0, real_guard: bool = False) -> int:
+    """`/tutor` 요청 tutor개와 `/guard` 요청 guard개에 허용되는 가드 nano 호출 수.
+
+    키 없이 띄운 앱(상수 판정기, `real_guard=False`)은 nano를 부르지 않으므로 0이다.
+    """
+    if not real_guard:
+        return 0
+    limits = MAX_GUARD_LLM_CALLS_PER_REQUEST
+    return tutor * limits["/tutor"] + guard * limits["/guard"]
+
+
+def guard_calls_per_request(path: str, *, real_guard: bool = False) -> int:
+    """`path` 요청 하나에 허용되는 가드 nano 호출 수(`guard_call_budget`을 거친다)."""
+    counts = {"/tutor": {"tutor": 1}, "/guard": {"guard": 1}}[path]
+    return guard_call_budget(**counts, real_guard=real_guard)
+
 
 CATEGORIES: tuple[str, ...] = get_args(Category)
 LONG_TAIL = " " + "길게 이어지는 문장이에요. " * 400  # 5,600자: 답변 상한 4,000자를 넘긴다
@@ -163,13 +207,216 @@ class FakeSend:
             self.evidence.append(log)
             raise UnknownSchema(name)
         self.evidence.append(log)
-        content = json.dumps(reply, ensure_ascii=False)
-        choice = types.SimpleNamespace(
-            message=types.SimpleNamespace(content=content), finish_reason="stop"
+        return _completion(json.dumps(reply, ensure_ascii=False))
+
+
+def _completion(content: str) -> Any:
+    """chat.completions.create 응답에서 서버가 읽는 부분만 가진 객체."""
+    choice = types.SimpleNamespace(
+        message=types.SimpleNamespace(content=content), finish_reason="stop"
+    )
+    return types.SimpleNamespace(choices=[choice], usage=types.SimpleNamespace(completion_tokens=5))
+
+
+_GUARD_PROBE = [{"role": "user", "content": "ping"}]  # guardrail.llm.LLM.probe()가 보내는 요청
+# json_object 방식에서 guardrail.llm.LLM._request가 system 끝에 붙이는 표식. 그 뒤가 스키마 JSON이다
+_GUARD_SCHEMA_NOTE = "JSON 객체만 출력한다. 스키마:\n"
+
+
+def _guard_models() -> dict[str, type[BaseModel]]:
+    """`guardrail.judges.schemas`에 정의된 공개 pydantic 모델 전부(이름 → 모델).
+
+    가드가 스키마를 더하거나 필드를 바꿔도 가짜가 따라간다. 이름이 "_"로 시작하는 것(`_Out`)과
+    다른 모듈에서 가져온 이름(`BaseModel` 등)은 뺀다.
+    """
+    return {
+        name: value
+        for name, value in vars(guard_schemas).items()
+        if not name.startswith("_")
+        and isinstance(value, type)
+        and issubclass(value, BaseModel)
+        and value.__module__ == guard_schemas.__name__
+    }
+
+
+# 가짜가 아는 가드 판정 스키마(이름 → 모델). 테스트는 monkeypatch.setitem으로 임시 모델을 넣는다
+GUARD_MODELS = _guard_models()
+# json_object 방식에서 스키마를 알아보지 못했을 때 `FakeGuardSend.unknown`에 남기는 표시
+UNKNOWN_JSON_OBJECT = "json_object:알 수 없는 스키마"
+
+
+def _guard_schema_name(kwargs: dict[str, Any], system: str) -> str:
+    """가드 판정 스키마 이름(guardrail.judges.schemas). 모르면 "".
+
+    json_schema 방식이면 `response_format`의 이름으로 본다. json_object 방식이면 system 끝의
+    마지막 표식 뒤를 JSON으로 읽어, 아는 스키마의 strict 스키마와 정확히 같을 때만 그 이름이다.
+    system 본문의 낱말(예시 JSON의 필드 이름 등)로는 추측하지 않는다: 본문에 다른 스키마의 필드
+    이름이 나오거나, 필드가 겹치는 새 스키마가 오면 엉뚱한 스키마로 답해 조용히 bad_json이 된다.
+    """
+    spec = kwargs.get("response_format", {}).get("json_schema")
+    if isinstance(spec, dict):
+        return str(spec.get("name", ""))
+    _, found, tail = system.rpartition(_GUARD_SCHEMA_NOTE)
+    if not found:
+        return ""
+    try:
+        schema = json.loads(tail)
+    except ValueError:
+        return ""
+    return next(
+        (name for name, model in GUARD_MODELS.items() if strict_schema(model) == schema), ""
+    )
+
+
+class FakeGuardSend:
+    """가드 LLM(`guardrail.llm.LLM`)의 chat.completions.create 자리에 넣는 가짜 전송.
+
+    `FakeSend`의 가드 쪽 짝이다. 실제 API를 부르지 않고, 받은 내용은 저장하지 않는다(횟수 · 해시 ·
+    스키마 이름만).
+
+    - `count`는 판정 호출 수다. `LLM.start()`의 probe(요청이 "ping" 하나)는 `probes`에 따로 센다.
+    - 응답은 그 스키마 모델의 필드에서 만든다(`_guard_reply`). 기본은 입력 판정 normal(act는
+      learning_question), 출력 판정 grounded(· safe) true, 그 밖의 bool은 false다. 튜터 답을
+      건드리지 않는 값이다.
+    - `vary=True`: 범주 등 문자열 Literal과 grounded · safe를 프롬프트 해시로 고른다(무작위 없음).
+    - 모르는 스키마로 부르거나, 만든 응답이 모델 검증을 통과하지 못하면 `UnknownSchema`를 던지고
+      `unknown`에 남긴다. 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send`
+      픽스처가 끝날 때 `unknown`을 본다.
+    """
+
+    def __init__(self, *, vary: bool = False) -> None:
+        self.vary = vary
+        self.count = 0
+        self.probes = 0
+        self.clients = 0  # AsyncOpenAI 자리(OpenAIShim)에서 클라이언트를 만든 횟수
+        self.by_schema: collections.Counter[str] = collections.Counter()
+        self.digests: list[str] = []
+        self.unknown: list[str] = []
+
+    async def __call__(self, kwargs: dict[str, Any]) -> Any:
+        messages = kwargs["messages"]
+        if messages == _GUARD_PROBE:
+            self.probes += 1
+            return _completion("{}")
+        self.count += 1
+        payload = json.dumps(messages, ensure_ascii=False, sort_keys=True).encode(
+            "utf-8", "surrogatepass"
         )
-        return types.SimpleNamespace(
-            choices=[choice], usage=types.SimpleNamespace(completion_tokens=5)
-        )
+        full = hashlib.sha256(payload)
+        digest = full.hexdigest()[:16]
+        self.digests.append(digest)
+        system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+        name = _guard_schema_name(kwargs, system)
+        self.by_schema[name] += 1
+        picks = itertools.cycle(full.digest())
+        note = f"{GUARD_WORD} {digest}"
+        model = GUARD_MODELS.get(name)
+        if model is None:
+            # json_object 방식은 이름이 없다. 빈 문자열 대신 알아볼 수 있는 표시를 남긴다
+            # (요청 본문은 남기지 않는다)
+            self.unknown.append(name or UNKNOWN_JSON_OBJECT)
+            raise UnknownSchema(name or UNKNOWN_JSON_OBJECT)
+        reply = _guard_reply(model, note, picks, vary=self.vary)
+        try:
+            if reply is None:
+                raise ValueError
+            model.model_validate(reply)
+        except (ValidationError, ValueError):
+            # 가드가 필드를 바꿨는데 가짜가 따라가지 못했다. 옛 모양으로 답하면 가드 LLM이 조용히
+            # bad_json이 되므로 여기서 드러낸다
+            problem = f"{name}: 가짜 응답이 스키마와 맞지 않음"
+            self.unknown.append(problem)
+            raise UnknownSchema(problem) from None
+        return _completion(json.dumps(reply, ensure_ascii=False))
+
+
+# bool 필드의 기본값이 true인 이름(그 밖의 bool은 false). 튜터 답을 건드리지 않는 쪽이다
+_TRUE_BY_DEFAULT = frozenset({"grounded", "safe"})
+# vary=True일 때 해시로 고르는 bool: 이름 → 나눌 수(0이 아니면 true). grounded는 반반, safe는 3/4
+_VARIED_BOOLS = {"grounded": 2, "safe": 4}
+# 문자열 Literal 필드의 기본값: 튜터 답을 건드리지 않는 값(입력 판정 normal). act는 가드
+# ACT_TO_CATEGORY로 normal이 된다(첫 값 no_meaningful_content는 low_signal_input이다). mode는 가드
+# 입력 v2(InputModeOut)의 필드다. 모델에 없는 이름은 쓰이지 않을 뿐이다. 표에 없는 Literal 필드는
+# 첫 값으로 채운다(가드가 새 판정 스키마를 올려도 tests/를 고치지 않고 돈다. 검증은 그대로 한다)
+_LITERAL_DEFAULTS = {"category": "normal", "act": "learning_question", "mode": "none"}
+
+
+def _guard_reply(
+    model: type[BaseModel], note: str, picks: Iterator[int], *, vary: bool
+) -> dict[str, Any] | None:
+    """스키마 모델의 필드를 차례로 돌며 가짜 응답을 만든다. 모르는 타입이 있으면 None.
+
+    - bool: grounded · safe는 true, 그 밖은 false. vary면 grounded · safe를 해시로 고른다.
+    - str: 이름이 "_quote"로 끝나면 ""(인용할 구절 없음), 아니면 `note`(판정 글 표식 + 해시).
+    - 문자열 Literal: `_LITERAL_DEFAULTS`의 값, 표에 없으면 첫 값. vary면 해시로 고른다.
+    """
+    reply: dict[str, Any] = {}
+    for field, info in model.model_fields.items():
+        kind = info.annotation
+        if kind is bool:
+            if vary and field in _VARIED_BOOLS:
+                reply[field] = bool(next(picks) % _VARIED_BOOLS[field])
+            else:
+                reply[field] = field in _TRUE_BY_DEFAULT
+        elif kind is str:
+            reply[field] = "" if field.endswith("_quote") else note
+        elif get_origin(kind) is Literal and all(isinstance(v, str) for v in get_args(kind)):
+            values = get_args(kind)
+            if vary:
+                reply[field] = values[next(picks) % len(values)]
+            else:
+                default = _LITERAL_DEFAULTS.get(field)
+                reply[field] = default if default in values else values[0]
+        else:
+            return None
+    return reply
+
+
+class OpenAIShim:
+    """`guardrail.llm` 모듈의 `openai` 이름 자리에 넣는다.
+
+    `AsyncOpenAI`만 가짜다: 만들어진 클라이언트의 `chat.completions.create`가 `FakeGuardSend`로
+    간다. 그 밖의 이름(예외 클래스 · `Timeout`)은 진짜 openai로 넘긴다. 튜터가 쓰는 `openai`
+    모듈 자체는 건드리지 않는다.
+    """
+
+    def __init__(self, fake: FakeGuardSend) -> None:
+        self._fake = fake
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(openai, name)
+
+    def AsyncOpenAI(self, **_: Any) -> Any:  # noqa: N802  SDK 클래스 이름 그대로
+        fake = self._fake
+        fake.clients += 1
+
+        async def create(**kwargs: Any) -> Any:
+            return await fake(kwargs)
+
+        completions = types.SimpleNamespace(create=create)
+        return types.SimpleNamespace(chat=types.SimpleNamespace(completions=completions))
+
+
+def patched_guard_llm(
+    monkeypatch: pytest.MonkeyPatch, env: Mapping[str, str]
+) -> Generator[FakeGuardSend, None, None]:
+    """가드 LLM의 전송을 가짜로 바꾸고 가짜를 내준 뒤, 끝날 때 모르는 호출이 없었는지 본다.
+
+    conftest의 `fake_guard_send` 픽스처가 `yield from`으로 쓴다. 픽스처가 아닌 일반 제너레이터로
+    빼 둔 것은 정리 단계의 단언을 테스트가 직접 돌려 볼 수 있게 하려는 것이다(픽스처의 정리 단계가
+    실패를 내는지는 그 픽스처를 쓰는 테스트로는 확인할 수 없다).
+
+    `env`는 패치된 `guardrail.llm.openai_env`가 돌려줄 값이다. 환경변수에는 넣지 않는다.
+    """
+    fake = FakeGuardSend()
+    llm_mod = importlib.import_module("guardrail.llm")
+    monkeypatch.setattr(llm_mod, "openai", OpenAIShim(fake))
+    monkeypatch.setattr(llm_mod, "openai_env", lambda: dict(env))
+    yield fake
+    # 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼킨다. 가짜가 모르는 호출이 있었으면 여기서 드러낸다.
+    assert fake.unknown == [], (
+        "FakeGuardSend가 모르는 스키마로 가드 LLM을 불렀다(applib.FakeGuardSend를 고친다)"
+    )
 
 
 def _plain_main(answer: str) -> dict[str, Any]:

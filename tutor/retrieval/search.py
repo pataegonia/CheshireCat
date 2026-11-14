@@ -2,9 +2,8 @@
 
 from collections.abc import Sequence
 from functools import cache
-from pathlib import Path
 
-from guardrail.config import load_config, resolve_path
+from guardrail.config import GuardConfig, load_config, resolve_path
 
 from tutor.retrieval.embedding import EmbeddingSearch, is_english
 from tutor.retrieval.index import KbIndex
@@ -13,15 +12,22 @@ from tutor.retrieval.kb import Section, bigrams
 DEFAULT_K = 5
 
 
-def default_kb_dir() -> Path:
-    """가드와 같은 KB 폴더: 가드 설정 `paths.kb`(GUARD_KB_DIR로 덮어쓸 수 있다)."""
-    return resolve_path(load_config().paths.kb)
+def build_index(cfg: GuardConfig) -> KbIndex:
+    """가드 설정 cfg의 KB 폴더(`paths.kb`)·BM25 값(`kb`)·질의 상한(`retrieval`)으로 색인을 만든다.
+
+    서버는 `tutor.startup`이 가드가 기동 때 읽은 설정(`app.state.cfg`)으로 한 번 부른다.
+    배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18).
+    """
+    return KbIndex.from_dir(resolve_path(cfg.paths.kb), cfg)
 
 
 @cache
 def default_index() -> KbIndex:
-    """기동 때 한 번 만드는 KB 색인. 배포 자료 파생물만 담고 요청 내용은 담지 않는다(TU-18)."""
-    return KbIndex.from_dir(default_kb_dir())
+    """앱 state가 없는 쪽(로컬 측정·프로세스 안 handle·테스트)의 색인. 처음 부를 때 한 번 만든다.
+
+    가드 설정은 `load_config()`로 읽는다(GUARD_CONFIG·GUARD_KB_DIR를 따른다).
+    """
+    return build_index(load_config())
 
 
 async def retrieve(
@@ -31,6 +37,7 @@ async def retrieve(
     subject: str | None = None,
     k: int = DEFAULT_K,
     embedding: EmbeddingSearch | None = None,
+    index: KbIndex | None = None,
 ) -> list[Section]:
     """KB 섹션을 점수 높은 순으로 0개 이상 k개 이하 돌려준다.
 
@@ -43,10 +50,12 @@ async def retrieve(
     subject는 과목 폴더 이름(python·prompt·finance)으로 거른다.
     embedding(기동 때 만든 임베딩 검색)을 주면 영어 위주 질의에 한해 질의 임베딩 순위를 BM25
     순위와 RRF로 섞는다(TU-11). 2-gram이 없는 질의는 임베딩도 부르지 않는다.
+    index는 기동 때 만든 색인이다(서버는 `app.state.tutor_kb`). 없으면 `default_index()`를 쓴다.
     """
     if k <= 0:
         return []
-    index = default_index()
+    if index is None:
+        index = default_index()
     text = "\n".join([*history, query])[-index.max_query_chars :]
     ranked = [sid for sid, _score in index.search(text, subject=subject)]
     if embedding is not None and is_english(query) and bigrams(query):

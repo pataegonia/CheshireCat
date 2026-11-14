@@ -444,3 +444,10 @@ async def test_given_block_category_ignores_a_refusal_past_the_answer_cap():
     pad = "가" * guard.cfg.input.max_answer_chars
     v = await guard.judge_output([], pad + REFUSAL, category="harmful_content")
     assert v.safe is False  # 거절 문구는 자른 답변 밖이라 보이지 않는다
+
+
+async def test_given_category_sees_a_hidden_tag_past_the_answer_cap():
+    guard, _ = await make(responder(output=GROUNDED))
+    pad = "가" * guard.cfg.input.max_answer_chars
+    v = await guard.judge_output([], pad + TAG, category="normal")
+    assert v.safe is False  # 숨긴 태그 검사는 자르기 전 전체를 본다(GR-02)

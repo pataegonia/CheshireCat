@@ -224,7 +224,8 @@ class Guard:
         candidate_answer: str,
         category: Category | None = None,
     ) -> OutputVerdict:
-        """후보 답변의 근거·safe 판정. 재시도 없음, 실패는 `output.failure_default`·safe=true.
+        """후보 답변의 근거·safe 판정. 재시도 없음. 실패해도 예외 없이 값을 낸다:
+        grounded는 block 범주면 ①(true), 아니면 `output.failure_default`, safe는 GR-08 규칙 그대로.
 
         category가 있으면 입력 nano 없이 그 범주로 GR-07 ①과 safe를 계산한다(low-signal로 덮지
         않는다). 판정이 실패하거나 학습자 발화가 없어도 그 범주로 ①·safe(GR-08)는 계산한다.

@@ -21,12 +21,15 @@ import urllib.request
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from functools import cache
 from pathlib import Path
+from typing import get_args
 
 from guardrail.config import load_config
 from guardrail.data import PublicRow, load_public
 from guardrail.eval.cv import load_splits
 from guardrail.kb import KbIndex
+from guardrail.schema import Category, _is_span, decision_of
 
 SPEC_TIMEOUT_S = 30.0  # 규격의 요청당 제한(SPEC §3)
 MAX_RESPONSE_BYTES = 256 * 1024  # 채점기가 읽는 응답 상한
@@ -68,6 +71,12 @@ def build_payloads(rows: list[PublicRow], n: int, big: int = 0, seed: int = 13) 
     return out
 
 
+@cache
+def _block() -> frozenset[Category]:
+    """block 범주. 서버가 다른 설정(GUARD_CONFIG)으로 떠 있으면 어긋날 수 있다(기본 설정 기준)."""
+    return frozenset(load_config().block_categories)
+
+
 def classify(payload: dict, status: int, body: bytes) -> str:
     """ok | http | json | format. 형식은 계약(guard.schema.json)의 채점 필드만 본다."""
     if status != 200:
@@ -75,11 +84,13 @@ def classify(payload: dict, status: int, body: bytes) -> str:
     try:
         d = json.loads(body)
         inp = d["input"]
-        ok = inp["decision"] in ("allow", "block") and isinstance(inp["category"], str)
+        cat = inp["category"]
+        ok = cat in get_args(Category) and inp["decision"] == decision_of(cat, _block())
         if "candidate_answer" in payload:
             o = d["output"]
             ok = ok and isinstance(o["grounded"], bool) and isinstance(o["safe"], bool)
-            ok = ok and all(isinstance(s, str) for s in o["unsupported"])
+            u = o["unsupported"]
+            ok = ok and isinstance(u, list) and all(isinstance(s, str) and _is_span(s) for s in u)
     except ValueError:
         return "json"
     except (KeyError, TypeError):

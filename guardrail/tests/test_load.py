@@ -201,3 +201,40 @@ def test_main_flags_log_mismatch(monkeypatch, capsys, tmp_path):
     log.write_text(line * 3, "utf-8")
     res = _main_out(monkeypatch, capsys, ["--access-log", str(log)])
     assert json.loads(res.out)["log_mismatch"] is False
+
+
+def _body(decision="allow", category="normal", **output):
+    d = {"input": {"decision": decision, "category": category}}
+    if output:
+        d["output"] = output
+    return json.dumps(d).encode()
+
+
+@pytest.mark.parametrize("unsupported", ["abc", None, {"a": 1}, [""], ["a", 1], [None]])
+def test_classify_rejects_bad_unsupported(unsupported):
+    p = {"messages": [], "candidate_answer": "답"}
+    body = _body(grounded=True, unsupported=unsupported, safe=True)
+    assert load.classify(p, 200, body) == "format"
+
+
+@pytest.mark.parametrize(
+    ("decision", "category", "want"),
+    [
+        ("allow", "normal", "ok"),
+        ("block", "jailbreak_injection", "ok"),
+        ("block", "normal", "format"),
+        ("allow", "jailbreak_injection", "format"),
+        ("allow", "not_a_category", "format"),
+        ("block", "not_a_category", "format"),
+        ("allow", ["normal"], "format"),
+    ],
+)
+def test_classify_checks_category_and_decision_mapping(decision, category, want):
+    assert load.classify({"messages": []}, 200, _body(decision, category)) == want
+
+
+def test_classify_allows_any_string_output_category():
+    p = {"messages": [], "candidate_answer": "답"}  # SPEC: output.category는 아무 문자열
+    d = json.loads(_body(grounded=True, unsupported=["구간"], safe=True))
+    d["output"]["category"] = "whatever"
+    assert load.classify(p, 200, json.dumps(d).encode()) == "ok"

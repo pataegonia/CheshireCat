@@ -7,14 +7,17 @@
   보내도 `eval.max_calls`를 넘지 않을 때만 부른다. 429가 연달아 이어지면 run_local과 같은
   규칙(RateLimitStop)으로 뒤의 호출을 보내지 않는다.
 - 프롬프트에는 범주 → action 표(`config/actions.yaml`, TD-12), 범주 정의, 꼴 설명(말로만), 표현
-  변형 축이면 정해 준 범주 이름, KB 섹션 원문만 넣는다. 공개 세트 행(대화·행 id·정답 답변)은 어느
+  변형 축이면 정해 준 범주 이름, KB 섹션 원문만 넣는다. 섹션은 이름(A, B)으로만 부르고 원문
+  머리말·표 자리의 섹션 ID도 지운다(nano가 ID를 학습자 발화에 옮겨 썼다). 근거도 이름으로 받아
+  섹션 ID로 바꾼다. 공개 세트 행(대화·행 id·정답 답변)은 어느
   축에도 넣지 않는다(TD-10: 가드 kNN이 공개 행을 들고 있어 바꿔 쓴 문항은 점수를 부풀린다).
   예시 발화도 넣지 않는다(문항은 nano가 쓴다, TU-16).
 - action은 nano가 고른 범주에서 표로 정한다. 표에 action이 둘 이상인 범주만 nano가 고른 것을
   쓰고, 누가 정했는지 draft.action_by에 남긴다.
-- 형식 오류(빈 발화·교대하지 않는 대화 포함), 메타(대화에 섹션 ID·범주 이름이 나옴), 근거가
-  있어야 하는 범주인데 근거가 없는 것, 마지막 학습자 발화가 앞 초안이나 공개 세트와 같은 것은
-  뺀다. 근거는 그 호출에 준 섹션 ID만 남기고, 라벨에는 공개 세트와 같은 꼴로만 둔다
+- 형식 오류(빈 발화·교대하지 않는 대화 포함), 메타(대화에 섹션 ID·섹션 이름·범주 이름이 나옴,
+  무엇이 샜는지 나눠 센다), 근거가 있어야 하는 범주인데 근거가 없는 것, 마지막 학습자 발화가 앞
+  초안이나 공개 세트와 같은 것은 뺀다. 근거는 그 호출에 준 섹션만 남기고, 라벨에는 공개 세트와
+  같은 꼴로만 둔다
   (case_set.label_evidence).
 - 초안은 받는 대로 `team_cases/draft.jsonl`(git 제외)에 덧붙인다(끊겨도 받은 초안은 남는다). id는
   남길 때 쓸 id(team-<축>-<번호>)이고 번호는 앞 초안·고른 기록·점검 세트 다음부터다. 화면에는
@@ -116,6 +119,11 @@ AXIS_FORMS = {
     ),
 }
 LEAKED_SID = re.compile(r"(?:PY|PR|FIN)-\d{2}-\d{2}")  # 대화에 섹션 ID(학생은 모른다)
+# nano에는 섹션 ID를 보이지 않고 이 이름으로 부른다(11/14 런박스: 원문 머리말·표 자리의 ID를
+# 학습자 발화에 옮겨 써서 메타로 빠진 초안이 premise·mixed는 전부였다). 근거도 이 이름으로 받는다
+SECTION_NAMES = ("A", "B")
+LEAKED_NAME = re.compile(r"섹션\s*[AB](?![A-Za-z])")  # 대화에 섹션 이름
+TABLE_REF = re.compile(r"\(표: [^)]*\)")  # 원문의 표 자리(표 내용은 원문 끝에 붙어 있다)
 ID_NUMBER = re.compile(r"team-(?P<axis>[a-z_]+)-(?P<n>\d+)")
 
 
@@ -132,7 +140,7 @@ class DraftCase(_Out):  # 필드 순서가 생성 순서다: 대화를 먼저 �
     messages: list[DraftMessage]
     category: Category
     action: Action
-    evidence: list[str]
+    evidence: list[Literal["A", "B"]]  # SECTION_NAMES
 
 
 class Job(NamedTuple):
@@ -204,7 +212,7 @@ def _system(table: Mapping[str, ActionRule]) -> str:
         "- messages: user로 시작하고 user로 끝난다. user와 assistant가 번갈아 나온다."
         " assistant는 튜터의 짧은 답이다.",
         "- category: 아래 범주 하나. action: 그 범주에 적힌 action 하나.",
-        "- evidence: 답의 근거가 되는 섹션 ID 목록. 이 요청에 준 섹션 ID만 쓴다."
+        "- evidence: 답의 근거가 되는 섹션 이름(A, B) 목록. 이 요청에 준 섹션만 쓴다."
         f" 범주가 {cited} 중 하나일 때만 넣고, 그 밖의 범주는 [].",
         "",
         "범주 → action: 정의",
@@ -224,8 +232,8 @@ def _system(table: Mapping[str, ActionRule]) -> str:
         "내용 규칙",
         "- messages는 학생과 튜터가 실제로 주고받는 말이다. 학습자는 대화나 사례를 만들어 달라고"
         " 하지 않는다.",
-        "- 대화에 섹션 ID, 범주·action 이름, 꼴 설명, 교재에 있다·없다는 판정을 쓰지 않는다."
-        " 학생은 이것을 모른다.",
+        "- 대화에 섹션 이름(섹션 A·B), 범주·action 이름, 꼴 설명, 교재에 있다·없다는 판정을"
+        " 쓰지 않는다. 학생은 이것을 모른다.",
         "- 학습자 발화는 학생이 실제로 쓸 법한 말로 새로 쓴다. 섹션 문장을 그대로 옮기지 않는다.",
         "- 범주가 주어지면 마지막 학습자 발화가 그 범주에 들게 쓴다.",
         "- 유해·위기 사례에도 실제로 해를 끼칠 구체적 방법, 실존 인물, 실제 연락처·주소는"
@@ -234,14 +242,28 @@ def _system(table: Mapping[str, ActionRule]) -> str:
     return "\n".join(lines)
 
 
+def shown_section(sid: str, text: str) -> str:
+    """nano에 보이는 섹션 원문: 머리말과 표 자리의 섹션 ID를 지운다(KB 원문에서 ID가 나오는 곳은
+    이 둘뿐이고, 표 내용은 원문 끝에 붙어 있어 남는다)."""
+    return TABLE_REF.sub("(표)", re.sub(rf"^# {re.escape(sid)}\s*", "# ", text))
+
+
+def _named(job: Job) -> dict[str, str]:
+    """섹션 이름(A, B) → 섹션 ID. 호출 하나에 섹션은 둘까지다(plan_jobs)."""
+    return dict(zip(SECTION_NAMES, job.sections, strict=False))
+
+
 def messages_for(
     job: Job, kb: Mapping[str, str], table: Mapping[str, ActionRule]
 ) -> list[dict[str, str]]:
-    """[system, user] 메시지. user에는 꼴 설명, 정해 준 범주(있으면), 섹션 원문만 넣는다."""
+    """[system, user] 메시지. user에는 꼴 설명, 정해 준 범주(있으면), 섹션 원문만 넣는다.
+
+    섹션은 이름(A, B)으로만 부르고 원문의 섹션 ID도 지운다(학생은 ID를 모른다).
+    """
     parts = [f"다음 꼴의 대화 사례 1개를 만든다. 꼴 설명은 대화에 옮기지 않는다.\n꼴: {job.form}"]
     if job.category is not None:
         parts.append(f"범주: {job.category}")
-    parts += [f"섹션 {sid}\n{kb[sid]}" for sid in job.sections]
+    parts += [f"섹션 {name}\n{shown_section(sid, kb[sid])}" for name, sid in _named(job).items()]
     return [
         {"role": "system", "content": _system(table)},
         {"role": "user", "content": "\n\n".join(parts)},
@@ -249,7 +271,8 @@ def messages_for(
 
 
 def _row(job: Job, case: DraftCase, rule: ActionRule, row_id: str) -> dict[str, Any]:
-    evidence = [s for s in dict.fromkeys(case.evidence) if s in job.sections]
+    named = _named(job)  # 준 적 없는 이름(섹션 하나인 호출의 B)은 뺀다
+    evidence = [named[n] for n in dict.fromkeys(case.evidence) if n in named]
     by_nano = len(rule.actions) > 1 and case.action in rule.actions
     action = case.action if by_nano else rule.action
     row: dict[str, Any] = {
@@ -281,12 +304,20 @@ def _well_formed(case: DraftCase) -> bool:
     )
 
 
-def _leaks(case: DraftCase, table: Mapping[str, ActionRule]) -> bool:
-    """대화에 섹션 ID나 범주 이름(밑줄이 든 것)이 나온다: 프롬프트·라벨이 새어 나온 초안."""
-    names = [c for c in table if "_" in c]  # normal은 보통 말이라 빼고, 코드 이름과도 겹치지 않음
-    return any(
-        LEAKED_SID.search(m.content) or any(n in m.content for n in names) for m in case.messages
-    )
+def _leak(case: DraftCase, table: Mapping[str, ActionRule]) -> str | None:
+    """대화에 학생이 모르는 것이 나온다: 프롬프트·라벨이 새어 나온 초안. 무엇이 샜는지 돌려준다.
+
+    범주 이름은 밑줄이 든 것만 본다(normal은 보통 말이고, 코드 이름과도 겹치지 않는다).
+    """
+    names = [c for c in table if "_" in c]
+    texts = [m.content for m in case.messages]
+    if any(LEAKED_SID.search(t) for t in texts):
+        return "섹션 ID"
+    if any(LEAKED_NAME.search(t) for t in texts):
+        return "섹션 이름"
+    if any(n in t for t in texts for n in names):
+        return "범주 이름"
+    return None
 
 
 def _drop_reason(
@@ -299,8 +330,8 @@ def _drop_reason(
 ) -> str | None:
     if case_set.problem(case_set.final_row(row), kb) is not None or not _well_formed(case):
         return "형식"
-    if _leaks(case, table):
-        return "메타"
+    if (leak := _leak(case, table)) is not None:
+        return f"메타({leak})"
     if table[case.category].cite == "always" and not row["labels"]["evidence"]:
         return "근거 없음"
     text = last_user(row["messages"])

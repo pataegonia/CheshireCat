@@ -24,7 +24,7 @@
 | [R13-B2-libraries](R13-B2-libraries.md) | 라이브러리 선정과 규칙 준수 판정 (11/10) |
 | [R14](R14-prompt-uplift.md) | **프롬프트·판정 고도화 조사 종합**: few-shot 예시 구성 측정, 후보 재평가, 실험 순서 초안 (11/13, 스크립트 `guardrail/scripts/r14/`) |
 | [R14-B1-input-prompting](R14-B1-input-prompting.md) | 외부 조사: 최소쌍 분류 프롬프트, GPT-5 계열 지침, 불확실성 신호, 지시 언어 (11/13, 출처 24개) |
-| [R14-B2-grounding-eval-injection](R14-B2-grounding-eval-injection.md) | 외부 조사: 근거 판정 정밀도, 작은 세트의 프롬프트 A/B 통계, 판정기 주입 방어, 거절 탐지 (11/13, 출처 31개) |
+| [R14-B2-grounding-eval-injection](R14-B2-grounding-eval-injection.md) | 외부 조사: 근거 판정 정밀도, 작은 세트의 프롬프트 A/B 통계, 판정기 주입 방어, 거절 탐지 (11/13, 출처 30개) |
 | [R14-B3-eval-tools](R14-B3-eval-tools.md) | 개발 전용 평가 도구 검색: 채택 0건, 하네스에 더할 최소 변경 (11/13) |
 | `src/guardrail/preprocess.py` | 한국어 정규화 구현 (조사 단계 참고 코드를 옮겨 고침, ADR-0001) |
 

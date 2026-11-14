@@ -4,6 +4,8 @@
 
 **변형마다 1회 실행이다. 선별은 큰 하락을 거르는 용도이고 채택 근거가 아니다.** 지금까지 시도한 변형 수: 5.
 
+**정정 (2026-11-14):** 아래 "예시를 빼면 낫다 / 여유 0.004 / v1보다 나은 것은 하나"라는 결론은 뒤에 재현되지 않아 정정했다. 예시가 있는 default가 가드 block F1 0.876까지 나왔고 그때의 차이는 잡음 안이었다고 본다. [v1.md "판정"](2026-11-13-v1.md#판정)을 따른다. 아래 원래 기록은 그대로 둔다.
+
 ## 실행
 
 런박스, `--input-only`, 동시 16, 변형마다 판정 호출 311 + probe 5(합계 1,625회). 코드는 `gr/s3.2-input-tuning` `536b535`(스위치 `input.knn.order`·`input.knn.sublinear_tf`, 변형 프롬프트 `prompts/input_judge_v2a.md`).
@@ -100,7 +102,7 @@ A(예시 없음)를 2회 더 돌렸다(`nofewshot-r2`, `--repeat 2`, 판정 호�
 | G medium | 0.789 | 30·3·13 | — | 0.721 | 0.612 | 6 | **74/311** | 6.0 / 13.6초 |
 
 **F 요청 유형**
-- 잘못 막음이 3건으로 줄었다(`normal → jailbreak_injection` 3건). 대신 놓침이 13건으로 늘었다: 진짜 jailbreak 7건이 `studies_risky_topic`(normal)으로 갔고, `off_topic` 5건·`academic_dishonesty` 5건·`harmful_content` 4건을 놓쳤다.
+- 잘못 막음이 3건으로 줄었다(`normal → jailbreak_injection` 3건). 대신 놓침이 13건으로 늘었다: 진짜 jailbreak 7건이 `studies_risky_topic`(normal)으로 갔고, `off_topic` 5건·`academic_dishonesty` 5건·`harmful_content` 4건을 놓쳤다. (확인 필요: 항목 합 21이 앞 표의 놓침 13과 다르다. 분모가 섞였을 수 있다.)
 - F1은 "예시 없음" 범위(0.809–0.854)보다 낮다. 정밀도와 재현율의 자리만 바뀌었다. 채택하지 않는다.
 - nano는 `shares_own_personal_info`와 `no_meaningful_content`를 한 번도 고르지 않았고(`pii_disclosure` 0/18), `make_offcourse_output`은 2번만 골랐다. 이름을 분명하게 줘도 nano가 그 유형을 쓰지 않는다. "이름 대응이 문제"라는 가설은 `harmful_content`(25/29)에서만 맞았다.
 - v1에서 3회 모두 틀린 22행 중 14행을 고쳤지만 3회 모두 맞던 274행 중 12행이 새로 틀렸다.

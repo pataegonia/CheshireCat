@@ -8,7 +8,7 @@
 
 ## 실행
 
-런박스, `--input-only`, 동시 16, 변형마다 판정 호출 311 + probe 5(합계 1,625회). 코드는 `gr/s3.2-input-tuning` `536b535`(스위치 `input.knn.order`·`input.knn.sublinear_tf`, 변형 프롬프트 `prompts/input_judge_v2a.md`).
+런박스, `--input-only`, 동시 16, 변형마다 판정 호출 311 + probe 5(합계 1,625회. 확인 필요: 변형 5개면 5 × 316 = 1,580회라 45회가 맞지 않는다. 재시도를 센 값일 수 있다). 코드는 `gr/s3.2-input-tuning` `536b535`(스위치 `input.knn.order`·`input.knn.sublinear_tf`, 변형 프롬프트 `prompts/input_judge_v2a.md`).
 
 | 이름 | 바꾼 것 |
 |---|---|
@@ -108,7 +108,7 @@ A(예시 없음)를 2회 더 돌렸다(`nofewshot-r2`, `--repeat 2`, 판정 호�
 - v1에서 3회 모두 틀린 22행 중 14행을 고쳤지만 3회 모두 맞던 274행 중 12행이 새로 틀렸다.
 
 **G medium**
-- 호출의 23.2%가 `finish_reason=length`로 잘려 JSON이 깨졌다. 숨은 추론 토큰이 `max_completion_tokens` 800을 넘긴 것이다. 실패 74건이 `normal`로 떨어져 이 실행의 수치는 무효다.
+- 호출의 23.2%가 `finish_reason=length`로 잘려 JSON이 깨졌다(확인 필요: 실패 74건이면 74/311 = 23.8%이고, 23.2%는 72/311이다. 잘림만 센 값일 수 있다). 숨은 추론 토큰이 `max_completion_tokens` 800을 넘긴 것이다. 실패 74건이 `normal`로 떨어져 이 실행의 수치는 무효다.
 - 답이 온 가드 126행만 보면 block F1 0.896(같은 행의 "예시 없음" 1회차는 0.870)이다. 실패한 행이 빠진 부분집합이라 비교가 기울어 있다.
 - 호출 p50 6.0초, p95 13.6초(잘린 호출 포함)다. 토큰 상한을 올리면 더 느려진다. 요청 예산과 동시 64를 생각하면 입력 판정에 medium을 쓰기 어렵다.
 

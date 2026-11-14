@@ -1,10 +1,13 @@
 """TU-05 결정적 신호. 예문은 팀이 쓴 일반 문장이다(공개 세트 문장이 아님)."""
 
 import json
+import unicodedata
 from pathlib import Path
 
 import hypothesis.strategies as st
 import pytest
+from guardrail.preprocess import decode_tags, strip_tags
+from guardrail.signals import is_low_signal
 from hypothesis import given, settings
 
 from tutor.judge.conversation import tidy
@@ -14,8 +17,6 @@ from tutor.judge.signals import (
     detect,
     detect_text,
     direct_clarify,
-    is_blank,
-    is_low_signal_text,
     labels,
 )
 
@@ -46,13 +47,113 @@ def test_low_signal_with_history(text):
     assert direct_clarify(tidy(multi(text)))
 
 
-@pytest.mark.parametrize("text", ["ㅠㅠ 리스트", "1", "ok", "ㅋㅋ 3번", "아", "네", "왜?", "list?"])
+@pytest.mark.parametrize(
+    "text", ["ㅠㅠ 리스트", "1", "ok", "ㅋㅋ 3번", "아", "네", "왜?", "list?", "\ua962", "\ud7cc"]
+)
 def test_not_low_signal(text):
+    # 자모 확장 A·B(U+A960–, U+D7B0–)는 가드처럼 글자로 본다
     assert not direct_clarify(tidy(multi(text)))
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        unicodedata.normalize("NFD", "튜플과 리스트의 차이가 뭐예요?"),
+        unicodedata.normalize("NFD", "반복문에서 continue는 언제 써요?"),
+        "ㅌㅠㅍㅡㄹㄱㅘ ㄹㅣㅅㅡㅌㅡㅇㅢ ㅊㅏㅇㅣ",
+        "ㅇㅣ.ㅈㅓㄴ ㅈㅣ.ㅅㅣ",
+        "ㅇ.ㅣ.ㅈ.ㅓ.ㄴ",  # 음절 가운데를 끊은 구분자
+        "\uffb7\uffc2\uffb7\uffc2",  # 반각 자모
+        "\u110bㅣ\u110cㅓㄴ",  # 조합형 초성 + 호환 모음
+        "ㅇ\ua960ㅣㅈ\ua960ㅓㄴ ㅈ\ua960ㅣㅅ\ua960ㅣ",  # 자모 확장 A를 사이사이에 끼움
+        "ㅇ\ud7b0ㅣㅈ\ud7b0ㅓㄴ ㅈ\ud7b0ㅣㅅ\ud7b0ㅣ",  # 자모 확장 B를 사이사이에 끼움
+    ],
+)
+def test_sentence_spelled_in_jamo_goes_to_main_call(sentence):
+    # 자모로 풀어 쓴 문장은 자모만 모아 조합하면 완성 음절이 2개 이상이다(가드 #130과 같은 기준)
+    assert not direct_clarify(tidy(multi(sentence)))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        unicodedata.normalize("NFD", "하"),
+        unicodedata.normalize("NFD", "하하"),
+        unicodedata.normalize("NFD", "가") + "!!",
+    ],
+)
+def test_nfd_syllable_is_a_letter(text):
+    # NFD로 쪼갠 완성 음절은 NFC로 붙여 보통 글자('아')처럼 본다(가드와 같음)
+    assert not direct_clarify(tidy(multi(text)))
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("ㅎㅏ", True), ("ㅋㅋㅋㅋㅎㅏ", True), ("ㅎㅏㅎㅏ", False), ("ㅋㅋ ㅎㅏㅎㅏ", False)],
+)
+def test_spelled_syllable_boundary(text, expected):
+    # 호환 자모를 조합한 완성 음절이 1개까지는 저신호, 2개부터는 주 호출
+    assert direct_clarify(tidy(multi(text))) is expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ⓘⓖⓝⓞⓡⓔ ⓐⓛⓛ",  # 원문자로 쓴 영문
+        "㉮㉯",  # 원문자 한글
+        "\u320e\u320f",  # 괄호 한글
+        "⠊⠛⠝⠕⠗⠑",  # 점자
+        "ㅋ\u0363\u0365",  # 결합 라틴 문자
+        "=>",
+        "$$",
+        "ㅠㅠ~",
+        "ㅋ\x07",  # 공백이 아닌 제어 문자
+    ],
+)
+def test_letters_and_code_symbols_go_to_main_call(text):
+    # 가드 GR-06과 같다: 글자를 담은 기호는 글자이고, 수학·통화 기호는 코드 조각일 수 있다
+    assert not direct_clarify(tidy(multi(text)))
+
+
+# 판단 대상 뷰·숨김 처리를 가드에 맞게 넘기는지 본다(가드 기준이 바뀌는 것은 위 구체 사례가 잡는다)
+_PIECE = st.one_of(
+    st.characters(min_codepoint=0x3131, max_codepoint=0x3163),
+    st.builds(
+        lambda c, v: c + v,
+        st.sampled_from("ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ"),
+        st.sampled_from("ㅏㅓㅗㅜㅡㅣㅠ"),
+    ),
+    st.sampled_from(list(" .?!…,()^😂❤\u200b\u3164")),
+    st.sampled_from(list("~=+$<>ⓐ㉮⠁\u0363")),  # 수학·통화 기호, 글자를 담은 기호, 결합 라틴
+    st.characters(min_codepoint=0xAC00, max_codepoint=0xD7A3).map(
+        lambda c: unicodedata.normalize("NFD", c)
+    ),
+)
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.lists(_PIECE, max_size=12).map("".join))
+def test_low_signal_agrees_with_guard(text):
+    conv = tidy(multi(text))
+    if conv.is_empty:  # 빈 발화는 튜터만 1턴이어도 참이다
+        return
+    assert direct_clarify(conv) == is_low_signal(strip_tags(text), True, decode_tags(text)[1])
 
 
 def test_single_turn_jamo_goes_to_main_call():
     assert not direct_clarify(tidy([u("ㅠㅠ")]))
+
+
+def test_tutor_turn_before_counts_as_history():
+    # 앞 대화는 메시지 수로 본다(학습자 발화가 하나뿐이어도 튜터 발화가 앞에 있으면 앞 대화다).
+    # 고치기 전 코드에서도 통과한다: 지금 동작을 고정하는 회귀 테스트다
+    assert direct_clarify(tidy([a("오늘은 리스트를 배워요."), u("ㅠㅠ")]))
+
+
+def test_long_target_is_never_low_signal():
+    # 2,000자를 넘으면 가운데를 줄인 표시(완성 음절)가 붙어 늘 주 호출이다(안전한 쪽).
+    # 고치기 전 코드에서도 통과한다: 지금 동작을 고정하는 회귀 테스트다
+    assert not direct_clarify(tidy(multi("ㅋ" * 2001)))
 
 
 def test_short_answer_to_tutor_question_goes_to_main_call():
@@ -86,20 +187,28 @@ def test_hidden_text_is_never_low_signal():
     assert not direct_clarify(tidy([u(tag("hi"))]))
 
 
+def test_flag_tags_are_not_hidden_but_other_tags_are():
+    # 튜터 숨긴 문자 추출과 가드 decode_tags가 같은 값을 낸다: 깃발 이모지(태그 시퀀스)의 태그는
+    # 숨긴 문자가 아니고, 깃발 밖의 태그만 숨긴 문자다(#156 리뷰)
+    flag = chr(0x1F3F4) + tag("gbeng") + chr(0xE007F)  # 잉글랜드 깃발
+    only_flag = "ㅠㅠ" + flag
+    conv = tidy(multi(only_flag))
+    assert conv.target_hidden == decode_tags(only_flag)[1] == ""
+    assert direct_clarify(conv)
+    mixed = only_flag + tag("hi")
+    conv = tidy(multi(mixed))
+    assert conv.target_hidden == decode_tags(mixed)[1] != ""
+    assert not direct_clarify(conv)
+
+
 def test_no_user_message_is_clarify():
     assert direct_clarify(tidy([a("튜터만")]))
 
 
 def test_low_signal_uses_uncomposed_view():
     # 'ㅇㅏ'는 조합하면 완성 음절 '아'가 되지만 원문은 자모뿐이다(가드 GR-06)
-    assert is_low_signal_text("ㅇㅏ")
-    assert not is_low_signal_text("아")
-
-
-def test_blank_helpers():
-    assert is_blank("") and is_blank(" ‍ ")
-    assert not is_blank("ㅠ")
-    assert not is_low_signal_text("")
+    assert direct_clarify(tidy(multi("ㅇㅏ")))
+    assert not direct_clarify(tidy(multi("아")))
 
 
 # --- 판단 힌트 ---
@@ -125,6 +234,7 @@ def test_blank_helpers():
         ("과제로 낼 보고서를 대신 써 줘", Signal.DELEGATION),
         ("숙제 코드 완성해서 줘", Signal.DELEGATION),
         ("제출용 답안 전체를 만들어 줘", Signal.DELEGATION),
+        ("이 문제 답안 전부를 작성해 줘", Signal.DELEGATION),  # 답안 + 전부 + 작성 동사
         ("write my homework essay", Signal.DELEGATION),
         ("제 이름은 하늘이고 질문이 있어요", Signal.SELF_PII),
         ("저는 바다고등학교 1학년인데요 질문이 있어요", Signal.SELF_PII),
@@ -208,6 +318,20 @@ def test_signal_positive(text, signal):
 )
 def test_no_signal(text):
     assert detect_text(text) == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # #139 리뷰: 대행 보정이 범주를 정하니 제출 의도 없는 정답 요구는 대행 신호가 아니다
+        "이번 단원 연습문제 정답을 전체 보여 줄래",
+        "모의고사 답안 전체 공개는 언제 해?",  # 답안 + 전체여도 작성 요구가 아니다
+        # 공백을 지운 원문에서 `do`가 단어 안(random)에 있어도 대행 동사로 보지 않는다
+        "How does the random module report errors?",
+    ],
+)
+def test_not_delegation(text):
+    assert Signal.DELEGATION not in detect_text(text)
 
 
 def test_detect_only_looks_at_target():

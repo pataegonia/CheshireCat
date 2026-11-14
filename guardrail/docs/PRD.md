@@ -200,7 +200,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓴다(SPEC §7.1).
 - `AsyncOpenAI`: 시간 제한을 직접 지정(연결 3초·읽기 12초 수준), SDK 재시도 0, 수동 재시도는 호출마다 1회이고 요청 예산 안에서만. `Retry-After`가 예산을 넘으면 기다리지 않고 기본값으로(S6).
 - `gpt-5-nano` 파라미터: `reasoning_effort="low"`(minimal 금지, S3), `verbosity="low"`, json_schema strict, `max_completion_tokens` ≥800. `temperature`·`max_tokens`·`logprobs`는 보내지 않는다. 기동 시 시험 호출로 파라미터(`reasoning_effort`·`verbosity`·`max_completion_tokens`·`response_format` json_schema)를 **하나씩** 시험해 거부된 것만 끈다(json_schema가 거부되면 JSON 모드). 설정의 각 파라미터는 생략(null)할 수 있고, 시험 결과는 오류 코드로만 남긴다. `max_completion_tokens`는 1600이다(S2.9: 800에서 출력 판정 호출의 6.2–9.4%가 잘렸고 1600에서 잘림 0/192. `read` 12초 시간 초과는 유효 6회에서 8/384로 2%를 넘었다, 조치는 ADR-0014 "S2.9 수정").
 - 프롬프트는 고정 부분(정의·지시)을 앞에, 요청별 부분(예시·대화·답변)을 뒤에 둔다(프롬프트 캐시 접두 일치, R13-B Q9).
-- 요청당 호출: nano 2회(입력·출력 병렬) + 조건부 입력 1회(ablation) + 호출마다 재시도 1회. 임베딩 0회.
+- 요청당 호출: nano 2회(입력·출력 병렬) + 조건부 입력 1회(ablation) + 호출마다 재시도 1회. 임베딩 0회. 튜터 공유 메서드(`classify` 최대 1회, `judge_output`은 범주를 받으면 1회·None이면 병렬 2회)는 재시도 0.
 - 부하 시험은 채점 수준(동시 64, 가드·튜터 합쳐 약 600요청)까지만 한다. 더 센 시험은 과한 호출로 볼 수 있다(SPEC §7.1).
 - **수용 기준**: 채점 수준 부하에서 시간 초과 0건, 가드 요청 p50·p95 보고(목표 p95 ≤8s), 전체 실행 시간이 베이스라인 수준(약 2분)인지 확인. BM25·TF-IDF·LR 같은 CPU 작업이 이벤트 루프를 막지 않는지(스레드 풀 또는 1ms 미만) 확인. 런박스 실측(§11-2 1번)이 코드 단계 첫 작업.
 
@@ -279,7 +279,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓴다(SPEC §7.1).
 | ID | 결정 사항 | 가드 쪽 제안 | 상태 |
 |---|---|---|---|
 | T1 | 입력 범주 판정을 `/tutor`가 쓸지 | `/tutor`는 부적절한 요청에 응하면 그 문항 0점이다(SPEC §4). GR-04·GR-05·GR-06의 범주 함수를 import해 action을 정하게 한다. 튜터는 block 범주이고 확신할 때만 거절한다(민감하지만 정상인 질문을 거절하면 action 점수를 잃음, SPEC §6) | 제안 |
-| T1-2 | 출력 판정을 `/tutor`가 쓸지(서버 담당 요청, PR #40 리뷰) | `/tutor`가 생성 직후 자기 답변을 같은 기준으로 거르게 `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict`(grounded·unsupported·safe)를 import 가능하게 낸다. `category`가 None이면 먼저 `classify(messages)`를 부른다(nano 호출 +1). 3단 ①과 safe는 그 범주를 쓴다. v6에는 문장 번호가 없고 `unsupported`는 규칙 구간(원문 부분 문자열)이므로, 튜터는 그 구간이 든 문장을 지우고 citations를 다시 계산하면 된다. 문장 분리는 튜터 쪽 몫 | 제안(S2.11) |
+| T1-2 | 출력 판정을 `/tutor`가 쓸지(서버 담당 요청, PR #40 리뷰) | `/tutor`가 생성 직후 자기 답변을 같은 기준으로 거르게 `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict`(grounded·unsupported·safe)를 import 가능하게 낸다. `category`가 None이면 입력·출력 nano를 병렬로 부른다(최대 2회). 3단 ①과 safe는 그 범주를 쓴다. v6에는 문장 번호가 없고 `unsupported`는 규칙 구간(원문 부분 문자열)이므로, 튜터는 그 구간이 든 문장을 지우고 citations를 다시 계산하면 된다. 문장 분리는 튜터 쪽 몫 | 구현됨(S2.11) |
 | T2 | KB 색인 공유 | GR-03 색인을 두 엔드포인트가 함께 쓴다 | 제안 |
 | T3 | 범주 → action 대응 | 튜터 공개 세트에서 거의 함수다: normal·pii → answer, answer_seeking·academic → scaffold, out_of_material → abstain, jailbreak → refuse, harmful → refuse(정보 탐색·사기)/redirect(혐오·모욕), off_topic → redirect, emotional → escalate, low_signal → clarify(R13-A §1.5) | 제안(측정 근거) |
 | T4 | 서버·게이트 | 한 서버(시작용 `competition/server.py`처럼 한 앱)에 `/tutor`·`/guard`, 전역 LLM 게이트 하나(GR-10). SPEC이 한 프로세스를 요구하지는 않지만, 계정마다 제출은 그 계정 런박스의 `/tutor`·`/guard`여야 한다(SPEC §7) | 런박스 규칙은 확정, 한 프로세스·게이트 공유는 제안 |

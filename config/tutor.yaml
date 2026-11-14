@@ -16,6 +16,7 @@ toggles:
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   scaffold_state_rule: false   # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다. 11/14 측정으로 숨김(전체 이득 없음, 과제 대행 행 0점 증가). T3에서 운영진 답(§11-1-4)과 함께 다시 본다
   inline_cite: false           # 답변 끝 (섹션 ID) 표기. 켜면 citations와 같은 ID를 붙인다(TU-07, #82 ablation)
+  evidence_check: false        # 주 호출이 범주보다 먼저 "묻는 내용이 근거 묶음에 있는가"(asked_in_evidence)를 쓴다(TU-06, #162). 판단 보조일 뿐 action을 덮지 않는다. 3회 비교 뒤 정한다
   max_citations: 1             # 1 | 2. 공개 세트 근거 2개 행 0(#82 집계)이라 2는 이득 없음(TU-07)
 fewshot:                       # 판단 예시 고르기(TU-08). 가드 GR-05 input.knn과 같은 값
   ngram: [1, 3]                # 문자 n-gram(char_wb) 범위

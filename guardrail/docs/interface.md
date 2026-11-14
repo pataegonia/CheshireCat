@@ -44,7 +44,7 @@ Content-Type: application/json
 | 공유 후보 | 형태 | `/tutor`에서 쓰는 곳 | 결정 전 기본값 |
 |---|---|---|---|
 | 입력 범주 판정 | `async Guard.classify(messages) -> Category`와 `decision_of(category, block)`(`block` = 설정 `block_categories`, master-plan §4) | action 결정. 튜터 공개 세트의 범주 → action 대응(PRD §9 T3). block 범주이고 확신할 때만 거절 | 가드만 사용 |
-| 출력 판정 | `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict` | 생성 직후 자기 답변 거르기(`category`가 None이면 먼저 `classify(messages)`를 부른다(nano 호출 +1). 3단 ①과 safe는 그 범주를 쓴다): `unsupported` 구간이 든 문장을 지우고 citations 재계산(PRD §9 T1-2). 넘겨받은 `category`는 다시 확인하지 않는다. 튜터는 classify가 실패하면 주 호출 범주를 넘긴다(#138) | 가드만 사용 |
+| 출력 판정 | `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict` | 생성 직후 자기 답변 거르기(`category`가 None이면 입력·출력 nano를 병렬로 부른다(최대 2회). 있으면 입력 nano 없이 출력 nano만(최대 1회). 3단 ①과 safe는 그 범주를 쓴다): `unsupported` 구간이 든 문장을 지우고 citations 재계산(PRD §9 T1-2). 넘겨받은 `category`는 다시 확인하지 않고 low-signal 판단으로 덮지 않는다. `category`가 10개 값이 아니면 `ValueError`. 두 메서드는 nano 재시도 0이고(튜터 TU-12·TU-13의 "재시도 없음, 요청당 정상 3회·절대 4회"에 맞춘 것. `/guard` 경로는 `llm.retries: 1` 그대로) 실패를 이렇게 알린다: `classify`는 입력 nano가 실패하면 kNN·LR 추측값을 돌려주지 않고 `GuardUnavailable`(`guardrail.guard`, `RuntimeError`)을 낸다(학습자 발화가 없는 대화는 실패가 아니라 `normal`). `judge_output`은 판정에 실패해도 예외를 내지 않는다(잘못된 `category`의 `ValueError`만 예외): 출력 nano가 실패하면 nano 없이 3단을 계산한다(block 범주면 ① true, 규칙 ②가 걸리면 false와 그 구간, 그 밖에는 `output.failure_default`). 가드 예외나 학습자 발화 없음이면 규칙 ②도 없이 ①·`output.failure_default`만 쓴다. `category`가 있으면 safe는 이 모든 경우에 GR-08 규칙 그대로다. `category`가 None인데 가드 예외가 나면 `/guard`와 같이 safe=true다. 바깥에서 취소되면 최대 0.2초 늦게 돌아올 수 있다. 시간 제한은 부르는 튜터가 `asyncio.timeout`으로 건다. 튜터는 classify가 실패하면 주 호출 범주를 넘긴다(#138) | 가드만 사용 |
 | KB 색인 | 기동 때 한 번 만든 BM25 색인 객체 | 튜터 검색(#158) | 튜터가 기동 때 가드 `KbIndex`를 같은 설정 `kb`로 따로 만든다 |
 | 전역 LLM 게이트 | 세마포어 + 지터 재시도, 요청 예산 | 튜터 생성 호출 | 각자 게이트(합계 동시성 주의) |
 | kNN 색인 | 공개 400행 TF-IDF | 튜터 판단 예시 고르기(#141). 튜터는 색인을 따로 만들고 아래 2.1의 정규화·묶음 함수와 GR-05 고르기 규칙을 쓴다 | 색인은 각자, 규칙은 공유 |
@@ -55,12 +55,10 @@ Content-Type: application/json
 
 아래 이름의 시그니처·필드·반환형을 바꾸면 튜터·통합이 깨진다. 바꿀 때는 PR 본문에 적고 튜터·통합 담당을 리뷰어로 넣는다. `guardrail/tests/test_shared_api.py`가 호출하는 쪽이 기대는 인자 종류·필드 순서·반환형만 고정해 두므로, 바꾸면 가드 CI에서 먼저 걸린다. 출력 내용(예: `normalize` 결과)은 고정하지 않는다. 표에 없는 가드 내부 이름은 예고 없이 바뀔 수 있다. 테스트 코드의 import는 세지 않는다.
 
-`Guard.classify`·`Guard.judge_output`(#138)은 아직 main에 없다. S2.8에서 들어오면 S2.11에서 이 표와 테스트에 올린다.
-
 | 모듈 | 이름 | 쓰는 곳 |
 |---|---|---|
 | `guardrail.server` | `create_app`(인자 없는 `guard_factory` 기본값, `tutor_router`·`defaults`·`startups` 키워드). 기동 때 `app.state.cfg`(설정)·`app.state.guard`(`await guard_factory(cfg)`)를 두고 `startups`를 `await fn(app.state)`로 부른다 | `app.py`, `tutor/startup.py`, `tutor/runtime/budget.py`, `tutor/runtime/llm.py`, `tutor/eval/mock_load.py` |
-| `guardrail.guard` | `ConstantGuard` | `tutor/eval/mock_load.py` |
+| `guardrail.guard` | `ConstantGuard`, `Guard`의 `async classify(messages) -> Category`·`async judge_output(messages, candidate_answer, category=None) -> OutputVerdict`. `messages`는 role·content dict 목록이나 `Message` 시퀀스 | `ConstantGuard`는 `tutor/eval/mock_load.py`, `Guard`는 `tutor/judge/guard_merge.py`(#138). 테스트는 `tests/test_shared_api.py`·`tests/test_tutor_api.py` |
 | `guardrail.schema` | `Category`, `OutputVerdict` | `integration/contracts.py`, `integration/actions.py`, `tutor/judge/guard_merge.py`·`tutor/judge/flow.py`(#138) |
 | `guardrail.config` | `load_config`, `resolve_path`, `DEFAULT_CONFIG`, `GuardConfig`(타입), 설정의 `paths.public`·`paths.kb`·`block_categories`·`retrieval.max_query_chars`·`kb.ngram`·`kb.k1`·`kb.b`·`budget_s`·`llm.gate`·`llm.timeout_s.read`·`llm.structured_output`·`llm.reasoning_effort`·`llm.verbosity`·`llm.max_completion_tokens` | `tutor/retrieval/search.py`, `tutor/retrieval/index.py`(#158, `retrieval.max_query_chars`·`kb.*`), `tutor/runtime/llm.py`, `tutor/eval/mock_load.py`, `tutor/judge/guard_merge.py`(#138, `block_categories`), `tutor/judge/examples.py`(#141) |
 | `guardrail.kb` | `KbIndex(sections, *, ngram, k1, b)`. `sections`는 섹션 ID → 섹션 원문 Mapping, 나머지는 키워드 인자. `chunks`는 `(섹션 ID, 조각)` 튜플(섹션 순서), `scores(query: str) -> list[float]`는 조각 순서. 점수 값은 고정하지 않는다 | `tutor/retrieval/index.py`(#158) |

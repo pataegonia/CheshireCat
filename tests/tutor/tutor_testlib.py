@@ -98,6 +98,12 @@ OK_REPLIES = {
         "action": "answer",
         "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
     },
+    "CheckedMainCallOut": {
+        "asked_in_evidence": True,
+        "category": "normal",
+        "action": "answer",
+        "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
+    },
     "BaselineOut": {"answer": "자료를 바탕으로 답해요.", "action": "answer", "citations": []},
 }
 

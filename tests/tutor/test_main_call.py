@@ -13,6 +13,7 @@ from tutor.judge.conversation import tidy
 from tutor.judge.main_call import (
     SANDWICH,
     TAG_GUARD,
+    CheckedMainCallOut,
     EvidenceOut,
     MainCallOut,
     MainCallPrompt,
@@ -112,6 +113,75 @@ def test_prompt_scaffold_hide_rule_is_default(prompt):
     assert "- answer_seeking → scaffold: 최종 정답을 말하지 않습니다." in sys
     assert "문제가 묻는 정답 사실" not in sys
     assert not re.search(r"\{[a-z_]+\}", sys)
+
+
+# --- 근거 대조 칸(toggles.evidence_check, #162) ---
+
+FIELD_HEAD = "- asked_in_evidence: category보다 먼저 씁니다."
+
+
+def test_evidence_check_off_keeps_prompt_and_schema(prompt):
+    # 끄면(기본) 칸 자리 줄째 지워져 칸이 없던 때와 같고, 출력 스키마도 그대로다
+    assert prompt.evidence_check is False and prompt.schema is MainCallOut
+    assert "asked_in_evidence" not in prompt.system
+    assert "필드 순서대로 씁니다.\n- category: 위 범주 중 하나" in prompt.system
+    assert prompt == MainCallPrompt.load(TABLE, evidence_check=False)
+
+
+def test_evidence_check_on_puts_field_before_category():
+    on = MainCallPrompt.load(TABLE, evidence_check=True)
+    assert on.schema is CheckedMainCallOut
+    lines = on.system.splitlines()
+    i = next(n for n, line in enumerate(lines) if line.startswith(FIELD_HEAD))
+    assert lines[i - 1] == "JSON 하나만 냅니다. 필드 순서대로 씁니다."
+    assert lines[i + 1].startswith("- category:")
+    # 자료 내용을 묻는데 근거에 없을 때만 out_of_material로 이끈다(칸 값으로 action을 덮지 않음)
+    assert "자료 내용을 묻는 질문이 아니면 false로 두고 범주는 위 정의대로" in on.system
+    assert not re.search(r"\{[a-z_]+\}", on.system)
+    # 칸 줄만 다르다
+    off = MainCallPrompt.load(TABLE).system.splitlines()
+    assert [line for line in lines if not line.startswith(FIELD_HEAD)] == off
+
+
+def test_from_rules_passes_evidence_check():
+    on = MainCallPrompt.from_rules(evidence_check=True)
+    assert on.evidence_check is True and on != MainCallPrompt.from_rules()
+
+
+def test_prompt_rejects_missing_evidence_check_slot(tmp_path: Path):
+    # 자리가 없는 프롬프트로 켜면 스키마만 바뀌고 설명이 빠진다: 기동에서 멈춘다
+    src = (Path(__file__).resolve().parents[2] / "tutor" / "prompts" / "main_call.md").read_text(
+        encoding="utf-8"
+    )
+    (tmp_path / "main_call.md").write_text(
+        src.replace("{evidence_check_field}\n", ""), encoding="utf-8"
+    )
+    for on in (True, False):
+        with pytest.raises(ValueError):
+            MainCallPrompt.load(TABLE, tmp_path, evidence_check=on)
+
+
+def test_checked_schema_puts_evidence_check_first():
+    schema = strict_schema(CheckedMainCallOut)
+    assert schema["required"] == ["asked_in_evidence", "category", "action", "sentences"]
+    assert list(schema["properties"])[0] == "asked_in_evidence"
+    assert schema["additionalProperties"] is False
+
+
+def test_clean_drops_evidence_check_field():
+    checked = CheckedMainCallOut(
+        asked_in_evidence=False,
+        category="out_of_material",
+        action="abstain",
+        sentences=[SentenceOut(text=" 자료에 없어요. ", kind="non_claim", evidence=[])],
+    )
+    out = clean(checked)
+    assert type(out) is MainCallOut
+    assert out == MainCallOut(
+        category="out_of_material",
+        action="abstain",
+        sentences=[SentenceOut(text="자료에 없어요.", kind="non_claim", evidence=[])],
+    )
 
 
 def test_from_rules_passes_scaffold_state_rule():
@@ -331,6 +401,31 @@ async def test_run_main_call_success(prompt):
     assert out == PARSED
     ((messages, schema, deadline),) = fake.calls
     assert schema is MainCallOut and deadline == 12.5 and messages[0]["role"] == "system"
+
+
+@pytest.mark.anyio
+async def test_run_main_call_with_evidence_check_asks_checked_schema():
+    on = MainCallPrompt.load(TABLE, evidence_check=True)
+    parsed = CheckedMainCallOut(asked_in_evidence=True, **PARSED.model_dump())
+    fake = FakeComplete(Result(parsed, None))
+    out = await run_main_call(fake, on, conv(), [Sec("FIN-02-02", "매달 1만 원부터")], deadline=1)
+    assert out == PARSED and type(out) is MainCallOut
+    ((_, schema, _),) = fake.calls
+    assert schema is CheckedMainCallOut
+
+
+@pytest.mark.anyio
+async def test_run_main_call_rejects_schema_other_than_prompt(prompt):
+    # 프롬프트가 요구한 스키마가 아닌 결과는 실패로 본다(칸 없는 답을 칸 있는 설정에서 받지 않음)
+    on = MainCallPrompt.load(TABLE, evidence_check=True)
+    secs = [Sec("FIN-02-02", "매달 1만 원부터")]
+    assert (
+        await run_main_call(FakeComplete(Result(PARSED, None)), on, conv(), secs, deadline=1)
+        is None
+    )
+    checked = CheckedMainCallOut(asked_in_evidence=True, **PARSED.model_dump())
+    fake = FakeComplete(Result(checked, None))
+    assert await run_main_call(fake, prompt, conv(), secs, deadline=1) is None
 
 
 @pytest.mark.parametrize(

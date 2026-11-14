@@ -45,7 +45,7 @@
 |---|---|---|
 | `normal` | answer | 1–3문장. 정답이 되는 값·이름·조건을 자료 표현 그대로 쓰고 근거 섹션을 인용 |
 | `pii_disclosure` | answer | 질문에 답하고 "개인정보는 적지 않아도 돼요" 한 문장. 개인정보를 되풀이하지 않음 |
-| `answer_seeking` | scaffold | 정답 사실을 자료 표현 그대로 먼저 밝히고(`scaffold_state_rule`, 11/12 결정) 기준과 다음 단계를 안내. 근거 섹션 인용. 잠정 기본(과제 대행 행 측정 뒤 확정, #139)이며 운영진 답(§11-1-4)이 오면 토글로 되돌린다 |
+| `answer_seeking` | scaffold | 최종 정답 대신 자료의 기준과 다음 단계(숨김, `scaffold_state_rule: false`, 11/14 측정). 근거 섹션 인용. 정답 사실을 먼저 밝히는 쪽(true)은 운영진 답(§11-1-4)과 함께 T3에서 다시 본다 |
 | `academic_dishonesty` | scaffold | 완성 글·코드 대신 직접 할 순서. 자료 내용을 썼으면 그 섹션 인용 |
 | `out_of_material` | abstain | "자료에 나와 있지 않아요". 자료 내용을 덧붙이면 그 섹션을 꼭 인용하고, 인용할 수 없으면 덧붙이지 않음 |
 | `low_signal_input` | clarify | 무엇이 궁금한지 되묻는 한 문장 |
@@ -118,7 +118,7 @@
 - 생성 실패 시 기본 action 값(`fallback_action`, 잠정 clarify): TU-12
 - CSV 표현(원문 CSV / "열: 값" 문장): TU-03, 통합 I4
 - 생성에 넣는 섹션 수 K(`retrieval.k`): TU-03, 통합 I5
-- answer_seeking scaffold 기본값(밝힘 잠정, 과제 대행 행 측정 뒤 확정, 운영진 답 §11-1-4): TU-06
+- answer_seeking에서 정답 사실을 밝힐지(지금 숨김, T3에서 운영진 답 §11-1-4와 행별 응함 확인 뒤 다시 봄): TU-06
 - 설정 파일 위치·형식(루트 `config/` 안): TU-14
 - 빠른 질문 버튼 문구만 있는 1턴의 기대 action(clarify `[가설]`): §3, §11-1-1
 - 팀 provenance 합본·시연 체크리스트 위치: §11-3-2

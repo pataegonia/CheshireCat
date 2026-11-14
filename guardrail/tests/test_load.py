@@ -291,9 +291,17 @@ def test_mix_keeps_counts_and_order_without_endpoint_key():
         (200, _tutor_body(answer="가" * 4001), "format"),
         (200, _tutor_body(action="dance"), "format"),
         (200, _tutor_body(citations=["a", 1]), "format"),
+        (200, _tutor_body(citations="a"), "format"),
+        (200, _tutor_body(citations=None), "format"),
+        (200, _tutor_body(answer=5), "format"),
+        (200, json.dumps({"action": "answer", "citations": []}).encode(), "format"),
         (200, b"{broken", "json"),
         (500, b"", "http"),
+        (300, b"", "redirect"),
         (307, b"", "redirect"),
+        (399, b"", "redirect"),
+        (400, b"", "http"),
+        *[(200, _tutor_body(action=a), "ok") for a in load.TUTOR_ACTIONS],
     ],
 )
 def test_classify_tutor(status, body, want):
@@ -477,3 +485,91 @@ def test_main_mixed_reports_tutor_failures_and_mismatch(monkeypatch, capsys, tmp
     assert rep["tutor_failures"] == {"lines": 1, "failed": 1, "by_code": {"TimeoutError": 1}}
     assert rep["log_mismatch"] is True  # /tutor 줄 1개 대 요청 2개
     assert "/tutor" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("status", "want"), [(299, "http"), (300, "redirect"), (399, "redirect"), (400, "http")]
+)
+def test_classify_guard_redirect_bounds(status, want):
+    assert load.classify({}, status, b"not json") == want
+
+
+def test_tutor_actions_match_spec():
+    want = {"answer", "scaffold", "clarify", "abstain", "redirect", "refuse", "escalate"}
+    assert set(load.TUTOR_ACTIONS) == want  # SPEC §4
+
+
+def test_run_mixed_probe_exception_counts_as_zero():
+    def boom():
+        raise OSError
+
+    rep = load.run_mixed(
+        {"guard": lambda p: (time.sleep(0.3), (200, OK))[1]},
+        [("guard", _gp(0))],
+        probe=boom,
+        probe_interval_s=0.02,
+    )
+    assert set(rep["probe"]["statuses"]) == {"0"}
+
+
+def test_log_latency_ignores_other_paths():
+    lines = ["2026-11-15T00:00:00.0Z other 10 20 200 5.0 -"]
+    rep = load.log_latency(lines)
+    assert rep["/guard"]["n"] == 0 and rep["/tutor"]["n"] == 0
+
+
+def test_main_tutor_n_one_without_url_exits_2(monkeypatch):
+    sent = []
+    monkeypatch.setattr(load, "http_sender", lambda *a, **k: lambda p: sent.append(p))
+    with pytest.raises(SystemExit) as e:
+        load.main(["--n", "1", "--tutor-n", "1"])
+    assert e.value.code == 2 and sent == []
+
+
+def test_main_mixed_guard_log_uses_guard_count(monkeypatch, tmp_path):
+    """혼합에서도 /guard 집계의 분모는 가드 요청 수다(전체 요청 수가 아니다)."""
+    monkeypatch.setenv("TEAM_TOKEN", TOKEN)
+    guard = json.dumps(
+        json.loads(OK) | {"output": {"grounded": True, "unsupported": [], "safe": True}}
+    ).encode()
+    tutor = _tutor_body()
+    monkeypatch.setattr(
+        load,
+        "http_sender",
+        lambda url, *a, **k: lambda p: (200, tutor if url.endswith("/tutor") else guard),
+    )
+    g = "2026-11-15T00:00:00.0Z /guard 10 20 200 1.0 input_judge\n"
+    t = "2026-11-15T00:00:00.0Z /tutor 10 20 200 1.0 -\n"
+    log = tmp_path / "a.log"
+    log.write_text(g * 2 + t * 3, "utf-8")
+    out = tmp_path / "r.json"
+    argv = ["--n", "2", "--tutor-n", "3", "--tutor-url", "http://x/tutor"]
+    load.main([*argv, "--access-log", str(log), "--out", str(out)])
+    rep = json.loads(out.read_text("utf-8"))
+    assert rep["log_mismatch"] is False
+    assert rep["failures"]["rate"]["input_judge"] == 1.0  # 2/2, 2/5가 아니다
+
+
+def test_probe_sender_does_not_follow_redirect_and_closed_port_is_zero():
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(302)
+            self.send_header("Location", "/followed")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    port = srv.server_port
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        assert load.probe_sender(f"http://127.0.0.1:{port}/guard", 5.0)() == 302
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert load.probe_sender(f"http://127.0.0.1:{port}/guard", 2.0)() == 0

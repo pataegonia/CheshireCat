@@ -209,6 +209,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.kb_bench:
         report = {"kb": kb_bench()}
     else:
+        if args.access_log and not Path(args.access_log).is_file():
+            sys.stderr.write(f"사용법 오류: --access-log 파일이 없다: {args.access_log}\n")
+            sys.exit(2)  # 보내기 전에 막는다
         if not args.access_log:
             sys.stderr.write(WARN_NO_LOG)
         payloads = build_payloads(guard_rows(), args.n, args.big)
@@ -219,6 +222,14 @@ def main(argv: list[str] | None = None) -> None:
         if args.access_log:
             lines = Path(args.access_log).read_text("utf-8", errors="replace").splitlines()
             report["failures"] = log_failures(lines, report["requests"], report["with_candidate"])
+            seen = report["failures"]["guard_lines"]
+            report["log_mismatch"] = seen != report["requests"]
+            if report["log_mismatch"]:
+                sys.stderr.write(
+                    f"경고: 접근 로그의 /guard 200 줄 {seen}개가 보낸 요청 "
+                    f"{report['requests']}개와 다르다"
+                    "(다른 로그이거나 이전 실행이 섞였다). 오류 칸 집계를 믿지 마라.\n"
+                )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text + "\n", "utf-8")

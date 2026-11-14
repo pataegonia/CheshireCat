@@ -179,3 +179,25 @@ def test_latency_ok_excludes_failed_requests():
     payloads = [{"session_id": f"load_{i:04d}", "messages": []} for i in range(10)]
     rep = load.run_load(send, payloads, concurrency=4)
     assert rep["latency_s"]["n"] == 10 and rep["latency_ok_s"]["n"] == 9
+
+
+def test_main_missing_access_log_sends_nothing(monkeypatch, capsys, tmp_path):
+    sent = []
+    monkeypatch.setattr(load, "http_sender", lambda url, token: lambda p: sent.append(p))
+    out = tmp_path / "r.json"
+    with pytest.raises(SystemExit) as e:
+        load.main(["--n", "3", "--access-log", str(tmp_path / "nope.log"), "--out", str(out)])
+    assert e.value.code == 2 and sent == [] and not out.exists()
+    err = capsys.readouterr().err
+    assert "nope.log" in err and len(err.strip().splitlines()) == 1
+
+
+def test_main_flags_log_mismatch(monkeypatch, capsys, tmp_path):
+    log = tmp_path / "a.log"
+    line = "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 -\n"
+    log.write_text(line, "utf-8")
+    res = _main_out(monkeypatch, capsys, ["--access-log", str(log)])
+    assert json.loads(res.out)["log_mismatch"] is True and "1" in res.err
+    log.write_text(line * 3, "utf-8")
+    res = _main_out(monkeypatch, capsys, ["--access-log", str(log)])
+    assert json.loads(res.out)["log_mismatch"] is False

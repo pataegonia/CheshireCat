@@ -30,10 +30,11 @@ JSON의 holdout_excluded에 남는다. 홀드아웃 행이 섞인 이전 결과(
 (형식이 틀린 응답이면 action·인용 수가 null, 판정하지 않았거나 판정 오류면 응함이 null, 본문은
 남기지 않는다, TU-15). 화면에는 정답이 abstain·refuse인데 answer를 낸 행 id와 그중 인용 0인 수를
 실행별로 낸다(#162·#163). 이 필드가 없는 이전 결과와도 --compare할 수 있다.
-프리셋 실행 결과 JSON의 guard_config에는 튜터 검색에 닿는 가드 설정(읽은 파일, kb ngram·k1·b,
-retrieval.max_query_chars, config_hash)을 남기고, GUARD_CONFIG가 저장소 기본 설정이 아니면 화면에
-한 줄 낸다(--responses는 이 프로세스가 답을 만들지 않아 남기지 않는다). 이 필드가 없는 이전
-결과와도 --compare할 수 있다.
+프리셋 실행 결과 JSON의 guard_config에는 튜터 검색에 닿는 가드 설정(읽은 파일, KB 폴더, kb
+ngram·k1·b, retrieval.max_query_chars, config_hash)을 남기고, 설정 파일(GUARD_CONFIG)이나 KB
+폴더(GUARD_KB_DIR)가 저장소 기본과 다르면 API를 부르기 전에 화면에 무엇이 다른지 한 줄 낸다
+(--responses는 이 프로세스가 답을 만들지 않아 남기지 않는다). 이 필드가 없는 이전 결과와도
+--compare할 수 있다.
 tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
 결과 JSON의 tutor_llm에 남긴다.
 """
@@ -386,22 +387,32 @@ def _shown_path(path: Path) -> str:
         return str(path)
 
 
-def guard_config_used() -> tuple[dict[str, Any], bool]:
-    """튜터에 닿는 가드 설정(숫자·경로만)과, 저장소 기본 설정 파일인지.
+def guard_config_used() -> tuple[dict[str, Any], list[str]]:
+    """튜터에 닿는 가드 설정(숫자·경로만)과, 저장소 기본과 다른 것(설정 파일·KB 폴더, 값과 함께).
 
-    서버와 같은 로더(가드 load_config, GUARD_CONFIG를 따른다)로 읽는다. #158부터 튜터 검색이 kb
-    (ngram·k1·b)와 retrieval.max_query_chars를 이 설정에서 읽는다. #158 전 브랜치에서도 같이
-    남긴다(#158이 들어오면 실제로 쓰는 값이다).
+    서버와 같은 로더(가드 load_config, GUARD_CONFIG·GUARD_KB_DIR를 따른다)로 읽는다. #158부터 튜터
+    검색이 KB 폴더(paths.kb), kb(ngram·k1·b), retrieval.max_query_chars를 이 설정에서 읽는다.
+    GUARD_KB_DIR는 설정 파일을 그대로 두고 KB 폴더만 바꾸므로 따로 본다(#168 리뷰). 기본 KB
+    폴더는 저장소 기본 설정 파일이 적은 paths.kb다.
     """
     used = resolve_path(os.environ.get("GUARD_CONFIG", GUARD_DEFAULT_CONFIG)).resolve()
     cfg = load_guard_config()
+    kb_dir = resolve_path(cfg.paths.kb).resolve()
     guard = {
         "path": _shown_path(used),
+        "kb_dir": _shown_path(kb_dir),
         "kb": {"ngram": cfg.kb.ngram, "k1": cfg.kb.k1, "b": cfg.kb.b},
         "max_query_chars": cfg.retrieval.max_query_chars,
         "config_hash": config_hash(cfg),
     }
-    return guard, used == resolve_path(GUARD_DEFAULT_CONFIG).resolve()
+    default_file = resolve_path(GUARD_DEFAULT_CONFIG)
+    default_kb = yaml.safe_load(default_file.read_text(encoding="utf-8"))["paths"]["kb"]
+    changed = []
+    if used != default_file.resolve():
+        changed.append(f"설정 파일 {guard['path']}")
+    if kb_dir != resolve_path(default_kb).resolve():
+        changed.append(f"KB 폴더 {guard['kb_dir']}")
+    return guard, changed
 
 
 def _by_role(counts: Mapping[tuple[str, Any], int]) -> dict[str, dict[Any, int]]:
@@ -713,11 +724,11 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     guard = None
     if args.preset is not None:  # --responses의 답은 다른 프로세스가 만들었다
         try:
-            guard, is_default = guard_config_used()
+            guard, changed = guard_config_used()
         except (OSError, ValueError, yaml.YAMLError) as exc:
             ap.error(f"가드 설정을 읽지 못했다: {type(exc).__name__}")
-        if not is_default:  # ablation 설정이면 튜터 검색 순위가 바뀐다. 놓치지 않게 알린다
-            sys.stdout.write(f"가드 설정: {guard['path']} (기본 아님)\n")
+        if changed:  # ablation 설정·다른 KB 폴더면 튜터 검색 순위가 바뀐다. 놓치지 않게 알린다
+            sys.stdout.write(f"가드 설정 기본 아님: {' · '.join(changed)}\n")
     if args.max_calls is None:
         args.max_calls = cfg.eval.max_calls
     judge = judge_from_env() if args.judge else None

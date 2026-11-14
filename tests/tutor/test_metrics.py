@@ -10,6 +10,7 @@ import dataclasses
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -576,6 +577,7 @@ def test_cli_records_the_default_guard_settings(monkeypatch, tmp_path, capsys):
     """#158 리뷰: 튜터 검색에 닿는 가드 설정을 결과 JSON에 남긴다. 기본 설정이면 화면에 안 낸다."""
     expected = {
         "path": "guardrail/configs/default.yaml",
+        "kb_dir": "competition/kb",
         "kb": {"ngram": 2, "k1": 1.2, "b": 0.75},
         "max_query_chars": 4000,
         "config_hash": config_hash(load_guard_config(GUARD_DEFAULT)),
@@ -600,7 +602,57 @@ def test_cli_records_guard_settings_from_guard_config_env(monkeypatch, tmp_path,
     assert Path(guard["path"]) == ablation.resolve()  # 저장소 밖 파일은 절대 경로
     assert guard["kb"] == {"ngram": 3, "k1": 1.5, "b": 0.5} and guard["max_query_chars"] == 2000
     assert guard["config_hash"] != default_hash
-    assert f"가드 설정: {guard['path']} (기본 아님)\n" in out
+    assert guard["kb_dir"] == "competition/kb"  # KB 폴더는 기본 그대로
+    assert f"가드 설정 기본 아님: 설정 파일 {guard['path']}\n" in out
+
+
+def test_cli_records_and_flags_a_guard_kb_dir_override(monkeypatch, tmp_path, capsys):
+    """#168 리뷰: GUARD_KB_DIR는 설정 파일을 그대로 두고 튜터 검색 KB를 바꾼다. 결과 JSON에 KB
+    폴더를 남기고, 기본 KB 폴더와 다르면 API를 부르기 전에 화면에 무엇이 다른지 낸다."""
+    kb_copy = tmp_path / "kb"
+    shutil.copytree(KB_DIR, kb_copy)
+    monkeypatch.setenv("GUARD_KB_DIR", str(kb_copy))
+    guard, out = _guard_config(tmp_path / "runs", capsys)
+    assert guard["path"] == "guardrail/configs/default.yaml"  # 설정 파일은 기본이다
+    assert Path(guard["kb_dir"]) == kb_copy.resolve()  # 저장소 밖 폴더는 절대 경로
+    line = f"가드 설정 기본 아님: KB 폴더 {guard['kb_dir']}\n"
+    assert line in out and out.index(line) < out.index("운영진 API 예상 호출")
+    assert "설정 파일" not in out
+    monkeypatch.setenv("GUARD_CONFIG", str(GUARD_DEFAULT.parent / "baseline.yaml"))  # 둘 다 다르면
+    guard, out = _guard_config(tmp_path / "both", capsys)
+    shown = f"설정 파일 {guard['path']} · KB 폴더 {guard['kb_dir']}"
+    assert f"가드 설정 기본 아님: {shown}\n" in out
+    monkeypatch.delenv("GUARD_CONFIG")
+    monkeypatch.setenv("GUARD_KB_DIR", str(KB_DIR))  # 기본 폴더를 절대 경로로 줘도 기본이다
+    guard, out = _guard_config(tmp_path / "same", capsys)
+    assert guard["kb_dir"] == "competition/kb" and "가드 설정" not in out
+
+
+def _file(path, text):
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    "env, make",
+    [
+        ("GUARD_CONFIG", lambda d: d / "없는 파일.yaml"),  # OSError
+        ("GUARD_CONFIG", lambda d: _file(d / "broken.yaml", "a: [")),  # yaml.YAMLError
+        ("GUARD_CONFIG", lambda d: _file(d / "unknown.yaml", "version: x\n")),  # 검증 ValueError
+        ("GUARD_PROMPTS_DIR", lambda d: d),  # 프롬프트 파일이 없어 config_hash가 못 읽는다(OSError)
+    ],
+)
+def test_cli_stops_before_any_call_when_the_guard_config_cannot_be_read(
+    monkeypatch, tmp_path, capsys, env, make
+):
+    """가드 설정을 못 읽으면 튜터를 부르기 전에 종료 코드 2로 멈춘다(오류 클래스 이름만 낸다)."""
+    sent = answer_openai(monkeypatch)  # 가짜 전송: 부르면 여기에 남는다
+    monkeypatch.setenv(env, str(make(tmp_path)))
+    with pytest.raises(SystemExit) as stop:
+        run_local.main(["--preset", "tutor", "--out", str(tmp_path / "runs")])
+    err = capsys.readouterr().err
+    assert stop.value.code == 2 and "가드 설정을 읽지 못했다" in err and str(tmp_path) not in err
+    assert sent == [] and not (tmp_path / "runs").exists()
 
 
 # 이 변경 전부터 있던 결과 JSON 필드와 출력 줄(다른 사람이 쓰는 --compare·비교가 읽는다)

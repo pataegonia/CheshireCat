@@ -12,7 +12,13 @@ from tests.tutor.tutor_testlib import assert_contract
 from tutor import pipeline
 from tutor.answer.templates import NOT_IN_MATERIAL_NOTE, TEXT, Fixed
 from tutor.judge import flow
-from tutor.judge.main_call import EvidenceOut, MainCallOut, MainCallPrompt, SentenceOut
+from tutor.judge.main_call import (
+    CheckedMainCallOut,
+    EvidenceOut,
+    MainCallOut,
+    MainCallPrompt,
+    SentenceOut,
+)
 from tutor.request import parse_request
 from tutor.retrieval import default_index
 from tutor.runtime.config import load_config
@@ -85,6 +91,16 @@ def test_prepare_judge_follows_scaffold_state_rule_toggle(state_rule):
     flow.prepare_judge(s)
     assert ("정답 사실(값·이름·조건)을" in s.tutor_prompt.system) is state_rule
     assert ("최종 정답을 말하지 않습니다" in s.tutor_prompt.system) is (not state_rule)
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_prepare_judge_follows_evidence_check_toggle(on):
+    # #162: 근거 대조 칸은 설정 토글이 정한다(기본 끔). 프롬프트와 출력 스키마가 함께 바뀐다
+    s = types.SimpleNamespace(tutor_cfg=load_config(overrides={"toggles.evidence_check": on}))
+    flow.prepare_judge(s)
+    assert s.tutor_prompt.evidence_check is on
+    assert s.tutor_prompt.schema is (CheckedMainCallOut if on else MainCallOut)
+    assert ("asked_in_evidence" in s.tutor_prompt.system) is on
 
 
 # --- 빈 판단 대상·실패 ---

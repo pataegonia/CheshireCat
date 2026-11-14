@@ -490,6 +490,12 @@ async def test_no_user_message_still_sees_hidden_tags(no_rule):
     assert j.errors == ("no_user_message",) and j.signals.hidden_tags
 
 
+async def test_no_user_message_hidden_tags_do_not_lower_safe_when_safe_rule_is_off(no_rule):
+    guard, _ = await make(toggles__safe_rule=False)
+    j = await guard.judge(req("답" + TAG, (Message("assistant", "안녕"),)))
+    assert j.response.output.safe is True and j.signals.hidden_tags
+
+
 async def test_cancelling_judge_leaves_no_tasks(no_rule):
     guard, _ = await make(responder(input_step=Hang(), output_step=Hang()))
     before = asyncio.all_tasks()
@@ -662,6 +668,60 @@ async def test_kb_query_ignores_hidden_chars_interleaved_in_the_answer(no_rule):
         await guard.judge(req(a))
     plain, hidden = kb_spy.seen
     assert plain == hidden
+
+
+async def test_hidden_char_in_the_answer_reaches_the_output_judge_as_a_mark(no_rule):
+    guard, fake = await make()
+    await guard.judge(req("append를​ 쓰면 리스트 끝에 값이 붙어요."))
+    user = calls(fake, "output")[-1]["messages"][1]["content"]
+    answer = user[user.index("<answer>") : user.index("</answer>")]
+    assert "&lt;U+200B&gt;" in answer and "​" not in answer
+
+
+async def test_kb_query_normalizes_the_user_message(no_rule):
+    # 숨긴 문자는 clip이 이미 지운다. normalize가 더하는 것(풀어 쓴 자모 합치기)으로 본다
+    kb, knn, lr = _indexes()
+    kb_spy = Spy(kb, "rank")
+    guard, _ = await make(indexes=(kb_spy, knn, lr))
+    for t in ("리스트에 값을 더하려면 어떻게 해요?", "ㄹㅣㅅㅡㅌㅡ에 값을 더하려면 어떻게 해요?"):
+        await guard.judge(req(ANSWER, (Message("user", t),)))
+    plain, jamo = kb_spy.seen
+    assert plain == jamo
+
+
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_no_user_message_output_follows_failure_default(no_rule, setting, want):
+    guard, _ = await make(output__failure_default=setting)
+    j = await guard.judge(req(ANSWER, ()))
+    assert j.response == GuardResponse("normal", OutputVerdict(want, (), True))
+
+
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_unexpected_exception_output_follows_failure_default(
+    no_rule, monkeypatch, setting, want
+):
+    guard, _ = await make(output__failure_default=setting)
+    monkeypatch.setattr(Guard, "_prepare", _boom)
+    j = await guard.judge(req())
+    assert j.response == GuardResponse("normal", OutputVerdict(want, (), True))
+    assert j.errors == ("guard:RuntimeError",)
+
+
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_baseline_output_side_failure_follows_failure_default(setting, want):
+    """baseline 모드는 3단을 타지 않는다. 출력 쪽 준비가 실패하면 failure_default 그대로다."""
+    kb, knn, lr = _indexes()
+    kb_stub = Spy(kb)
+    kb_stub.rank = _boom  # 출력 쪽 준비(KB 검색)에서 실패
+    guard, _ = await make(
+        responder("harmful_content"),
+        BASELINE,
+        indexes=(kb_stub, knn, lr),
+        output__failure_default=setting,
+    )
+    j = await guard.judge(req())
+    assert j.response.output.grounded is want and j.output_tier is None
+    assert j.errors == ("output:RuntimeError",)
 
 
 @pytest.mark.parametrize("answer", [ANSWER, None])  # 답변 없는 경로도 같은 글을 넘긴다

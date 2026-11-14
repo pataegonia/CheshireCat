@@ -1,7 +1,8 @@
-"""가드 LLM(nano)의 가짜 전송과 호출 수 집계(가드 S2.8 대비).
+"""가드 LLM(nano)의 가짜 전송, 호출 수 집계, 판정기 대역 앱.
 
-지금 루트 앱의 가드는 상수 판정기라 nano를 부르지 않는다. 가드가 기본 판정기를 실제 판정기로
-바꾸면(S2.8) 통합 테스트가 띄우는 앱이 기동 때 가드 LLM을 만든다. 그때 필요한 것을 미리 확인한다.
+루트 앱의 기본 판정기(가드 `default_factory`)는 키가 없으면 상수 판정기라, 키를 지우는 `app_env`로
+띄운 앱은 nano를 부르지 않는다. 진짜 판정기로 띄운 앱은 test_real_guard.py가 본다. 여기서는 가짜
+전송 자체와, 튜터→가드 호출까지 있는 판정기 대역(`llm_guard`) 앱을 본다.
 
 - 가드 LLM을 서버 기본 경로(`LLM(cfg.llm)` → `start()`)로 만들어도 실제 클라이언트 대신 가짜로 간다.
 - 가짜는 가드 판정 스키마 셋을 두 출력 방식(json_schema · json_object) 모두에서 알아본다.
@@ -15,11 +16,12 @@ import importlib
 import json
 import logging
 import time
+from typing import Literal
 
 import pytest
 from guardrail.config import load_config
 from guardrail.judges.input_judge import judge_input
-from guardrail.judges.schemas import InputOut, OutputOut, strict_schema
+from guardrail.judges.schemas import ACT_TO_CATEGORY, InputOut, OutputOut, strict_schema
 from guardrail.llm import LLM
 from guardrail.schema import Message
 from pydantic import BaseModel, ConfigDict
@@ -217,6 +219,9 @@ def test_fake_builds_replies_from_the_guard_models_fields():
             elif field.endswith("_quote"):
                 assert value == "", (name, field)
     assert _guard_reply(GUARD_MODELS["InputOut"], "x", iter(()), vary=False)["category"] == "normal"
+    # act도 튜터 답을 건드리지 않는 값이다: 가드 대응표로 normal(첫 값은 low_signal_input)
+    act = _guard_reply(GUARD_MODELS["InputActOut"], "x", iter(()), vary=False)["act"]
+    assert ACT_TO_CATEGORY[act] == "normal"
 
 
 class _StrictOut(BaseModel):
@@ -236,6 +241,12 @@ class ListFieldOut(_StrictOut):
     spans: list[str]
 
 
+class NewLiteralOut(_StrictOut):
+    """기본값 표에 없는 문자열 Literal 필드가 있는 스키마(첫 값이 튜터 답을 바꿀 수도 있다)."""
+
+    verdict: Literal["block", "allow"]
+
+
 @pytest.mark.parametrize("structured", ["json_schema", "json_object"])
 def test_fake_reply_that_fails_the_models_validation_is_recorded(app_env, monkeypatch, structured):
     """가짜가 만든 응답이 모델 검증에 실패하면 옛 모양으로 답하지 않고 `unknown`에 남긴다
@@ -253,14 +264,17 @@ def test_fake_reply_that_fails_the_models_validation_is_recorded(app_env, monkey
     assert dict(llm.unexpected) == {UnknownSchema.__name__: 1}
 
 
-def test_fake_cannot_build_a_field_type_it_does_not_know(app_env, monkeypatch):
-    """bool · str · 문자열 Literal 밖의 타입이 있으면 지어내지 않고 `unknown`에 남긴다."""
-    monkeypatch.setitem(GUARD_MODELS, "ListFieldOut", ListFieldOut)
-    assert _guard_reply(ListFieldOut, "x", iter(()), vary=False) is None
+@pytest.mark.parametrize("model", [ListFieldOut, NewLiteralOut], ids=lambda m: m.__name__)
+def test_fake_cannot_build_a_field_it_does_not_know(app_env, monkeypatch, model):
+    """bool · str 밖의 타입, 기본값 표에 없는 문자열 Literal 필드가 있으면 지어내지 않고
+    `unknown`에 남긴다."""
+    name = model.__name__
+    monkeypatch.setitem(GUARD_MODELS, name, model)
+    assert _guard_reply(model, "x", iter(()), vary=False) is None
     fake = FakeGuardSend()
-    _, result = complete_once(lambda: LLM(load_config().llm, send=fake), ListFieldOut)
+    _, result = complete_once(lambda: LLM(load_config().llm, send=fake), model)
     assert result.parsed is None
-    assert fake.unknown == ["ListFieldOut: 가짜 응답이 스키마와 맞지 않음"]
+    assert fake.unknown == [f"{name}: 가짜 응답이 스키마와 맞지 않음"]
 
 
 def test_guard_schema_name_reads_only_the_appended_schema():
@@ -367,8 +381,10 @@ def test_app_whose_guard_calls_nano_starts_and_serves_both_paths(
         assert_tutor_contract(t.json())
         assert t.json()["answer"].startswith(ANSWER_WORD)  # 튜터가 가짜 LLM의 답을 실제로 냈다
         assert fake_send.count == MAX_LLM_CALLS_PER_REQUEST["v2"]
-        # 튜터가 가드에 맡기는 판정은 classify · judge_output 둘뿐이다(붙기 전에는 0)
-        assert 0 <= fake_guard_send.count - before <= 2
+        # 대역 판정기에는 classify · judge_output이 있어 튜터가 둘 다 맡긴다(범주를 넘기므로
+        # judge_output은 classify를 다시 부르지 않는다). 건너뛴 단계가 없다
+        assert fake_guard_send.count - before == 2
+        assert dict(client.app.state.guard_skips) == {}
 
         # 가드 LLM의 카운터와 가짜 전송이 센 수가 같다(재시도 없음, probe 제외)
         assert sum(llm.calls.values()) == fake_guard_send.count

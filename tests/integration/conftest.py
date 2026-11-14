@@ -2,6 +2,7 @@
 
 import contextlib
 import importlib
+import logging
 import re
 from pathlib import Path
 
@@ -37,8 +38,10 @@ def fake_guard_send(monkeypatch):
 
     가드 LLM은 `start()`에서 `openai_env()`로 설정을 읽고 `openai.AsyncOpenAI`로 클라이언트를
     만든다. 그 두 이름을 `guardrail.llm` 모듈 안에서만 바꾼다(환경변수와 튜터가 쓰는 openai 모듈은
-    그대로 둔다). 지금 루트 앱의 가드는 상수 판정기라 이 가짜는 불리지 않는다. 가드가 기본 판정기를
-    실제 판정기로 바꾸면(S2.8) 그때부터 모든 통합 테스트의 가드 nano 호출이 여기로 온다.
+    그대로 둔다). 루트 앱의 기본 판정기(가드 `default_factory`)는 OPENAI_API_KEY가 없으면 상수
+    판정기라, 키를 지우는 `app_env`로 띄운 앱에서는 이 가짜가 불리지 않는다. 진짜 판정기로 여는
+    `real_guard_client`(test_real_guard.py)와 판정기 대역(`open_llm_guard_app`)의 nano 호출이
+    여기로 온다.
 
     패치와 끝날 때의 `unknown` 단언은 `applib.patched_guard_llm`에 있다(테스트가 그 단언을 직접
     돌려 볼 수 있게 일반 제너레이터로 뺐다).
@@ -112,7 +115,8 @@ def open_app(app_env, fake_send):
 def open_llm_guard_app(app_env, fake_send):
     """루트 app.py와 같은 조립에서 판정기만 LLM을 쓰는 대역(`llm_guard`)으로 바꾼 앱을 여는 함수.
 
-    가드의 실제 판정기가 들어오기 전에 "기본 판정기가 nano를 부르는 앱"을 미리 띄워 보는 용도다.
+    대역에는 튜터가 맡기는 classify · judge_output이 있다. 지금 main의 Guard에는 둘이 없어(#119)
+    튜터→가드 호출은 이 앱으로만 본다. 가드가 올리고 test_real_guard.py가 그 경로를 덮으면 지운다.
     """
     from fastapi.testclient import TestClient
 
@@ -133,6 +137,40 @@ def open_llm_guard_app(app_env, fake_send):
             yield client
 
     return _open
+
+
+# 진짜 판정기를 고르게 하는 API 키의 가짜 값. 환경변수에 넣어 가드 `default_factory`가
+# `Guard.build`를 고르게 한다. 가드 LLM의 전송은 `fake_guard_send`가, 튜터 전송은 `fake_send`가
+# 가짜로 바꿔 두므로 이 값으로 실제 API를 부르는 코드는 없다.
+REAL_GUARD_KEY = "fake-real-guard-key"
+
+
+@pytest.fixture
+def real_guard_env(monkeypatch, app_env):
+    """`app_env`에 가짜 OPENAI_API_KEY만 더한다. 루트 앱이 진짜 판정기(`Guard.build`)로 뜬다.
+
+    기존 테스트(`app_env` · `client`)는 키가 없어 상수 판정기로 돈다. 진짜 판정기로 여는 앱은
+    `test_real_guard.py`에서만 쓴다(전부 진짜 판정기로 돌리면 몇 분이 걸린다).
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", REAL_GUARD_KEY)
+    # 가짜 전송을 거치지 않는 코드가 생겨도 실제 주소가 아니라 닫힌 주소로 가서 바로 실패하게 한다
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+
+
+@pytest.fixture
+def real_guard_client(real_guard_env, fake_send, caplog):
+    """`real_guard_env`로 루트 app.py를 연 TestClient. 진짜 판정기가 아니면 열자마자 실패한다.
+
+    기동 로그를 보려고 caplog를 DEBUG로 둔다(기동 기록은 `caplog.get_records("setup")`).
+    """
+    from fastapi.testclient import TestClient
+
+    caplog.set_level(logging.DEBUG)
+    module = importlib.reload(importlib.import_module("app"))
+    with TestClient(module.app) as c:
+        # 기동이 실패하면 가드는 앱을 살리려고 상수 판정기로 조용히 내린다. 여기서 드러낸다
+        assert type(c.app.state.guard).__name__ == "Guard", type(c.app.state.guard).__name__
+        yield c
 
 
 @pytest.fixture

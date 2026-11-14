@@ -80,10 +80,16 @@ def user(content: str) -> dict[str, Any]:
 MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
 
 # 요청 하나에 가드 LLM(`guardrail.llm.LLM`)이 nano를 부르는 횟수의 상한(경로별). probe는 세지
-# 않는다(기동 때 한 번). 지금 루트 앱의 가드는 상수 판정기라 0이다. 가드가 기본 판정기를 실제
-# 판정기로 바꾸면(S2.8) 여기 한 곳을 고친다: `/guard`는 입력 판정 + 출력 판정(+ 재시도),
-# `/tutor`는 튜터가 맡기는 classify · judge_output. 요청당 전체 nano 호출 상한은 두 표의 합이다.
-MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 0, "/guard": 0}
+# 않는다(기동 때). 요청당 전체 nano 호출 상한은 위 표와 이 표의 합이다.
+# - 기본 판정기는 가드 `default_factory`다: OPENAI_API_KEY가 없으면 상수 판정기(0회)라, 키를
+#   지우는 `app_env`로 띄우는 기존 테스트는 상수 판정기로 돈다. 진짜 판정기 경로는
+#   test_real_guard.py가 본다.
+# - `/guard` 2: 입력 판정 1 + 출력 판정 1(후보 답변이 있을 때).
+# - `/tutor` 3: 가드가 튜터용 메서드를 올린 뒤(이슈 #119) classify 1 + judge_output 1,
+#   judge_output에 범주를 넘기지 않으면 classify +1(가드 interface.md의 judge_output 설명).
+#   지금 main의 Guard에는 두 메서드가 없어 0회다.
+# - 가짜 전송은 실패를 내지 않아 재시도 몫은 없다.
+MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 2}
 GUARD_BUDGET_HINT = (
     "가드 nano 호출이 상한을 넘었다. 판정기를 바꿨으면 "
     "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST를 고친다"
@@ -256,8 +262,9 @@ class FakeGuardSend:
     스키마 이름만).
 
     - `count`는 판정 호출 수다. `LLM.start()`의 probe(요청이 "ping" 하나)는 `probes`에 따로 센다.
-    - 응답은 그 스키마 모델의 필드에서 만든다(`_guard_reply`). 기본은 입력 판정 normal, 출력 판정
-      grounded(· safe) true, 그 밖의 bool은 false다. 튜터 답을 건드리지 않는 값이다.
+    - 응답은 그 스키마 모델의 필드에서 만든다(`_guard_reply`). 기본은 입력 판정 normal(act는
+      learning_question), 출력 판정 grounded(· safe) true, 그 밖의 bool은 false다. 튜터 답을
+      건드리지 않는 값이다.
     - `vary=True`: 범주 등 문자열 Literal과 grounded · safe를 프롬프트 해시로 고른다(무작위 없음).
     - 모르는 스키마로 부르거나, 만든 응답이 모델 검증을 통과하지 못하면 `UnknownSchema`를 던지고
       `unknown`에 남긴다. 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send`
@@ -314,6 +321,10 @@ class FakeGuardSend:
 _TRUE_BY_DEFAULT = frozenset({"grounded", "safe"})
 # vary=True일 때 해시로 고르는 bool: 이름 → 나눌 수(0이 아니면 true). grounded는 반반, safe는 3/4
 _VARIED_BOOLS = {"grounded": 2, "safe": 4}
+# 문자열 Literal 필드의 기본값: 튜터 답을 건드리지 않는 값(입력 판정 normal). act는 가드
+# ACT_TO_CATEGORY로 normal이 된다(첫 값 no_meaningful_content는 low_signal_input이다). 표에 없는
+# Literal 필드는 기본값을 지어내지 않고 모르는 스키마로 남긴다
+_LITERAL_DEFAULTS = {"category": "normal", "act": "learning_question"}
 
 
 def _guard_reply(
@@ -323,7 +334,7 @@ def _guard_reply(
 
     - bool: grounded · safe는 true, 그 밖은 false. vary면 grounded · safe를 해시로 고른다.
     - str: 이름이 "_quote"로 끝나면 ""(인용할 구절 없음), 아니면 `note`(판정 글 표식 + 해시).
-    - 문자열 Literal: category는 "normal", 그 밖은 첫 값. vary면 해시로 고른다.
+    - 문자열 Literal: `_LITERAL_DEFAULTS`의 값. 표에 없는 필드면 None. vary면 해시로 고른다.
     """
     reply: dict[str, Any] = {}
     for field, info in model.model_fields.items():
@@ -339,8 +350,10 @@ def _guard_reply(
             values = get_args(kind)
             if vary:
                 reply[field] = values[next(picks) % len(values)]
-            else:
-                reply[field] = "normal" if field == "category" else values[0]
+            elif _LITERAL_DEFAULTS.get(field) in values:
+                reply[field] = _LITERAL_DEFAULTS[field]
+            else:  # 기본값을 모르는 Literal 필드: 첫 값으로 지어내지 않는다
+                return None
         else:
             return None
     return reply

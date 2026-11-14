@@ -36,7 +36,7 @@ GUARD_DEFAULT = {"input": {"decision": "allow", "category": "normal"}}
 # 가드 로그 한 줄: 시각 경로 요청바이트 응답바이트 상태 ms 오류클래스
 ACCESS_LINE = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z (/guard|/tutor|other) \d+ \d+ \d{3} \d+\.\d "
-    r"(-|[A-Za-z_]\w*)"
+    r"(-|[A-Za-z_]\w*(?:[:,][A-Za-z_]\w*)*)"
 )
 HEADER_MARKER = "HeaderMarkQX7"  # 헤더 값은 ASCII만 실을 수 있다
 
@@ -50,6 +50,29 @@ def guard_body(content: str, candidate: str | None = None) -> dict:
     if candidate is not None:
         body["candidate_answer"] = candidate
     return body
+
+
+_LINE_HEAD = "2026-11-14T00:00:00.000000Z /guard 10 20 200 3.5 "
+
+
+@pytest.mark.parametrize(
+    "error",
+    ["-", "RuntimeError", "input_judge,output_judge", "output:KeyError",
+     "input_judge,output_judge:TimeoutError"],
+)  # fmt: skip
+def test_access_line_accepts_the_guards_error_field(error):
+    # 가드 #150부터 오류 칸은 고정 문자열 · 예외 클래스 이름을 쉼표 · 콜론으로 잇는다
+    assert ACCESS_LINE.fullmatch(_LINE_HEAD + error)
+
+
+@pytest.mark.parametrize(
+    "error",
+    ["input_judge, output_judge", "output:Key Error", '"KeyError"', "'x'", "출력:KeyError",
+     "a:", ",a", "a,,b", ""],
+)  # fmt: skip
+def test_access_line_rejects_other_text_in_the_error_field(error):
+    # 공백 · 따옴표 · 한글 등 본문이 섞일 수 있는 값은 받지 않는다
+    assert not ACCESS_LINE.fullmatch(_LINE_HEAD + error)
 
 
 # ── 조립 ──────────────────────────────────────────────────────────────────

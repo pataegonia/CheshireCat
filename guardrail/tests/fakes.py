@@ -7,6 +7,7 @@ RateLimited·ServerError·BadRequest·HttpStatus·Boom(예외), Hang(영영 기�
 
 import asyncio
 import copy
+import json
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -97,6 +98,8 @@ class FakeLLM:
         self.requests: list[dict[str, Any]] = []
 
     async def send(self, kwargs: dict[str, Any]) -> Any:
+        # 실제 전송처럼 UTF-8 JSON으로 직렬화한다(짝 없는 surrogate는 보내기 전에 실패)
+        json.dumps(kwargs.get("messages"), ensure_ascii=False).encode("utf-8")
         self.requests.append(copy.deepcopy(kwargs))
         if self.steps:
             step = self.steps.popleft()

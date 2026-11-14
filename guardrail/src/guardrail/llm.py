@@ -14,6 +14,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -34,6 +35,8 @@ Send = Callable[[dict[str, Any]], Awaitable[Any]]  # chat.completions.create(**k
 MAX_RETRY_AFTER_S = 120.0  # openai-python MAX_RETRY_AFTER_DELAY
 REJECTED = (400, 422)  # probe가 "이 파라미터를 거절했다"로 보는 상태 코드
 OPTIONAL_PARAMS = ("reasoning_effort", "verbosity", "max_completion_tokens")
+# 짝 없는 surrogate는 UTF-8로 못 써서 SDK가 보내기 전에 실패한다(HTTP 0건) → 대체 문자로
+_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,21 @@ class LLMResult:
     latency_ms: float
     finish_reason: str | None  # 마지막 시도의. 응답이 없으면 None
     completion_tokens: int | None  # 마지막 시도의 usage.completion_tokens. 없으면 None
+
+
+API_ENV = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")
+
+
+def openai_env() -> dict[str, str]:
+    """운영진 API 설정(앞뒤 공백 제거). 하나라도 비면 ValueError, 문구에는 이름만.
+
+    주소가 비면 SDK가 공개 OpenAI 주소로 팀 키를 보내므로 클라이언트를 만들기 전에 막는다.
+    """
+    env = {k: os.environ.get(k, "").strip() for k in API_ENV}
+    missing = [k for k, v in env.items() if not v]
+    if missing:
+        raise ValueError(f"환경변수 {'·'.join(missing)}이 필요하다")
+    return env
 
 
 @dataclass
@@ -124,13 +142,12 @@ class LLM:
             if self._started:
                 return
             if self._send is None:
-                key = os.environ.get("OPENAI_API_KEY")
-                if not key or not self.model:
-                    raise ValueError("환경변수 OPENAI_API_KEY·OPENAI_MODEL이 필요하다")
+                env = openai_env()
+                self.model = env["OPENAI_MODEL"]
                 t = self.cfg.timeout_s
                 client = openai.AsyncOpenAI(
-                    base_url=os.environ.get("OPENAI_BASE_URL") or None,
-                    api_key=key,
+                    base_url=env["OPENAI_BASE_URL"],
+                    api_key=env["OPENAI_API_KEY"],
                     timeout=openai.Timeout(
                         connect=t.connect, read=t.read, write=t.write, pool=t.pool
                     ),
@@ -238,7 +255,10 @@ class LLM:
         }
 
     def _request(self, messages: list[dict], schema: type[BaseModel]) -> dict[str, Any]:
-        msgs = [dict(m) for m in messages]
+        msgs = [dict(m) for m in messages]  # 복사본만 바꾼다: 응답 구간은 원문의 부분 문자열이다
+        for m in msgs:
+            if isinstance(m.get("content"), str):
+                m["content"] = _SURROGATE.sub("\ufffd", m["content"])
         if self.structured == "json_object":
             note = "JSON 객체만 출력한다. 스키마:\n" + json.dumps(
                 strict_schema(schema), ensure_ascii=False

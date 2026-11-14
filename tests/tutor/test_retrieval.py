@@ -10,14 +10,27 @@ import math
 import re
 
 import pytest
+import yaml
+from guardrail.config import load_config
+from guardrail.kb import KbIndex as GuardKbIndex
 
 import tutor
 from tests.tutor.tutor_testlib import COMPETITION, REPO, scoring
-from tutor.retrieval import KbIndex, Section, default_index, retrieve
+from tutor.retrieval import KbIndex, Section, default_index, retrieve, search
 from tutor.retrieval.kb import load_sections, normalize
 
 KB = COMPETITION / "kb"
 R13 = REPO / "guardrail" / "scripts" / "r13" / "common.py"
+GUARD_DEFAULT = REPO / "guardrail" / "configs" / "default.yaml"
+
+
+def use_guard_config(tmp_path, monkeypatch, **changes):
+    """가드 기본 설정에서 최상위 항목 몇 개만 바꾼 파일을 GUARD_CONFIG로 쓴다."""
+    raw = yaml.safe_load(GUARD_DEFAULT.read_text("utf-8"))
+    assert all(key in raw for key in changes)
+    path = tmp_path / "guard.yaml"
+    path.write_text(yaml.safe_dump({**raw, **changes}, allow_unicode=True), "utf-8")
+    monkeypatch.setenv("GUARD_CONFIG", str(path))
 
 
 @pytest.fixture(scope="module")
@@ -94,6 +107,53 @@ def test_chunk_scores_match_the_r13_bm25(r13):
         )
 
 
+def test_index_scores_are_the_guard_kb_index_scores():
+    """가드 KbIndex(GR-03, 가드 설정의 kb 값)와 조각·점수가 비트 단위로 같다(TD-03)."""
+    kb = load_config().kb
+    guard = GuardKbIndex.load(KB, ngram=kb.ngram, k1=kb.k1, b=kb.b)
+    index = default_index()
+    assert index.chunks == guard.chunks
+    for query in [heading(sid) for sid in index.sections] + ["변수", "", "ab", "!!"]:
+        assert index.chunk_scores(query) == guard.scores(query)
+
+
+def test_guard_default_kb_settings_are_the_tu03_values():
+    """튜터 검색은 가드 설정 kb·retrieval을 같이 쓴다(TD-03). 값이 바뀌면 튜터 순위·인용도 바뀐다.
+
+    TU-03은 문자 2-gram BM25(k1 1.2, b 0.75), 질의 상한 4,000자다. 가드 기본 설정에서 이 값을
+    바꾸려면 튜터 검색(recall·인용)도 다시 재고 두 트랙이 같이 정한 뒤 이 테스트를 고친다.
+    """
+    cfg = load_config(GUARD_DEFAULT)  # 셸의 GUARD_CONFIG와 상관없이 저장소의 가드 기본 설정
+    assert (cfg.kb.ngram, cfg.kb.k1, cfg.kb.b) == (2, 1.2, 0.75)
+    assert cfg.retrieval.max_query_chars == 4000
+
+
+def test_bm25_settings_follow_the_guard_config(tmp_path, monkeypatch):
+    query = heading("PY-01-01")
+    before = GuardKbIndex.load(KB).scores(query)
+    use_guard_config(tmp_path, monkeypatch, kb={"top_k": 3, "ngram": 3, "k1": 2.0, "b": 0.3})
+    got = KbIndex(load_sections(KB)).chunk_scores(query)
+    assert got == GuardKbIndex.load(KB, ngram=3, k1=2.0, b=0.3).scores(query)
+    assert got != before
+
+
+def test_query_limit_below_one_is_refused(tmp_path, monkeypatch):
+    # 0이면 [-0:]가 질의를 통째로 남기고 음수면 앞만 버린다. 기동 때 막는다
+    use_guard_config(tmp_path, monkeypatch, retrieval={"max_query_chars": 0})
+    with pytest.raises(ValueError, match="max_query_chars"):
+        KbIndex(load_sections(KB))
+
+
+def test_query_limit_follows_the_guard_config(tmp_path, monkeypatch):
+    """질의 상한은 가드 설정 retrieval.max_query_chars다. 넘으면 뒤쪽(최근 발화)을 남긴다."""
+    tail, earlier = heading("PY-01-01"), [heading("FIN-01-01")]
+    whole = [s.id for s in run(retrieve(tail, earlier))]
+    assert whole != [s.id for s in run(retrieve(tail, []))]  # 상한 안이면 앞 발화도 질의에 든다
+    use_guard_config(tmp_path, monkeypatch, retrieval={"max_query_chars": len(tail)})
+    monkeypatch.setattr(search, "default_index", lambda: KbIndex.from_dir(KB))
+    assert [s.id for s in run(retrieve(tail, earlier))] == [s.id for s in run(retrieve(tail, []))]
+
+
 def test_search_folds_chunk_scores_to_the_section_max():
     index = default_index()
     query = "변수에 값을 저장하는 방법"
@@ -131,11 +191,6 @@ def test_query_without_bigrams_returns_nothing(query):
 @pytest.mark.parametrize("k", [0, -1])
 def test_non_positive_k_returns_nothing(k):
     assert run(retrieve("변수", [], k=k)) == []
-
-
-def test_embedding_mix_is_not_built_yet():
-    with pytest.raises(NotImplementedError):
-        run(retrieve("변수", [], use_embedding=True))
 
 
 def test_history_is_part_of_the_query():

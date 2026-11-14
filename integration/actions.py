@@ -7,6 +7,7 @@
 `FinalizeConfig`로 받는다. 요청 사이에 아무것도 저장하지 않는다.
 """
 
+import re
 import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
@@ -18,7 +19,6 @@ from guardrail.schema import OutputVerdict
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from integration.contracts import (
-    ACTIONS,
     SECTION_IDS,
     SID_PATTERN,
     Action,
@@ -27,10 +27,10 @@ from integration.contracts import (
     Sentence,
     TutorResult,
 )
+from integration.runtime import RUNTIME_PATH, load_runtime
 
 __all__ = [
     "ACTIONS_PATH",
-    "DEFAULT_FALLBACK_ACTION",
     "FALLBACK_ACTION",
     "RUNTIME_PATH",
     "ActionRule",
@@ -44,10 +44,6 @@ __all__ = [
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 ACTIONS_PATH = CONFIG_DIR / "actions.yaml"
-RUNTIME_PATH = CONFIG_DIR / "runtime.yaml"  # I1.4에서 생긴다. 없으면 기본값을 쓴다
-
-# 생성 실패 · 모르는 범주의 기본 action. 주인은 튜터 TU-12(잠정 clarify, 11/18 측정으로 확정).
-DEFAULT_FALLBACK_ACTION: Action = "clarify"
 
 _CATEGORIES: tuple[str, ...] = get_args(Category)
 _FROZEN = ConfigDict(frozen=True, extra="forbid")
@@ -112,14 +108,11 @@ def load_actions(path: Path | None = None) -> dict[str, ActionRule]:
 
 
 def load_fallback_action(path: Path | None = None) -> Action:
-    """`config/runtime.yaml`의 `fallback_action`. 파일이나 키가 없으면 기본값."""
-    path = RUNTIME_PATH if path is None else path
-    if not path.is_file():
-        return DEFAULT_FALLBACK_ACTION
-    value = _read_mapping(path).get("fallback_action", DEFAULT_FALLBACK_ACTION)
-    if value not in ACTIONS:
-        raise ValueError(f"{path.name}: fallback_action이 action 7종이 아니다")
-    return value
+    """`config/runtime.yaml`(또는 준 경로)의 `fallback_action`. 검증은 `load_runtime`이 한다.
+
+    파일이 없거나, 키가 빠졌거나, 모르는 키가 있으면 실패한다(기본값으로 넘어가지 않는다).
+    """
+    return load_runtime(path).fallback_action
 
 
 _TABLE = MappingProxyType(load_actions())
@@ -143,6 +136,8 @@ def action_for(category: object) -> ActionRule:
 _PUNCT_TABLE = str.maketrans("", "", ".,!?;:'\"“”‘’`()[]{}<>«»·…~-–—/\\")
 # 최종 action이 이 넷이면 범주와 상관없이 인용하지 않는다.
 _NO_CITE_ACTIONS: frozenset[str] = frozenset({"clarify", "redirect", "refuse", "escalate"})
+# 과목 내용으로 답하는 action. 표와 다르게 골라졌을 때도 always 규칙을 잇는다(`_cite_policy`).
+_ANSWERING_ACTIONS: frozenset[str] = frozenset({"answer", "scaffold"})
 _KEPT_CONTROLS = frozenset("\n\t")
 
 
@@ -167,6 +162,15 @@ def _normalize(text: str) -> str:
     return "".join(text.split()).translate(_PUNCT_TABLE)
 
 
+# 짝이 맞는 굵게 표시 "**…**"(한 줄 안, 안쪽이 공백으로 시작 · 끝나지 않음)
+_BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+
+
+def _strip_bold(text: str) -> str:
+    """굵게 표시의 별표만 벗긴다. `a ** b` · `a * b` 같은 연산자는 그대로 둔다."""
+    return _BOLD.sub(r"\1", text)
+
+
 def _is_real_sid(sid: str) -> bool:
     return SID_PATTERN.fullmatch(sid) is not None and sid in SECTION_IDS
 
@@ -175,16 +179,18 @@ def _verified_sids(sentence: Sentence, retrieved: Sequence[Section], min_chars: 
     """인용 문구가 그 섹션 원문(본문 + 표)에 실제로 있는 evidence의 sid.
 
     정규화한 길이가 `min_chars`보다 짧은 문구는 보지 않는다.
+    이 비교에서만 양쪽에서 짝이 맞는 굵게 표시 "**…**"의 별표를 벗긴다: 교재는 굵게 적고
+    모델은 별표 없이 옮긴다. 그 밖의 `*`(곱셈 · 거듭제곱 예제)는 그대로 두고 비교한다.
     """
     out: list[str] = []
     for ev in sentence.evidence:
         if not _is_real_sid(ev.sid):
             continue
         section = next((s for s in retrieved if s.id == ev.sid), None)
-        quote = _normalize(ev.quote)
+        quote = _normalize(_strip_bold(ev.quote))
         if section is None or len(quote) < min_chars:
             continue
-        if quote in _normalize("\n".join([section.text, *section.tables])):
+        if quote in _normalize(_strip_bold("\n".join([section.text, *section.tables]))):
             out.append(ev.sid)
     return out
 
@@ -243,12 +249,16 @@ def _join(texts: Sequence[str]) -> str:
 
 
 def _cite_policy(rule: ActionRule, action: str) -> str:
-    """최종 action 기준의 인용 규칙: always | if_used | never."""
+    """최종 action 기준의 인용 규칙: always | if_used | never. 위에서부터 먼저 맞는 것."""
     if action in _NO_CITE_ACTIONS:
         return "never"
     if action in rule.actions:
         return rule.cite
-    return "if_used"  # 표에 없는 조합: claim이 실제로 쓴 섹션만
+    # 모델이 표와 다른 answer · scaffold를 골랐어도 표 규칙이 always인 범주면 인용을 비우지 않는다.
+    # 정답 근거가 있는 문항은 답변 내용과 상관없이 인용이 채점된다(#97 리뷰).
+    if action in _ANSWERING_ACTIONS and rule.cite == "always":
+        return "always"
+    return "if_used"  # 그 밖의 표에 없는 조합: claim이 실제로 쓴 섹션만
 
 
 def finalize(
@@ -267,8 +277,9 @@ def finalize(
     - `action`은 주 호출 · 합치기 단계가 고른 값이다(harmful_content의 redirect 등). None이면
       `rule.action`. 표와 다른 값이 와도 막지 않는다(표 강제는 튜터 설정).
     - `safe=false`면 답변을 버리고 `cfg.refuse_text` + refuse를 낸다.
-    - 인용은 최종 action으로 정한다: clarify · redirect · refuse · escalate는 `[]`, 표에 있는
-      조합이면 `rule.cite`, 그 밖에는 if_used.
+    - 인용은 최종 action으로 정한다(`_cite_policy`, 위에서부터 먼저 맞는 것): clarify ·
+      redirect · refuse · escalate는 `[]`, 표에 있는 조합이면 `rule.cite`, 표에 없는 조합이라도
+      answer · scaffold이고 그 범주의 cite가 always이면 always, 그 밖에는 if_used.
     - 길이 상한을 넘으면 뒤 문장부터 통째로 빼고, 인용은 남은 문장으로 계산한다. 첫 문장 하나로도
       넘을 때만 문자 수로 자른다.
     - `cfg.unverified_notice`는 인용 규칙이 always일 때, claim 문장이 판정이나 길이 자르기로

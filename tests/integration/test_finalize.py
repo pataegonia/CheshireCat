@@ -10,7 +10,7 @@ from guardrail.schema import OutputVerdict
 
 from integration import actions
 from integration.actions import FinalizeConfig, action_for, finalize
-from integration.contracts import Evidence, Section, Sentence, TutorResult
+from integration.contracts import ACTIONS, Evidence, Section, Sentence, TutorResult
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPETITION = ROOT / "competition"
@@ -378,9 +378,85 @@ def test_action_in_rule_actions_follows_rule_cite():
     out = finalize(sentences, OK, RETRIEVED, SCAFFOLD, CFG, action="scaffold")
     assert out.answer == "힌트부터 볼까요?"
     assert (out.action, out.citations) == ("scaffold", ["PY-01-02"])
-    # normal + scaffold(표에 없는 조합) → if_used
+    # normal + scaffold(표와 다르지만 답하는 action, 표 규칙이 always) → always
     other = finalize(sentences, OK, RETRIEVED, NORMAL, CFG, action="scaffold")
-    assert other == TutorResult(answer="힌트부터 볼까요?", action="scaffold", citations=[])
+    assert other == TutorResult(
+        answer="힌트부터 볼까요?", action="scaffold", citations=["PY-01-02"]
+    )
+
+
+# 모델이 표와 다른 answer · scaffold를 고른 경우(#97 리뷰). 정답 근거가 있는 문항은 답변 내용과
+# 상관없이 인용이 채점되므로, 표 규칙이 always인 범주에서는 인용을 비우지 않는다.
+OFF_TABLE_ALWAYS = [
+    ("answer_seeking", "answer"),
+    ("normal", "scaffold"),
+    ("pii_disclosure", "scaffold"),
+]
+OFF_TABLE_IF_USED = [
+    ("academic_dishonesty", "answer"),
+    ("off_topic", "answer"),
+    ("normal", "abstain"),
+    ("out_of_material", "answer"),
+    ("jailbreak_injection", "scaffold"),
+]
+UNVERIFIED = {
+    "quote_not_in_text": [claim("5회까지 기록해요.", ("PY-01-01", "5회까지의 점수를 기록한다"))],
+    "no_claim": [plain("같이 살펴볼까요?")],
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNVERIFIED))
+@pytest.mark.parametrize(("category", "action"), OFF_TABLE_ALWAYS)
+def test_off_table_answer_or_scaffold_under_an_always_rule_cites_top1(category, action, case):
+    rule = action_for(category)
+    assert action not in rule.actions and rule.cite == "always"
+    sentences = UNVERIFIED[case]
+    out = finalize(sentences, OK, RETRIEVED, rule, CFG, action=action)
+    assert out.action == action
+    assert out.citations == ["PY-01-02"]  # 검색 1위 하나
+    assert out.answer == sentences[0].text  # 문장은 그대로, 안내도 붙지 않는다
+    # 검증된 문구가 있으면 검색 1위가 아니라 그 섹션이다
+    used = finalize(
+        [claim("3회까지 기록해요.", VALID_CLAIM)], OK, RETRIEVED, rule, CFG, action=action
+    )
+    assert used.citations == ["PY-01-01"]
+    # 검색 결과가 없으면 채울 것이 없다
+    assert finalize(sentences, OK, [], rule, CFG, action=action).citations == []
+
+
+@pytest.mark.parametrize("case", sorted(UNVERIFIED))
+@pytest.mark.parametrize(("category", "action"), OFF_TABLE_IF_USED)
+def test_other_off_table_combinations_stay_if_used(category, action, case):
+    rule = action_for(category)
+    assert action not in rule.actions
+    out = finalize(UNVERIFIED[case], OK, RETRIEVED, rule, CFG, action=action)
+    assert (out.action, out.citations) == (action, [])
+    used = finalize(
+        [claim("3회까지 기록해요.", VALID_CLAIM)], OK, RETRIEVED, rule, CFG, action=action
+    )
+    assert used.citations == ["PY-01-01"]
+
+
+def _old_cite_policy(rule, action: str) -> str:
+    """새 규칙 3번이 들어가기 전의 규칙(표 조합이 바뀌지 않았는지 비교하는 기준)."""
+    if action in ("clarify", "redirect", "refuse", "escalate"):
+        return "never"
+    return rule.cite if action in rule.actions else "if_used"
+
+
+def test_cite_policy_changes_only_the_three_off_table_combinations():
+    categories = sorted(actions.load_actions())
+    assert len(categories) == 10
+    changed = []
+    for category in categories:
+        rule = action_for(category)
+        for action in ACTIONS:
+            new, old = actions._cite_policy(rule, action), _old_cite_policy(rule, action)
+            if action in rule.actions:
+                assert new == old, (category, action)  # 표에 있는 조합은 그대로
+            if new != old:
+                changed.append((category, action, old, new))
+    assert sorted(changed) == sorted((c, a, "if_used", "always") for c, a in OFF_TABLE_ALWAYS)
 
 
 def test_invalid_action_is_rejected():
@@ -792,7 +868,11 @@ def test_rows_without_evidence_pass_unchanged_and_uncited():
         assert out.action == rule.action, row["id"]
 
 
-def test_all_200_rows_under_50ms():
+def test_all_200_rows_stay_under_a_generous_bound():
+    """알고리즘이 망가졌을 때만 걸리는 넉넉한 상한(0.5초).
+
+    벽시계 기준이라 CI 부하에서 흔들리므로 빡빡하게 잡지 않는다. 실측값은 S1.md I1.3에 있다.
+    """
     inputs = [(*_as_input(r), action_for(r["labels"]["category"])) for r in ROWS]
     best = float("inf")
     for _ in range(5):
@@ -800,4 +880,137 @@ def test_all_200_rows_under_50ms():
         for sentences, retrieved, rule in inputs:
             finalize(sentences, OK, retrieved, rule, CFG)
         best = min(best, time.perf_counter() - start)
-    assert best < 0.050, f"{best * 1000:.1f}ms"
+    assert best < 0.5, f"{best * 1000:.1f}ms"
+
+
+# ── 굵게 표시(**)가 있는 교재 문장의 인용 문구 ───────────────────────────
+
+BOLD = sec(
+    "FIN-01-02", "용돈 통장 안내예요. **하루 이체 한도는 5만 원**이에요. 더 보내려면 물어봐요."
+)
+BOLD_RETRIEVED = [B, BOLD, A]  # 검색 1위는 B: BOLD가 인용되면 문구 검증으로 된 것이다
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "하루 이체 한도는 5만 원이에요",  # ** 없이 옮김(모델이 보통 이렇게 옮긴다)
+        "**하루 이체 한도는 5만 원**이에요",  # ** 를 그대로 옮김
+        "**하루 이체 한도는 5만 원**",
+        "안내예요. 하루 이체 한도는",  # 굵게 표시 경계를 넘는 문구
+    ],
+)
+def test_quote_from_a_bold_sentence_is_verified(quote):
+    out = finalize(
+        [claim("한도는 5만 원이에요.", ("FIN-01-02", quote))], OK, BOLD_RETRIEVED, NORMAL, CFG
+    )
+    assert out.citations == ["FIN-01-02"]
+
+
+@pytest.mark.parametrize(
+    ("sid", "quote"),
+    [
+        ("FIN-01-02", "변수는 값을 담는 이름이다"),  # 다른 섹션(B)의 문구
+        ("FIN-01-02", "하루 이체 한도는 50만 원이에요"),  # 원문에 없는 문구
+        ("PY-01-02", "하루 이체 한도는 5만 원이에요"),  # 문구는 맞지만 다른 섹션에 붙임
+        ("FIN-01-02", "**"),  # 별표뿐
+        ("FIN-01-02", "*원*"),  # 별표를 지우면 한 글자
+        ("FIN-01-02", "하루 이체 한도는 5만 원**이에요"),  # 짝이 없는 ** 는 벗기지 않는다
+        ("FIN-01-02", "하루 * 이체 한도는 5만 원이에요"),  # 원문에 없는 * 를 끼움
+    ],
+)
+def test_bold_handling_does_not_verify_other_quotes(sid, quote):
+    academic = [claim("한도 이야기예요.", (sid, quote))]
+    assert finalize(academic, OK, BOLD_RETRIEVED, ACADEMIC, CFG).citations == []  # if_used
+    # always 규칙에서는 검색 1위(B)로 넘어간다. BOLD가 검증된 것이 아니다
+    fallback = finalize(academic, OK, [A, BOLD, B], NORMAL, CFG).citations
+    assert fallback == ["PY-01-01"]
+
+
+def test_bold_is_ignored_only_for_quotes_not_for_normalize_or_unsupported_spans():
+    """`_normalize`는 채점기와 같아야 하고(별표 유지), unsupported 구간 대조도 그대로다."""
+    assert actions._normalize("**가 나**") == scoring.normalize("**가 나**") == "**가나**"
+    sentences = [plain("첫 문장이에요."), plain("**굵은** 문장이에요.")]
+    # 구간에 별표가 없으면 별표가 낀 문장과 맞지 않는다(기존 동작)
+    assert actions._unsupported_indexes(sentences, ["굵은 문장"], 2) == set()
+    assert actions._unsupported_indexes(sentences, ["**굵은** 문장"], 2) == {1}
+
+
+def _cited(sid: str, quote: str) -> bool:
+    """실제 교재에서 그 섹션을 검색 2위에 두고, 인용 문구가 검증돼 그 섹션이 인용되는지."""
+    other = next(s for other_sid, s in KB.items() if other_sid != sid)
+    out = finalize([claim("설명이에요.", (sid, quote))], OK, [other, KB[sid]], NORMAL, CFG)
+    return out.citations == [sid]
+
+
+# 굵게 표시가 아닌 ** (PY-01-03의 거듭제곱 예제 한 줄)
+POWER_LINE = ("PY-01-03", "square = score ** group")
+
+
+def _bold_line_failures() -> tuple[int, list[tuple[str, int, str]]]:
+    """교재에서 굵게 표시가 든 줄마다 두 가지 문구를 넣어, 인용되지 않은 (섹션, 줄, 어느 쪽).
+
+    ** 를 뺀 앞 40자(모델이 보통 이렇게 옮긴다)와, ** 를 둔 줄 전체.
+    """
+    total = 0
+    failed = []
+    for sid, section in KB.items():
+        for number, line in enumerate(section.text.splitlines(), start=1):
+            # 별표만 있는 줄(파이썬 별 찍기 예제의 출력)은 굵게 표시가 아니고 옮길 글자도 없다
+            if "**" not in line or not line.replace("*", "").strip():
+                continue
+            if (sid, line.strip()) == POWER_LINE:
+                continue
+            total += 1
+            if not _cited(sid, line.replace("**", "")[:40]):
+                failed.append((sid, number, "별표 뺌"))
+            if not _cited(sid, line):
+                failed.append((sid, number, "별표 둠"))
+    return total, failed
+
+
+def test_every_bold_line_in_the_real_kb_can_be_quoted_with_or_without_the_asterisks():
+    assert len(KB) == 48
+    total, failed = _bold_line_failures()
+    # ** 가 든 37줄 중 별표만 있는 7줄(PY-02-04, PY-03-04)과 거듭제곱 예제 1줄(PY-01-03)을 뺀 수
+    assert total == 29
+    assert failed == [], f"{len(failed)}건 실패 / 굵게 표시가 든 {total}줄"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "square = score ** group",  # 원문 그대로(거듭제곱)
+        "multi = apple * basket",  # 원문 그대로(곱셈)
+        "multi = first * second",
+        "(6 + 2) * 2",
+    ],
+)
+def test_operators_in_the_real_kb_are_quoted_as_written(quote):
+    assert scoring.normalize(quote) in scoring.normalize(KB["PY-01-03"].text)
+    assert _cited("PY-01-03", quote)
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "square = score * group",  # ** 를 * 로 바꿈
+        "square = score group",  # 연산자를 뺌
+        "multi = apple basket",
+        "multi = apple ** basket",  # * 를 ** 로 바꿈
+        "square = score **** group",
+    ],
+)
+def test_quotes_with_a_changed_or_missing_operator_are_not_verified(quote):
+    assert scoring.normalize(quote) not in scoring.normalize(KB["PY-01-03"].text)
+    assert not _cited("PY-01-03", quote)
+
+
+def test_only_paired_bold_markers_are_removed():
+    strip = actions._strip_bold
+    assert strip("앞 **굵게** 뒤 **또 굵게** 끝") == "앞 굵게 뒤 또 굵게 끝"
+    assert strip("square = score ** group") == "square = score ** group"  # 짝이 없다
+    assert strip("a ** b ** c") == "a ** b ** c"  # 안쪽이 공백으로 시작 · 끝나면 연산자다
+    assert strip("a * b") == "a * b"
+    assert strip("**첫 줄\n둘째 줄**") == "**첫 줄\n둘째 줄**"  # 줄을 넘지 않는다
+    assert strip("**한쪽만") == "**한쪽만"

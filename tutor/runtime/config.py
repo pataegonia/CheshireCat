@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
 ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트
 DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
+# 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
+PROXY_MAX_COMPLETION_TOKENS = 2000
 
 
 class _Strict(BaseModel):
@@ -26,7 +28,7 @@ class _Strict(BaseModel):
 
 class Toggles(_Strict):
     name_dict: bool
-    fewshot: bool
+    fewshot: Literal["off", "fixed", "knn"]  # 판단 예시(TU-08). off는 따옴표로
     action_from_category: bool
     signals: bool
     verify: Literal["off", "self", "guard"]
@@ -37,6 +39,16 @@ class Toggles(_Strict):
     scaffold_state_rule: bool
     inline_cite: bool
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
+
+
+class Fewshot(_Strict):
+    """판단 예시 고르기(TU-08). 가드 GR-05 `input.knn`과 같은 값으로 시작한다."""
+
+    # 문자 n-gram 범위(char_wb) [최소, 최대]. strict라 tuple 대신 길이 2 목록
+    ngram: Annotated[list[PositiveInt], Field(min_length=2, max_length=2)]
+    max_examples: PositiveInt  # knn 전체 상한(4–8)
+    per_category: PositiveInt  # knn 범주당 상한
+    with_answer: bool  # 예시에 정답 답변을 붙이는가(기본 끔, ablation)
 
 
 class Retrieval(_Strict):
@@ -56,7 +68,8 @@ class Timeouts(_Strict):
 
 class Llm(_Strict):
     reasoning_effort: Literal["low", "medium"]  # minimal 금지(TU-13)
-    max_completion_tokens: PositiveInt  # 튜터 주 호출 상한(가드 판정 호출과 따로)
+    # 튜터 주 호출 상한(가드 판정 호출과 따로). 프록시 상한을 넘으면 로드에서 실패한다
+    max_completion_tokens: Annotated[int, Field(ge=1, le=PROXY_MAX_COMPLETION_TOKENS)]
     timeout_s: Timeouts
 
 
@@ -68,6 +81,7 @@ class TutorConfig(_Strict):
     version: str
     mode: Literal["v2", "baseline"]
     toggles: Toggles
+    fewshot: Fewshot
     retrieval: Retrieval
     answer: Answer
     llm: Llm

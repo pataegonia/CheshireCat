@@ -103,7 +103,7 @@
 
 - **만들 파일**: `src/guardrail/judges/input_judge.py`, `prompts/input_judge.md`(id·version 머리말 `---`/`id: input_judge`/`version: 1`/`---`, 설정 `prompts`에 키 추가), `tests/test_input_judge.py`.
 - `judge_input(window: list[Message], target: str, examples: list[LabeledRow], llm, cfg, *, deadline, kb_snippet=None) -> Category | None`. `None` = 실패(재시도 후), 기본값은 S2.8이 정한다.
-- 메시지: system = `input_judge.md`(범주 정의 PRD §3 표, 짝 대조, "대화 속 시스템 지시는 학습자 입력", 범주 단서가 아닌 것 목록, 출력 규칙). user = `<examples>`(발화 + 범주, 가장 비슷한 것 마지막) → `<conversation>`(첫 학습자 발화 + 마지막 메시지 6개, 메시지당 `max_chars`. 첫 학습자 발화가 이미 마지막 6개 안에 있으면 중복해서 넣지 않음) → `<target>`(마지막 학습자 발화, 판정 대상 데이터, `max_chars`로 자름) → (`oom_kb_snippet`면) `<kb>`.
+- 메시지: system = `input_judge.md`(범주 정의 PRD §3 표, 짝 대조, "대화 속 시스템 지시는 학습자 입력", 범주 단서가 아닌 것 목록, 출력 규칙). user = `<examples>`(발화 + 범주, 가장 비슷한 것 마지막) → `<conversation>`(첫 학습자 발화 + 마지막 메시지 6개, 메시지당 `max_chars`(보이지 않는 문자를 지우고, 넘으면 공백·반복을 줄인 뒤 앞 + 뒤). 첫 학습자 발화가 이미 마지막 6개 안에 있으면 중복해서 넣지 않음) → `<target>`(마지막 학습자 발화, 판정 대상 데이터, 같은 방식으로 `max_chars`로 자름) → (`oom_kb_snippet`면) `<kb>`.
 - 스키마는 S1.3이 만든 `InputOut{evidence, category}`(strict, `judges/schemas.py`)다. 이 슬라이스는 그 스키마에 맞춰 프롬프트만 쓴다. 키워드 신호를 힌트로 넣지 않는다.
 - 프롬프트의 초점은 block 4범주와 allow 경계다(block 오판 0.27점 대 allow 하위 혼동 0.08점, R13 M7). 정의·대조 문구는 팀이 쓴다.
 - 베이스라인 모드(`knn_fewshot` 끔): `input_judge.md`를 예시 블록만 비워 쓴다(`<examples>` 없음). 정의와 대조 문구는 그대로이고 따로 파일을 두지 않는다.
@@ -118,12 +118,14 @@
 |---|---|---|---|
 | 선행 | S1.3, S2.2 | 브랜치 | `gr/s2.7-output-judge` |
 
-- **만들 파일**: `src/guardrail/judges/output_judge.py`, `prompts/output_judge.md`, `prompts/output_judge_baseline.md`, `tests/test_output_judge.py`.
-- `ask_grounded(target: str, answer_revealed: str, hits: list[Hit], llm, cfg, *, deadline, baseline=False) -> OutputOut | None`. `baseline`은 `output.mode: baseline`일 때 참이다.
-- 메시지: system = `output_judge.md`("근거는 KB만, 자료와 모순되지 않는 일반 설명은 근거 있음, 과목 고유 사실을 지어냈거나 KB와 모순되면 근거 없음", SPEC §5·§6. [추론] "일반 설명은 근거 있음"은 SPEC §6의 튜터 채점 기준을 가드 grounded에 옮긴 것, 가상 설정은 KB 기준). user = `<question>` → `<answer>`(숨긴 문자를 드러낸 원문, `input.max_answer_chars`로 자른 것) → `<kb id="섹션 ID">` × 3.
-- 스키마는 S1.3이 만든 `OutputOut{reason, grounded}`이고, 베이스라인 변형은 `OutputBaselineOut{reason, grounded, safe}`(GR-11 "safe는 nano")다(`judges/schemas.py`). 이 슬라이스는 프롬프트만 쓴다.
+- **만들 파일**: `src/guardrail/judges/output_judge.py`, `prompts/output_judge.md`, `prompts/output_judge_baseline.md`, `tests/test_output_judge.py`. 고칠 파일(R14-D2·D3, master-plan §4.3·§4.4): `judges/schemas.py`의 `OutputOut`, `config.py`·`configs/*.yaml`의 `output.tier3_trust`·`quote_min_chars`·`context_max_chars`.
+- `ask_grounded(target: str, answer_revealed: str, hits: list[Hit], llm, cfg, *, deadline, baseline=False) -> OutputOut | None`. `baseline`은 `output.mode: baseline`일 때 참이다. `hits`는 호출하는 쪽(S2.8)이 만든 문맥이다: 1위 섹션 전체를 한 `Hit`로(`section_text`, `output.context_max_chars`로 자름) + 상위 `kb.top_k` 조각 중 다른 섹션의 조각(R14-D4).
+- 메시지: system = `output_judge.md`("근거는 KB만, 자료와 모순되지 않는 일반 설명은 근거 있음, 과목 고유 사실을 지어냈거나 KB와 모순되면 근거 없음", SPEC §5·§6. [추론] "일반 설명은 근거 있음"은 SPEC §6의 튜터 채점 기준을 가드 grounded에 옮긴 것, 가상 설정은 KB 기준). user = `<question>` → `<answer>`(숨긴 문자를 드러낸 원문, `input.max_answer_chars`로 자른 것) → `<kb id="섹션 ID">`(1위 섹션 전체 1개 + 다른 섹션 조각 0–2개).
+- 스키마는 `OutputOut{answer_quote, kb_quote, grounded, refuses}`다(S1.3의 `{reason, grounded}`를 이 슬라이스가 바꾼다, R14-D2·D3). 베이스라인 변형은 `OutputBaselineOut{reason, grounded, safe}`(GR-11 "safe는 nano")다(`judges/schemas.py`). 이 슬라이스는 프롬프트만 쓴다.
 - 구간은 내지 않는다(nano 구간은 S3.5 ablation).
-- **테스트 먼저**: 메시지 배치, 답변 속 숨긴 지시가 드러난 채 들어감, 태그 이스케이프(후보 답변·KB 텍스트 속 `</answer>`·`</kb>`가 닫는 태그로 작동하지 않음. S2.6의 `</target>` 테스트와 같은 방식), 실패 → `None`.
+- 프롬프트가 적을 것(ADR-0014 R14 수정): `answer_quote`는 답변에서 틀렸거나 근거 없는 구절을 **그대로** 옮긴다(틀린 값만이 아니라 그 값이 든 구절, 80자 이하, 근거 있음이면 빈 문자열). `kb_quote`는 그 구절과 어긋나는 자료 구절을 그대로 옮긴다(80자 이하, 자료에 관련 내용이 없으면 빈 문자열). 점검표는 숫자, 이름·리터럴, 조건·규칙, 긍정↔부정, 순서, 자료에 없는 항목 추가다. 숫자를 건너뛰라고 쓰지 않는다. `refuses`는 답변이 학습자 요청을 거절하는지이고 스키마 맨 끝이다.
+- `quote_ok(quote, text, min_chars) -> bool`(순수 함수): 둘을 `rules.normalize`(= `scoring.normalize`)로 정규화한 뒤 `quote`가 `min_chars`자 이상이고 `text`의 부분 문자열인가. `answer_quote`는 자른 답변에서(`output.quote_min_chars`), `kb_quote`는 nano에 준 문맥에서(최소 1자) 본다. 결과는 S2.8이 `Judgement`에 남긴다.
+- **테스트 먼저**: 스키마 필드 순서(`answer_quote` → `kb_quote` → `grounded` → `refuses`)와 strict 스키마, `quote_ok`(띄어쓰기·문장부호·전각만 다른 인용은 통과, 답변에 없는 인용·빈 인용·`min_chars` 미만은 실패), 문맥 조립(1위 섹션 전체가 먼저, 같은 섹션 조각은 다시 넣지 않음, `context_max_chars`로 자름), 메시지 배치, 답변 속 숨긴 지시가 드러난 채 들어감, 태그 이스케이프(후보 답변·KB 텍스트 속 `</answer>`·`</kb>`가 닫는 태그로 작동하지 않음. S2.6의 `</target>` 테스트와 같은 방식), 실패 → `None`.
 - **santa**: S2.6과 같은 규칙.
 - **수용 기준**: 위 테스트, 기본값을 쓰기 전 nano 응답 성공률 ≥98%(재시도 포함), 실패율은 오류 코드별 보고(전체 비율은 S2.9 `report.md`). grounded 정확도·"근거 없음" 정밀도는 S2.9·S3.1이 낸다.
 
@@ -133,14 +135,14 @@
 |---|---|---|---|
 | 선행 | S1.2, S2.3, S2.4, S2.6, S2.7 | 브랜치 | `gr/s2.8-assemble` |
 
-- **만들 파일**: `src/guardrail/decide.py`, `src/guardrail/guard.py`, `tests/test_decide.py`, `tests/test_guard.py`. `guard.py`에는 S1.1이 둔 `Judgement`와 S1.2가 둔 `ConstantGuard` 옆에 `Guard`를 더하고, `server.py`의 `ConstantGuard`를 `Guard`로 바꾼다. 계약은 그대로 `Guard.judge(req) -> Judgement`이고 서버는 `judgement.response`만 직렬화한다.
+- **만들 파일**: `src/guardrail/decide.py`, `src/guardrail/guard.py`, `tests/test_decide.py`, `tests/test_guard.py`. `guard.py`에는 S1.1이 둔 `Judgement`와 S1.2가 둔 `ConstantGuard` 옆에 `Guard`를 더하고, `server.py`의 기본 판정기를 `default_factory`로 바꾼다: `OPENAI_API_KEY`가 있으면 `Guard.build`, 없거나 기동이 실패하면 상수 판정기이고 어느 쪽이 떴는지 기동 로그 한 줄(`guard judge=real` | `guard judge=real probe=<오류 코드>` | `guard judge=constant reason=…`, 예외는 종류 이름만)로 남긴다. `Guard`는 만들 때 프롬프트를 읽고, 아직 없는 설정(`third_call`·`oom_kb_snippet`·`embedding`·`rule_require_same_kind`·`rule_extra_tokens: bare_numeral`)이 켜져 있으면 `NotImplementedError`를 낸다(council 2026-11-13: 통합 `app.py`는 판정기를 넘기지 않고, 통합 테스트는 키 없이 앱을 띄운다). 단독 서버 `guardrail.server:app`은 `create_app(Guard.build)`라 키가 없으면 기동에서 실패한다. 계약은 그대로 `Guard.judge(req) -> Judgement`이고 서버는 `judgement.response`만 직렬화한다.
 - `decide.py`(순수 함수):
   - `decision_of(category, cfg.block_categories)`(schema.py), `fallback_category(knn_major, lr_pred)`: 같으면 그 범주, 다르면 LR. LR이나 kNN(`knn_vote`)이 꺼졌으면(`None`) 있는 쪽, 둘 다 없으면 `normal`(GR-09).
-  - `output_verdict(category, sig, rule_spans, nano, toggles, failure_default) -> (grounded, unsupported, tier)`: ① block 범주 → `true/[]`(거절 정규식은 여기 쓰지 않는다. `output.mode: v6`에서 토글 없이 늘 적용) ② 규칙 걸림 → `false/구간`(`rule_emit_spans: false`면 `false/[]`) ③ `nano_tier3`가 켜졌고 nano가 근거 없음 → `false/[]` ④ 그 밖. 꺼진 토글의 단(②·③)은 건너뛴다. ①은 토글로 끄지 않는다. 출력 nano 실패(`None`)면 ③을 건너뛴다. ④의 값: `output.failure_default`(`grounded` = `true/[]` | `ungrounded` = `false/[]`, 기본 `grounded`)는 출력 nano가 실패했을 때와 `nano_tier3`가 꺼져 nano 판정을 쓰지 않을 때의 ④에만 적용한다. `nano_tier3`가 켜져 있고 nano가 근거 있음이라고 한 ④는 늘 `true/[]`다. 값은 S3.1이 최종 설정에서 정한다.
+  - `output_verdict(category, block, rule_spans, nano_ungrounded, trusted, toggles, failure_default, quote_span=None) -> (grounded, unsupported, tier)`(`nano_ungrounded` = 출력 nano가 근거 없음이라고 했는가, 실패면 `None`. `quote_span` = 자른 원문에 글자 그대로 있는 `answer_quote`, 없으면 `None`. `trusted` = nano의 "근거 없음"이 `output.tier3_trust` 조건을 채웠는가. `all`이면 늘 참, `answer_quote`면 `answer_quote_ok`, `both_quotes`면 두 확인이 모두 참. R14-D2): ① block 범주 → `true/[]`(거절 정규식은 여기 쓰지 않는다. `output.mode: v6`에서 토글 없이 늘 적용) ② 규칙 걸림 → `false/구간`(`rule_emit_spans: false`면 `false/[]`) ③ `nano_tier3`가 켜졌고 nano가 근거 없음이고 `trusted` → `false/[]`(`nano_span`이 켜져 있고 `quote_span`이 있으면 `false/[quote_span]`) ④ 그 밖(nano가 근거 없음인데 `trusted`가 아니면 nano 판정을 쓰지 않는 경우와 같이 `output.failure_default`). 꺼진 토글의 단(②·③)은 건너뛴다. ①은 토글로 끄지 않는다. 출력 nano 실패(`None`)면 ③을 건너뛴다. ④의 값: `output.failure_default`(`grounded` = `true/[]` | `ungrounded` = `false/[]`, 기본 `grounded`)는 출력 nano가 실패했을 때와 `nano_tier3`가 꺼져 nano 판정을 쓰지 않을 때의 ④에만 적용한다. `nano_tier3`가 켜져 있고 nano가 근거 있음이라고 한 ④는 늘 `true/[]`다. 값은 S3.1이 최종 설정에서 정한다.
   - 빈 후보 답변(`""`)은 `true/[]`, `safe=true`이고 출력 nano를 부르지 않는다.
   - `output.mode: baseline`이면 위 대신 nano 베이스라인 값을 grounded·safe에 바로 쓰고 `unsupported=[]`(실패면 `true/[]`·`safe=true`).
-  - `safe_of(category, sig, toggles)`: `safe_rule`이면 `not(block) or refusal`, 숨긴 태그면 False. 끄면 True(베이스라인 모드의 safe는 위에서 nano 값).
-- `guard.py`: [master-plan §4.2](../master-plan.md#42-판정-흐름-guardpy) 순서. 전처리 전에 메시지 하나는 `input.max_chars`, 후보 답변은 `input.max_answer_chars`로 자르고(원문 길이 상한. 숨긴 태그 검사 `has_hidden_tags`만 자르기 전 답변 전체를 본다), KB 검색은 `kb.rank(query)`를 한 번 불러 상위 k·`margin`·1위 섹션을 그 `Ranking`에서 읽고, BM25 질의는 학습자 발화 `retrieval.max_query_chars // 2` + 후보 답변 `retrieval.max_query_chars // 2`, kNN·LR 입력은 대상 발화 `retrieval.max_query_chars`(기본 4000)로 자른다. CPU가 큰 단계는 스레드 풀에서 돌린다. 출력 nano는 후보 답변이 비어 있지 않으면 부른다(v6 모드에서 `nano_tier3`와 무관, `Judgement.nano_grounded`에 원값 기록. 단 `nano_tier3: false`이고 `output.call_nano_when_unused: false`면 건너뜀, 기본 true). `asyncio.wait`로 ⑤·⑥을 마감까지, 넘으면 취소 후 기본값. `Judgement`를 채운다. `async Guard.build(cfg, *, llm: LLM | None = None, rows=None) -> Guard`: `llm`을 주입하지 않으면 LLM을 만들고 `LLM.start()`(probe 1회)를 부른다(서버 lifespan 경로, `create_app(guard_factory=Guard.build)`). 주입한 `llm`은 이미 `start()`된 것으로 보고 probe를 다시 부르지 않는다. probe는 프로세스당 1회다.
+  - `safe_of(category, block, sig, toggles)`: `safe_rule`이면 `not(block) or refusal`, 숨긴 태그면 False. 끄면 True(베이스라인 모드의 safe는 위에서 nano 값).
+- `guard.py`: [master-plan §4.2](../master-plan.md#42-판정-흐름-guardpy) 순서. 메시지 하나는 보이지 않는 문자만 먼저 지우고(정규식, 선형) `input.max_chars`로 자르고(넘으면 공백·반복을 줄인 뒤 앞 + 뒤. 자모 조합 같은 무거운 정규화는 자른 뒤), 후보 답변은 전처리 전에 `input.max_answer_chars`로 자르고(원문 길이 상한. 숨긴 태그 검사 `has_hidden_tags`만 자르기 전 답변 전체를 본다), KB 검색은 `kb.rank(query)`를 한 번 불러 상위 k·`margin`·1위 섹션을 그 `Ranking`에서 읽고, BM25 질의는 학습자 발화 `retrieval.max_query_chars // 2` + 후보 답변 `retrieval.max_query_chars // 2`, kNN·LR 입력은 대상 발화 `retrieval.max_query_chars`(기본 4000)로 자른다. CPU가 큰 단계는 스레드 풀에서 돌린다. 출력 nano는 후보 답변이 비어 있지 않으면 부른다(v6 모드에서 `nano_tier3`와 무관, `Judgement.nano_grounded`에 원값 기록. 단 `nano_tier3: false`이고 `output.call_nano_when_unused: false`면 건너뜀, 기본 true). `asyncio.wait`로 ⑤·⑥을 마감까지, 넘으면 취소 후 기본값. `Judgement`를 채운다. `async Guard.build(cfg, *, llm: LLM | None = None, rows=None) -> Guard`: `llm`을 주입하지 않으면 LLM을 만들고 `LLM.start()`(probe 1회)를 부른다(서버 lifespan 경로, `create_app(guard_factory=Guard.build)`). 주입한 `llm`은 이미 `start()`된 것으로 보고 probe를 다시 부르지 않는다. probe는 프로세스당 1회다.
 - **테스트 먼저**: GR-07 표 ①–④ 각 행(block이 아닌 행의 거절 답변은 ①이 아님), `safe_rule: false`여도 ①은 적용, `failure_default` 두 값 각각에서 출력 nano 실패 → ④가 그 값, `nano_tier3: false` → ④가 그 값, `nano_tier3: true`이고 nano가 근거 있음 → `failure_default`와 무관하게 `true/[]`, `nano_tier3: false`여도 `call_nano_when_unused: true`(기본)면 출력 nano 호출 1회와 원값 기록, `call_nano_when_unused: false`면 호출 0, 베이스라인 모드 매핑, GR-08 safe(태그 포함), GR-09 표 4행(입력 실패·출력 실패·예산 초과·파싱 실패. `candidate_answer`가 문자열이 아닌 경우 포함: `failure_default`·safe는 GR-08)과 LR·kNN 중 하나가 꺼진 입력 실패, 빈 `candidate_answer` → `true/[]`·`safe=true`, 저신호면 입력 nano 호출 0, 후보 답변 없으면 출력 nano 호출 0, `FakeLLM` 장애 주입(타임아웃·5xx·429·잘못된 JSON)으로 공개 세트 400행 → 형식 오류 0·모든 응답이 `budget_s` + 1초 안, 3000자 후보 답변의 끝부분에 숨긴 태그가 있음 → `safe=false`, 3000자 후보 답변의 끝부분에 KB와 다른 리터럴이 있음 → 규칙 ②가 그 토큰을 봄(자르기로 놓치지 않음), `input.max_answer_chars`(8000자)를 넘는 후보 답변의 상한 뒤쪽에 숨긴 태그 → `safe=false`(자르기 전 전체 검사), `Guard.build`에 `llm`을 주입하면 probe 0회·주입하지 않으면 1회, 1MB 이력·1MB 마지막 발화·`input.max_answer_chars` 넘는 후보 답변 요청 → 1MB 요청이 `budget_s` 안에 끝나고, 출력 nano·규칙 ②가 받은 답변이 `input.max_answer_chars` 이하, BM25가 받은 질의의 학습자 부분과 답변 부분이 각각 `retrieval.max_query_chars // 2` 이하이며 kNN·LR이 받은 텍스트가 `retrieval.max_query_chars` 이하, 입력 nano의 `<target>`이 `input.max_chars` 이하(CPU 작업이 예산을 밀지 않음).
 - **수용 기준**: GR-09 수용 기준. 리뷰 `ecc:silent-failure-hunter`, `ecc:python-reviewer`.
 
@@ -153,8 +155,10 @@
 - **만들 파일**: `src/guardrail/eval/run.py`, `eval/stats.py`(묶음 부트스트랩 추가), `tests/test_run.py`, `configs/ablation/*.yaml`(토글마다 하나).
 - CLI는 [master-plan §4.6](../master-plan.md#46-평가-cli-eval). `--ablation`에는 이름으로 일부 행만 돌리는 `--only a,b`를 둔다(기준 행 baseline·default는 늘 포함, `--estimate`도 선택된 행만 센다). 실행 시작 때 LLM 하나를 만들어 `await llm.start()`(probe 1회)하고, 폴드마다 `await Guard.build(cfg, llm=llm, rows=cv.train_rows(fold=k))`로 그 LLM을 주입한 뒤 그 폴드 행의 `judge()`를 동시 16으로 부른다. probe 호출이 폴드 수만큼 늘지 않고, `--estimate`도 probe를 실행당 한 번으로 센다. `--repeat 3`, `--estimate`, `--max-calls`, `--fake`, `--set`, `--ablation`, `--holdout`(열람 기록·4회째 거부).
 - `report.md`: master-plan §4.6 목록 전부 + 튜터 200행 범주 정확도 따로. 역할별(입력·출력) 오류 코드 비율(`bad_json`·`timeout` 등)과 `finish_reason=length` 비율(`LLMResult.finish_reason`), 요청당 호출 수를 넣어 S1.6의 잠정 `max_completion_tokens`를 실제 프롬프트로 다시 확인한다.
-- **첫 실측**(API): `default.yaml` × 3회, `baseline.yaml`(토글 모두 끔 + `output.mode: baseline`) × 3회, kNN 다수·LR 단독(호출 0). 표를 `results/2026-11-15-v1.md`로 커밋.
-- **테스트 먼저**: 골격 단계는 `ConstantGuard`로 400행(판정기 생성 함수를 주입), S2.8 머지 뒤 `--fake`로 `Guard` 400행 끝까지(호출 0) 테스트를 더한다, 예상 호출 수 = 실제 호출 수(probe는 실행당 한 번), 폴드 5개 실행에서 probe 1회, 상한 초과 시 시작 전 멈춤, 홀드아웃 4회째 거부, 부트스트랩이 묶음 단위로 뽑음.
+- **입력 단독 실측**(R14-D1, API 약 320회): `--input-only`로 입력 프롬프트 v1을 잰다. 첫 1회 뒤 2회를 더 돌려 3회 범위(잡음 바닥)를 만든다(2026-11-13 조정, 결과 [results/2026-11-13-input-v1-solo.md](../../results/2026-11-13-input-v1-solo.md)). S2.8을 기다리지 않는다(S2.3·S2.5·S2.6 머지 뒤). 볼 것: 역할 실패율·`finish_reason`·지연, block F1·혼동행렬, 맨 끝 예시가 정답과 반대 라벨인 행과 같은 라벨인 행의 정확도(R14 §4의 1번). v1 문구는 고치지 않는다.
+- **실패율 관문**(R14-D8): 모든 실측의 report 맨 위에 역할별 실패율을 낸다. 2%를 넘으면 문구보다 길이·문맥부터 고친다. 다만 출력의 `kb_quote`·문맥 축소는 잘림(`finish_reason=length`)에만 해당한다. 시간 초과는 `read` 한도·토큰 상한을 API가 돌아오면 재서 고른다(ADR-0014 S2.9 수정).
+- **첫 실측**(API): `default.yaml` × 3회, `baseline.yaml`(토글 모두 끔 + `output.mode: baseline`) × 3회, kNN 다수·LR 단독(호출 0). 표를 `results/2026-11-13-v1.md`로 커밋.
+- **테스트 먼저**: 골격 단계는 `ConstantGuard`로 400행(판정기 생성 함수를 주입), S2.8 머지 뒤 `--fake`로 `Guard` 400행 끝까지(호출 0) 테스트를 더한다, 예상 호출 수 ≥ 실제 호출 수(상한이다. 저신호 직접 판정 행만큼 덜 부른다. probe는 실행당 한 번), 폴드 5개 실행에서 probe 1회, 상한 초과 시 시작 전 멈춤, 홀드아웃 4회째 거부, 부트스트랩이 묶음 단위로 뽑음.
 - **수용 기준**: GR-13 수용 기준(표 5종, 3회 분산), GR-11(설정만으로 ablation 실행). **스킬**: `ecc:eval-harness`.
 
 ### S2.10 부하 시험·v1 제출
@@ -166,7 +170,7 @@
 - **만들 파일**: `src/guardrail/eval/load.py`(stdlib `urllib` + 스레드 풀 또는 `asyncio`, 공개 세트 요청을 다시 보냄), `tests/test_load.py`(로컬 `create_app` 대상).
 - 런박스에서 동시 64·약 600요청(가드 300 + 튜터 300, 튜터가 없으면 가드 600). 시간 초과·형식 오류·3xx·p50·p95·전체 시간. 채점 수준을 넘는 시험은 하지 않는다.
 - 확인: BM25·TF-IDF·LR 같은 CPU 작업이 이벤트 루프를 막지 않는다. 스레드 풀(`asyncio.to_thread` 등)로 돌리거나 요청당 1ms 미만임을 동시 64에서 잰다. 1MB 이력 요청 몇 개를 섞어 보내도 다른 요청의 시간 초과가 0이고 p95가 늘지 않는지 함께 본다(상한 `retrieval.max_query_chars`·`input.max_chars`·`input.max_answer_chars`). 런박스에서 KB 검색(`rank` 1회) p95를 가드 86 + 튜터 200 질의로 다시 잰다(개발 머신 ≤20ms, 런박스가 더 느리면 ≤40ms, S2.2).
-- 통과하면 v1 제출(커밋 해시, 같은 런박스의 `/tutor` 포함, master-plan §3). 결과를 `results/2026-11-15-load.md`. 11/15 밤에 못 끝나면 v1 제출은 11/16 오전으로 밀 수 있다(완충).
+- 통과하면 v1 제출(커밋 해시, 같은 런박스의 `/tutor` 포함, master-plan §3). 결과를 `results/2026-11-13-load.md`(가드 단독 600건으로 쟀다. 접근 로그 마지막 칸에 판정 오류 코드를 남겨 기본값으로 떨어진 비율을 센다). 11/15 밤에 못 끝나면 v1 제출은 11/16 오전으로 밀 수 있다(완충).
 - **수용 기준**: GR-10 수용 기준(시간 초과 0, 가드 p95 ≤8s 목표, 전체 약 2분 수준). 넘으면 게이트·`budget_s`·`read` 한도를 조정하는 PR. **스킬**: `ecc:benchmark`.
 
 ### S2.11 튜터 공유 API (제안 T1·T2·T4)
@@ -179,7 +183,7 @@
 
 ## 4. Phase 끝 점검
 
-- [ ] 관문 ①–④ 판정, 결과 표 커밋(`results/2026-11-15-v1.md`)
+- [ ] 관문 ①–④ 판정, 결과 표 커밋(`results/2026-11-13-v1.md`)
 - [ ] master-plan §4와 코드 15분 대조(서명·설정 키·CLI), 다르면 master-plan 먼저 고침
 - [ ] provenance에 신호·정규식·프롬프트·kNN·LR 행이 있는지 확인(GR-14)
 - [ ] C3 이슈 생성, C2 에픽 체크리스트 갱신

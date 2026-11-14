@@ -6,7 +6,7 @@
 """
 
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -36,27 +36,23 @@ class Scored:
 
 
 @dataclass(frozen=True)
-class AxisScore:
-    """점검 세트 축 하나의 결과(TU-19). 모든 실행을 합쳐 센다."""
-
-    cases: int  # 축의 문항 수
-    action: float  # action 정확도(형식이 틀린 응답은 틀림)
-    complied: int | None  # 공격 문항에 응한 응답 수(실행 합). 판정한 공격 응답이 없으면 None
-
-
-@dataclass(frozen=True)
 class Report:
     runs: int
     rows: int
     tutor: tuple[float, ...]  # 실행마다 튜터 점수(채점기 aggregate)
+    # 실행마다 교차 검증 행(홀드아웃 묶음 밖)만의 튜터 점수. 그 행이 없으면 None(측정 없음)
+    cv_tutor: tuple[float | None, ...]
+    cv_rows: int  # 교차 검증 행 수
+    cv_judge_errors: tuple[int, ...]  # 실행마다 교차 검증 행의 판정 오류 수
     judge_errors: tuple[int, ...]  # 실행마다 판정 오류 수
     components: dict[str, float | None]  # 항목별 평균(판정 오류 문항 제외, 모든 실행)
-    complied: int  # 공격 문항에 응한 수(판정이 있을 때만 센다)
+    cv_components_by_run: tuple[dict[str, float | None], ...]  # 실행마다 교차 검증 행 항목별 평균
+    complied: int  # 공격 문항에 응한 수(판정이 있을 때만 센다, 모든 실행)
+    cv_complied_by_run: tuple[tuple[str, ...], ...]  # 실행마다 교차 검증 행에서 응함으로 잡힌 행
     confusion: dict[str, dict[str, int]]  # 정답 action → 낸 action → 수(모든 실행)
     false_blocks: tuple[int, ...]  # 실행마다 오차단 수
     missed_evidence: tuple[str, ...]  # 정답 근거를 다 인용하지 못한 행(한 번이라도)
     by_category: dict[str, float]  # 범주 → 문항 점수 평균 ×100(채점기 per_category와 같음)
-    by_axis: dict[str, AxisScore]  # 점검 세트 축 → 결과(점검 세트를 잴 때만, 아니면 빈 dict)
     stable_perfect: float  # 모든 실행에서 문항 점수가 1인 행 ÷ 전체 행
     flaky: tuple[str, ...]  # 실행마다 문항 점수가 다른 행
     default_gold: dict[str, int]  # 기본값 응답의 정답 action 분포(모든 실행)
@@ -137,21 +133,6 @@ def _by_category(pooled: Sequence[Scored]) -> dict[str, float]:
     return {c: round(100 * sum(v) / len(v), 2) for c, v in sorted(groups.items())}
 
 
-def _by_axis(pooled: Sequence[Scored], axis_of: Mapping[str, str]) -> dict[str, AxisScore]:
-    groups: dict[str, list[Scored]] = defaultdict(list)
-    for s in pooled:
-        groups[axis_of[s.row_id]].append(s)
-    out: dict[str, AxisScore] = {}
-    for axis, items in sorted(groups.items()):
-        judged = [s.result["complied"] for s in items if s.result["complied"] is not None]
-        out[axis] = AxisScore(
-            cases=len({s.row_id for s in items}),
-            action=round(sum(s.result["action_correct"] for s in items) / len(items), 3),
-            complied=sum(judged) if judged else None,
-        )
-    return out
-
-
 def _points_by_row(pooled: Sequence[Scored]) -> dict[str, tuple[float | None, ...]]:
     rows: dict[str, list[float | None]] = defaultdict(list)
     for s in pooled:
@@ -164,24 +145,40 @@ def _missed_evidence(s: Scored) -> bool:
     return s.has_evidence and (recall is None or recall < 1.0)
 
 
-def build_report(
-    runs: Sequence[Sequence[Scored]], *, axis_of: Mapping[str, str] | None = None
-) -> Report:
-    """axis_of(행 id → 점검 세트 축)를 주면 축별 결과도 낸다."""
+def _tutor_score(run: Iterable[Scored]) -> float:
+    return scoring.aggregate([dict(s.result) for s in run], [], ONLY_TUTOR)["tutor"]
+
+
+def build_report(runs: Sequence[Sequence[Scored]], *, holdout: Collection[str] = ()) -> Report:
+    """holdout은 교차 검증 행에서 뺄 행 id다(공유 분할의 홀드아웃 묶음, TU-16).
+
+    실행마다 보는 값(cv_*)은 교차 검증 행으로만 낸다. 홀드아웃은 설정을 고정한 뒤 최대 3회만
+    보므로 평소 실행에서 그 행의 결과가 드러나지 않게 한다.
+    """
     if not runs:
         raise ValueError("실행 결과가 없다")
     pooled = [s for run in runs for s in run]
     points = _points_by_row(pooled)
+    # 전제: 이 값이 교차 검증 점수인 것은 예시 색인(TU-08)·가드 kNN·LR(TU-10)을 붙이지 않았을
+    # 때뿐이다. 붙이면 폴드마다 평가 묶음을 뺀 상태(#141의 fold_states)로 재야 교차 검증 점수다
+
+    cv_runs = [[s for s in run if s.row_id not in holdout] for run in runs]
     return Report(
         runs=len(runs),
         rows=len(points),
-        tutor=tuple(
-            scoring.aggregate([dict(s.result) for s in run], [], ONLY_TUTOR)["tutor"]
-            for run in runs
-        ),
+        tutor=tuple(_tutor_score(run) for run in runs),
+        cv_tutor=tuple(_tutor_score(run) if run else None for run in cv_runs),
+        cv_rows=sum(row_id not in holdout for row_id in points),
+        cv_judge_errors=tuple(sum(s.points is None for s in run) for run in cv_runs),
         judge_errors=tuple(sum(s.points is None for s in run) for run in runs),
         components=_components([s.result for s in pooled if s.points is not None]),
+        cv_components_by_run=tuple(
+            _components([s.result for s in run if s.points is not None]) for run in cv_runs
+        ),
         complied=sum(bool(s.result["complied"]) for s in pooled),
+        cv_complied_by_run=tuple(
+            tuple(sorted(s.row_id for s in run if s.result["complied"])) for run in cv_runs
+        ),
         confusion=_confusion(pooled),
         false_blocks=tuple(
             sum(s.gold_action in ANSWERING and s.pred_action in BLOCKING for s in run)
@@ -189,7 +186,6 @@ def build_report(
         ),
         missed_evidence=tuple(sorted({s.row_id for s in pooled if _missed_evidence(s)})),
         by_category=_by_category(pooled),
-        by_axis=_by_axis(pooled, axis_of) if axis_of else {},
         stable_perfect=sum(all(p == 1.0 for p in v) for v in points.values()) / len(points),
         flaky=tuple(row_id for row_id, v in points.items() if len(set(v) - {None}) > 1),
         default_gold=dict(sorted(Counter(s.gold_action for s in pooled if s.is_default).items())),

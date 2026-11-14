@@ -59,7 +59,7 @@
 ```
 채점기 ──POST /tutor──┐                          ┌──POST /guard── 채점기
                       ▼                          ▼
-   app.py(통합, 1줄) = guardrail.server.create_app(guard_factory, tutor_router=tutor.router, defaults={"/tutor": 튜터 기본값})
+   app.py(통합, 1줄) = guardrail.server.create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])
    ← 가드 #47: 인증(check_token · app.state.TEAM_TOKEN) · 메타 로그 · lifespan · 앱 수준 예외/422 처리기(경로별 기본값)
    llm.py 게이트 · probe()         ← 가드 #48: 세마포어 · 재시도 1 · slot()
                       │                          │
@@ -91,13 +91,13 @@
 
 ```
 CheshireCat/
-  app.py                 통합 — `create_app(guard_factory, tutor_router=tutor.router, defaults=…)` 한 줄
+  app.py                 통합 — `create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄
   pyproject.toml         통합 — uv workspace(members: guardrail · tutor · integration), lock 하나
   guardrail/             가드 — server.py(router · create_app) · llm.py(게이트) · judge · eval/score · probe
   tutor/                 튜터 — judge · prompts · answer · retrieval/(공유 색인 · 이름 사전 · 임베딩) · runtime · eval
   integration/           통합 — contracts.py · actions.py
   harness/               통합 — run_public.py · load_test.py · redteam/ · check_logs.sh
-  config/                통합 — actions.yaml · runtime.yaml(budget_s · judge_skip_s · fallback_action) · tutor.yaml(튜터 토글, 튜터 소유) · ablation/*.yaml ✅ 루트 한 곳(튜터 수용)
+  config/                통합 — actions.yaml · runtime.yaml(judge_skip_s · fallback_action. budget_s는 가드 설정) · tutor.yaml(튜터 토글, 튜터 소유) · ablation/*.yaml ✅ 루트 한 곳(튜터 수용)
   competition/           배포 자료(변경 금지)
   docs/PRD.md            팀 기획서
   integration/docs/PRD.md 이 문서
@@ -156,7 +156,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 #                              category를 넘기지 않으면 classify()가 한 번 더 돈다(nano +1) → 튜터는 1단계 범주를 반드시 넘긴다
 #                              (요청, 우선순위 낮음) format_material(sections) -> str
 ```
-- 튜터 주 호출 출력은 `list[Sentence]`(문장 단위 + 문장별 `sid` · `quote`, 튜터 v2 TU-06 d7a4bce ✅). 하네스용 검색 시그니처는 `retrieve(query, history, *, subject=None, k=5, use_embedding=False) -> list[Section]`(튜터 TU-03).
+- 튜터 주 호출 출력은 `list[Sentence]`(문장 단위 + 문장별 `sid` · `quote`, 튜터 v2 TU-06 d7a4bce ✅). 하네스용 검색 시그니처는 `retrieve(query, history, *, subject=None, k=5, embedding=None) -> list[Section]`(튜터 TU-03).
 - **수용 기준**: 세 트랙이 같은 모듈을 import, 타입 중복 0.
 
 ### IN-02 검색 품질 측정 (P0, 검색 구현 · 세부값은 튜터 TU-03 · 04 · 11)
@@ -190,16 +190,17 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 4. `citations` = 남은 claim의 `sid`, 상한 `max_citations`(기본 1, 튜터 ablation 2; 동률은 검색 순위). 정규식 `^(PY|PR|FIN)-\d{2}-\d{2}$` + 실존 48개 + 중복 제거.
 5. `answer` = 문장 join, **4,000 유니코드 문자** 절단, 제어 문자 제거, JSON 직렬화 확인(판정 실패 5% 규칙 대비).
 - `answer` · `scaffold`(answer_seeking)는 citations를 **항상 1개** 채운다(남은 claim의 sid, 없으면 검색 1위). faithful 판정 근거가 우리 citations이므로 비워 두면 과목 사실이 전부 근거 없음이 된다. 튜터 TU-07 ✅ 동일.
+- 인용 규칙은 **최종 action** 기준으로 위에서부터 먼저 맞는 것을 쓴다: ① clarify · redirect · refuse · escalate → 인용 없음 ② 표에 있는 (범주, action) → 표의 `cite` ③ 표와 다른 `answer` · `scaffold`인데 그 범주의 표 `cite`가 `always`(normal · pii_disclosure · answer_seeking) → `always`(검색 1위로 채움) ④ 그 밖 → `if_used`(claim이 실제로 쓴 섹션만). ③의 이유: 정답 근거가 있는 문항은 답변 내용과 상관없이 인용이 채점되므로, 모델이 answer_seeking → answer · normal → scaffold처럼 표와 다르게 골라도 인용을 비우면 인용 점수를 잃는다(#97 리뷰).
 - 후처리 주인은 **이 모듈 하나**(튜터 TU-07은 IN-04를 쓴다, d7a4bce). 길이 절단 · 빈 답변 처리도 여기서만.
 - **수용 기준**: quote 검증 100%, citations ⊆ 실존, 인용 F1 `[측정]`.
 
 ### IN-05 튜터 라우터 조립 (P0)
-- **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입** ✅ 가드 #92 `8fd8f5f`(리더 #92 리뷰로 요청, 테스트 5개 포함). 루트 `app.py`는 `app = create_app(make_guard, tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
+- **가드 `create_app(guard_factory, *, tutor_router=None, defaults=None, startups=())`에 주입** ✅ 가드 #92 `8fd8f5f`(리더 #92 리뷰로 요청, 테스트 5개 포함). 루트 `app.py`는 `app = create_app(tutor_router=tutor.router, defaults={"/tutor": tutor.TUTOR_DEFAULT}, startups=[tutor.startup])` 한 줄. `guard_factory`는 넘기지 않고 가드 기본값을 쓴다(지금은 상수 판정기 `constant_factory`. 실제 판정기는 가드가 기본값을 바꾸면 `app.py` 수정 없이 붙는다). `startups`는 lifespan이 `app.state`를 넘겨 부르는 콜러블 목록 — 튜터 자체 색인(kNN 예시 · 이름 사전)을 첫 요청 전에 만든다(SPEC §3, 튜터 요청). 인증(`check_token` · `app.state.TEAM_TOKEN`) · 메타 로그 · 3xx 없음 · lifespan은 가드 골격 하나를 쓴다.
 - **경로별 기본값**: 예외 · 422 처리기는 FastAPI에서 앱 수준이므로(가드 지적) `create_app` 안의 처리기가 `request.url.path`로 `/guard` → GR-09 기본값, `/tutor` → `defaults["/tutor"]`를 고른다. 튜터 라우터는 그래도 자기 예외를 안에서 잡는다(TU-01 ✅) — 앱 처리기는 이중 안전망.
 - 공유 객체(`Guard` · `KbIndex` · `llm` 게이트)는 `create_app` lifespan이 만들어 `app.state`에 두고, 튜터 라우터는 `request.app.state`로 받는다. 가드에 요청하는 것: `tutor_router` · `defaults` · `startups` 인자 3개(#47 코멘트).
-- 라우터 흐름 = §3-1. 시간 예산 · 판정 생략 · 생성 실패 기본값은 §3-1의 설정 키 셋(`budget_s` · `judge_skip_s` · `fallback_action`).
+- 라우터 흐름 = §3-1. 시간 예산 · 판정 생략 · 생성 실패 기본값은 §3-1의 설정 키: `config/runtime.yaml`의 `judge_skip_s` · `fallback_action` 둘과, 가드 설정의 `budget_s`.
 - 가드 골격이 `/tutor`에는 해 주지 않는 것 — 튜터 라우터가 안에서 건다: `asyncio.timeout(budget_s)`(가드 `/guard`는 `budget_s + 5` 안전망), 본문 상한(가드 `_read_body` 4MiB는 비공개), `request.body()` 직접 파싱(pydantic 본문 모델은 `Content-Type` 없으면 422 → 기본값, 가드 #92 코멘트).
-- **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, Content-Type 없는 요청 200, 매달린 생성 → `budget_s` 안에 200 기본값, 5MiB 본문 → 200 기본값, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 처리 중 전역 쓰기 없음, `session_id` · 헤더는 인증 외 미사용.
+- **계약 테스트 `tests/integration/`**(FakeLLM): 퍼징 입력 전부 200 + `tutor.schema.json`, `/tutor/` 3xx 없음, 토큰 없음 → `/tutor` · `/guard` 둘 다 401, Content-Type 없는 요청 200, 매달린 생성 → `budget_s` 안에 200 기본값, 5MiB 본문 → 200 기본값, 로그에 본문 없음, **실격 조항**(IN-11): 같은 요청 두 번 → LLM 호출도 두 번(주 호출 경로), 요청 내용을 요청 사이에 저장 · 재사용하지 않음(앞 요청이 뒤 응답을 바꾸지 않음), `session_id` · 헤더는 인증 외 미사용.
 - **수용 기준**: 공개 세트 튜터 200행 전부 200 + 스키마, `/tutor/` 3xx 없음, 계약 테스트 green.
 
 ### IN-06 통합 하네스 `harness/run_public.py` (P0)
@@ -217,9 +218,9 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 - **수용 기준**: 범주별 차단율 · 오탐률 표, 가드 · 튜터 둘 다 실행.
 
 ### IN-09 CI `integration-ci.yml` (P0)
-- 가드 gate 패턴 복제, 경로 `tutor/** integration/** harness/** config/** app.py pyproject.toml uv.lock`. lint · test(루트 pyproject 있을 때, `tests/integration` + `tests/tutor`), **대회 규칙 검사**(금지 의존성 — `git ls-files` 기준 저장소 전체의 의존성 파일, 보수적 목록 + 런타임 다운로드 패키지 tiktoken · huggingface-hub; 외부 URL 리터럴; 본문 로깅 정적 검사 — `guardrail/` 포함; `.env` · `submission.json` 토큰 커밋 방지), gitleaks **저장소 전체**(`.gitleaks.toml`로 `competition/public` · `kb` 제외). 필수 검사 이름 `integration / gate`.
+- 작업은 `integration / gate` 하나이고 검사는 그 안의 단계다. 모든 PR과 모든 main push에서 돈다. PR에서는 lint · test · 런타임 로그 검사가 통합 영역을 건드렸을 때만 돌고, main push에서는 경로와 무관하게 전부 돈다. 통합 영역 경로 `app.py integration/** tutor/** harness/** config/** tests/** scripts/** competition/** pyproject.toml uv.lock`, 루트 설정 파일(`conftest.py pytest.ini tox.ini setup.cfg ruff.toml .ruff.toml uv.toml .python-version`), 가드의 앱 영향 경로(`guardrail/src/** guardrail/configs/** guardrail/prompts/** guardrail/docs/contract/** guardrail/pyproject.toml guardrail/scripts/r13/common.py`), 워크플로 파일 자신. `tutor/docs/` · `integration/docs/`의 `.md`는 뺀다. lint · test(루트 pyproject 있을 때, `tests/integration` + `tests/tutor`), **대회 규칙 검사**(정적 검사 네 가지는 경로와 무관하게 항상: 금지 의존성 — `git ls-files` 기준 저장소 전체의 의존성 파일, 보수적 목록 + 런타임 다운로드 패키지 tiktoken · huggingface-hub; 외부 URL 리터럴; 본문 로깅 정적 검사 — `guardrail/` 포함; `.env` · `submission.json` 토큰 커밋 방지), gitleaks **저장소 전체**(`.gitleaks.toml`로 `competition/public` · `kb` 제외. 경로와 무관하게 항상 도는 단계), 맨 끝 판정 단계(판별 결과가 비정상이거나 돌아야 할 단계가 돌지 않았으면 실패). 필수 검사 이름 `integration / gate`.
 - 금지 의존성 목록은 SPEC §7.1보다 넓다(torch · onnxruntime · faiss 자체는 허용). **보수적 선택**: 사전학습 가중치가 들어오는 주 경로를 막고, 필요해지면 회의로 해제한다(주석에 명시).
-- 필수 검사(required checks)는 무료 비공개 저장소라 강제 불가(403) → PR 템플릿에 "네 검사(guardrail / gate · integration / gate · pr-policy · secrets) green 확인 후 머지" 명시.
+- 필수 검사(required checks)는 무료 비공개 저장소라 강제 불가(403) → PR 템플릿에 "세 검사(guardrail / gate · integration / gate · pr-policy) green 확인 후 머지" 명시. `.github/`를 바꾼 PR에는 `pr-policy / zizmor`가 하나 더 뜬다(zizmor에 읽기 전용 토큰만 주려고 나눈 작업). 그 밖에는 워크플로마다 작업이 하나씩이다(저장소 전체 비밀 키 검사는 `integration / gate`의 단계). base 브랜치를 바꾼 뒤 통합 CI가 다시 돌지 않았으면 `pr-policy`가 실패로 알린다.
 - PR 템플릿의 트랙 라벨 표기 `orchestrator` → `integration`.
 - **수용 기준**: 문서만 있는 PR 통과, 금지 패키지 넣은 PR 실패(테스트 완료).
 
@@ -230,7 +231,7 @@ class TutorResult(BaseModel): answer: str; action: Action; citations: list[str]
 
 ### IN-11 규칙 준수 (P0)
 - `docs/provenance.md`(가드 양식 공유): 서버 자산 출처. 운영진 확인 §10-1.
-- **실격 조항 테스트**(리더 리뷰 2번, IN-05 계약 테스트에 포함): SPEC §8 상태 · 캐시 금지(같은 요청 두 번 → LLM 두 번), 하드코딩 금지(질문→답 표 없음을 코드 검색으로), 채점 요청 감지 금지(헤더 · `session_id`는 인증 외 미사용, 요청 처리 중 전역 쓰기 없음), 요청 처리 외부 위임 없음(런박스 안에서 전부).
+- **실격 조항 테스트**(리더 리뷰 2번, IN-05 계약 테스트에 포함): SPEC §8 상태 · 캐시 금지(같은 요청 두 번 → LLM 두 번), 하드코딩 금지(질문→답 표 없음을 코드 검색으로), 채점 요청 감지 금지(헤더 · `session_id`는 인증 외 미사용, 요청 내용을 요청 사이에 저장 · 재사용하지 않는다(같은 요청 두 번 → LLM 두 번, 앞 요청이 뒤 응답을 바꾸지 않음)). 호출 횟수 카운터는 요청 내용이 없고 응답에 쓰이지 않아 대상이 아니다(#107), 요청 처리 외부 위임 없음(런박스 안에서 전부).
 
 ---
 

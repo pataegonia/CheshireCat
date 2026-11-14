@@ -1,0 +1,2 @@
+# ablation: 기본 설정에서 toggles.oom_kb_snippet만 켠다(GR-11)
+toggles: {oom_kb_snippet: true}

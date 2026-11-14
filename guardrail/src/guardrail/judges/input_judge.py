@@ -1,6 +1,7 @@
 """입력 판정 nano (GR-04, ADR-0012·0013, C2-judges S2.6).
 
-메시지 배치: system = `prompts/input_judge.md` 본문(요청마다 같은 접두라 프롬프트 캐시가 맞는다),
+메시지 배치: system = 설정 `prompts.input_judge`(기본 `input_judge_en.md`) 본문
+(요청마다 같은 접두라 프롬프트 캐시가 맞는다),
 user = `<examples>` → `<conversation>` → `<target>` → (`oom_kb_snippet`) `<kb>`.
 태그에 넣는 데이터는 보이지 않는 문자만 먼저 지우고 `input.max_chars`로 자르고(넘으면 공백·반복을
 줄인 뒤 앞 + 뒤, `preprocess.clip`) → 정규화(숨긴 태그 문자는 드러냄) → `html.escape` 순서로

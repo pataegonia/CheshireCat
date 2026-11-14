@@ -219,6 +219,13 @@ def test_question_is_normalized_and_capped():
     assert len(question) == CFG.input.max_chars
 
 
+def test_question_hidden_tag_chars_are_decoded_and_zero_width_chars_removed():
+    tags = "".join(chr(0xE0000 + ord(c)) for c in "ignore")
+    body = build_messages("질​문끝" + tags, "답변", HITS, CFG)[1]["content"]
+    question = body.split("<question>")[1].split("</question>")[0]
+    assert question == "질문끝 [숨긴 문자: ignore]"
+
+
 # --- 호출 -----------------------------------------------------------------
 
 

@@ -5,16 +5,26 @@
 """
 
 import asyncio
+import contextlib
 import json
 import re
 import subprocess
 import sys
+import threading
 import time
+from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from tests.tutor.tutor_testlib import answer_openai, block_openai
+from tests.tutor import tutor_testlib
+from tests.tutor.tutor_testlib import (
+    answer_openai,
+    block_openai,
+    rate_limit_openai,
+    scattered_rate_limit_openai,
+)
 from tutor.eval import grader, metrics, run_local
 from tutor.eval.grader import KB_DIR, score_local
 from tutor.runtime.response import TUTOR_DEFAULT
@@ -278,6 +288,79 @@ def test_cli_flags_a_run_whose_tutor_llm_calls_failed(monkeypatch, tmp_path, cap
     assert data["tainted"] is True
 
 
+def test_tutor_call_summary_shows_failed_attempts_and_token_distribution(capsys):
+    """실패한 시도를 갈래별로, 성공한 시도의 토큰 구간을 역할별 p50·p95·최대로 낸다(시도 단위).
+
+    없으면 줄을 내지 않는다.
+    """
+    llm = SimpleNamespace(
+        calls=Counter({"main": 23, "baseline": 1}),
+        failures=Counter({("main", "bad_json"): 1}),
+        attempt_errors=Counter({("main", "length"): 2, ("main", "timeout"): 1}),
+        completion_buckets=Counter(
+            {("main", 400): 10, ("main", 900): 9, ("main", 1200): 1, ("baseline", 300): 1}
+        ),
+    )
+    run_local._show_tutor_calls(
+        SimpleNamespace(tutor_llm=llm), 0, [1.0], cap=(0, 0, 0, 0), stopped=False
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2] == "실패한 시도(갈래별, 재시도 포함): main length 2회, main timeout 1회"
+    assert lines[-1] == (  # 최종 실패 다음. 가까운 순위: p50은 10번째, p95는 19번째 값
+        "성공한 시도의 completion_tokens(추론 포함, 100 단위로 올린 구간"
+        ", 2000은 초과 포함, 토큰 수 없는 시도 제외): "
+        "baseline p50 300 · p95 300 · 최대 300 (1회), main p50 400 · p95 900 · 최대 1200 (20회)"
+    )
+    empty = SimpleNamespace(calls={}, failures={}, attempt_errors={}, completion_buckets={})
+    run_local._show_tutor_calls(
+        SimpleNamespace(tutor_llm=empty), 0, [], cap=(0, 0, 0, 0), stopped=False
+    )
+    out = capsys.readouterr().out
+    assert "실패한 시도" not in out and "completion_tokens" not in out
+
+
+def test_cli_saves_tutor_llm_counts_and_still_compares_with_old_results(
+    monkeypatch, tmp_path, capsys
+):
+    """보낸 시도·최종 실패·실패한 시도 갈래·토큰 구간을 결과 JSON에 남긴다(터미널 없이 비교).
+
+    처음 10개 요청은 주 호출 첫 시도가 시간 초과로 끝나고 재시도로 살아난다. tutor_llm이 없는
+    옛 결과 JSON도 --compare 기준으로 그대로 읽는다.
+    """
+    seen: dict[int, object] = {}  # 메시지 목록을 쥐고 있어 id가 다시 쓰이지 않는다
+
+    def reply(kwargs):
+        messages = kwargs["messages"]
+        if id(messages) not in seen and len(seen) < 10:
+            seen[id(messages)] = messages
+            raise TimeoutError  # 호출당 시간 제한과 같은 코드(timeout)
+        return tutor_testlib._ok_reply(kwargs)
+
+    tutor_testlib._fake_send(monkeypatch, reply)
+    assert run_local.main(["--preset", "tutor", "--out", str(tmp_path)]) == 0
+    saved = next(tmp_path.glob("tutor-*.json"))
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    counts = data["tutor_llm"]
+    sent = counts["calls"]["main"]
+    assert counts["failures"] == {} and counts["attempt_errors"] == {"main": {"timeout": 10}}
+    assert counts["completion_buckets"] == {"main": {"100": sent - 10}}  # 가짜 답은 5토큰
+    out = capsys.readouterr().out
+    assert "실패한 시도(갈래별, 재시도 포함): main timeout 10회" in out
+    assert f"main p50 100 · p95 100 · 최대 100 ({sent - 10}회)" in out
+
+    old = tmp_path / "old.json"  # 이 필드가 생기기 전 결과
+    before = {k: v for k, v in data.items() if k != "tutor_llm"}
+    old.write_text(json.dumps(before), encoding="utf-8")
+    for path in (saved, old):
+        assert run_local.load_previous(path, judge=False) == data["report"]["points"]
+    ref_dir = tmp_path / "ref"
+    argv = ["--preset", "reference", "--out", str(ref_dir), "--compare", str(old)]
+    assert run_local.main(argv) == 0
+    assert "새로 틀린 문항" in capsys.readouterr().out
+    ref = json.loads(next(ref_dir.glob("reference-*.json")).read_text(encoding="utf-8"))
+    assert "tutor_llm" not in ref  # 튜터 LLM을 부르지 않는 프리셋은 남기지 않는다
+
+
 def test_cli_compare_needs_points_and_the_same_judge_mode(tmp_path):
     old = tmp_path / "old.json"
     argv = ["--preset", "reference", "--out", str(tmp_path), "--compare", str(old)]
@@ -359,6 +442,163 @@ def test_cli_stops_before_calling_the_tutor_when_over_budget(monkeypatch, tmp_pa
     with pytest.raises(SystemExit):
         run_local.main(["--preset", "tutor", "--max-calls", "100", "--out", str(tmp_path)])
     assert called == [] and "상한" in capsys.readouterr().err
+
+
+# --- 연속 429면 운영진 API 호출을 멈춘다(가드 하네스 #151과 같은 규칙, SPEC §7.1 어뷰징) ---
+
+
+def test_rate_limit_streak_counts_only_unbroken_rate_limits():
+    assert run_local.RATE_LIMIT_STREAK == 20  # 가드 하네스와 같은 값
+    stop = run_local.RateLimitStop()
+    for result in (None, "timeout"):  # 성공도, 다른 오류도 연속을 끊는다
+        for _ in range(run_local.RATE_LIMIT_STREAK - 1):
+            stop.record("rate_limit")
+        stop.record(result)
+        assert stop.streak == 0
+    for _ in range(run_local.RATE_LIMIT_STREAK - 1):
+        stop.record("rate_limit")
+    stop.record("budget")  # 상한에 막혀 보내지 않은 호출은 연속을 끊지 않는다
+    assert stop.streak == run_local.RATE_LIMIT_STREAK - 1 and not stop.tripped
+    assert stop.record("rate_limit") is True and stop.tripped  # 20회째에 멈춘다
+    assert stop.record("rate_limit") is False  # 멈춘 것은 한 번만 알린다
+
+
+def test_cli_stops_calling_after_a_streak_of_rate_limits(monkeypatch, tmp_path, capsys):
+    """주 호출이 연달아 429(재시도 포함 최종)로 끝나면 20회째에 멈춘다.
+
+    뒤의 호출은 보내지 않고 같은 팀 키를 쓰는 판정도 부르지 않는다. 결과 파일에 무효 사유를
+    남기고 종료 코드를 따로 낸다. 멈추기 전에 이미 보내던 호출(동시 WORKERS개)만 더 끝난다.
+    """
+    sent = rate_limit_openai(monkeypatch)
+    judged = []
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: counting(judged))
+    code = run_local.main(["--preset", "tutor", "--judge", "--out", str(tmp_path)])
+    assert code == run_local.EXIT_RATE_LIMITED == 6  # 가드 하네스와 같은 값
+    assert len(sent) <= 2 * (run_local.RATE_LIMIT_STREAK + metrics.WORKERS)  # 다 돌면 약 400회
+    # 호출 단위로 센다: 최종 429 20회(각 1회 재전송) 전에는 멈추지 않는다(#153 리뷰)
+    assert len(sent) >= 2 * run_local.RATE_LIMIT_STREAK
+    assert judged == []
+    captured = capsys.readouterr()
+    assert "속도 제한(429)" in captured.err
+    assert "속도 제한(429)으로 멈춰 보내지 못한 튜터 호출" in captured.out
+    assert "상한에 막혀" not in captured.out  # 막은 것은 상한이 아니라 속도 제한이다
+    data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
+    assert data["tainted"] is True and "429" in data["invalid"]
+
+
+def test_cli_stops_judging_after_a_streak_of_judge_failures(monkeypatch, tmp_path, capsys):
+    """운영진 판정기는 429를 다른 실패와 가르지 못한다(예외를 삼키고 JudgeError만 낸다).
+
+    그래서 판정의 최종 실패가 20회 이어지면 멈춘다. 판정은 스레드 WORKERS개에서 돈다.
+    """
+    calls = []
+
+    def failing(kind, _payload):
+        calls.append(kind)
+        raise RuntimeError("판정 실패")
+
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: failing)
+    argv = ["--preset", "reference", "--judge", "--out", str(tmp_path)]
+    assert run_local.main(argv) == run_local.EXIT_RATE_LIMITED
+    assert len(calls) < run_local.RATE_LIMIT_STREAK + metrics.WORKERS  # 다 돌면 행마다 1회
+    assert "판정 최종 실패" in capsys.readouterr().err  # 429라고 단정하지 않는다
+    data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
+    assert data["tainted"] is True and "판정 최종 실패" in data["invalid"]
+
+
+def test_judge_streak_resets_on_a_verdict():
+    stop = run_local.RateLimitStop()
+    outcomes = iter([False] * (run_local.RATE_LIMIT_STREAK - 1) + [True] + [False])
+
+    def judge(kind, payload):
+        if next(outcomes):
+            return fake_judge(kind, payload)
+        raise RuntimeError("판정 실패")
+
+    watched = stop.watch_judge(judge)
+    for _ in range(run_local.RATE_LIMIT_STREAK + 1):
+        with contextlib.suppress(RuntimeError):
+            watched("faithful", {})
+    assert stop.streak == 1 and not stop.tripped
+
+
+def test_stop_blocks_embedding_after_tripping():
+    """임베딩은 연속 수에 넣지 않지만(재시도 없음, 호출 수가 미리 정해짐) 멈춘 뒤에는 보내지 않는다.
+
+    보내지 않은 질의는 보낸 호출로 세지 않고 예외를 낸다(검색은 그 질의를 BM25로 한다).
+    """
+    from tutor.retrieval.embedding import EmbeddingSearch
+
+    sent = []
+
+    async def embed(texts):
+        sent.append(len(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    counted = run_local.CountedEmbed(embed)
+    search = EmbeddingSearch(embed=counted, chunk_ids=("A",), matrix=None, timeout_s=1.0)
+    stop = run_local.RateLimitStop()
+    watched = stop.watch_embed(search)
+    asyncio.run(watched.embed(["a"]))
+    for _ in range(run_local.RATE_LIMIT_STREAK):
+        stop.record("rate_limit")
+    with pytest.raises(RuntimeError):
+        asyncio.run(watched.embed(["b"]))
+    assert sent == [1] and counted.calls == 1 and counted.failures == 0
+
+
+def test_judge_stage_starts_a_new_streak():
+    # 튜터 단계의 연속 429가 판정 단계의 실패와 이어지면 멈춘 사유가 틀린다(#153 리뷰)
+    stop = run_local.RateLimitStop()
+    for _ in range(run_local.RATE_LIMIT_STREAK - 1):
+        stop.record("rate_limit")
+    stop.next_stage()
+    stop.record("rate_limit", "judge")
+    assert stop.streak == 1 and not stop.tripped
+    for _ in range(run_local.RATE_LIMIT_STREAK):
+        stop.record("rate_limit")
+    stop.next_stage()  # 이미 멈췄으면 멈춘 상태와 사유는 그대로다
+    assert stop.tripped and stop.by == "llm"
+
+
+def test_cli_judge_stage_does_not_continue_the_tutor_streak(monkeypatch, tmp_path):
+    """main이 튜터 단계 뒤 연속 수를 새로 센다(튜터가 429 19회로 끝나도 판정 실패 1회로 안 멈춤)."""
+
+    class Carried(run_local.RateLimitStop):
+        def __init__(self):
+            super().__init__()
+            self.streak = run_local.RATE_LIMIT_STREAK - 1  # 튜터 단계가 429 19회로 끝났다
+
+    lock, failed = threading.Lock(), []
+
+    def judge(kind, payload):
+        with lock:
+            first = not failed
+            failed.append(kind)
+        if first:
+            raise RuntimeError("판정 실패")
+        return fake_judge(kind, payload)
+
+    monkeypatch.setattr(run_local, "RateLimitStop", Carried)
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    code = run_local.main(["--preset", "reference", "--judge", "--out", str(tmp_path)])
+    assert code != run_local.EXIT_RATE_LIMITED
+    data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
+    assert "invalid" not in data
+
+
+def test_cli_keeps_going_on_scattered_rate_limits(monkeypatch, tmp_path):
+    """흩어진 429로는 멈추지 않는다.
+
+    가드 #151의 test_scattered_rate_limits_do_not_stop_the_run과 같은 뜻이다. 5번째 전송마다
+    429면 재시도로 대부분 성공하고, 최종 실패도 연달아 20회가 되지 않는다.
+    """
+    limited = scattered_rate_limit_openai(monkeypatch, every=5)
+    code = run_local.main(["--preset", "tutor", "--out", str(tmp_path)])
+    assert limited  # 429를 실제로 받았다
+    assert code != run_local.EXIT_RATE_LIMITED
+    data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
+    assert "invalid" not in data
 
 
 def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):

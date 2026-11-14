@@ -260,6 +260,124 @@ def test_truncated_answer_shows_as_length():
     assert result.completion_tokens == 1600  # 상한(max_completion_tokens)을 정할 때 본다
 
 
+def refused():
+    message = types.SimpleNamespace(content=None, refusal="거절 문장")
+    choice = types.SimpleNamespace(message=message, finish_reason="stop")
+    return types.SimpleNamespace(choices=[choice], usage=None)
+
+
+@pytest.mark.parametrize(
+    "reply, cause",
+    [
+        (ok('{"answer": "a', finish_reason="length", tokens=1600), "length"),
+        (ok('{"answer": "a', finish_reason="content_filter"), "content_filter"),
+        (refused(), "refusal"),
+        (ok(None), "no_content"),
+        (ok("not json"), "schema"),
+        (ok('{"other": "a"}'), "schema"),  # JSON이지만 스키마에 안 맞음
+        (types.SimpleNamespace(choices=[]), "no_choice"),
+    ],
+)
+def test_bad_json_attempts_are_counted_by_cause(reply, cause):
+    """형식 오류 원인을 시도마다 갈래로 센다(재시도로 살아나도). 본문은 남기지 않는다."""
+    llm, clock = make(Send(reply, ok()))
+    assert run(llm, clock).error is None
+    assert llm.attempt_errors == {("main", cause): 1} and not llm.failures
+    llm, clock = make(Send(reply, reply))
+    assert run(llm, clock).error == "bad_json"
+    assert llm.attempt_errors == {("main", cause): 2}
+    assert llm.failures == {("main", "bad_json"): 1}
+    assert "거절 문장" not in repr(llm.attempt_errors) + repr(llm.completion_buckets)
+
+
+@pytest.mark.parametrize(
+    "first, code",
+    [
+        (openai.APITimeoutError(request=REQ), "timeout"),
+        (status(408), "timeout"),
+        (openai.APIConnectionError(request=REQ), "server"),
+        (status(503), "server"),
+        (status(429), "rate_limit"),
+    ],
+)
+def test_other_failed_attempts_are_counted_by_code(first, code):
+    """상한을 바꿔 length가 시간 초과로 옮겨 가도 보이게, 재시도로 살아난 시도도 코드로 센다."""
+    llm, clock = make(Send(first, ok()))
+    assert run(llm, clock).error is None and not llm.failures
+    assert llm.attempt_errors == {("main", code): 1}
+    llm, clock = make(Send(first, first))
+    assert run(llm, clock).error == code
+    assert llm.attempt_errors == {("main", code): 2} and llm.failures == {("main", code): 1}
+
+
+def test_a_per_call_timeout_recovered_by_retry_is_counted():
+    sent = []
+
+    async def slow_then_ok(_kwargs):
+        sent.append(1)
+        if len(sent) == 1:
+            await asyncio.sleep(5)  # 호출당 시간 제한(0.05초)에 걸린다
+        return ok()
+
+    llm, clock = make(slow_then_ok)
+    result = run(llm, clock, timeout_s=0.05)
+    assert result.error is None and result.attempts == 2 and not llm.failures
+    assert llm.attempt_errors == {("main", "timeout"): 1}
+
+
+def test_attempts_that_were_never_sent_are_not_counted():
+    """게이트 대기 초과·마감 지남·예산 막힘·다시 보낼 시간 없음은 보낸 시도가 아니다."""
+
+    @contextlib.asynccontextmanager
+    async def stuck():
+        await asyncio.sleep(5)
+        yield
+
+    llm, clock = make(Send(ok()), gate=stuck)
+    assert asyncio.run(call(llm, clock, budget=0.05, timeout_s=0.05)).error == "timeout"
+    assert not llm.calls and not llm.attempt_errors  # 게이트(gate)
+
+    llm, clock = make(Send(ok()))
+    assert run(llm, clock, budget=0.0).error == "timeout"  # 마감 지남
+    llm.max_calls = 0
+    assert run(llm, clock).error == "budget"  # 예산(budget)
+    assert not llm.calls and not llm.attempt_errors and not llm.completion_buckets
+
+    clock = Clock()
+    entries = []
+
+    @contextlib.asynccontextmanager
+    async def slow_second():
+        entries.append(1)
+        if len(entries) == 2:
+            clock.now += 15  # 재시도는 게이트에서 오래 기다렸다(no_time)
+        yield
+
+    llm, clock = make(Send(status(500), ok()), gate=slow_second, clock=clock)
+    assert run(llm, clock, budget=20.0, timeout_s=8.0).error == "server"
+    assert llm.calls == {"main": 1} and llm.attempt_errors == {("main", "server"): 1}
+
+
+@pytest.mark.parametrize(
+    "tokens, bucket",
+    [(0, 0), (1, 100), (100, 100), (101, 200), (1600, 1600), (1999, 2000), (2000, 2000)]
+    + [(5000, 2000), (-3, 0)],  # 프록시 상한 밖이나 이상한 값도 키가 늘지 않는다
+)
+def test_token_buckets_round_up_and_stay_bounded(tokens, bucket):
+    assert tutor_llm._token_bucket(tokens) == bucket
+
+
+def test_only_successful_attempts_fill_the_token_histogram():
+    """성공한 시도의 completion_tokens만 구간으로 센다(잘린 시도는 attempt_errors에)."""
+    truncated = ok('{"answer": "a', finish_reason="length", tokens=1600)
+    steps = [ok(tokens=12), ok(tokens=850), truncated, ok(tokens=1600), ok(tokens=None)]
+    llm, clock = make(Send(*steps))
+    for _ in range(4):
+        assert run(llm, clock).error is None
+    assert llm.completion_buckets == {("main", 100): 1, ("main", 900): 1, ("main", 1600): 1}
+    assert llm.attempt_errors == {("main", "length"): 1} and llm.calls == {"main": 5}
+
+
 @pytest.mark.parametrize(
     "failure, code",
     [
@@ -274,6 +392,7 @@ def test_other_failures_do_not_retry(failure, code):
     llm, clock = make(send)
     result = run(llm, clock)
     assert result.error == code and result.attempts == 1
+    assert llm.attempt_errors == {("main", code): 1}  # 보낸 시도는 다시 보내지 않아도 센다
 
 
 def test_unclassified_errors_are_counted_by_class_name_only():

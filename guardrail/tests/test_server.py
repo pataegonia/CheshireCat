@@ -716,6 +716,8 @@ def test_default_factory_uses_the_real_guard_when_the_key_is_set(monkeypatch, ca
             "category": "harmful_content",
         }
     assert _startup_lines(caplog) == ["guard judge=real"]
+    levels = [r.levelno for r in caplog.records if r.name == "guardrail.access.startup"]
+    assert levels == [logging.INFO]  # 정상 기동은 오류로 남기지 않는다
 
 
 @pytest.mark.parametrize("key", [None, "", "  "])
@@ -790,3 +792,15 @@ def test_judgement_error_codes_reach_access_log(caplog):
     fields = _access_lines(caplog)[-1].split(" ")
     assert len(fields) == 7 and fields[-1] == "input_judge,output_judge:TimeoutError"
     _assert_logs_clean(caplog)
+
+
+def test_guard_lifespan_and_setup_guard_default_to_the_default_factory(caplog):
+    # 팀 앱이 판정기를 넘기지 않으면 기본 판정기(default_factory)다. 키가 없으니 상수로 뜬다
+    app = FastAPI(lifespan=guard_lifespan, redirect_slashes=False)
+    with caplog.at_level(logging.INFO), TestClient(app):
+        pass
+    assert _startup_lines(caplog) == ["guard judge=constant reason=no_api_key"]
+
+
+def test_constant_factory_gives_the_constant_judge():
+    assert isinstance(asyncio.run(server.constant_factory(server.load_config())), ConstantGuard)

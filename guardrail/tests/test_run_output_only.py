@@ -113,6 +113,65 @@ async def test_baseline_mode_asks_with_the_baseline_schema_and_prompt():
     assert (j.response.output.grounded, j.errors) == (False, ())
 
 
+FILLER = "zxqv" * 700  # KB와 겹치는 2-gram이 없는 글(2,800자)
+KEYED = "리스트에 값을 더하려면 어떻게 해요?"
+
+
+async def _kb_part(messages, answer="네."):
+    guard, llm = await _guard()
+    await guard.judge(GuardRequest(messages, answer, True))
+    user = _judge_calls(llm)[-1]["messages"][1]["content"]
+    return user[user.index("</answer>") :]
+
+
+async def test_kb_search_normalizes_the_user_side_too():
+    plain = await _kb_part((Message("user", KEYED),))
+    hidden = await _kb_part((Message("user", "​".join(KEYED)),))
+    assert '<kb id="' in plain and plain == hidden
+
+
+async def test_kb_search_keeps_the_latest_user_turns_when_history_is_long():
+    only_last = await _kb_part((Message("user", KEYED),))
+    long_history = await _kb_part((Message("user", FILLER), Message("user", KEYED)))
+    assert '<kb id="' in only_last and long_history == only_last
+
+
+async def test_kb_search_does_not_use_user_text_past_the_cap():
+    guard, _ = await _guard()
+    cap = guard.cfg.input.max_chars
+    filler = ("zxqv" * cap)[:cap]
+    assert await _kb_part((Message("user", filler + KEYED),)) == await _kb_part(
+        (Message("user", filler),)
+    )
+
+
+KEYED_ANSWER = "append를 쓰면 리스트 끝에 값이 붙어요."
+
+
+async def test_kb_search_uses_the_answer_and_its_head_when_it_is_long():
+    hello = (Message("user", "zxqv"),)  # 학습자 쪽은 KB와 겹치지 않는다
+    short = await _kb_part(hello, KEYED_ANSWER)
+    assert '<kb id="' in short
+    assert await _kb_part(hello, KEYED_ANSWER + FILLER) == short
+
+
+async def test_kb_search_query_is_capped_on_both_sides():
+    quiet = (Message("user", "zxqv"),)
+    # 답변 쪽: 상한(질의 절반) 뒤에만 있는 글은 검색에 쓰지 않는다
+    assert await _kb_part(quiet, FILLER + KEYED_ANSWER) == await _kb_part(quiet, FILLER)
+    # 학습자 쪽: 여러 발화를 이은 글의 상한 앞쪽은 검색에 쓰지 않는다
+    early = (Message("user", KEYED), Message("user", FILLER))
+    assert await _kb_part(early) == await _kb_part((Message("user", FILLER),))
+
+
+@pytest.mark.parametrize("setting", ["grounded", "ungrounded"])
+async def test_request_without_a_user_message_is_grounded_without_a_call(setting):
+    guard, llm = await _guard(failure_default=setting)
+    j = await guard.judge(GuardRequest((Message("assistant", "안녕"),), "답변이에요.", True))
+    assert j.response.output == OutputVerdict(True, (), True) and j.calls == 0
+    assert not _judge_calls(llm)
+
+
 async def test_no_candidate_or_empty_candidate_makes_no_call():
     guard, llm = await _guard()
     none = await guard.judge(GuardRequest(MSGS, None, False))

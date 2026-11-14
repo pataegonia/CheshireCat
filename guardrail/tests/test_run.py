@@ -293,6 +293,46 @@ async def test_budget_invalid_banner_is_in_report(tmp_path):
     assert "# 무효 실행" in report.split("# 평가 보고서")[0]
 
 
+# --- S2.8: 기본 판정기는 Guard ---
+
+
+async def test_fake_run_drives_the_real_guard_end_to_end(tmp_path, capsys):
+    assert await run.amain(_args(tmp_path, "--fake", config=DEFAULT)) == 0
+    est = int(capsys.readouterr().out.split("estimate_calls=")[1].split()[0])
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text("utf-8"))
+    recs = [json.loads(x) for x in (out / "responses.jsonl").read_text("utf-8").splitlines()]
+    score = summary["configs"]["t"]["scores"][0]
+    assert summary["judge_kind"] == "Guard"
+    assert score["cv"]["invalid"] == 0 and score["errors"] == {}
+    # 예상 호출 수는 상한이다. 저신호 직접 판정 행만큼만 덜 부른다
+    low = sum(r["source"] == "low_signal" for r in recs)
+    cfg = load_config(DEFAULT)
+    assert low > 0 and score["calls"]["total"] + run.probe_calls(cfg.llm) == est - low
+    public = {r.id: r for r in load_public(cfg.paths.public)}
+    for r in recs:
+        has = bool(public[r["id"]].candidate_answer)
+        assert (r["tier"] is not None) == has
+        # 인용 확인과 거절 판정 원값이 기록에 남는다(S3.1이 저장된 응답으로 정밀도를 잰다)
+        assert all(
+            (r[k] is not None) == has for k in ("answer_quote_ok", "kb_quote_ok", "nano_refuses")
+        )
+
+
+async def test_unsupported_ablation_row_is_refused_before_any_call(tmp_path, capsys):
+    made = []
+
+    def make_llm(cfg_llm):
+        made.append(cfg_llm)
+        raise AssertionError("LLM을 만들면 안 된다")
+
+    argv = ["--ablation", str(ROOT / "configs/ablation"), "--only", "no_lr,with_third_call",
+            "--name", "t", "--out", str(tmp_path / "runs")]  # fmt: skip
+    assert await run.amain(argv, make_llm=make_llm) == run.EXIT_USAGE
+    assert not made and "third_call" in capsys.readouterr().err
+    assert not (tmp_path / "runs" / "t").exists()
+
+
 async def test_measure_writes_no_nano_output_for_held_out_rows(monkeypatch):
     # 홀드아웃 행의 nano 파싱 출력(학습자 발화를 옮겨 적은 문장)이 responses.jsonl에 남으면 안 된다
     split = SimpleNamespace(cluster={"a": "c1", "b": "c2"}, holdout=("c2",))
@@ -302,7 +342,8 @@ async def test_measure_writes_no_nano_output_for_held_out_rows(monkeypatch):
         tap.parsed += [("a", "input", {"evidence": "x"}), ("b", "input", {"evidence": "y"})]
         return SimpleNamespace(
             judgements={i: SimpleNamespace(
-                input_source="s", output_tier=None, calls=1, errors=(), knn_major=None, lr_pred=None
+                input_source="s", output_tier=None, calls=1, errors=(), knn_major=None,
+                lr_pred=None, answer_quote_ok=None, kb_quote_ok=None, nano_refuses=None,
             ) for i in "ab"},
             judge_kind="K",
         )  # fmt: skip

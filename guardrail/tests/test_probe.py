@@ -87,7 +87,7 @@ def test_main_refuses_over_cap(calls, monkeypatch):
 def _respond(kwargs):
     rf = kwargs.get("response_format")
     if rf is None or rf["json_schema"]["name"] == "OutputOut":
-        body = '{"reason": "r", "grounded": true}'
+        body = '{"answer_quote": "", "kb_quote": "", "grounded": true, "refuses": false}'
     else:
         body = '{"evidence": "e", "category": "normal"}'
     finish = "length" if kwargs.get("max_completion_tokens") == 800 else "stop"

@@ -60,7 +60,12 @@ def test_default_loads_section_4_4_model():
         "academic_dishonesty",
         "off_topic",
     ]
-    assert cfg.prompts == {"input_judge": "input_judge.md"}  # S2.6
+    assert cfg.prompts == {  # S2.6·S2.7
+        "input_judge": "input_judge.md",
+        "output_judge": "output_judge.md",
+        "output_judge_baseline": "output_judge_baseline.md",
+    }
+    assert cfg.output.tier3_trust == "answer_quote" and cfg.output.quote_min_chars == 8
     assert cfg.toggles.knn_vote and not cfg.toggles.third_call
     assert cfg.output.mode == "v6" and cfg.output.rule_min_margin == 3.5
 
@@ -92,6 +97,9 @@ def test_every_key_is_required(tmp_path, dotted):
         ("output.rule_extra_tokens", ["nope"]),
         ("llm.structured_output", "prompt"),
         ("input.knn.analyzer", "bytes"),
+        # label_mode·order는 Literal이라 모르는 값·대소문자 오류를 로드에서 막는다
+        *[("input.label_mode", v) for v in ("foo", "ACT")],
+        *[("input.knn.order", v) for v in ("foo", "NEAREST_FIRST")],
         ("embedding.targets", ["web"]),
         ("llm.gate", 0),
         ("budget_s", 0),
@@ -313,3 +321,24 @@ def test_load_prompt_rejects_bad_front_matter(monkeypatch, tmp_path, text):
 def test_load_prompt_rejects_unmapped_name():
     with pytest.raises(ValueError, match="prompts"):
         load_prompt(load_config(DEFAULT), "not_registered")
+
+
+# v1 프롬프트(input_judge.md)는 "가장 비슷한 예시가 마지막에 있다"고 적는다
+def test_nearest_first_with_order_stating_prompt_is_rejected():
+    with pytest.raises(ValidationError, match="nearest_first"):
+        load_config(DEFAULT, overrides={"input.knn.order": "nearest_first"})
+
+
+def test_nearest_first_with_v2a_prompt_loads():
+    cfg = load_config(
+        DEFAULT,
+        overrides={
+            "input.knn.order": "nearest_first",
+            "prompts.input_judge": "input_judge_v2a.md",
+        },
+    )
+    assert cfg.input.knn.order == "nearest_first"
+
+
+def test_default_order_with_v1_prompt_loads():
+    assert load_config(DEFAULT).input.knn.order == "nearest_last"

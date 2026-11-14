@@ -28,7 +28,7 @@ class _Strict(BaseModel):
 
 class Toggles(_Strict):
     name_dict: bool
-    fewshot: bool
+    fewshot: Literal["off", "fixed", "knn"]  # 판단 예시(TU-08). off는 따옴표로
     action_from_category: bool
     signals: bool
     verify: Literal["off", "self", "guard"]
@@ -39,6 +39,16 @@ class Toggles(_Strict):
     scaffold_state_rule: bool
     inline_cite: bool
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
+
+
+class Fewshot(_Strict):
+    """판단 예시 고르기(TU-08). 가드 GR-05 `input.knn`과 같은 값으로 시작한다."""
+
+    # 문자 n-gram 범위(char_wb) [최소, 최대]. strict라 tuple 대신 길이 2 목록
+    ngram: Annotated[list[PositiveInt], Field(min_length=2, max_length=2)]
+    max_examples: PositiveInt  # knn 전체 상한(4–8)
+    per_category: PositiveInt  # knn 범주당 상한
+    with_answer: bool  # 예시에 정답 답변을 붙이는가(기본 끔, ablation)
 
 
 class Retrieval(_Strict):
@@ -71,6 +81,7 @@ class TutorConfig(_Strict):
     version: str
     mode: Literal["v2", "baseline"]
     toggles: Toggles
+    fewshot: Fewshot
     retrieval: Retrieval
     answer: Answer
     llm: Llm

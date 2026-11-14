@@ -71,6 +71,7 @@ def passed(**changes):
         slash_status=404,
         mode="v2",
         fake=(mock_load.P50_S, mock_load.P95_S),
+        tutor_fake=(mock_load.TUTOR_P50_S, mock_load.TUTOR_P95_S),
         scale=1.0,
         guard_per_request=2,
         concurrency=64,
@@ -96,7 +97,29 @@ def test_every_request_gets_200_in_contract():
     assert report.guard_judged == 300
     assert report.guard_calls == report.guard_expected == guard_expected(300, 300, 1)
     assert report.fake == pytest.approx((mock_load.P50_S, mock_load.P95_S))
+    assert report.tutor_fake == pytest.approx((mock_load.TUTOR_P50_S, mock_load.TUTOR_P95_S))
     assert report.server_gate == report.gate == 64
+
+
+def test_tutor_sends_and_guard_judges_wait_on_their_own_latency(monkeypatch):
+    """튜터 주 호출(send)과 가드 판정 호출(hold)은 따로 정한 지연 분포를 쓴다."""
+    waited: list[float] = []
+
+    async def record(seconds):
+        waited.append(seconds)
+
+    monkeypatch.setattr(mock_load.asyncio, "sleep", record)
+    fake = mock_load.FakeLLM(
+        mock_load.Latency.from_quantiles(2.0, 2.0),
+        random.Random(0),  # noqa: S311
+        scale=0.5,
+        tutor_latency=mock_load.Latency.from_quantiles(8.0, 8.0),
+    )
+    asyncio.run(fake.hold())
+    asyncio.run(fake.send({"response_format": {}}))
+    assert waited == pytest.approx([1.0, 4.0])  # 가드 2초·튜터 8초, 배율 0.5
+    same = mock_load.FakeLLM(fake.latency, random.Random(0), scale=1.0)  # noqa: S311
+    assert same.tutor_latency is same.latency  # 따로 주지 않으면 가드 판정 지연을 같이 쓴다
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -267,8 +290,11 @@ def test_guard_timeouts_fail_the_run(monkeypatch, capsys):
         ["--concurrency", "0"],
         ["--guard-calls", "-1"],
         ["--scale", "0"],
-        ["--fake-p50", "0"],
-        ["--fake-p50", "3", "--fake-p95", "2"],
+        ["--guard-p50", "0"],
+        ["--guard-p50", "3", "--guard-p95", "2"],
+        ["--tutor-p50", "0"],
+        ["--tutor-p50", "9", "--tutor-p95", "8"],
+        ["--fake-p50", "9"],  # 옛 이름(튜터에도 걸리던 값)은 조용히 다른 실행이 되지 않게 멈춘다
     ],
 )
 def test_cli_rejects_values_that_hang_or_break_the_run(flag, capsys):
@@ -412,7 +438,8 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     out = capsys.readouterr().out
     assert ok and "튜터 p50" in out and "시간 초과(30초 이상) 0" in out
     assert (
-        "가정: 튜터 모드 v2, 가짜 LLM 지연 p50 4.51초·p95 6.62초(배율 0.001)"
+        "가정: 튜터 모드 v2, 가짜 지연 튜터 주 호출 p50 4.9초·p95 8.3초"
+        "·가드 판정 p50 4.51초·p95 6.62초(배율 0.001)"
         ", 가드 판정 최대 2회 병렬(읽기 제한 12초·마감 20초), 게이트 64, 동시 64\n" in out
     )
     assert f"튜터 {report.llm_calls}회" in out  # 튜터는 직접 판정을 뺀 수
@@ -438,8 +465,10 @@ def test_a_real_time_pass_names_the_bar_and_says_when_the_gate_never_filled(caps
     "changes, reason",
     [
         ({"scale": 0.5}, "배율 0.5"),
-        ({"fake": (0.1, 0.2)}, "가짜 지연이 기본보다 짧음"),
-        ({"fake": (mock_load.P50_S, 6.0)}, "가짜 지연이 기본보다 짧음"),
+        ({"fake": (0.1, 0.2)}, "가짜 가드 지연이 기본보다 짧음"),
+        ({"fake": (mock_load.P50_S, 6.0)}, "가짜 가드 지연이 기본보다 짧음"),
+        ({"tutor_fake": (mock_load.P50_S, mock_load.P95_S)}, "가짜 튜터 지연이 기본보다 짧음"),
+        ({"tutor_fake": (mock_load.TUTOR_P50_S, 8.0)}, "가짜 튜터 지연이 기본보다 짧음"),
         (
             {"guard_per_request": 1, "guard_calls": 300, "guard_expected": 300},
             "가드 판정 최대 1회 < 2회",
@@ -464,7 +493,8 @@ def test_an_easier_run_passes_only_as_a_smoke_run(capsys, changes, reason):
 @pytest.mark.parametrize(
     "changes",
     [
-        {"fake": (8.0, 14.0)},  # 튜터 주 호출 실측이 더 느리면 바꿔 끼운다
+        {"fake": (8.0, 14.0)},  # 가드 판정 호출이 더 느리면 더 어렵다
+        {"tutor_fake": (8.0, 14.0)},  # 동시 64 튜터 주 호출 실측이 더 느리면 바꿔 끼운다
         {"gate": 32, "llm_peak": 32, "gate_queued": 100},
         {"concurrency": 128},
         {"guard_limits": (6.0, 10.0)},  # 가드 제한이 더 짧으면 더 어렵다
@@ -484,10 +514,10 @@ def test_a_harder_run_keeps_the_real_time_label(capsys, changes):
 def test_cli_passes_easy_inputs_only_as_a_smoke_run(capsys):
     """검증 리뷰 재현: 배율이 1이어도 부하·지연을 줄인 통과는 스모크다."""
     argv = ["--tutor", "5", "--guard", "0", "--concurrency", "2", "--seed", "21"]
-    argv += ["--fake-p50", "0.1", "--fake-p95", "0.2", "--guard-calls", "0"]
+    argv += ["--guard-p50", "0.1", "--guard-p95", "0.2", "--guard-calls", "0"]
     assert mock_load.main(argv) == 0
     assert capsys.readouterr().out.splitlines()[-1] == (
-        "통과(스모크: 가짜 지연이 기본보다 짧음, 가드 판정 최대 0회 < 2회, 동시 2 < 64"
+        "통과(스모크: 가짜 가드 지연이 기본보다 짧음, 가드 판정 최대 0회 < 2회, 동시 2 < 64"
         ", 튜터 요청 5 < 300, 가드 요청 0 < 300, 실측 아님)"
     )
 
@@ -533,9 +563,10 @@ def test_cli_runs_fast_and_returns_zero(capsys):
 
 def test_cli_takes_the_fake_latency_the_bar_and_the_gate(capsys):
     argv = ["--tutor", "10", "--guard", "0", "--scale", "0.001", "--seed", "9"]
-    assert mock_load.main([*argv, "--fake-p50", "2", "--fake-p95", "3", "--gate", "8"]) == 0
+    latency = ["--guard-p50", "2", "--guard-p95", "3", "--tutor-p50", "5", "--tutor-p95", "9"]
+    assert mock_load.main([*argv, *latency, "--gate", "8"]) == 0
     out = capsys.readouterr().out
-    assert "가짜 LLM 지연 p50 2초·p95 3초" in out and "게이트 8" in out  # 튜터 주 호출 실측
+    assert "튜터 주 호출 p50 5초·p95 9초·가드 판정 p50 2초·p95 3초" in out and "게이트 8" in out
     assert mock_load.main([*argv, "--max-p95", "0"]) == 1
     assert mock_load.main([*argv, "--max-p50", "0"]) == 1
 

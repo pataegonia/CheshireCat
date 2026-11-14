@@ -418,3 +418,62 @@ def test_mixed_report_has_no_payload_text():
     sends = {"guard": lambda p: (200, OK), "tutor": lambda p: (200, _tutor_body())}
     rep = load.run_mixed(sends, jobs, concurrency=2)
     assert MARK not in json.dumps(rep, ensure_ascii=False)
+
+
+def test_main_tutor_url_without_tutor_n_sends_nothing(monkeypatch, capsys):
+    """--tutor-url만 주면 가드만 보내고 혼합처럼 통과하던 것을 막는다(자체 리뷰)."""
+    sent = []
+    monkeypatch.setattr(load, "http_sender", lambda *a, **k: lambda p: sent.append(p))
+    with pytest.raises(SystemExit) as e:
+        load.main(["--n", "3", "--tutor-url", "http://127.0.0.1:1/tutor"])
+    assert e.value.code == 2 and sent == []
+    assert "--tutor-n" in capsys.readouterr().err
+
+
+def test_zero_requests_is_not_all_ok():
+    assert load.run_load(lambda p: (200, OK), [])["all_ok"] is False
+
+
+def test_log_errors_counts_tutor_fallbacks():
+    """/tutor는 실패해도 200 + 기본 답변이라 오류 칸으로만 보인다(자체 리뷰)."""
+    lines = [
+        "2026-11-15T00:00:00.0Z /guard 10 20 200 1.0 -",
+        "2026-11-15T00:00:00.0Z /tutor 10 20 200 1.0 -",
+        "2026-11-15T00:00:00.0Z /tutor 10 20 200 1.0 TimeoutError",
+        "2026-11-15T00:00:00.0Z /tutor 10 20 200 1.0 RateLimitError,TimeoutError",
+        "2026-11-15T00:00:00.0Z /tutor 10 20 401 1.0 HTTPException",
+    ]
+    rep = load.log_errors(lines, "/tutor")
+    assert rep == {"lines": 3, "failed": 2, "by_code": {"TimeoutError": 2, "RateLimitError": 1}}
+
+
+def test_log_latency_skips_unparsable_ms():
+    lines = ["2026-11-15T00:00:00.0Z /guard 10 20 200 abc -"]
+    assert load.log_latency(lines)["/guard"]["n"] == 0
+
+
+def test_main_mixed_reports_tutor_failures_and_mismatch(monkeypatch, capsys, tmp_path):
+    log = tmp_path / "a.log"
+    log.write_text(
+        "2026-11-15T00:00:00.0Z /guard 10 20 200 1.0 -\n"
+        "2026-11-15T00:00:00.0Z /tutor 10 20 200 1.0 TimeoutError\n",
+        "utf-8",
+    )
+    monkeypatch.setenv("TEAM_TOKEN", TOKEN)
+    tutor = _tutor_body()
+    guard = json.dumps(
+        json.loads(OK) | {"output": {"grounded": True, "unsupported": [], "safe": True}}
+    ).encode()
+
+    def sender(url, *a, **k):
+        return lambda p: (200, tutor if url.endswith("/tutor") else guard)
+
+    monkeypatch.setattr(load, "http_sender", sender)
+    out = tmp_path / "r.json"
+    argv = ["--n", "1", "--tutor-n", "2", "--tutor-url", "http://x/tutor"]
+    load.main([*argv, "--access-log", str(log), "--out", str(out)])
+    rep = json.loads(out.read_text("utf-8"))
+    assert rep["all_ok"] is True  # 클라이언트 쪽은 모두 형식이 맞다
+    assert rep["tutor_failures"] == {"lines": 1, "failed": 1, "by_code": {"TimeoutError": 1}}
+    assert rep["log_mismatch"] is True  # /tutor 줄 1개 대 요청 2개
+    assert "/tutor" in capsys.readouterr().err

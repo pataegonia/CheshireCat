@@ -45,20 +45,20 @@ WARN_NO_LOG = (
 Send = Callable[[dict], tuple[int, bytes]]
 
 
-def guard_rows() -> list[PublicRow]:
-    """홀드아웃 묶음을 뺀 가드 행."""
+def _rows(endpoint: str) -> list[PublicRow]:
+    """홀드아웃 묶음을 뺀 행."""
     split = load_splits()
     held = set(split.holdout)
     rows = load_public(load_config().paths.public)
-    return [r for r in rows if r.endpoint == "guard" and split.cluster[r.id] not in held]
+    return [r for r in rows if r.endpoint == endpoint and split.cluster[r.id] not in held]
+
+
+def guard_rows() -> list[PublicRow]:
+    return _rows("guard")
 
 
 def tutor_rows() -> list[PublicRow]:
-    """홀드아웃 묶음을 뺀 튜터 행."""
-    split = load_splits()
-    held = set(split.holdout)
-    rows = load_public(load_config().paths.public)
-    return [r for r in rows if r.endpoint == "tutor" and split.cluster[r.id] not in held]
+    return _rows("tutor")
 
 
 def build_payloads(rows: list[PublicRow], n: int, big: int = 0, seed: int = 13) -> list[dict]:
@@ -88,6 +88,7 @@ def _block() -> frozenset[Category]:
 
 
 def mix(guard: list[dict], tutor: list[dict], seed: int = 13) -> list[tuple[str, dict]]:
+    """(엔드포인트, payload)를 섞는다. 표시는 payload 밖에 둔다(전송 본문 그대로)."""
     jobs = [("guard", p) for p in guard] + [("tutor", p) for p in tutor]
     random.Random(seed).shuffle(jobs)  # noqa: S311 — 순서 섞기일 뿐이다
     return jobs
@@ -161,7 +162,7 @@ def _summary(rs: list[tuple[str, float, bool]]) -> dict:
     return {
         "requests": len(rs),
         "counts": {k: counts.get(k, 0) for k in KINDS},
-        "all_ok": counts["ok"] == len(rs),
+        "all_ok": bool(rs) and counts["ok"] == len(rs),  # 0건은 통과가 아니다
         "latency_s": _latency([dt for _, dt, big in rs if not big]),
         "latency_ok_s": _latency(ok_dt) if ok_dt else None,  # ok 요청만(없으면 null)
         "latency_big_s": _latency([dt for _, dt, big in rs if big]),
@@ -219,11 +220,11 @@ def run_mixed(
     try:
         with ThreadPoolExecutor(concurrency) as ex:
             results = list(ex.map(one, jobs))
+        wall = round(time.perf_counter() - t0, 1)  # probe가 끝나기를 기다린 시간은 빼고
     finally:
         stop.set()
         if th:
             th.join()
-    wall = round(time.perf_counter() - t0, 1)
     report = {
         **_summary(results),
         "with_candidate": sum("candidate_answer" in p for _, p in jobs),
@@ -233,14 +234,13 @@ def run_mixed(
             ep: _summary([r for (e, _), r in zip(jobs, results, strict=True) if e == ep])
             for ep in sends
         },
-        "probe": None,
-    }
-    if probe:
-        report["probe"] = {
-            "n": len(probes),
+        "probe": {
             "statuses": dict(Counter(str(s) for s, _ in probes)),
-            **{k: v for k, v in _ms_stats([dt * 1000 for _, dt in probes]).items() if k != "n"},
+            **_ms_stats([dt * 1000 for _, dt in probes]),
         }
+        if probe
+        else None,
+    }
     report["total_sent"] = report["requests"] + len(probes)
     return report
 
@@ -252,7 +252,7 @@ def run_load(
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):  # urllib이 POST 3xx를 GET으로 따라가지 않게 한다
+    def redirect_request(self, *a: object, **k: object) -> None:  # POST 3xx를 GET으로 따라가지 않게
         return None
 
 
@@ -318,8 +318,26 @@ def log_latency(lines: list[str]) -> dict:
     for line in lines:
         f = line.split(" ")
         if len(f) >= 7 and f[-6] in ms and f[-3] == "200":  # log_failures와 같이 끝에서 센다
-            ms[f[-6]].append(float(f[-2]))
+            try:
+                ms[f[-6]].append(float(f[-2]))
+            except ValueError:
+                continue  # 깨진 줄 하나로 보고서를 잃지 않는다
     return {path: _ms_stats(v) for path, v in ms.items()}
+
+
+def log_errors(lines: list[str], path: str) -> dict:
+    """path의 200 줄 오류 칸. /tutor는 실패해도 200 + 기본 답변이라 여기서만 보인다."""
+    codes: Counter[str] = Counter()
+    seen = failed = 0
+    for line in lines:
+        f = line.split(" ")
+        if len(f) < 7 or f[-6] != path or f[-3] != "200":
+            continue
+        seen += 1
+        if f[-1] != "-":
+            failed += 1
+            codes.update(f[-1].split(","))
+    return {"lines": seen, "failed": failed, "by_code": dict(codes)}
 
 
 def kb_bench() -> dict:
@@ -361,8 +379,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.kb_bench:
         report = {"kb": kb_bench()}
     else:
-        if args.tutor_n > 0 and not args.tutor_url:
-            sys.stderr.write("사용법 오류: --tutor-n > 0이면 --tutor-url이 필요하다\n")
+        if (args.tutor_n > 0) != bool(args.tutor_url):
+            sys.stderr.write("사용법 오류: --tutor-n > 0과 --tutor-url은 함께 준다\n")
             sys.exit(2)  # 보내기 전에 막는다
         if args.access_log and not Path(args.access_log).is_file():
             sys.stderr.write(f"사용법 오류: --access-log 파일이 없다: {args.access_log}\n")
@@ -371,11 +389,11 @@ def main(argv: list[str] | None = None) -> None:
             sys.stderr.write(WARN_NO_LOG)
         token = os.environ["TEAM_TOKEN"]
         sends = {"guard": http_sender(args.url, token)}
-        jobs = [("guard", p) for p in build_payloads(guard_rows(), args.n, args.big)]
+        guard = build_payloads(guard_rows(), args.n, args.big)
+        jobs = [("guard", p) for p in guard]
         if args.tutor_n > 0:
             sends["tutor"] = http_sender(args.tutor_url, token)
-            tutor = build_payloads(tutor_rows(), args.tutor_n)
-            jobs = mix([p for _, p in jobs], tutor)
+            jobs = mix(guard, build_payloads(tutor_rows(), args.tutor_n))
         report = run_mixed(
             sends,
             jobs,
@@ -396,6 +414,15 @@ def main(argv: list[str] | None = None) -> None:
                     f"{n_guard}개와 다르다"
                     "(다른 로그이거나 이전 실행이 섞였다). 오류 칸 집계를 믿지 마라.\n"
                 )
+            if "tutor" in sends:
+                tf = report["tutor_failures"] = log_errors(lines, "/tutor")
+                n_tutor = report["by_endpoint"]["tutor"]["requests"]
+                if tf["lines"] != n_tutor:
+                    report["log_mismatch"] = True
+                    sys.stderr.write(
+                        f"경고: 접근 로그의 /tutor 200 줄 {tf['lines']}개가 보낸 요청 "
+                        f"{n_tutor}개와 다르다. 튜터 오류 칸 집계를 믿지 마라.\n"
+                    )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text + "\n", "utf-8")

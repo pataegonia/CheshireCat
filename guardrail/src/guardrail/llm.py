@@ -206,7 +206,7 @@ class LLM:
         deadline: float,
         retries: int | None = None,
     ) -> LLMResult:
-        """retries가 None이면 `llm.retries`. 튜터 공유 메서드는 0을 넘긴다(S2.11 D1-A)."""
+        """retries가 None이면 `llm.retries`. 튜터 공유 메서드는 0을 넘긴다(S2.11, interface.md §2)."""
         self._require_send()  # start() 전 호출은 프로그래밍 오류라 코드로 바꾸지 않는다
         max_retries = self.cfg.retries if retries is None else retries
         t0 = self._clock()

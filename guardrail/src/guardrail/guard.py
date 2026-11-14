@@ -228,7 +228,8 @@ class Guard:
 
         출력 nano가 실패하면 nano 없이 GR-07을 계산한다: block 범주면 ①(true), 규칙 ②가 걸리면
         false와 그 구간, 그 밖에는 `output.failure_default`. 가드 예외·학습자 발화 없음이면 규칙 ②도
-        없이 ①·`output.failure_default`만 쓴다. safe는 어느 경우에도 GR-08 규칙 그대로.
+        없이 ①·`output.failure_default`만 쓴다. category가 있으면 safe는 이 모든 경우에 GR-08 규칙
+        그대로다. category가 None인데 가드 예외가 나면 `/guard`와 같이 safe=true다.
 
         category가 있으면 입력 nano 없이 그 범주로 GR-07 ①과 safe를 계산한다(low-signal로 덮지
         않는다). 판정이 실패하거나 학습자 발화가 없어도 그 범주로 ①·safe(GR-08)는 계산한다.

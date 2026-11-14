@@ -16,7 +16,17 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 `--max-calls`(기본은 config/tutor.yaml의 eval.max_calls, TU-14)를 넘으면
 아무것도 부르지 않고 멈춘다. 실행 중에는 판정 몫(예상 판정 호출)을 뺀 나머지를 튜터 LLM 호출
 상한으로 건다.
+튜터 LLM 호출의 429(판정은 최종 실패)가 연달아 RATE_LIMIT_STREAK회 이어지면 뒤의 호출(임베딩
+포함)을 보내지 않고, 결과를 무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드
+하네스와 같은 규칙).
+튜터 점수는 모든 행과, 공유 분할(가드 splits/v1.json)의 홀드아웃 묶음을 뺀 교차 검증 행으로 따로
+낸다. 설정을 비교할 때는 교차 검증 점수를 본다(홀드아웃은 설정을 고정한 뒤 최대 3회만 본다, TU-16).
+실행별 항목·응함 문항도 교차 검증 행으로만 낸다. 모든 행 점수(첫 줄)와 그 밖의 지표(항목별
+평균·범주별 점수·오차단·혼동표·흔들리는 문항·--compare의 새로 틀린 문항, 결과 JSON의 행별
+points)에는 홀드아웃 행이 섞여 있다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
+tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
+결과 JSON의 tutor_llm에 남긴다.
 """
 
 import argparse
@@ -25,15 +35,17 @@ import json
 import math
 import secrets
 import sys
+import threading
 import time
-from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TextIO
 
 import yaml
+from guardrail.eval.cv import load_splits
 
 import tutor
 from tutor import pipeline
@@ -46,10 +58,11 @@ from tutor.eval.recall import (
     missing_embedding_env,
     query_parts,
 )
+from tutor.judge.examples import build_index, load_examples
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
-from tutor.runtime.config import TutorConfig, load_config
-from tutor.runtime.llm import missing_api_env
+from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig, load_config
+from tutor.runtime.llm import TOKEN_BUCKET, missing_api_env
 from tutor.startup import build_embedding, prepare
 
 PRESETS = ("tutor", "reference", "reference_top1")
@@ -59,11 +72,28 @@ RUNS_DIR = Path(__file__).resolve().parent / "runs"
 TUTOR_CALLS = 3
 CALLS_PER_REQUEST = {"v2": TUTOR_CALLS, "baseline": 1}  # 모드별 요청당 nano 호출(재시도 제외)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
+# 운영진 API 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속
+# 보내면 어뷰징으로 보일 수 있다(SPEC §7.1). 값과 종료 코드는 가드 하네스(#151)와 같다
+RATE_LIMIT_STREAK = 20
+EXIT_RATE_LIMITED = 6
 
 
 def public_tutor_rows() -> list[dict[str, Any]]:
     lines = (PUBLIC_DIR / "tutor.jsonl").read_text(encoding="utf-8").splitlines()
     return [json.loads(line) for line in lines if line.strip()]
+
+
+def holdout_ids(rows: Sequence[dict[str, Any]] = ()) -> frozenset[str]:
+    """공유 분할(가드 splits/v1.json)의 홀드아웃 묶음에 든 행 id. 교차 검증 점수에서 뺀다.
+
+    rows를 주면 모두 분할에 있는지 본다. 없는 행이 조용히 교차 검증 행으로 들어가지 않게 한다.
+    """
+    split = load_splits()
+    missing = sum(1 for row in rows if row["id"] not in split.cluster)
+    if missing:
+        raise ValueError(f"공유 분할에 없는 행 {missing}개: 교차 검증 점수를 낼 수 없다")
+    held = set(split.holdout)
+    return frozenset(row_id for row_id, cluster in split.cluster.items() if cluster in held)
 
 
 def _reference(row: dict[str, Any], citations: list[str]) -> dict[str, Any]:
@@ -101,8 +131,9 @@ async def _collect(
     async def one(row: dict[str, Any]) -> tuple[str, Any, float]:
         async with gate:
             started = time.perf_counter()
+            own = state.for_row(row["id"]) if isinstance(state, FoldStates) else state
             try:
-                response = await _respond(preset, row, state)
+                response = await _respond(preset, row, own)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
                 sys.stderr.write(f"{row['id']}: {type(exc).__name__}\n")  # 메시지는 내지 않는다
                 response = None
@@ -197,6 +228,99 @@ def expected_calls(
     return (per_run * runs * 11 + 9) // 10  # 정수로 1.1배 올림(가드 하네스와 같음)
 
 
+class RateLimitStop:
+    """운영진 API 호출이 RATE_LIMIT_STREAK회 연달아 429로 끝나면 뒤의 호출을 보내지 않는다.
+
+    가드 하네스(#151)와 같은 규칙이다: 호출 하나의 최종 오류(재시도 포함)가 rate_limit이면 연속
+    수 +1, budget(상한에 막혀 보내지 않음)이면 그대로, 그 밖(성공 포함)이면 0이다. 튜터 LLM과
+    판정은 같은 팀 키라 한 객체가 세되, 단계가 바뀌면 연속 수를 새로 센다(next_stage). 판정은
+    스레드에서 돌아 잠금 안에서 센다.
+    """
+
+    def __init__(self) -> None:
+        self.streak = 0
+        self.tripped = False
+        self.by: str | None = None  # 멈추게 한 호출: "llm" 또는 "judge"
+        self._lock = threading.Lock()
+
+    def record(self, error: str | None, by: str = "llm") -> bool:
+        """호출 하나의 최종 오류 코드를 센다. 이번 호출로 멈췄으면 True."""
+        with self._lock:
+            if error == "rate_limit":
+                self.streak += 1
+            elif error != "budget":
+                self.streak = 0
+            if self.streak < RATE_LIMIT_STREAK or self.tripped:
+                return False
+            self.tripped, self.by = True, by
+            return True
+
+    def next_stage(self) -> None:
+        """튜터 단계가 끝나면 연속 수를 새로 센다(튜터의 429가 판정 실패와 이어지지 않게)."""
+        with self._lock:
+            self.streak = 0
+
+    def reason(self) -> str | None:
+        """멈춘 사유(결과 JSON의 invalid). 판정기는 429를 가르지 못해 판정 쪽은 단정하지 않는다."""
+        if not self.tripped:
+            return None
+        if self.by == "judge":
+            return f"판정 최종 실패(429일 수 있음)가 {RATE_LIMIT_STREAK}회 이어져 멈췄다"
+        return f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다"
+
+    def watch_llm(self, llm: Any) -> None:
+        """튜터 LLM의 complete를 감싼다(서버 코드는 그대로다).
+
+        멈추면 max_calls를 0으로 내린다. 뒤의 호출과 진행 중인 재시도는 보내지 않고 budget이 된다.
+        """
+        inner = llm.complete
+
+        async def complete(*args: Any, **kwargs: Any) -> Any:
+            result = await inner(*args, **kwargs)
+            if self.record(result.error):
+                llm.max_calls = 0
+            return result
+
+        llm.complete = complete
+
+    def watch_judge(self, judge: metrics.Judge) -> metrics.Judge:
+        """판정기를 감싼다. 멈춘 뒤에는 부르지 않고 판정 오류로 둔다.
+
+        운영진 판정기(judge.py)는 예외를 삼키고 JudgeError만 내서 429를 다른 실패와 가르지 못한다.
+        그래서 판정의 최종 실패(판정기 재시도 포함)를 429로 센다. 막힌 키에서는 판정이 모두
+        실패하고, 그렇지 않아도 연달아 실패한 판정 결과는 쓰지 않는다.
+        """
+
+        def watched(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if self.tripped:
+                raise scoring.JudgeError("속도 제한으로 멈췄다")
+            try:
+                verdict = judge(kind, payload)
+            except Exception:
+                self.record("rate_limit", "judge")
+                raise
+            self.record(None, "judge")
+            return verdict
+
+        return watched
+
+    def watch_embed(self, search: Any) -> Any:
+        """질의 임베딩을 감싼 EmbeddingSearch를 돌려준다. 멈춘 뒤에는 보내지 않고 예외를 낸다.
+
+        세는 함수(CountedEmbed) 바깥에서 막으므로 막은 질의는 보낸 호출로 세지 않는다. 검색은
+        예외가 난 질의를 BM25로 한다. 임베딩은 다시 보내지 않고 호출 수가 시작 전에 정해져 상한
+        검사를 받으므로 연속 수에는 넣지 않는다. 같은 팀 키라 멈춘 뒤 남은 질의만 막는다.
+        """
+        inner = search.embed
+
+        async def embed(texts: Sequence[str]) -> list[list[float]]:
+            if self.tripped:
+                raise RuntimeError("속도 제한으로 멈췄다")
+            return await inner(texts)
+
+        return replace(search, embed=embed)
+
+
 def _write(
     report: metrics.Report,
     *,
@@ -205,17 +329,41 @@ def _write(
     out_dir: Path,
     tainted: bool,
     embedding: "EmbeddingUse | None",
+    invalid: str | None,
+    llm: Any = None,
 ) -> Path:
-    """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다."""
+    """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
+
+    invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
+    llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
+    읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = out_dir / f"{name}-{stamp}.json"
     data: dict[str, Any] = {"preset": name, "judge": judge, "created": stamp, "tainted": tainted}
+    if invalid is not None:
+        data["invalid"] = invalid
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
+    if llm is not None:
+        data["tutor_llm"] = {
+            "calls": dict(sorted(llm.calls.items())),  # 보낸 시도 수(아래 시도 단위 수의 분모)
+            "failures": _by_role(llm.failures),  # 호출 단위 최종 오류
+            "attempt_errors": _by_role(llm.attempt_errors),  # 시도 단위 갈래(재시도 포함)
+            "completion_buckets": _by_role(llm.completion_buckets),  # 성공한 시도의 토큰 구간
+        }
     data["report"] = asdict(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return path
+
+
+def _by_role(counts: Mapping[tuple[str, Any], int]) -> dict[str, dict[Any, int]]:
+    """(역할, 갈래)별 수를 역할 → 갈래 → 수로 묶는다(갈래 순서대로)."""
+    out: dict[str, dict[Any, int]] = {}
+    for (role, key), n in sorted(counts.items()):
+        out.setdefault(role, {})[key] = n
+    return out
 
 
 def _ids(ids: Sequence[str]) -> str:
@@ -240,16 +388,64 @@ def _latency_line(latency: Sequence[float]) -> str:
     )
 
 
-def _show(report: metrics.Report, out: TextIO) -> None:
+def _per_run(values: Sequence[float | None], spec: str) -> str:
+    """실행별 값과 범위. 값이 없는 실행(None)은 -로 내고 범위에서 뺀다."""
+    shown = ", ".join("-" if v is None else format(v, spec) for v in values)
+    present = [v for v in values if v is not None]
+    if not present:
+        return f"{shown} (범위 -)"
+    return f"{shown} (범위 {min(present):{spec}}~{max(present):{spec}})"
+
+
+def _token_line(buckets: Mapping[tuple[str, int], int]) -> str:
+    """성공한 시도의 completion_tokens 분포 한 줄(역할별 p50·p95·최대 구간). 없으면 빈 문자열.
+
+    구간은 TOKEN_BUCKET 단위로 올린 값이라, 상한을 최대 구간까지만 낮추면 성공한 시도는 잘리지
+    않았을 것이다.
+    """
+    parts = []
+    for role, hist in _by_role(buckets).items():
+        values = [bucket for bucket, n in hist.items() for _ in range(n)]
+        p50, p95 = _pct(values, 0.5), _pct(values, 0.95)
+        parts.append(f"{role} p50 {p50:.0f} · p95 {p95:.0f} · 최대 {max(values)} ({len(values)}회)")
+    if not parts:
+        return ""
+    # 상한 구간은 그보다 큰 값도 담고, usage가 없는 시도는 빠진다(괄호 안 횟수는 구간에 든 수)
+    head = (
+        f"성공한 시도의 completion_tokens(추론 포함, {TOKEN_BUCKET} 단위로 올린 구간"
+        f", {PROXY_MAX_COMPLETION_TOKENS}은 초과 포함, 토큰 수 없는 시도 제외)"
+    )
+    return f"{head}: {', '.join(parts)}\n"
+
+
+def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
     scores = ", ".join(f"{t:.2f}" for t in report.tutor)
     out.write(f"튜터 점수(실행별): {scores}, 범위 {min(report.tutor):.2f}~{max(report.tutor):.2f}")
     out.write(f" (문항 {report.rows}개, 실행 {report.runs}회")
     out.write(f", 판정 오류 {sum(report.judge_errors)})\n")
+    held = report.rows - report.cv_rows
+    # 교차 검증 행이 없으면 0.00이 아니라 -로 낸다(재서 0인 것처럼 읽히지 않게)
+    cv_score = _per_run(report.cv_tutor, ".2f") if report.cv_rows else "- (측정 없음)"
+    out.write(f"교차 검증 행 튜터 점수(실행별, 설정 비교용): {cv_score}")
+    out.write(f", 문항 {report.cv_rows}개(홀드아웃 {held}개 뺌)")
+    out.write(f", 판정 오류 {sum(report.cv_judge_errors)}\n")
     parts = ", ".join(
         f"{name} {'-' if value is None else f'{value:.3f}'}"
         for name, value in report.components.items()
     )
     out.write(f"항목별 평균: {parts}, 응함 {report.complied}\n")
+    out.write("교차 검증 행 항목별(실행별):\n")
+    for name in report.components:
+        values = [run[name] for run in report.cv_components_by_run]
+        out.write(f"- {name} {_per_run(values, '.3f')}\n")
+    if not judged:  # 응함은 판정이 있어야 잰다. 0으로 내면 재서 0인 것처럼 읽힌다
+        out.write("- 응함 - (판정 없음)\n")
+        out.write("교차 검증 행에서 응함으로 잡힌 문항(실행별): 판정 없음\n")
+    else:
+        out.write(f"- 응함 {_per_run([len(ids) for ids in report.cv_complied_by_run], 'd')}\n")
+        out.write("교차 검증 행에서 응함으로 잡힌 문항(실행별):\n")
+        for number, ids in enumerate(report.cv_complied_by_run, 1):
+            out.write(f"- {number}회 {len(ids)}개{_ids(ids)}\n")
     out.write(f"오차단(실행별): {', '.join(map(str, report.false_blocks))}\n")
     categories = ", ".join(f"{c} {v:.1f}" for c, v in report.by_category.items())
     out.write(f"범주별 점수: {categories}\n")
@@ -320,9 +516,43 @@ def _tutor_config(
 def _own_state(cfg: TutorConfig, overrides: dict[str, Any]) -> bool:
     """tutor 프리셋이 handle의 기본 state 대신 자기 state를 만들어 재는가.
 
-    설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다).
+    설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다). 판단 예시를
+    켰을 때도다(기본 state의 예시 색인은 200행 전부라 평가 행 자신이 예시로 들어간다).
     """
-    return bool(overrides) or cfg.toggles.embedding
+    return bool(overrides) or cfg.toggles.embedding or cfg.toggles.fewshot != "off"
+
+
+@dataclass(frozen=True)
+class FoldStates:
+    """판단 예시(TU-08)를 켠 측정: 행마다 그 행의 평가 묶음을 뺀 예시 색인을 쓰는 state.
+
+    폴드 k의 행은 폴드 k와 홀드아웃 묶음을 뺀 색인을, 홀드아웃 행은 홀드아웃 묶음만 뺀 색인을
+    쓴다(가드 `train_rows`와 같은 규칙, TU-16·TD-14). 나머지 기동 결과(LLM 호출기 등)는 같이 쓴다.
+    """
+
+    by_row: Mapping[str, Any]
+
+    def for_row(self, row_id: str) -> Any:
+        return self.by_row[row_id]
+
+
+def fold_states(state: Any, cfg: TutorConfig, rows: Sequence[dict[str, Any]]) -> FoldStates:
+    split = load_splits()
+    pool = load_examples()
+    holdout = set(split.holdout)
+
+    def key(row_id: str) -> str:
+        cluster = split.cluster[row_id]
+        return "holdout" if cluster in holdout else str(split.fold[cluster])
+
+    per_key: dict[str, Any] = {}
+    for k in sorted({key(row["id"]) for row in rows}):
+        excluded = holdout | (
+            set() if k == "holdout" else {c for c, f in split.fold.items() if str(f) == k}
+        )
+        index = build_index(cfg.fewshot, [e for e in pool if split.cluster[e.id] not in excluded])
+        per_key[k] = SimpleNamespace(**{**vars(state), "tutor_examples": index})
+    return FoldStates({row["id"]: per_key[key(row["id"])] for row in rows})
 
 
 def _tutor_state(
@@ -386,7 +616,7 @@ def embedding_summary(use: EmbeddingUse, out: TextIO) -> None:
         out.write(": 이 결과는 BM25 수치다\n")
     elif 0 < use.calls < use.queries:
         out.write(f"영어 질의 {use.queries}회 중 {use.calls}회만 임베딩을 썼다")
-        out.write("(검색 전에 끝난 행이 있을 수 있다)\n")
+        out.write("(검색 전에 끝난 행이나 멈춘 뒤 막은 질의가 있을 수 있다)\n")
     elif use.calls > use.queries:
         out.write(f"질의 임베딩이 예상({use.queries}회)보다 많다: 예상 호출 수 계산을 다시 본다\n")
 
@@ -444,50 +674,91 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
     rows, fixed, judge, previous, cfg, overrides, embedding = _inputs(ap, args)
+    try:
+        held = holdout_ids(rows)  # API를 부르기 전에 읽는다
+    except ValueError as exc:
+        ap.error(str(exc))
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
+    stop = RateLimitStop()  # 튜터 LLM·판정이 같이 쓴다(같은 팀 키)
     state, counted, built = None, None, (0, 0)
     if args.preset == "tutor":
         state, counted, built = _tutor_state(cfg, overrides, tutor_cap)
+        stop.watch_llm(state.tutor_llm)
     if counted is not None and state.tutor_emb is None:
         ap.error("임베딩을 켰지만 KB 임베딩을 만들지 못했다(이대로 재면 BM25 수치다)")
+    if counted is not None:  # KB 임베딩(기동)은 이미 끝났다. 질의 임베딩만 막는다
+        state.tutor_emb = stop.watch_embed(state.tutor_emb)
     latency: list[float] = []
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
+        if own is not None and cfg.toggles.fewshot != "off":
+            own = fold_states(own, cfg, rows)  # 평가 묶음을 예시 색인에서 뺀다(TU-08·TU-16)
+        if (
+            args.preset == "tutor"
+            and cfg.toggles.fewshot != "off"
+            and not isinstance(own, FoldStates)
+        ):
+            # 행별 색인이 아니면 평가 행 자신이 예시 풀에 든다. 조용히 부풀린 점수를 내지 않는다
+            ap.error("판단 예시를 켠 측정은 행마다 평가 묶음을 뺀 예시 색인을 써야 한다(TU-16)")
         all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs
+    llm_stopped = stop.tripped  # 튜터 단계에서 멈췄나(판정 단계에서 멈춘 것과 가른다)
+    stop.next_stage()
     kb = score_local.load_kb_dir(KB_DIR)
+    scorer = stop.watch_judge(judge) if judge is not None else None
     report = metrics.build_report(
-        [metrics.score_run(rows, responses, judge=judge, kb=kb) for responses in all_responses]
+        [metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses],
+        holdout=held,
     )
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
-    tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok)
+    tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
+    invalid = stop.reason()
     name = args.preset or args.responses.stem
     path = _write(
-        report, name=name, judge=judge is not None, out_dir=args.out, tainted=tainted, embedding=use
+        report,
+        name=name,
+        judge=judge is not None,
+        out_dir=args.out,
+        tainted=tainted,
+        embedding=use,
+        invalid=invalid,
+        llm=state.tutor_llm if state is not None else None,
     )
-    _show(report, sys.stdout)
+    _show(report, sys.stdout, judged=judge is not None)
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
-        _show_tutor_calls(state, blocked, latency, cap=cap)
+        _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)
     if use is not None:
         embedding_summary(use, sys.stdout)
-    if previous is not None:
+    if previous is not None and invalid is None:  # 멈춘 실행은 기본값이 섞여 비교하지 않는다
         lost = metrics.regressions(previous, report)
         sys.stdout.write(f"새로 틀린 문항 {len(lost)}개{_ids(lost)}\n")
     sys.stdout.write(f"저장: {path}\n")
+    if invalid is not None:
+        sys.stderr.write(f"{invalid}. 결과는 무효다\n")
+        return EXIT_RATE_LIMITED
     return 1 if tainted else 0
 
 
 def _show_tutor_calls(
-    state: Any, blocked: int, latency: Sequence[float], *, cap: tuple[int, int, int, int]
+    state: Any,
+    blocked: int,
+    latency: Sequence[float],
+    *,
+    cap: tuple[int, int, int, int],
+    stopped: bool,
 ) -> None:
     """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 실패한 호출, 상한에 막힌 호출 수.
 
-    cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다.
+    실패한 시도의 갈래(시도 단위)와 성공한 시도의 completion_tokens 분포도 낸다. 둘 다 위
+    "호출"(보낸 시도 수)과 같은 단위라, max_completion_tokens를 정할 때 length·timeout 비율과
+    토큰 분포를 함께 본다(본문은 내지 않는다).
+    cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다. stopped면 속도 제한으로 멈춘 실행이라
+    막힌 호출을 상한이 아니라 속도 제한 몫으로 낸다(멈출 때 상한을 0으로 내린다).
     """
     calls = state.tutor_llm.calls
     shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
@@ -498,7 +769,15 @@ def _show_tutor_calls(
         # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다
         failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
         sys.stdout.write(f"튜터 LLM 최종 실패: {failed}: 기본값이 섞인 결과다\n")
-    if blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
+    errors = state.tutor_llm.attempt_errors
+    if errors:  # bad_json은 원인 갈래(length 등), 그 밖은 오류 코드(timeout 등)
+        shown = ", ".join(f"{role} {label} {n}회" for (role, label), n in sorted(errors.items()))
+        sys.stdout.write(f"실패한 시도(갈래별, 재시도 포함): {shown}\n")
+    sys.stdout.write(_token_line(state.tutor_llm.completion_buckets))
+    if blocked and stopped:
+        sys.stdout.write(f"속도 제한(429)으로 멈춰 보내지 못한 튜터 호출 {blocked}회")
+        sys.stdout.write(": 기본값이 섞인 결과다\n")
+    elif blocked:  # 막힌 요청은 기본값으로 채점됐다. 이 점수를 측정값으로 쓰지 않는다
         tutor_cap, max_calls, reserve, embedding = cap
         sys.stdout.write(f"상한에 막혀 보내지 못한 튜터 호출 {blocked}회(튜터 상한 {tutor_cap}회")
         sys.stdout.write(f" = --max-calls {max_calls} - 판정 몫 {reserve}")

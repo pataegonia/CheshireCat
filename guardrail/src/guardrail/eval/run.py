@@ -15,6 +15,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from typing import Any, Protocol
 import yaml
 
 from guardrail import guard as guard_module
+from guardrail.classifier import LrClassifier
 from guardrail.config import ROOT, GuardConfig, Llm, config_hash, load_config
 from guardrail.data import LabeledRow, PublicRow, labeled_rows, load_public
 from guardrail.eval import cv
@@ -30,15 +32,41 @@ from guardrail.eval.fake_llm import make_fake_llm
 from guardrail.eval.score import as_scoring_input, score_responses, scoring
 from guardrail.eval.stats import cluster_bootstrap_ci
 from guardrail.guard import ConstantGuard, Judgement
+from guardrail.judges.input_judge import judge_input
+from guardrail.judges.output_judge import ask_grounded, output_context
+from guardrail.kb import KbIndex
+from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
-from guardrail.schema import GuardRequest
+from guardrail.preprocess import clip, decode_tags, normalize, reveal_hidden, strip_tags
+from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict
+from guardrail.signals import Signals, is_low_signal
 
 CONCURRENCY = 16
+# 지금 판정 중인 행 id. Tap이 LLM 출력을 행에 묶는 데 쓴다(행마다 태스크가 달라 섞이지 않는다)
+ROW_ID: ContextVar[str | None] = ContextVar("row_id", default=None)
 HOLDOUT_OPEN_LIMIT = 3  # 4회째 거부(ADR-0013: 홀드아웃은 거의 보지 않는다)
 RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
-EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT = 2, 3, 4, 5
+EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT, EXIT_RATE_LIMITED = 2, 3, 4, 5, 6
+EXIT_PROBE_FAILED = 7  # probe의 맨 요청이 429 말고 다른 오류로 실패(연결·서버·잘못된 요청)
+# 판정 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속 보내면
+# 어뷰징으로 보일 수 있다(SPEC §7.1). 2026-11-13에 429 뒤로 약 3,700회를 더 보낸 일이 있었다
+RATE_LIMIT_STREAK = 20
+# 호출 실패율이 상한을 넘었다(입력 단독은 2%, 그 밖의 모드는 GROSS_FAIL_RATE)
+EXIT_INPUT_FAIL_RATE = EXIT_FAIL_RATE = 8
+EXIT_CALLS_FAILED = 9  # 인증 오류, 또는 429·서버·시간 초과가 섞여 이어져 호출을 멈췄다
+INPUT_FAIL_RATE_LIMIT = 0.02  # R14-D8: 역할별 호출 실패율 2% 초과면 무효
+WARN_FAIL_RATE = 0.02  # R14-D8: 넘으면 report 맨 위에 경고를 낸다(모든 모드)
+# 역할별 호출 실패율이 이것을 넘으면 무효다(실행 전체, 또는 한 회차). 실패한 호출은 기본값으로
+# 채워져 점수를 바꾼다. 10%는 잠정값이다: read 12초 시간 초과 조치를 잰 뒤 다시 정한다
+GROSS_FAIL_RATE = 0.10
+TRANSPORT_ERRORS = frozenset({"rate_limit", "server", "timeout"})
+STOP_TEXT = {
+    "rate_limit": f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다",
+    "auth": "인증 오류(401·403)가 나서 멈췄다",
+    "errors": f"호출 실패(429·서버·시간 초과)가 {RATE_LIMIT_STREAK}회 이어져 멈췄다",
+}
 BASELINE, DEFAULT = "baseline", "default"
 
 
@@ -56,6 +84,149 @@ async def default_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]) -
     if Guard is None:  # S2.8 전: 안의 ImportError를 삼키지 않도록 속성 유무로만 가른다
         return ConstantGuard()
     return await Guard.build(cfg, llm=llm, rows=train)
+
+
+class InputOnlyGuard:
+    """입력 판정만 잰다(R14-D1): 저신호 직접 판정 + kNN few-shot + judge_input. 출력은 상수다.
+
+    S2.8 Guard 전에 입력 프롬프트를 재는 하네스 전용 판정기다. nano가 실패하면 kNN·LR 기본값을
+    쓰지 않고 normal로 두고 오류로 센다(재려는 것이 프롬프트라서다).
+    """
+
+    UNSUPPORTED = ("third_call", "oom_kb_snippet", "embedding")  # 구현하지 않은 스위치
+
+    @classmethod
+    def check(cls, cfg: GuardConfig) -> None:
+        """구현하지 않은 스위치가 켜져 있으면 거부한다(조용히 무시하면 다른 것을 잰다)."""
+        if on := [f"toggles.{k}" for k in cls.UNSUPPORTED if getattr(cfg.toggles, k)]:
+            raise ValueError(f"--input-only는 {', '.join(on)}을 지원하지 않는다")
+
+    def __init__(self, cfg: GuardConfig, llm: LLM, train: Sequence[LabeledRow]) -> None:
+        self.check(cfg)
+        self.cfg, self.llm = cfg, llm
+        self.knn = KnnIndex(train, cfg)
+        self.lr = LrClassifier(train, cfg)
+
+    async def judge(self, req: GuardRequest) -> Judgement:
+        cfg = self.cfg
+        raw = next((m.content for m in reversed(req.messages) if m.role == "user"), None)
+        if raw is None:
+            return self._result(req, "normal", "default")
+        raw = clip(raw, cfg.input.max_chars)  # 서버처럼 전처리 전에 앞 + 뒤로 자른다(§4.2)
+        text = normalize(raw)[: cfg.retrieval.max_query_chars]
+        side = {
+            "knn_major": self.knn.majority(text) if cfg.toggles.knn_vote else None,
+            "lr_pred": self.lr.predict(text) if cfg.toggles.lr else None,
+        }
+        if cfg.toggles.low_signal_direct and is_low_signal(
+            strip_tags(raw), len(req.messages) > 1, decode_tags(raw)[1]
+        ):
+            return self._result(req, "low_signal_input", "low_signal", low=True, **side)
+        examples = self.knn.fewshot(text) if cfg.toggles.knn_fewshot else []
+        category = await judge_input(
+            list(req.messages),
+            raw,
+            examples,
+            self.llm,
+            cfg,
+            deadline=time.monotonic() + cfg.budget_s,
+        )
+        if category is None:
+            return self._result(req, "normal", "default", calls=1, errors=("input_judge",), **side)
+        return self._result(req, category, "nano", calls=1, **side)
+
+    @staticmethod
+    def _result(
+        req: GuardRequest,
+        category: Category,
+        source: str,
+        *,
+        low: bool = False,
+        calls: int = 0,
+        errors: tuple[str, ...] = (),
+        knn_major: Category | None = None,
+        lr_pred: Category | None = None,
+    ) -> Judgement:
+        output = OutputVerdict(True, (), True) if req.has_candidate else None
+        return Judgement(
+            response=GuardResponse(category, output),
+            input_source=source,  # type: ignore[arg-type]
+            output_tier=None,
+            nano_grounded=None,
+            signals=Signals(low, False, False),
+            knn_major=knn_major,
+            lr_pred=lr_pred,
+            calls=calls,
+            errors=errors,
+            latency_ms={},
+        )
+
+
+async def input_only_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]) -> Judge:
+    return InputOnlyGuard(cfg, llm, train)
+
+
+class OutputOnlyGuard:
+    """출력 근거 판정만 잰다: KB 검색 → 문맥 → ask_grounded. 입력은 상수(normal)다.
+
+    S2.8 Guard 전에 출력 프롬프트를 재는 하네스 전용 판정기다. nano의 grounded를 그대로 내고
+    구간은 내지 않는다(3단·규칙 ②·safe 규칙은 S2.8). nano가 실패하면 `output.failure_default`를
+    내고 오류로 센다. 빈 답변은 설정과 상관없이 근거 있음이다(PRD GR-01, 응한 내용이 없음).
+    질의와 길이 상한은 master-plan §4.2를 따른다.
+    """
+
+    def __init__(self, cfg: GuardConfig, llm: LLM) -> None:
+        self.cfg, self.llm = cfg, llm
+        self.kb = KbIndex.load(cfg.paths.kb, ngram=cfg.kb.ngram, k1=cfg.kb.k1, b=cfg.kb.b)
+
+    async def judge(self, req: GuardRequest) -> Judgement:
+        cfg = self.cfg
+        users = [m.content[: cfg.input.max_chars] for m in req.messages if m.role == "user"]
+        if not req.candidate_answer or not users:
+            output = OutputVerdict(True, (), True) if req.has_candidate else None
+            return self._result(output, None)
+        answer = req.candidate_answer[: cfg.input.max_answer_chars]
+        half = cfg.retrieval.max_query_chars // 2
+        # 학습자 쪽은 최근 발화를 남긴다. KbIndex.scores는 normalize를 거친 질의를 받는다
+        query = normalize("\n".join(users))[-half:] + "\n" + normalize(answer)[:half]
+        hits = output_context(self.kb.rank(query), self.kb, cfg)
+        out = await ask_grounded(
+            users[-1],
+            reveal_hidden(answer),
+            hits,
+            self.llm,
+            cfg,
+            deadline=time.monotonic() + cfg.budget_s,
+            baseline=cfg.output.mode == "baseline",
+        )
+        if out is None:  # 서버 기본값(`server._default_body`)과 같은 규칙
+            grounded = cfg.output.failure_default == "grounded"
+            return self._result(OutputVerdict(grounded, (), True), None, 1, ("output_judge",))
+        return self._result(OutputVerdict(out.grounded, (), True), out.grounded, 1)
+
+    @staticmethod
+    def _result(
+        output: OutputVerdict | None,
+        nano_grounded: bool | None,
+        calls: int = 0,
+        errors: tuple[str, ...] = (),
+    ) -> Judgement:
+        return Judgement(
+            response=GuardResponse("normal", output),
+            input_source="default",
+            output_tier=None,
+            nano_grounded=nano_grounded,
+            signals=Signals(False, False, False),
+            knn_major=None,
+            lr_pred=None,
+            calls=calls,
+            errors=errors,
+            latency_ms={},
+        )
+
+
+async def output_only_factory(cfg: GuardConfig, llm: LLM, train: list[LabeledRow]) -> Judge:
+    return OutputOnlyGuard(cfg, llm)
 
 
 # --- 설정 -----------------------------------------------------------------
@@ -128,11 +299,26 @@ def calls_per_row(cfg: GuardConfig, has_candidate: bool) -> int:
 
 
 def estimate_calls(
-    configs: Mapping[str, GuardConfig], rows: Sequence[PublicRow], repeat: int, llm: Llm
+    configs: Mapping[str, GuardConfig],
+    rows: Sequence[PublicRow],
+    repeat: int,
+    llm: Llm,
+    *,
+    input_only: bool = False,
+    output_only: bool = False,
 ) -> int:
-    """probe는 실행당 한 번, 나머지는 설정 행 × 반복 × 행."""
+    """probe는 실행당 한 번, 나머지는 설정 행 × 반복 × 행.
+
+    input_only면 행당 입력 1회뿐이고, output_only면 후보 답변이 있는 행만 출력 1회다.
+    """
     total = 0
     for cfg in configs.values():
+        if input_only:
+            total += len(rows)
+            continue
+        if output_only:
+            total += sum(bool(r.candidate_answer) for r in rows)
+            continue
         total += sum(calls_per_row(cfg, r.candidate_answer is not None) for r in rows)
     return probe_calls(llm) + total * repeat
 
@@ -197,6 +383,16 @@ class Tap:
     """LLM.complete 결과를 모아 둔다(역할별 오류 코드·finish_reason=length 집계용)."""
 
     records: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    # (행 id, 호출 기록). 공개 세트 분석용으로 runs/에만 쓴다. 서버 로그와 무관하다(GR-12)
+    parsed: list[tuple[str | None, dict]] = field(default_factory=list)
+    streak: int = 0  # 연달아 rate_limit으로 끝난 호출 수
+    fails: int = 0  # 연달아 429·서버·시간 초과로 끝난 호출 수(응답이 한 번 오면 0)
+    # 멈춘 사유(STOP_TEXT의 키). 멈춘 뒤의 호출은 보내지 않고 budget 오류가 된다
+    stop: str | None = None
+
+    @property
+    def tripped(self) -> bool:
+        return self.stop is not None
 
     def attach(self, llm: LLM) -> None:
         inner = llm.complete
@@ -204,6 +400,34 @@ class Tap:
         async def complete(role, messages, schema, *, deadline):  # type: ignore[no-untyped-def]
             res = await inner(role, messages, schema, deadline=deadline)
             self.records.append((role, res.error, res.finish_reason))
+            if res.error == "rate_limit":
+                self.streak += 1
+            elif res.error != "budget":
+                self.streak = 0
+            if res.error in TRANSPORT_ERRORS:
+                self.fails += 1
+            elif res.error != "budget":
+                self.fails = 0
+            if self.stop is None:
+                if res.error == "auth":  # 키가 회수됐을 수 있다(SPEC §7.1). 한 번에 멈춘다
+                    self.stop = "auth"
+                elif self.streak >= RATE_LIMIT_STREAK:
+                    self.stop = "rate_limit"
+                elif self.fails >= RATE_LIMIT_STREAK:
+                    self.stop = "errors"
+                if self.stop:
+                    llm.max_calls = 0  # 이후 호출은 LLM이 보내지 않는다
+            out = res.parsed.model_dump(mode="json") if res.parsed is not None else None
+            call = {
+                "role": role,
+                "parsed": out,
+                "latency_ms": round(res.latency_ms, 1),  # 재시도 포함 전체
+                "attempts": res.attempts,
+                "error": res.error,
+                "finish_reason": res.finish_reason,
+                "completion_tokens": res.completion_tokens,  # 마지막 시도의 값
+            }
+            self.parsed.append((ROW_ID.get(), call))
             return res
 
         llm.complete = complete  # type: ignore[method-assign]
@@ -225,6 +449,7 @@ async def _judge_rows(judge: Judge, rows: Sequence[PublicRow], out: Outcome) -> 
 
     async def one(row: PublicRow) -> None:
         async with gate:
+            ROW_ID.set(row.id)
             t0 = time.perf_counter()
             out.judgements[row.id] = await judge.judge(to_request(row))
             out.latency_ms[row.id] = (time.perf_counter() - t0) * 1000
@@ -430,10 +655,61 @@ def add_variance(summary: dict) -> None:
     }
 
 
+def input_call_failures(summary: dict) -> tuple[int, int]:
+    """입력 판정 호출 (실패 수, 시도 수). 모든 설정·반복의 합이다."""
+    scores = [s for c in summary["configs"].values() for s in c["scores"]]
+    return (
+        sum(s["errors"].get("input_judge", 0) for s in scores),
+        sum(s["calls"]["total"] for s in scores),
+    )
+
+
+def call_failures(records: Sequence[tuple[str, str | None, str | None]]) -> dict[str, dict]:
+    """역할별 호출 (실패, 시도). 보내지 않은 호출(budget)은 세지 않는다."""
+    out: dict[str, dict] = {}
+    for role, error, _ in records:
+        if error != "budget":
+            d = out.setdefault(role, {"failed": 0, "calls": 0})
+            d["calls"] += 1
+            d["failed"] += error is not None
+    return out
+
+
+def worst_fail_rate(fails: Mapping[str, Mapping[str, int]]) -> float:
+    return max((f["failed"] / f["calls"] for f in fails.values()), default=0.0)
+
+
+def _worst_run_fail_rate(summary: dict) -> float:
+    """한 회차·한 역할의 실패율 가운데 가장 큰 값(합계가 나쁜 회차 하나를 가리지 않게)."""
+    return max(
+        (
+            sum(r for code, r in role["error_rate"].items() if code != "budget")
+            for c in summary["configs"].values()
+            for s in c["scores"]
+            for role in s.get("llm_by_role", {}).values()
+        ),
+        default=0.0,
+    )
+
+
 def _banner(summary: dict) -> list[str]:
     lines = []
     if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
         lines.append("# FAKE/상수 판정기 — 점수 무효 (results/로 옮기지 않는다)")
+    if summary.get("output_only"):
+        lines.append(
+            "# 출력 단독 실행 — 입력은 상수(normal)라 가드 점수·block F1은 비교에 쓰지 않는다"
+        )
+    if summary.get("input_only"):
+        lines.append("# 입력 단독 실행 — 출력·가드 점수는 상수 출력 기준이라 비교에 쓰지 않는다")
+    if f := summary.get("input_fail"):
+        lines.append(f"# 입력 판정 호출 실패 {f['failed']}/{f['calls']}")
+    for role, f in summary.get("call_fail", {}).items():
+        if f["failed"] / f["calls"] > WARN_FAIL_RATE:
+            lines.append(
+                f"# 경고 — {role} 호출 실패 {f['failed']}/{f['calls']}"
+                f"({f['failed'] / f['calls']:.1%}) > {WARN_FAIL_RATE:.0%} (R14-D8)"
+            )
     if summary.get("invalid"):
         lines.append(f"# 무효 실행 — {summary['invalid']}")
     return lines
@@ -553,6 +829,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--ablation", metavar="DIR", help="토글별 yaml 폴더")
     ap.add_argument("--only", help="--ablation 중 이 이름만(쉼표). baseline·default는 늘 포함")
     ap.add_argument("--holdout", action="store_true", help="홀드아웃도 잰다(열람 기록, 4회째 거부)")
+    ap.add_argument(
+        "--input-only", action="store_true", help="입력 판정만 잰다(출력은 상수, 행당 호출 ≤1)"
+    )
+    ap.add_argument(
+        "--output-only", action="store_true", help="출력 근거 판정만 잰다(입력은 상수 normal)"
+    )
     ap.add_argument("--out", default=str(RUNS_DIR))
     return ap
 
@@ -590,12 +872,16 @@ class Plan:
 def _usage_error(args: argparse.Namespace) -> str | None:
     if args.repeat < 1:
         return "--repeat은 1 이상"
+    if args.input_only and args.output_only:
+        return "--input-only와 --output-only는 함께 쓰지 않는다"
     if args.holdout and args.fake:
         return (
             "--fake와 --holdout은 함께 쓰지 않는다(가짜 응답으로 홀드아웃 열람 횟수를 쓰지 않는다)"
         )
     if args.holdout and (args.ablation or args.repeat > 1):
         return "--holdout은 단일 설정·--repeat 1에서만 쓴다(설정 비교에 홀드아웃을 쓰지 않는다)"
+    if args.holdout and args.input_only:
+        return "--input-only와 --holdout은 함께 쓰지 않는다(홀드아웃 열람은 전체 판정기에만 쓴다)"
     if not re.fullmatch(r"[\w.-]+", args.name) or args.name in {".", ".."}:
         return "--name은 영문·숫자·_.-만 쓴다"
     return None
@@ -605,6 +891,9 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     overrides = parse_sets(args.sets)
     base = load_config(args.config, overrides)
     configs = select_rows(base, args, overrides)
+    if args.input_only:  # 못 쓰는 스위치는 호출 전에 거부한다
+        for cfg in configs.values():
+            InputOnlyGuard.check(cfg)
     public = load_public(base.paths.public)
     split = cv.load_splits()
     if missing := {r.id for r in public} - split.cluster.keys():
@@ -612,7 +901,14 @@ def _make_plan(args: argparse.Namespace) -> Plan:
     held = set(split.holdout)
     judged = [r for r in public if args.holdout or split.cluster[r.id] not in held]
     limit = args.max_calls if args.max_calls is not None else base.eval.max_calls
-    est = estimate_calls(configs, judged, args.repeat, base.llm)
+    est = estimate_calls(
+        configs,
+        judged,
+        args.repeat,
+        base.llm,
+        input_only=args.input_only,
+        output_only=args.output_only,
+    )
     _say(
         f"estimate_calls={est} probe={probe_calls(base.llm)} max_calls={limit} "
         f"configs={','.join(configs)} judged_rows={len(judged)} repeat={args.repeat}"
@@ -631,13 +927,17 @@ async def _measure(
         block = frozenset(cfg.block_categories)
         scores = []
         for rep in range(args.repeat):
-            mark = len(tap.records)
+            mark, pmark = len(tap.records), len(tap.parsed)
             out = await run_once(
                 cfg, llm, factory, plan.public, plan.labeled, plan.split, holdout=args.holdout
             )
             summary["judge_kind"] = out.judge_kind
             scores.append(summarize(plan.public, out, tap.records[mark:], cfg, plan.split))
             resp = _responses(out, block)
+            llm_out: dict[str, list[dict]] = {}
+            for rid, call in tap.parsed[pmark:]:
+                if rid is not None:
+                    llm_out.setdefault(rid, []).append(call)
             for rid, p in row_points([r for r in plan.public if r.id in resp], resp).items():
                 if plan.split.cluster[rid] not in held:
                     points.setdefault(cname, {}).setdefault(rid, []).append(p)
@@ -649,8 +949,14 @@ async def _measure(
                     "response": resp[rid],
                     "source": j.input_source,
                     "tier": j.output_tier,
+                    "answer_quote_ok": j.answer_quote_ok,
+                    "kb_quote_ok": j.kb_quote_ok,
+                    "nano_refuses": j.nano_refuses,
                     "calls": j.calls,
                     "errors": list(j.errors),
+                    "knn_major": j.knn_major,
+                    "lr_pred": j.lr_pred,
+                    "llm": [] if plan.split.cluster[rid] in held else llm_out.get(rid, []),
                 }
                 for rid, j in out.judgements.items()
             ]
@@ -687,8 +993,14 @@ async def amain(
     except HoldoutRefused as e:
         _err(str(e))
         return EXIT_HOLDOUT
-    if judge_factory is None and not hasattr(guard_module, "Guard"):
-        sys.stderr.write("note: guardrail.guard.Guard가 아직 없어 ConstantGuard로 돈다\n")
+    only = (args.input_only and input_only_factory) or (args.output_only and output_only_factory)
+    factory = judge_factory or only or default_factory
+    if factory is default_factory:  # 호출을 쓰기 전에 막는다(없는 설정 행은 재지 못한다)
+        bad = {n: guard_module.unsupported_switches(c) for n, c in plan.configs.items()}
+        bad = {n: v for n, v in bad.items() if v}
+        if bad:
+            _err(f"Guard가 아직 지원하지 않는 설정: {bad}. --only에서 빼고 다시 실행한다")
+            return EXIT_USAGE
     llm = make_fake_llm(plan.base.llm) if args.fake else (make_llm or LLM)(plan.base.llm)
     tap = Tap()
     tap.attach(llm)
@@ -698,20 +1010,52 @@ async def amain(
     except ValueError as e:  # 환경변수 없음·인증 거절
         _err(str(e))
         return EXIT_USAGE
+    if base_error := llm.probe_result.get("base"):  # 막힌 키에 판정 호출을 보내지 않는다
+        _err(f"probe의 맨 요청이 {base_error}로 실패했다. 측정을 시작하지 않는다. 무효 실행이다")
+        return EXIT_RATE_LIMITED if base_error == "rate_limit" else EXIT_PROBE_FAILED
     if args.holdout:  # 열람은 start()가 성공한 뒤에만 센다
         record_holdout_open(args.name, config_hash(plan.base))
 
-    summary, records = await _measure(plan, args, llm, tap, judge_factory or default_factory)
+    summary, records = await _measure(plan, args, llm, tap, factory)
     summary["fake"] = args.fake
+    summary["input_only"] = args.input_only
+    summary["output_only"] = args.output_only
     spent = sum(e == "budget" for _, e, _ in tap.records)
-    if spent:
+    failed, tried = input_call_failures(summary) if args.input_only else (0, 0)
+    too_flaky = tried > 0 and failed / tried > INPUT_FAIL_RATE_LIMIT
+    if args.input_only:
+        summary["input_fail"] = {"failed": failed, "calls": tried}
+    summary["call_fail"] = call_failures(tap.records)
+    gross = max(worst_fail_rate(summary["call_fail"]), _worst_run_fail_rate(summary))
+    if tap.stop:
+        summary["invalid"] = f"{STOP_TEXT[tap.stop]}: 결과를 비교에 쓰지 않는다"
+    elif spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
+    elif too_flaky:  # 종료 코드 우선순위: 연속 429, budget이 먼저다
+        summary["invalid"] = (
+            f"입력 판정 호출 실패율 {failed}/{tried} = {failed / tried:.1%}가 "
+            f"{INPUT_FAIL_RATE_LIMIT:.0%}를 넘는다: 결과를 비교에 쓰지 않는다"
+        )
+    elif gross > GROSS_FAIL_RATE:
+        summary["invalid"] = (
+            f"역할별 호출 실패율 최대 {gross:.1%}가 {GROSS_FAIL_RATE:.0%}를 넘는다"
+            "(실행 전체 또는 한 회차): 결과를 비교에 쓰지 않는다"
+        )
     out_dir = Path(args.out) / args.name
     _write(out_dir, records, summary, render_report(args.name, summary))
     _say(f"wrote {out_dir}")
+    if tap.stop:
+        _err(f"{STOP_TEXT[tap.stop]}. 결과는 무효다")
+        return EXIT_RATE_LIMITED if tap.stop == "rate_limit" else EXIT_CALLS_FAILED
     if spent:
         _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT
+    if too_flaky:
+        _err(f"입력 판정 호출 실패율 {failed}/{tried}가 상한 초과. 결과는 무효다")
+        return EXIT_INPUT_FAIL_RATE
+    if gross > GROSS_FAIL_RATE:
+        _err(f"역할별 호출 실패율 최대 {gross:.1%}가 상한 초과. 결과는 무효다")
+        return EXIT_FAIL_RATE
     return 0
 
 

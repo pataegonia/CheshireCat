@@ -136,7 +136,7 @@ async def test_probe_turns_off_only_the_rejected_param():
         "response_format": None,
     }
     assert llm.params["verbosity"] is None
-    assert llm.params["reasoning_effort"] == "low" and llm.params["max_completion_tokens"] == 800
+    assert llm.params["reasoning_effort"] == "low" and llm.params["max_completion_tokens"] == 1600
     assert llm.structured == "json_schema"
     # 파라미터마다 따로 시험한다
     extras = [set(kw) - {"model", "messages"} for kw in fake.requests]

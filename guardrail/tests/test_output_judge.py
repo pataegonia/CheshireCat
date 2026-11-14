@@ -14,6 +14,7 @@ from guardrail.judges.output_judge import ask_grounded, build_messages, output_c
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut, strict_schema
 from guardrail.kb import Hit, KbIndex, Ranking
 from guardrail.llm import LLM
+from guardrail.preprocess import reveal_hidden
 
 pytestmark = pytest.mark.anyio
 
@@ -90,6 +91,61 @@ def test_schema_field_order_is_quotes_then_verdict_then_refuses():
 )
 def test_quote_ok(quote, text, min_chars, want):
     assert quote_ok(quote, text, min_chars) is want
+
+
+HIDDEN_ANSWER = "만기 전에 해지해도 이자를 모​두 받을 수 있어요."
+
+
+def test_quote_spanning_a_hidden_char_is_confirmed_with_or_without_the_mark():
+    answer = "값을 세 번​ 더하면 합계가 나와요"
+    assert reveal_hidden(answer) == "값을 세 번<U+200B> 더하면 합계가 나와요"  # nano가 보는 글
+    assert quote_ok("세 번<U+200B> 더하면 합계가", answer, 8) is True
+    assert quote_ok("더하면 합계가 나와요", answer, 8) is True  # 숨긴 문자가 없는 부분
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "이자를 모&lt;U+200B&gt;두 받을 수 있어요",  # nano가 본 이스케이프 그대로
+        "이자를 모<U+200B>두 받을 수 있어요",  # 이스케이프를 풀어서
+        "이자를 모두 받을 수 있어요",  # 표기를 빼고
+        "이자를 모<u+200b>두 받을 수 있어요",  # 소문자 표기
+        "이자를 모​두 받을 수 있어요",  # 숨긴 문자 그대로
+    ],
+)
+def test_quote_across_a_hidden_char_is_confirmed_in_every_copied_form(quote):
+    assert quote_ok(quote, HIDDEN_ANSWER, 8) is True
+
+
+def test_mark_invented_where_the_text_has_no_hidden_char_is_not_confirmed():
+    # 원문에는 U+200B가 없다. 표기를 지우고 보면 글자가 맞지만 nano가 본 적 없는 글자를 지어냈다
+    clean = "만기 전에 해지해도 이자를 모두 받을 수 있어요."
+    assert quote_ok("이자를 모<U+200B>두 받을 수 있어요", clean, 8) is False
+    # 원문의 다른 숨긴 문자 표기도 그 문자가 원문에 없으면 지어낸 것이다
+    assert quote_ok("이자를 모<U+2060>두 받을 수 있어요", HIDDEN_ANSWER, 8) is False
+
+
+def test_mark_only_quote_is_empty_after_removal():
+    assert quote_ok("<U+200B><U+200B>", "가​​나", 0) is False
+
+
+def test_literal_mark_text_in_the_answer_is_matched_like_a_revealed_one():
+    # 답변에 보이는 글자로 `<U+200B>`를 써도 nano가 보는 글은 같다
+    literal = "만기 전에 해지해도 이자를 모<U+200B>두 받을 수 있어요."
+    assert quote_ok("이자를 모&lt;U+200B&gt;두 받을 수 있어요", literal, 8) is True
+    assert quote_ok("이자를 모두 받을 수 있어요", literal, 8) is True
+
+
+def _tags(s: str) -> str:
+    return "".join(chr(0xE0000 + ord(c)) for c in s)
+
+
+def test_quote_across_tag_chars_is_confirmed_with_or_without_the_revealed_ascii():
+    answer = f"만기 전에 해지해도 이자를 모{_tags('ok')}두 받을 수 있어요."
+    assert reveal_hidden(answer) == "만기 전에 해지해도 이자를 모ok두 받을 수 있어요."
+    assert quote_ok("이자를 모ok두 받을 수 있어요", answer, 8) is True  # nano가 본 그대로
+    assert quote_ok("이자를 모두 받을 수 있어요", answer, 8) is True  # 드러낸 글자를 빼고
+    assert quote_ok("이자를 모no두 받을 수 있어요", answer, 8) is False  # 다른 글자
 
 
 # --- 문맥 조립 -------------------------------------------------------------

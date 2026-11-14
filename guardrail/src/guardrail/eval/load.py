@@ -4,6 +4,8 @@
 실행(guardrail/에서, 서버는 따로 띄운다. 토큰은 환경변수 TEAM_TOKEN):
 `uv run python -X utf8 -m guardrail.eval.load --url http://127.0.0.1:8000/guard --out r.json`
 `--access-log 파일`을 주면 서버 접근 로그의 오류 칸에서 기본값으로 떨어진 판정을 역할별로 센다.
+접근 로그 없이는 모두 ok여도 모델 호출이 성공 여부를 알 수 없다(실패해도 서버는 200+기본값).
+먼저 `--n 20`으로 짧게 돌려 접근 로그의 오류 칸을 확인한 뒤 전체를 돌린다.
 `--kb-bench`는 서버 없이 KB 검색 시간만 잰다(API 0회).
 """
 
@@ -19,16 +21,25 @@ import urllib.request
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from functools import cache
 from pathlib import Path
+from typing import get_args
 
 from guardrail.config import load_config
 from guardrail.data import PublicRow, load_public
 from guardrail.eval.cv import load_splits
 from guardrail.kb import KbIndex
+from guardrail.schema import Category, _is_span, decision_of
 
 SPEC_TIMEOUT_S = 30.0  # 규격의 요청당 제한(SPEC §3)
 MAX_RESPONSE_BYTES = 256 * 1024  # 채점기가 읽는 응답 상한
-BIG_BYTES = 1024 * 1024  # --big 요청의 본문 크기(약)
+# --big 요청의 글자 수(UTF-8 기준 약 1.06MB). 전송은 ensure_ascii 이스케이프로 약 2.1MB다
+BIG_BYTES = 1024 * 1024
+WARN_NO_LOG = (
+    "경고: --access-log 없이는 모두 ok여도 모델 호출이 성공했는지 알 수 없다"
+    "(실패해도 서버는 200과 기본값을 준다).\n"
+    "먼저 --n 20으로 짧게 돌려 접근 로그의 오류 칸을 확인한 뒤 전체를 돌려라.\n"
+)
 Send = Callable[[dict], tuple[int, bytes]]
 
 
@@ -41,7 +52,10 @@ def guard_rows() -> list[PublicRow]:
 
 
 def build_payloads(rows: list[PublicRow], n: int, big: int = 0, seed: int = 13) -> list[dict]:
-    """행을 돌려 n개. 앞의 big개는 이력을 약 1MB로 부풀린 뒤 전체를 섞는다."""
+    """행을 돌려 n개. 앞의 big개는 이력을 부풀린 뒤 전체를 섞는다.
+
+    크기: 글자 수로 UTF-8 약 1.06MB, 전송은 \\uXXXX 이스케이프로 약 2.1MB.
+    """
     out = []
     for i in range(n):
         r = rows[i % len(rows)]
@@ -57,6 +71,12 @@ def build_payloads(rows: list[PublicRow], n: int, big: int = 0, seed: int = 13) 
     return out
 
 
+@cache
+def _block() -> frozenset[Category]:
+    """block 범주. 서버가 다른 설정(GUARD_CONFIG)으로 떠 있으면 어긋날 수 있다(기본 설정 기준)."""
+    return frozenset(load_config().block_categories)
+
+
 def classify(payload: dict, status: int, body: bytes) -> str:
     """ok | http | json | format. 형식은 계약(guard.schema.json)의 채점 필드만 본다."""
     if status != 200:
@@ -64,11 +84,13 @@ def classify(payload: dict, status: int, body: bytes) -> str:
     try:
         d = json.loads(body)
         inp = d["input"]
-        ok = inp["decision"] in ("allow", "block") and isinstance(inp["category"], str)
+        cat = inp["category"]
+        ok = cat in get_args(Category) and inp["decision"] == decision_of(cat, _block())
         if "candidate_answer" in payload:
             o = d["output"]
             ok = ok and isinstance(o["grounded"], bool) and isinstance(o["safe"], bool)
-            ok = ok and all(isinstance(s, str) for s in o["unsupported"])
+            u = o["unsupported"]
+            ok = ok and isinstance(u, list) and all(isinstance(s, str) and _is_span(s) for s in u)
     except ValueError:
         return "json"
     except (KeyError, TypeError):
@@ -111,6 +133,7 @@ def run_load(
     with ThreadPoolExecutor(concurrency) as ex:
         results = list(ex.map(one, payloads))
     counts = Counter(k for k, _, _ in results)
+    ok_dt = [dt for k, dt, _ in results if k == "ok"]
     return {
         "requests": len(payloads),
         "with_candidate": sum("candidate_answer" in p for p in payloads),
@@ -119,7 +142,9 @@ def run_load(
         "counts": {
             k: counts.get(k, 0) for k in ("ok", "timeout", "http", "json", "format", "error")
         },
+        "all_ok": counts["ok"] == len(payloads),
         "latency_s": _latency([dt for _, dt, big in results if not big]),
+        "latency_ok_s": _latency(ok_dt) if ok_dt else None,  # ok 요청만(없으면 null)
         "latency_big_s": _latency([dt for _, dt, big in results if big]),
     }
 
@@ -182,7 +207,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--url", default="http://127.0.0.1:8000/guard")
     ap.add_argument("--n", type=int, default=600)
     ap.add_argument("--concurrency", type=int, default=64)
-    ap.add_argument("--big", type=int, default=0, help="이력을 약 1MB로 부풀릴 요청 수")
+    ap.add_argument(
+        "--big",
+        type=int,
+        default=0,
+        help="이력을 부풀릴 요청 수(글자 수로 약 1MB, \\uXXXX 이스케이프로 전송은 약 2.1MB)",
+    )
     ap.add_argument("--access-log", help="서버 접근 로그 파일(오류 칸 집계)")
     ap.add_argument("--kb-bench", action="store_true")
     ap.add_argument("--out")
@@ -190,17 +220,33 @@ def main(argv: list[str] | None = None) -> None:
     if args.kb_bench:
         report = {"kb": kb_bench()}
     else:
+        if args.access_log and not Path(args.access_log).is_file():
+            sys.stderr.write(f"사용법 오류: --access-log 파일이 없다: {args.access_log}\n")
+            sys.exit(2)  # 보내기 전에 막는다
+        if not args.access_log:
+            sys.stderr.write(WARN_NO_LOG)
         payloads = build_payloads(guard_rows(), args.n, args.big)
         report = run_load(
             http_sender(args.url, os.environ["TEAM_TOKEN"]), payloads, args.concurrency
         )
+        report["access_log"] = bool(args.access_log)
         if args.access_log:
             lines = Path(args.access_log).read_text("utf-8", errors="replace").splitlines()
             report["failures"] = log_failures(lines, report["requests"], report["with_candidate"])
+            seen = report["failures"]["guard_lines"]
+            report["log_mismatch"] = seen != report["requests"]
+            if report["log_mismatch"]:
+                sys.stderr.write(
+                    f"경고: 접근 로그의 /guard 200 줄 {seen}개가 보낸 요청 "
+                    f"{report['requests']}개와 다르다"
+                    "(다른 로그이거나 이전 실행이 섞였다). 오류 칸 집계를 믿지 마라.\n"
+                )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text + "\n", "utf-8")
     sys.stdout.write(text + "\n")
+    if not args.kb_bench and not report["all_ok"]:
+        sys.exit(1)  # 결과는 이미 썼다. 실패한 요청이 있다
 
 
 if __name__ == "__main__":

@@ -79,12 +79,45 @@ async def test_low_signal_last_turn_skips_the_model():
     assert not _judge_calls(llm)
 
 
-async def test_failed_call_falls_back_to_normal_and_is_counted():
+async def test_failed_call_falls_back_to_normal_and_is_counted(monkeypatch):
     guard, llm, _, _ = await _guard(None)  # 늘 잘못된 JSON
+    # kNN·LR이 차단 범주를 내도 실패 기본값은 normal이다(kNN 다수결로 바꾸면 여기서 깨진다)
+    monkeypatch.setattr(run.KnnIndex, "majority", lambda self, text: "off_topic")
+    monkeypatch.setattr(run.LrClassifier, "predict", lambda self, text: "off_topic")
     j = await guard.judge(GuardRequest((Message("user", "질문이에요"),), None, False))
+    assert (j.knn_major, j.lr_pred) == ("off_topic", "off_topic")
     assert (j.response.category, j.input_source) == ("normal", "default")
     assert j.errors == ("input_judge",)
     assert j.calls == 1 and len(_judge_calls(llm)) == 2  # 재시도 1회
+
+
+async def test_long_last_message_keeps_head_and_tail_in_target():
+    guard, llm, cfg, _ = await _guard('{"evidence": "e", "category": "normal"}')
+    filler = "".join(f"문장{i} " for i in range(cfg.input.max_chars))
+    assert len(filler) > cfg.input.max_chars
+    await guard.judge(GuardRequest((Message("user", filler + "끝표시XYZ"),), None, False))
+    user = _judge_calls(llm)[-1]["messages"][1]["content"]
+    target = re.search(r"<target>(.*?)</target>", user, re.S).group(1)
+    assert target.startswith("문장0 ") and "끝표시XYZ" in target  # 서버처럼 앞 + 뒤
+
+
+@pytest.mark.parametrize("switch", ["third_call", "oom_kb_snippet", "embedding"])
+async def test_unsupported_switch_is_rejected(switch, tmp_path):
+    cfg = load_config(DEFAULT, {f"toggles.{switch}": True})
+    with pytest.raises(ValueError, match=f"toggles.{switch}"):
+        run.InputOnlyGuard(cfg, _llm(cfg.llm), [])
+    made = []
+    args = ["--config", DEFAULT, "--name", "t", "--out", str(tmp_path / "runs"), "--input-only"]
+    code = await run.amain([*args, "--set", f"toggles.{switch}=true"], make_llm=made.append)
+    assert code == 2 and not made and not (tmp_path / "runs").exists()
+
+
+async def test_cli_rejects_input_only_with_holdout(tmp_path):
+    made = []
+    args = ["--config", DEFAULT, "--name", "t", "--out", str(tmp_path / "runs")]
+    code = await run.amain([*args, "--input-only", "--holdout"], make_llm=made.append)
+    assert code == 2 and not made
+    assert run.holdout_views() == [] and not run.HOLDOUT_VIEWS.exists()  # 열람을 쓰지 않는다
 
 
 async def test_request_without_user_message_is_normal_without_calls():
@@ -145,3 +178,58 @@ async def test_mismatched_prompt_in_a_late_ablation_row_stops_before_any_llm(tmp
     assert await run.amain(argv, make_llm=make_llm) == run.EXIT_USAGE
     assert not made and "z_bad" in capsys.readouterr().err
     assert not (tmp_path / "runs" / "t").exists()
+
+
+def _flaky_llm(fail_first_n):
+    """처음 보는 발화 중 앞 n개는 재시도까지 늘 잘못된 JSON, 나머지는 정상 응답."""
+    seen: list[str] = []
+
+    def respond(kw):
+        key = kw["messages"][-1]["content"]
+        if kw["messages"] == PING:
+            return Ok("ok")
+        if key not in seen:
+            seen.append(key)
+        bad = seen.index(key) < fail_first_n
+        return Malformed() if bad else Ok('{"evidence": "e", "category": "normal"}')
+
+    return respond
+
+
+async def _run_flaky(tmp_path, fail_first_n):
+    def make_llm(cfg_llm):
+        return LLM(cfg_llm, send=FakeLLM(respond=_flaky_llm(fail_first_n)).send)
+
+    args = ["--config", DEFAULT, "--name", "t", "--out", str(tmp_path / "runs"), "--input-only"]
+    code = await run.amain(args, make_llm=make_llm)
+    out = tmp_path / "runs" / "t"
+    summary = json.loads((out / "summary.json").read_text("utf-8"))
+    return code, summary, (out / "report.md").read_text("utf-8")
+
+
+def _rate(summary):
+    return run.input_call_failures(summary)
+
+
+async def test_input_call_failure_rate_over_2pct_invalidates_the_run(tmp_path):
+    code, summary, report = await _run_flaky(tmp_path, 10**6)  # 모든 호출 실패
+    errs, calls = _rate(summary)
+    assert errs == calls > 0
+    assert code == run.EXIT_INPUT_FAIL_RATE
+    assert "입력 판정 호출 실패율" in summary["invalid"]
+    assert f"{errs}/{calls}" in "".join(report.splitlines()[:4])  # 배너 안
+    assert "# 무효 실행" in report
+
+
+async def test_input_call_failure_rate_at_or_under_2pct_is_still_valid(tmp_path):
+    code, summary, report = await _run_flaky(tmp_path, 1)  # 호출 하나만 실패
+    errs, calls = _rate(summary)
+    assert errs == 1 and calls > 50 and errs / calls <= run.INPUT_FAIL_RATE_LIMIT
+    assert code == 0 and "invalid" not in summary
+    assert "# 무효 실행" not in report and f"{errs}/{calls}" in "".join(report.splitlines()[:4])
+
+
+async def test_no_input_call_failure_is_unchanged(tmp_path):
+    code, summary, report = await _run_flaky(tmp_path, 0)
+    assert code == 0 and "invalid" not in summary
+    assert "# 무효 실행" not in report

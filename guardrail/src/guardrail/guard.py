@@ -108,8 +108,8 @@ def _consume(task: asyncio.Task) -> None:
 class _Prepared:
     """호출 전 CPU 단계의 결과. 요청 하나 동안만 산다."""
 
-    target: str  # 마지막 학습자 발화 원문. 판정기가 `preprocess.clip`으로 줄인다(앞 + 뒤)
-    window: list[Message]
+    target: str  # 마지막 학습자 발화를 `preprocess.clip`으로 줄인 글(앞 + 뒤)
+    window: list[Message]  # 내용을 같은 방식으로 줄인 창
     low: bool
     knn_major: Category | None
     lr_pred: Category | None
@@ -238,8 +238,12 @@ class Guard:
             full = req.candidate_answer
             return Signals(False, False, isinstance(full, str) and has_hidden_tags(full))
         # 앞만 남기면 뒤에 붙인 공격이 빠진다. 판정기와 같은 방식(앞 + 뒤)으로 줄인 글을 본다
-        clipped = clip(target, cfg.input.max_chars)
-        window = build_window(req.messages, cfg.input.window_last)
+        # 여기(스레드)서 줄여 넘긴다. 판정기가 이벤트 루프에서 큰 글을 다시 줄이지 않게
+        clipped = target = clip(target, cfg.input.max_chars)
+        window = [
+            Message(m.role, clip(m.content, cfg.input.max_chars))
+            for m in build_window(req.messages, cfg.input.window_last)
+        ]
         text = normalize(clipped)[: cfg.retrieval.max_query_chars]
         low = t.low_signal_direct and is_low_signal(
             strip_tags(clipped), len(req.messages) > 1, decode_tags(clipped)[1]
@@ -259,8 +263,11 @@ class Guard:
         signals = Signals(low, is_refusal(answer), has_hidden_tags(full))
         try:  # 출력 쪽 준비가 실패해도 입력 판정은 그대로 간다(GR-09: 출력 실패는 출력만 바꾼다)
             half = cfg.retrieval.max_query_chars // 2
-            users = [clip(m.content, cfg.input.max_chars) for m in window if m.role == "user"]
-            ranking = self.kb.rank("\n".join(users)[-half:] + "\n" + answer[:half])
+            users = [m.content for m in window if m.role == "user"]
+            # KbIndex는 normalize를 거친 질의를 받는다(숨긴 문자를 끼운 답변도 같은 조각을 찾게)
+            ranking = self.kb.rank(
+                normalize("\n".join(users))[-half:] + "\n" + normalize(answer)[:half]
+            )
             rule_spans = None
             if t.literal_rule:
                 top = list(ranking.hits[: cfg.kb.top_k])
@@ -307,12 +314,18 @@ class Guard:
         return OutputVerdict(self.cfg.output.failure_default == "grounded", (), True)
 
     def _fallback_output(self, req: GuardRequest, category: Category, sig: Signals) -> _Output:
-        """출력을 만들지 못했을 때: grounded는 `failure_default`, safe는 GR-08 그대로."""
+        """출력을 만들지 못했을 때: GR-07에서 nano·규칙 ② 없이 계산(GR-09), safe는 GR-08 그대로."""
+        cfg = self.cfg
         default = self._default_output(req)
         if default is None:
             return _Output(None)
-        safe = safe_of(category, self.block, sig, self.cfg.toggles)
-        return _Output(OutputVerdict(default.grounded, (), safe))
+        safe = safe_of(category, self.block, sig, cfg.toggles)
+        if cfg.output.mode == "baseline":
+            return _Output(OutputVerdict(default.grounded, (), safe))
+        grounded, unsupported, tier = output_verdict(
+            category, self.block, None, None, False, cfg.toggles, cfg.output.failure_default
+        )
+        return _Output(OutputVerdict(grounded, unsupported, safe), tier)
 
     def _output(
         self, req: GuardRequest, p: _Prepared, category: Category, nano: object | None

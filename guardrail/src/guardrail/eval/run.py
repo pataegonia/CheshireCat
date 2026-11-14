@@ -37,7 +37,7 @@ from guardrail.judges.output_judge import ask_grounded, output_context
 from guardrail.kb import KbIndex
 from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
-from guardrail.preprocess import decode_tags, normalize, reveal_hidden, strip_tags
+from guardrail.preprocess import clip, decode_tags, normalize, reveal_hidden, strip_tags
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict
 from guardrail.signals import Signals, is_low_signal
 
@@ -49,9 +49,12 @@ RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
 EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT, EXIT_RATE_LIMITED = 2, 3, 4, 5, 6
+EXIT_PROBE_FAILED = 7  # probe의 맨 요청이 429 말고 다른 오류로 실패(연결·서버·잘못된 요청)
 # 판정 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속 보내면
 # 어뷰징으로 보일 수 있다(SPEC §7.1). 2026-11-13에 429 뒤로 약 3,700회를 더 보낸 일이 있었다
 RATE_LIMIT_STREAK = 20
+EXIT_INPUT_FAIL_RATE = 8  # 입력 단독 실측의 입력 판정 호출 실패율이 상한을 넘었다
+INPUT_FAIL_RATE_LIMIT = 0.02  # R14-D8: 역할별 호출 실패율 2% 초과면 무효
 BASELINE, DEFAULT = "baseline", "default"
 
 
@@ -78,7 +81,16 @@ class InputOnlyGuard:
     쓰지 않고 normal로 두고 오류로 센다(재려는 것이 프롬프트라서다).
     """
 
+    UNSUPPORTED = ("third_call", "oom_kb_snippet", "embedding")  # 구현하지 않은 스위치
+
+    @classmethod
+    def check(cls, cfg: GuardConfig) -> None:
+        """구현하지 않은 스위치가 켜져 있으면 거부한다(조용히 무시하면 다른 것을 잰다)."""
+        if on := [f"toggles.{k}" for k in cls.UNSUPPORTED if getattr(cfg.toggles, k)]:
+            raise ValueError(f"--input-only는 {', '.join(on)}을 지원하지 않는다")
+
     def __init__(self, cfg: GuardConfig, llm: LLM, train: Sequence[LabeledRow]) -> None:
+        self.check(cfg)
         self.cfg, self.llm = cfg, llm
         self.knn = KnnIndex(train, cfg)
         self.lr = LrClassifier(train, cfg)
@@ -88,7 +100,7 @@ class InputOnlyGuard:
         raw = next((m.content for m in reversed(req.messages) if m.role == "user"), None)
         if raw is None:
             return self._result(req, "normal", "default")
-        raw = raw[: cfg.input.max_chars]  # 원문 길이 상한을 전처리 전에 건다(master-plan §4.2)
+        raw = clip(raw, cfg.input.max_chars)  # 서버처럼 전처리 전에 앞 + 뒤로 자른다(§4.2)
         text = normalize(raw)[: cfg.retrieval.max_query_chars]
         side = {
             "knn_major": self.knn.majority(text) if cfg.toggles.knn_vote else None,
@@ -147,7 +159,8 @@ class OutputOnlyGuard:
     """출력 근거 판정만 잰다: KB 검색 → 문맥 → ask_grounded. 입력은 상수(normal)다.
 
     S2.8 Guard 전에 출력 프롬프트를 재는 하네스 전용 판정기다. nano의 grounded를 그대로 내고
-    구간은 내지 않는다(3단·규칙 ②·safe 규칙은 S2.8). nano가 실패하면 근거 있음으로 두고 오류로 센다.
+    구간은 내지 않는다(3단·규칙 ②·safe 규칙은 S2.8). nano가 실패하면 `output.failure_default`를
+    내고 오류로 센다. 빈 답변은 설정과 상관없이 근거 있음이다(PRD GR-01, 응한 내용이 없음).
     질의와 길이 상한은 master-plan §4.2를 따른다.
     """
 
@@ -163,7 +176,8 @@ class OutputOnlyGuard:
             return self._result(output, None)
         answer = req.candidate_answer[: cfg.input.max_answer_chars]
         half = cfg.retrieval.max_query_chars // 2
-        query = "\n".join(users)[-half:] + "\n" + answer[:half]  # 학습자 쪽은 최근 발화를 남긴다
+        # 학습자 쪽은 최근 발화를 남긴다. KbIndex.scores는 normalize를 거친 질의를 받는다
+        query = normalize("\n".join(users))[-half:] + "\n" + normalize(answer)[:half]
         hits = output_context(self.kb.rank(query), self.kb, cfg)
         out = await ask_grounded(
             users[-1],
@@ -174,8 +188,9 @@ class OutputOnlyGuard:
             deadline=time.monotonic() + cfg.budget_s,
             baseline=cfg.output.mode == "baseline",
         )
-        if out is None:
-            return self._result(OutputVerdict(True, (), True), None, 1, ("output_judge",))
+        if out is None:  # 서버 기본값(`server._default_body`)과 같은 규칙
+            grounded = cfg.output.failure_default == "grounded"
+            return self._result(OutputVerdict(grounded, (), True), None, 1, ("output_judge",))
         return self._result(OutputVerdict(out.grounded, (), True), out.grounded, 1)
 
     @staticmethod
@@ -613,6 +628,15 @@ def add_variance(summary: dict) -> None:
     }
 
 
+def input_call_failures(summary: dict) -> tuple[int, int]:
+    """입력 판정 호출 (실패 수, 시도 수). 모든 설정·반복의 합이다."""
+    scores = [s for c in summary["configs"].values() for s in c["scores"]]
+    return (
+        sum(s["errors"].get("input_judge", 0) for s in scores),
+        sum(s["calls"]["total"] for s in scores),
+    )
+
+
 def _banner(summary: dict) -> list[str]:
     lines = []
     if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
@@ -623,6 +647,8 @@ def _banner(summary: dict) -> list[str]:
         )
     if summary.get("input_only"):
         lines.append("# 입력 단독 실행 — 출력·가드 점수는 상수 출력 기준이라 비교에 쓰지 않는다")
+    if f := summary.get("input_fail"):
+        lines.append(f"# 입력 판정 호출 실패 {f['failed']}/{f['calls']}")
     if summary.get("invalid"):
         lines.append(f"# 무효 실행 — {summary['invalid']}")
     return lines
@@ -793,6 +819,8 @@ def _usage_error(args: argparse.Namespace) -> str | None:
         )
     if args.holdout and (args.ablation or args.repeat > 1):
         return "--holdout은 단일 설정·--repeat 1에서만 쓴다(설정 비교에 홀드아웃을 쓰지 않는다)"
+    if args.holdout and args.input_only:
+        return "--input-only와 --holdout은 함께 쓰지 않는다(홀드아웃 열람은 전체 판정기에만 쓴다)"
     if not re.fullmatch(r"[\w.-]+", args.name) or args.name in {".", ".."}:
         return "--name은 영문·숫자·_.-만 쓴다"
     return None
@@ -807,6 +835,9 @@ def _make_plan(args: argparse.Namespace) -> Plan:
             load_prompt(cfg, "input_judge")
         except ValueError as e:
             raise ValueError(f"설정 행 {name}: {e}") from e
+    if args.input_only:  # 못 쓰는 스위치는 호출 전에 거부한다
+        for cfg in configs.values():
+            InputOnlyGuard.check(cfg)
     public = load_public(base.paths.public)
     split = cv.load_splits()
     if missing := {r.id for r in public} - split.cluster.keys():
@@ -869,7 +900,7 @@ async def _measure(
                     "errors": list(j.errors),
                     "knn_major": j.knn_major,
                     "lr_pred": j.lr_pred,
-                    "llm": llm_out.get(rid, []),
+                    "llm": [] if plan.split.cluster[rid] in held else llm_out.get(rid, []),
                 }
                 for rid, j in out.judgements.items()
             ]
@@ -923,6 +954,9 @@ async def amain(
     except ValueError as e:  # 환경변수 없음·인증 거절
         _err(str(e))
         return EXIT_USAGE
+    if base_error := llm.probe_result.get("base"):  # 막힌 키에 판정 호출을 보내지 않는다
+        _err(f"probe의 맨 요청이 {base_error}로 실패했다. 측정을 시작하지 않는다. 무효 실행이다")
+        return EXIT_RATE_LIMITED if base_error == "rate_limit" else EXIT_PROBE_FAILED
     if args.holdout:  # 열람은 start()가 성공한 뒤에만 센다
         record_holdout_open(args.name, config_hash(plan.base))
 
@@ -931,12 +965,21 @@ async def amain(
     summary["input_only"] = args.input_only
     summary["output_only"] = args.output_only
     spent = sum(e == "budget" for _, e, _ in tap.records)
+    failed, tried = input_call_failures(summary) if args.input_only else (0, 0)
+    too_flaky = tried > 0 and failed / tried > INPUT_FAIL_RATE_LIMIT
+    if args.input_only:
+        summary["input_fail"] = {"failed": failed, "calls": tried}
     if tap.tripped:
         summary["invalid"] = (
             f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다: 결과를 비교에 쓰지 않는다"
         )
     elif spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
+    elif too_flaky:  # 종료 코드 우선순위: 연속 429, budget이 먼저다
+        summary["invalid"] = (
+            f"입력 판정 호출 실패율 {failed}/{tried} = {failed / tried:.1%}가 "
+            f"{INPUT_FAIL_RATE_LIMIT:.0%}를 넘는다: 결과를 비교에 쓰지 않는다"
+        )
     out_dir = Path(args.out) / args.name
     _write(out_dir, records, summary, render_report(args.name, summary))
     _say(f"wrote {out_dir}")
@@ -946,6 +989,9 @@ async def amain(
     if spent:
         _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT
+    if too_flaky:
+        _err(f"입력 판정 호출 실패율 {failed}/{tried}가 상한 초과. 결과는 무효다")
+        return EXIT_INPUT_FAIL_RATE
     return 0
 
 

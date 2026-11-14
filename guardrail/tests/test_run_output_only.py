@@ -42,8 +42,10 @@ def _judge_calls(llm):
     return [r for r in llm.fake.requests if r["messages"] != PING]
 
 
-async def _guard(reply=UNGROUNDED):
+async def _guard(reply=UNGROUNDED, failure_default="grounded"):
     cfg = load_config(DEFAULT)
+    out_cfg = cfg.output.model_copy(update={"failure_default": failure_default})
+    cfg = cfg.model_copy(update={"output": out_cfg})
     llm = _llm(cfg.llm, reply)
     await llm.start()
     return run.OutputOnlyGuard(cfg, llm), llm
@@ -60,6 +62,17 @@ async def test_nano_verdict_is_recorded_and_sent_with_kb_context():
     assert "OutputOut" in str(_judge_calls(llm)[-1]["response_format"])
 
 
+async def test_kb_search_ignores_hidden_chars_interleaved_in_the_answer():
+    answer = "append를 쓰면 리스트 끝에 값이 붙어요."
+    kbs = []
+    for a in (answer, "​".join(answer)):
+        guard, llm = await _guard()
+        await guard.judge(GuardRequest((Message("user", "안녕"),), a, True))
+        user = _judge_calls(llm)[-1]["messages"][1]["content"]
+        kbs.append(user[user.index("</answer>") :])
+    assert '<kb id="' in kbs[0] and kbs[0] == kbs[1]
+
+
 async def test_no_candidate_or_empty_candidate_makes_no_call():
     guard, llm = await _guard()
     none = await guard.judge(GuardRequest(MSGS, None, False))
@@ -69,10 +82,11 @@ async def test_no_candidate_or_empty_candidate_makes_no_call():
     assert not _judge_calls(llm)
 
 
-async def test_failed_call_is_grounded_by_default_and_counted():
-    guard, llm = await _guard(None)
+@pytest.mark.parametrize(("setting", "want"), [("grounded", True), ("ungrounded", False)])
+async def test_failed_call_follows_failure_default_and_is_counted(setting, want):
+    guard, llm = await _guard(None, setting)
     j = await guard.judge(GuardRequest(MSGS, "답변이에요", True))
-    assert j.response.output == OutputVerdict(True, (), True)
+    assert j.response.output == OutputVerdict(want, (), True)
     assert (j.nano_grounded, j.errors, j.calls) == (None, ("output_judge",), 1)
     assert len(_judge_calls(llm)) == 2  # 재시도 1회
 

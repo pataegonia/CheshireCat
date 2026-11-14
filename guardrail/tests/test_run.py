@@ -3,6 +3,7 @@
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fakes import FakeLLM, Ok
@@ -386,3 +387,123 @@ async def test_scattered_rate_limits_do_not_stop_the_run(tmp_path):
         return LLM(cfg_llm, send=fake.send, sleep=nosleep)
 
     assert await run.amain(_args(tmp_path), make_llm=make_llm) == 0
+
+
+async def test_streak_resets_on_other_errors_and_holds_on_budget():
+    from types import SimpleNamespace
+
+    from guardrail.llm import LLMResult
+
+    script: list[str | None] = []
+
+    async def inner(role, messages, schema, *, deadline):
+        return LLMResult(None, script.pop(0), 1, 1.0, None, None)  # type: ignore[arg-type]
+
+    async def feed(errors):
+        llm = SimpleNamespace(complete=inner, max_calls=100)
+        tap = run.Tap()
+        tap.attach(llm)  # type: ignore[arg-type]
+        script[:] = errors
+        for _ in errors:
+            await llm.complete("r", [], None, deadline=None)
+        return llm, tap
+
+    rl = ["rate_limit"] * (run.RATE_LIMIT_STREAK - 1)
+    for last in (None, "timeout"):  # 성공이든 다른 오류든 0으로 되돌린다
+        llm, tap = await feed([*rl, last])
+        assert tap.streak == 0 and not tap.tripped and llm.max_calls == 100
+    llm, tap = await feed([*rl, "budget"])  # budget은 세지도 되돌리지도 않는다
+    assert tap.streak == run.RATE_LIMIT_STREAK - 1 and not tap.tripped and llm.max_calls == 100
+    script[:] = ["rate_limit"]
+    await llm.complete("r", [], None, deadline=None)  # 한 번 더 429면 멈춘다
+    assert tap.tripped and llm.max_calls == 0
+
+
+# --- probe의 맨 요청이 막혀 있으면 측정을 시작하지 않는다 ---
+
+
+def _blocked_llm(made, step):
+    from guardrail.llm import LLM
+
+    async def nosleep(_s):
+        return None
+
+    def make_llm(cfg_llm):
+        fake = FakeLLM(respond=lambda kw: step)
+        made.append(fake)
+        return LLM(cfg_llm, send=fake.send, sleep=nosleep)
+
+    return make_llm
+
+
+async def test_probe_base_rate_limit_stops_before_any_judge_call(tmp_path, capsys):
+    from fakes import RateLimited
+
+    made = []
+    argv = _args(tmp_path, "--holdout")
+    code = await run.amain(
+        argv, make_llm=_blocked_llm(made, RateLimited("0")), judge_factory=constant_factory
+    )
+    err = capsys.readouterr().err
+    assert code == run.EXIT_RATE_LIMITED == 6
+    assert len(made[0].requests) == 1  # probe의 맨 요청뿐. 판정 호출 0회
+    assert "rate_limit" in err and "무효" in err and err.count("\n") == 1
+    assert not run.HOLDOUT_VIEWS.exists()  # 열람 기록은 이 종료보다 뒤다
+
+
+async def test_probe_base_other_failure_uses_its_own_exit_code(tmp_path, capsys):
+    from fakes import ServerError
+
+    made = []
+    code = await run.amain(
+        _args(tmp_path, "--holdout"),
+        make_llm=_blocked_llm(made, ServerError()),
+        judge_factory=constant_factory,
+    )
+    err = capsys.readouterr().err
+    assert code == run.EXIT_PROBE_FAILED == 7
+    assert len(made[0].requests) == 1 and "server" in err and "무효" in err
+    assert not run.HOLDOUT_VIEWS.exists()
+
+
+async def test_probe_success_still_measures_and_records_holdout(tmp_path):
+    code = await run.amain(
+        _args(tmp_path, "--holdout"), make_llm=_counting_llm, judge_factory=constant_factory
+    )
+    assert code == 0 and len(run.holdout_views()) == 1
+
+
+async def test_measure_writes_no_nano_output_for_held_out_rows(monkeypatch):
+    # 홀드아웃 행의 nano 파싱 출력(학습자 발화를 옮겨 적은 문장)이 responses.jsonl에 남으면 안 된다
+    split = SimpleNamespace(cluster={"a": "c1", "b": "c2"}, holdout=("c2",))
+    tap = run.Tap()
+
+    async def fake_run_once(*a, **k):
+        tap.parsed += [  # #151부터 (행 id, 호출 기록)이다
+            (i, {"role": "input", "parsed": {"evidence": e}}) for i, e in (("a", "x"), ("b", "y"))
+        ]
+        return SimpleNamespace(
+            judgements={i: SimpleNamespace(
+                input_source="s", output_tier=None, calls=1, errors=(), knn_major=None,
+                lr_pred=None, answer_quote_ok=None, kb_quote_ok=None, nano_refuses=None,
+            ) for i in "ab"},
+            judge_kind="K",
+        )  # fmt: skip
+
+    monkeypatch.setattr(run, "run_once", fake_run_once)
+    monkeypatch.setattr(run, "summarize", lambda *a: {})
+    monkeypatch.setattr(run, "_responses", lambda out, block: {i: {} for i in out.judgements})
+    monkeypatch.setattr(run, "row_points", lambda rows, resp: {})
+    monkeypatch.setattr(run, "add_variance", lambda s: None)
+    cfg = load_config(BASELINE)
+    plan = SimpleNamespace(
+        split=split, configs={"c": cfg}, public=[SimpleNamespace(id="a"), SimpleNamespace(id="b")],
+        labeled=[],
+    )  # fmt: skip
+    args = SimpleNamespace(name="t", repeat=1, holdout=True)
+
+    _, records = await run._measure(plan, args, None, tap, None)
+
+    llm_by_id = {r["id"]: r["llm"] for r in records}
+    assert llm_by_id["a"] == [{"role": "input", "parsed": {"evidence": "x"}}]
+    assert llm_by_id["b"] == []

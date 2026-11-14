@@ -150,7 +150,7 @@ HTTP 200 + JSON
 우선순위: **P0** 제출에 필수 / **P1** 점수에 직접 기여 / **P2** 시간이 남으면(ablation).
 
 ### TU-01 HTTP 계약·형식 보장 (P0)
-- 튜터는 `async tutor.handle(body: dict) -> dict`와 그것을 감싼 **`tutor.router`(FastAPI `APIRouter`, `POST /tutor`) 하나를 내보낸다.** 조립은 **가드 `create_app(guard_factory, *, tutor_router=, defaults=, startups=)`에 주입**한다(통합 IN-05, 11/10): 루트 `app.py`는 통합이 한 줄로 만들고 `tutor_router=tutor.router`, `defaults={"/tutor": tutor.TUTOR_DEFAULT}`를 넘긴다. 인증(`TEAM_TOKEN` Bearer, 실패 401)·메타 로그·lifespan은 가드 골격 하나를 쓴다. 공유 객체(가드 `KbIndex`·LLM 게이트·`Guard`)는 `create_app` lifespan이 `app.state`에 두고 튜터는 `request.app.state`로 받는다. 튜터 자체 색인(예시 kNN·이름 사전)도 기동 때 만들어야 하므로 `tutor.startup(app_state)`를 `startups=`로 넘겨 lifespan에서 `setup_guard` 다음에 부르게 한다(가드 #92 `8fd8f5f`). `handle`은 헤더를 받지 않는다(TU-18).
+- 튜터는 `async tutor.handle(body: dict) -> dict`와 그것을 감싼 **`tutor.router`(FastAPI `APIRouter`, `POST /tutor`) 하나를 내보낸다.** 조립은 **가드 `create_app(guard_factory, *, tutor_router=, defaults=, startups=)`에 주입**한다(통합 IN-05, 11/10): 루트 `app.py`는 통합이 한 줄로 만들고 `tutor_router=tutor.router`, `defaults={"/tutor": tutor.TUTOR_DEFAULT}`를 넘긴다. 인증(`TEAM_TOKEN` Bearer, 실패 401)·메타 로그·lifespan은 가드 골격 하나를 쓴다. 공유 객체(LLM 게이트·`Guard`)는 `create_app` lifespan이 `app.state`에 두고 튜터는 `request.app.state`로 받는다. 가드 `KbIndex`는 클래스만 쓰고 인스턴스는 `tutor.startup`이 같은 설정으로 따로 만든다(TU-03). 튜터 자체 색인(예시 kNN·이름 사전)도 기동 때 만들어야 하므로 `tutor.startup(app_state)`를 `startups=`로 넘겨 lifespan에서 `setup_guard` 다음에 부르게 한다(가드 #92 `8fd8f5f`). `handle`은 헤더를 받지 않는다(TU-18).
 - `handle`과 튜터 라우터는 **예외를 밖으로 내지 않고** 언제나 튜터 규격 본문을 돌려준다(앱 수준 예외·422 처리기는 `request.url.path`로 `/tutor`면 `defaults["/tutor"]`를 내지만 이중 안전망일 뿐이다, 통합 IN-05). 서버는 이것을 HTTP 200 JSON 하나(비스트리밍, 256KB 미만)로 낸다. 요청 검증 실패를 FastAPI 기본 422로 내보내지 않는다(입력을 되풀이함, 가드 GR-01과 같음). 본문을 못 읽으면 TU-12 기본값.
 - 응답: `answer`는 문자열, **유니코드 문자 4,000자 이하**(SPEC §4). `action`은 7개 소문자 값 중 하나. `citations`는 문자열 목록(없으면 `[]`, `null` 금지). 규격에 없는 필드는 넣지 않는다.
 - `/tutor` → `/tutor/`·`http` → `https` 리다이렉트 없음(`redirect_slashes=False`, SPEC §3).
@@ -402,7 +402,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 |---|---|---|---|
 | D1 | 입력 범주 판정을 `/tutor`가 쓸지 | **쓴다(v1).** 가드 `classify`를 주 호출과 병렬로 돌려 공격 4범주에서만 덮어쓴다(TU-10, 통합 I13). 범주만으로는 action이 다 정해지지 않으므로(harmful 두 갈래, abstain, 섹션 선택) 비공격 범주는 주 호출을 따른다. 동결본은 TU-10 기준으로 11/18에 고른다. 범주 정의는 가드 §3을 그대로 쓴다 | v1 확정(11/10), 동결은 측정 |
 | D1-2 | 출력 판정을 `/tutor`가 쓸지 | **쓴다(v1).** 생성 경로에 `judge_output(category=)`(TU-09 ②, 범위는 TU-09). 자체 검증·끔과의 비교는 ablation | v1 확정(11/10) |
-| D2 | KB 색인 공유 | **동의.** 튜터는 가드 `KbIndex`(`search`·`section_text`)를 그대로 쓴다(TU-03). 튜터 쪽 추가(이름 사전·임베딩)는 그 위에 얹는다 | 제안 수용 |
+| D2 | KB 색인 공유 | **동의.** 튜터는 가드 `KbIndex`의 `chunks`·`scores`로 조각 점수를 내고, 섹션 접기·`section_text`는 튜터 `tutor.retrieval.KbIndex`가 한다(TU-03). 튜터 쪽 추가(이름 사전·임베딩)는 그 위에 얹는다 | 제안 수용 |
 | D3 | 범주 → action 대응 | **동의.** 튜터 공개 세트 200/200으로 같은 표를 확인했다(§3) | 일치 |
 | D4 | 서버·게이트 | **동의.** 한 앱에 두 라우터, 전역 LLM 게이트 하나, 앱 수준 `TEAM_TOKEN` 검사. 가드 `create_app(tutor_router=, defaults=, startups=)`에 튜터 라우터와 `/tutor` 기본값, `tutor.startup`을 주입한다(TU-01, 통합 IN-05) | 통합 IN-05 반영, 가드 #92 `8fd8f5f` 반영(11/11) |
 | D5 | 토큰·제출 | 팀 정책(가드 master-plan §2: 관문마다 한 번 제출, 11/24 18:00 최종, 11/25 아침 제출 없음)을 따른다. **제출은 팀원 4명이 각자 자기 계정·자기 런박스 주소로 한다**(SPEC §7, §9: 계정별 마지막 제출 중 최고가 팀 점수). 관문마다 4개 런박스에 같은 커밋을 띄운다. 튜터 일정은 그 관문에 맞춘다(§15.1) | 제출 방식 확정(11/10), 토큰은 리더 결정 |

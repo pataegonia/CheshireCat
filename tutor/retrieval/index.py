@@ -31,6 +31,8 @@ class KbIndex:
         self.chunks: tuple[tuple[str, str], ...] = self._bm25.chunks
         # 가드 색인은 질의를 자르지 않는다(호출자 몫). 넘으면 뒤쪽(최근 발화)을 남긴다
         self.max_query_chars: int = cfg.retrieval.max_query_chars
+        if self.max_query_chars < 1:  # 0이면 [-0:]가 질의를 통째로 남기고 음수면 앞만 버린다
+            raise ValueError("retrieval.max_query_chars는 1 이상")
 
     @classmethod
     def from_dir(cls, kb_dir: Path) -> "KbIndex":

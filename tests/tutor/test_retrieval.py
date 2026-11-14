@@ -120,10 +120,17 @@ def test_index_scores_are_the_guard_kb_index_scores():
 def test_bm25_settings_follow_the_guard_config(tmp_path, monkeypatch):
     query = heading("PY-01-01")
     before = GuardKbIndex.load(KB).scores(query)
-    use_guard_config(tmp_path, monkeypatch, kb={"top_k": 3, "ngram": 2, "k1": 2.0, "b": 0.3})
+    use_guard_config(tmp_path, monkeypatch, kb={"top_k": 3, "ngram": 3, "k1": 2.0, "b": 0.3})
     got = KbIndex(load_sections(KB)).chunk_scores(query)
-    assert got == GuardKbIndex.load(KB, k1=2.0, b=0.3).scores(query)
+    assert got == GuardKbIndex.load(KB, ngram=3, k1=2.0, b=0.3).scores(query)
     assert got != before
+
+
+def test_query_limit_below_one_is_refused(tmp_path, monkeypatch):
+    # 0이면 [-0:]가 질의를 통째로 남기고 음수면 앞만 버린다. 기동 때 막는다
+    use_guard_config(tmp_path, monkeypatch, retrieval={"max_query_chars": 0})
+    with pytest.raises(ValueError, match="max_query_chars"):
+        KbIndex(load_sections(KB))
 
 
 def test_query_limit_follows_the_guard_config(tmp_path, monkeypatch):

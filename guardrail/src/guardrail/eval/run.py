@@ -44,7 +44,7 @@ RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
 EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT = 2, 3, 4, 5
-EXIT_INPUT_FAIL_RATE = 6
+EXIT_INPUT_FAIL_RATE = 8  # 6·7은 위 브랜치(#151)의 연속 429 멈춤·probe 실패가 쓴다
 INPUT_FAIL_RATE_LIMIT = 0.02  # R14-D8: 역할별 호출 실패율 2% 초과면 무효
 BASELINE, DEFAULT = "baseline", "default"
 

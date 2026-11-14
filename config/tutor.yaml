@@ -6,7 +6,7 @@ version: "tutor-1"
 mode: v2                       # v2 | baseline(검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리, 토글은 모두 끔)
 toggles:
   name_dict: false             # 이름 사전(TU-04). 순위 올리기 방식은 채택 안 함(#81: recall@1 하락). 힌트 방식은 #82에서 잰다
-  fewshot: true                # 공개 세트 kNN few-shot(TU-08)
+  fewshot: "off"               # "off" | fixed | knn. 공개 세트 판단 예시(TU-08). 끔 / 고정 / kNN을 3회씩 비교해 순이득이 있을 때만 켠다
   action_from_category: false  # 범주 → action 표 강제. 기본 끔, 켜도 answer 쪽으로는 덮지 않음(TU-06)
   signals: true                # 결정적 신호 힌트(TU-05)
   verify: guard                # off | self | guard. 가드 judge_output 검증, v1 기본 켬(TU-09)
@@ -17,6 +17,11 @@ toggles:
   scaffold_state_rule: true    # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다. 11/12 결정(#75), 과제 대행 행 측정(#139) 뒤 확정, 운영진 답(§11-1-4) 전까지
   inline_cite: false           # 답변 끝 (섹션 ID) 표기
   max_citations: 1             # 1 | 2. 2는 "두 대상 비교" 문항 수를 센 뒤 ablation(TU-07)
+fewshot:                       # 판단 예시 고르기(TU-08). 가드 GR-05 input.knn과 같은 값
+  ngram: [1, 3]                # 문자 n-gram(char_wb) 범위
+  max_examples: 8              # knn 전체 상한(4–8)
+  per_category: 2              # knn 범주당 상한
+  with_answer: false           # 예시에 정답 답변도 붙이는가. 기본 끔(다른 섹션 사실이 섞이고 answer_seeking 숨김 방식과 충돌), ablation
 retrieval:
   k: 5                         # 근거 묶음 섹션 수. recall@5 = @8 = 0.958(#81), 판정 3회 비교에서 3은 분산 안(11/13)
 answer:

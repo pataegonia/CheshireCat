@@ -8,6 +8,9 @@
 ② 결정적 신호(TU-05): 저신호 직접 판정이면 LLM 없이 고정 clarify, 신호는 주 호출 <신호> 힌트
    (`toggles.signals`)와 실패 기본값(위기 → escalate, 지시 무력화 → refuse)에 쓴다
 
+④ 판단 예시(TU-08, `tutor.judge.examples`): `toggles.fewshot`이 fixed·knn이면 공개 세트 튜터 행의
+   발화·범주·action을 주 호출 <판단 예시>에 넣는다. 색인은 기동 때 만들고 요청 중 바뀌지 않는다
+
 ⑤-2 가드 classify 병렬 합치기(TU-10, `tutor.judge.guard_merge`): classify를 주 호출과 동시에 돌려
    공격 4범주이면 주 호출이 이미 표 고정 문장을 냈거나 더 강한 action을 낸 경우를 빼고 그 범주의
    고정 문장으로 바꾼다(`toggles.guard_classify`). serial(ⓐ)은 classify를 먼저 기다려 템플릿 범주면
@@ -16,7 +19,7 @@
    (`toggles.verify: guard`). 시간 부족·실패면 판정만 건너뛴다
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
 
-아직 없는 단계(뒤 이슈): kNN 예시(#77). 각 단계는 `config/tutor.yaml` 토글로 켜고 끈다(TU-14).
+각 단계는 `config/tutor.yaml` 토글로 켜고 끈다(TU-14).
 
 요청 내용은 지역 변수로만 쓰고 남기지 않는다(TU-18). LLM 실패는 예외가 아니라 결과 코드로 온다.
 """
@@ -40,6 +43,7 @@ from tutor.answer.templates import (
 )
 from tutor.judge.conversation import Conversation, tidy
 from tutor.judge.draft import draft_answer
+from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
     JUDGE_SKIP_S,
     GuardSkips,
@@ -62,12 +66,28 @@ REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
 
 def prepare_judge(app_state: Any) -> None:
-    """기동 때 한 번: 범주 → action 표와 scaffold 정책(`scaffold_state_rule`)으로 주 호출 프롬프트를
-    만들고, 가드 단계 건너뜀 횟수를 0으로. `tutor.startup.prepare`가 부른다."""
+    """기동 때 한 번: 범주 → action 표와 scaffold 정책(`scaffold_state_rule`)으로 주 호출
+    프롬프트를, 판단 예시를 켰으면 예시 색인을 만들고, 가드 단계 건너뜀 횟수를 0으로 둔다.
+
+    `tutor.startup.prepare`가 부른다. 공개 세트 파일을 못 읽으면 예외가 나서 서버가 뜨지 않는다
+    (KB와 같다). 예시를 끈 설정에서는 파일을 읽지 않는다."""
     app_state.tutor_prompt = MainCallPrompt.from_rules(
         scaffold_state_rule=app_state.tutor_cfg.toggles.scaffold_state_rule
     )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
+    cfg = getattr(app_state, "tutor_cfg", None)
+    on = cfg is not None and cfg.toggles.fewshot != "off"
+    app_state.tutor_examples = build_index(cfg.fewshot) if on else None
+
+
+def examples_block(state: Any, conv: Conversation) -> str:
+    """판단 예시 블록(TU-08). 끔이거나 색인이 없으면 빈 문자열. 질의는 판단 대상 정규화본이다."""
+    cfg = state.tutor_cfg
+    index = getattr(state, "tutor_examples", None)
+    if cfg.toggles.fewshot == "off" or index is None:
+        return ""
+    picked = index.pick(cfg.toggles.fewshot, normalize(conv.target_raw))
+    return render_examples(picked, with_answer=cfg.fewshot.with_answer)
 
 
 def _messages(req: TutorRequest) -> list[dict[str, str]]:
@@ -240,6 +260,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             k=cfg.retrieval.k,
             signals=labels(signals) if cfg.toggles.signals else (),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
+            examples=examples_block(state, conv),
         )
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다

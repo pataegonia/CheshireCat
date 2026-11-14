@@ -56,7 +56,7 @@ async def startup(app_state: Any) -> None:
 
     설정·KB를 못 읽으면 예외가 나서 서버가 뜨지 않는다. LLM 호출기는 가드 게이트를 같이 쓴다.
     운영진 API 환경변수가 비면 서버는 뜨지만(언제나 200) 모든 답이 기본값이 되므로, 빈 이름만
-    오류로 남긴다(값은 남기지 않는다, TU-15). 예시 kNN·이름 사전도 뒤 이슈에서 여기서 만든다.
+    오류로 남긴다(값은 남기지 않는다, TU-15). 판단 예시 색인(TU-08)은 prepare_judge가 만든다.
     """
     missing = missing_api_env()
     if missing:

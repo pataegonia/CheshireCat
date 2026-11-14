@@ -14,6 +14,7 @@ from tutor.answer.postprocess import (
     cut_to_limit,
     drop_grading_sentences,
     finalize,
+    inline_cite,
     is_grading_instruction,
     normalize_action,
     split_sentences,
@@ -296,3 +297,40 @@ def test_finalize_always_spec_shaped(body):
     assert strip_hidden(out["answer"]) == out["answer"]
     assert all(isinstance(c, str) for c in out["citations"])
     json.dumps(out, ensure_ascii=False).encode("utf-8")
+
+
+# --- 답변 끝 섹션 ID(inline_cite, #82) ---
+
+
+def test_inline_cite_appends_section_ids_and_keeps_citations():
+    one = {"answer": "값은 3이에요.", "action": "answer", "citations": ["PY-01-01"]}
+    assert inline_cite(one) == {**one, "answer": "값은 3이에요. (PY-01-01)"}
+    two = {"answer": "둘 다 써요.  ", "action": "answer", "citations": ["PY-01-01", "FIN-02-01"]}
+    assert inline_cite(two)["answer"] == "둘 다 써요. (PY-01-01, FIN-02-01)"
+    assert inline_cite(two)["citations"] == ["PY-01-01", "FIN-02-01"]
+
+
+def test_inline_cite_leaves_answers_without_citations_and_is_idempotent():
+    refuse = {"answer": TEXT[Fixed.REFUSE_JAILBREAK], "action": "refuse", "citations": []}
+    assert inline_cite(refuse) == refuse
+    once = inline_cite({"answer": "값은 3이에요.", "action": "answer", "citations": ["PY-01-01"]})
+    assert inline_cite(once) == once
+
+
+def test_inline_cite_stays_within_the_answer_limit():
+    long = "가" * 30 + ". " + "나" * (MAX_ANSWER_CHARS - 10) + "."
+    out = inline_cite({"answer": long, "action": "answer", "citations": ["PY-01-01"]})
+    # 문장 경계에서 잘라 첫 문장만 남는다(중간에서 자르는 회귀를 잡는다).
+    assert out["answer"] == "가" * 30 + ". (PY-01-01)"
+
+
+def test_inline_cite_limit_counts_the_joining_space():
+    tail = " (PY-01-01)"
+    room = MAX_ANSWER_CHARS - len(tail)
+    fits = {"answer": "가" * room, "action": "answer", "citations": ["PY-01-01"]}
+    assert inline_cite(fits)["answer"] == "가" * room + tail
+    # 1자 넘치면 마침표 없는 본문이라 글자 수로 잘라 한도를 정확히 채운다.
+    over = {"answer": "가" * (room + 1), "action": "answer", "citations": ["PY-01-01"]}
+    out = inline_cite(over)["answer"]
+    assert out == "가" * room + tail
+    assert len(out) == MAX_ANSWER_CHARS

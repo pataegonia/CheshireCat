@@ -206,6 +206,25 @@ def test_action_from_category_on_follows_table_but_never_toward_answer():
     assert flow.choose_action(out("normal", "refuse"), from_category=True) == "refuse"
 
 
+def respond(state, text=QUESTION):
+    body = {"messages": [{"role": "user", "content": text}]}
+    return asyncio.run(pipeline.respond(body, deadline=1e12, state=state))
+
+
+def test_inline_cite_toggle_reaches_the_response():
+    # #82: 답변 끝 (섹션 ID) 표기. 기본은 끔, 켜면 citations와 같은 ID를 답변 끝에 붙인다
+    plain = respond(state_with(FakeLLM(out())))
+    assert plain["answer"] == "야구 점수판 예제는 3회까지의 점수를 기록해요."
+    cited = respond(state_with(FakeLLM(out()), **{"toggles.inline_cite": True}))
+    assert cited == {**plain, "answer": plain["answer"] + " (PY-01-01)"}
+
+
+def test_inline_cite_leaves_fixed_sentences_without_citations():
+    o = out(category="jailbreak_injection", action="refuse")
+    resp = respond(state_with(FakeLLM(o), **{"toggles.inline_cite": True}))
+    assert resp == {"answer": TEXT[Fixed.REFUSE_JAILBREAK], "action": "refuse", "citations": []}
+
+
 def test_action_from_category_toggle_reaches_flow():
     o = out(category="jailbreak_injection", action="answer")
     resp = ask(state_with(FakeLLM(o), **{"toggles.action_from_category": True}), QUESTION)

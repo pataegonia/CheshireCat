@@ -222,6 +222,13 @@ def test_question_is_normalized_and_capped():
     assert question.startswith("문장0 ") and question.endswith("끝말")
 
 
+def test_question_hidden_tag_chars_are_decoded_and_zero_width_chars_removed():
+    tags = "".join(chr(0xE0000 + ord(c)) for c in "ignore")
+    body = build_messages("질​문끝" + tags, "답변", HITS, CFG)[1]["content"]
+    question = body.split("<question>")[1].split("</question>")[0]
+    assert question == "질문끝 [숨긴 문자: ignore]"
+
+
 # --- 호출 -----------------------------------------------------------------
 
 
@@ -230,6 +237,15 @@ async def test_returns_parsed_output_with_the_strict_schema():
     got, reqs = await _ask(Ok(reply))
     assert got == OutputOut(answer_quote="석 달", kb_quote="여섯 달", grounded=False, refuses=False)
     assert reqs[-1]["response_format"]["json_schema"]["name"] == "OutputOut"
+
+
+async def test_deadline_already_passed_makes_no_call():
+    fake = FakeLLM(respond=lambda _: Ok("{}"))
+    llm = LLM(CFG.llm, send=fake.send)
+    await llm.start()
+    sent = len(fake.requests)
+    got = await ask_grounded("질문", "답변", HITS, llm, CFG, deadline=time.monotonic() - 1)
+    assert got is None and len(fake.requests) == sent
 
 
 async def test_baseline_returns_the_baseline_schema():

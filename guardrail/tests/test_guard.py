@@ -468,7 +468,7 @@ async def test_output_assembly_failure_keeps_the_judged_category(no_rule, monkey
     def boom(*a, **k):
         raise RuntimeError(MARK)
 
-    monkeypatch.setattr(guard_module, "output_verdict", boom)
+    monkeypatch.setattr(guard_module, "quote_ok", boom)  # 대체 출력도 output_verdict를 쓴다
     guard, _ = await make(responder("harmful_content"))
     j = await guard.judge(req())
     # 입력 판정은 살린다(block이 allow로 바뀌지 않는다). 출력만 기본값
@@ -554,7 +554,7 @@ async def test_output_fallback_still_reports_hidden_tags(no_rule, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError(MARK)
 
-    monkeypatch.setattr(guard_module, "output_verdict", boom)
+    monkeypatch.setattr(guard_module, "quote_ok", boom)
     guard, _ = await make()
     j = await guard.judge(req(ANSWER + TAG))
     assert j.response.output == OutputVerdict(True, (), False)
@@ -665,3 +665,38 @@ async def test_prepare_hands_the_judges_text_that_is_already_cut():
     assert len(p.target) <= limit and p.target.endswith("끝")
     assert [m.role for m in p.window] == ["user", "assistant", "user"]
     assert all(len(m.content) <= limit for m in p.window)
+
+
+# --- 자체 리뷰 반영 ---
+
+
+def _boom(*a, **k):
+    raise RuntimeError(MARK)
+
+
+@pytest.mark.parametrize(
+    ("category", "want"), [("harmful_content", (True, (), 1)), ("answer_seeking", (False, (), 4))]
+)
+async def test_output_side_failures_all_keep_tier1_and_else_use_failure_default(
+    no_rule, monkeypatch, category, want
+):
+    """GR-09: 출력 nano·출력 준비·출력 조립 어느 쪽이 실패해도 ①은 계산하고 그 밖은 기본값."""
+    got = {}
+    guard, _ = await make(
+        responder(category, output_step=Malformed()), output__failure_default="ungrounded"
+    )
+    got["nano"] = await guard.judge(req())
+    with monkeypatch.context() as m:
+        m.setattr(guard_module, "literal_rule", _boom)
+        guard, _ = await make(responder(category), output__failure_default="ungrounded")
+        got["prepare"] = await guard.judge(req())
+    with monkeypatch.context() as m:
+        m.setattr(guard_module, "quote_ok", _boom)  # nano 응답을 받은 뒤 _output 안에서 실패
+        guard, _ = await make(responder(category), output__failure_default="ungrounded")
+        got["assemble"] = await guard.judge(req())
+    seen = {
+        k: (j.response.output.grounded, j.response.output.unsupported, j.output_tier)
+        for k, j in got.items()
+    }
+    assert seen == dict.fromkeys(got, want)
+    assert got["prepare"].errors == got["assemble"].errors == ("output:RuntimeError",)

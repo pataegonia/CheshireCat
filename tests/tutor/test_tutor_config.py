@@ -81,6 +81,13 @@ def test_invalid_values_fail_at_load(dotted, value):
         config.load_config(overrides={dotted: value})
 
 
+@pytest.mark.parametrize(("dotted", "value"), [("toggles.vote", True), ("toggles.verify", "self")])
+def test_toggles_that_were_not_built_fail_at_load(dotted, value):
+    # #83 결정(11/14): 요청당 nano 절대 4회(TU-13)를 넘어 만들지 않았다. 켜도 끔처럼 돌지 않는다
+    with pytest.raises(ValidationError, match="만들지 않았다"):
+        config.load_config(overrides={dotted: value})
+
+
 def test_output_cap_up_to_the_proxy_ceiling_loads():
     cfg = config.load_config(overrides={"llm.max_completion_tokens": 2000})
     assert cfg.llm.max_completion_tokens == 2000 == config.PROXY_MAX_COMPLETION_TOKENS
@@ -109,8 +116,8 @@ def test_ablation_preset_merges_over_the_file(tmp_path):
 
 
 def test_overrides_apply_last():
-    cfg = config.load_config(overrides={"toggles.vote": True, "retrieval.k": 8})
-    assert cfg.toggles.vote is True and cfg.retrieval.k == 8
+    cfg = config.load_config(overrides={"toggles.inline_cite": True, "retrieval.k": 8})
+    assert cfg.toggles.inline_cite is True and cfg.retrieval.k == 8
 
 
 def test_override_cannot_go_inside_a_value():

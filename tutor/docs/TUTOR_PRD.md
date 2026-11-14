@@ -231,12 +231,12 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - **수용 기준**: 끔 / 고정 예시 / kNN 비교에서 3회 분산 밖 순이득이 있을 때 켠다.
 
 ### TU-09 검증 (P1, ② v1 기본 켬)
-- **v1 기본은 ② 가드 `judge_output`을 주 호출 문장이 그대로 나가는 조합 전부에 켠다**(action과 상관없이, 고정 문장·템플릿 경로는 지울 주장이 없어 제외. 통합 §3-1 3단계 "생성 경로"에 표 밖 조합(예: normal에 refuse, out_of_material에 answer)을 더한 것). ① 자체 검증과 끔은 ablation으로 비교한다.
+- **v1 기본은 ② 가드 `judge_output`을 주 호출 문장이 그대로 나가는 조합 전부에 켠다**(action과 상관없이, 고정 문장·템플릿 경로는 지울 주장이 없어 제외. 통합 §3-1 3단계 "생성 경로"에 표 밖 조합(예: normal에 refuse, out_of_material에 answer)을 더한 것). 끔과 비교한다(ablation). ① 자체 검증은 요청당 nano 절대 4회(TU-13)를 넘어 동결 설정에 쓸 수 없어 만들지 않았다(#83 결정 11/14, `verify: self`는 로드에서 거부).
 - 검증이 주로 잡는 것: scaffold 답변(최종 정답 유출), 신호가 있었던 답변(응함), 수치가 든 answer(근거 대조).
 - 두 방식을 비교한다: ① 튜터 자체 검증 호출(통과 / 고칠 문장) ② 가드 `judge_output(messages, candidate_answer, category=주 호출의 범주)`(가드 §9 D1-2, 가드 9cce438)로 `unsupported` 구간이 든 문장을 지우고 인용을 다시 계산(통합 IN-04). **`category`(⑤-2 합친 범주)를 반드시 넘긴다**: 넘기지 않으면 가드가 `classify`를 다시 불러 nano가 1회 늘어난다.
 - 남은 시간이 `judge_skip_s`(공유 설정 키, 잠정 4초) 미만이거나 0 이하, 또는 판정이 실패하면 **판정만 건너뛰고 생성된 답과 action을 그대로 낸다**(abstain으로 바꾸지 않음, 통합 §3-1과 합의).
 - `safe=false`이면 답 전체를 버린다(IN-04). 합친 범주가 공격 4범주면 일반 거절 문장 대신 그 범주 표 action의 고정 문장(예: academic_dishonesty는 scaffold 고정 문장), 그 밖에는 IN-04의 거절 문장이다(#138 리뷰).
-- **수용 기준**: 끔 / ① / ②의 응함·유출·사실 점수·지연 비교에서 순이득이 있을 때만 켠다. 응함은 손으로 확인한 실제 응함으로 비교하고, 판정 개수의 차이는 3회 분산 밖일 때만 본다(§7).
+- **수용 기준**: 끔 / ②의 응함·유출·사실 점수·지연 비교에서 순이득이 있을 때만 켠다. 응함은 손으로 확인한 실제 응함으로 비교하고, 판정 개수의 차이는 3회 분산 밖일 때만 본다(§7).
 
 ### TU-10 가드 범주 판정 병렬 합치기 (P0, v1 기본)
 - **11/15 v1의 범주 판정은 가드 `Guard.classify(messages)`(가드 §9 D1, 통합 I13 ⓐ)가 맡는다.** 단, 주 호출 앞에 줄 세우지 않고 **주 호출과 동시에** 돌린다(`guard_classify: parallel`). 직렬(ⓐ, 생성 경로 p50 약 9s)은 §6 지연 기준을 넘기 때문이다.
@@ -287,7 +287,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 
 ### TU-14 설정·ablation (P0)
 - 모델 파라미터, 근거 묶음 크기 K, 예시 수, 프롬프트 버전, 단별 켜기·끄기를 설정 파일로 뺀다. 형식은 가드 GR-11과 같게 하고, 통합 `config/`(actions.yaml·ablation 프리셋·공유 키 `budget_s`·`judge_skip_s`·`fallback_action`)와 한 형식으로 둔다. 튜터 의견은 **위치도 루트 `config/` 한 곳**(튜터 토글은 `config/tutor.yaml`)이다 `[회의]`. ablation 프리셋 실행은 통합 하네스가 한다(통합 IN-06).
-- 켜기·끄기: 이름 사전(`name_dict`) / 판단 예시(`fewshot: off | fixed | knn`, 정답 답변 붙이기 `fewshot.with_answer`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | self | guard`) / 가드 범주(`guard_classify: off | serial | parallel`, 기본 parallel) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결) / scaffold 기준 밝히기(`scaffold_state_rule`, 켜면 과제 대행 보정도 함께 켠다, TU-06) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`. 켜면 근거 1개 문항에서 둘 중 하나만 맞을 때 인용 F1이 0.67이 되므로, 켜기 전에 통합 하네스로 공개 세트·점검 세트의 "두 대상 명시 비교" 문항 수를 센다). 값: `retrieval.k`(기본 5, 비교 3·5), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
+- 켜기·끄기: 이름 사전(`name_dict`) / 판단 예시(`fewshot: off | fixed | knn`, 정답 답변 붙이기 `fewshot.with_answer`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | guard`, self는 만들지 않음 #83) / 가드 범주(`guard_classify: off | serial | parallel`, 기본 parallel) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결. 호출 상한을 넘어 만들지 않음 #83) / scaffold 기준 밝히기(`scaffold_state_rule`, 켜면 과제 대행 보정도 함께 켠다, TU-06) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`. 켜면 근거 1개 문항에서 둘 중 하나만 맞을 때 인용 F1이 0.67이 되므로, 켜기 전에 통합 하네스로 공개 세트·점검 세트의 "두 대상 명시 비교" 문항 수를 센다). 값: `retrieval.k`(기본 5, 비교 3·5), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
 - 모드 `mode: v2 | baseline`. **베이스라인**은 "검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리"다(위 항목 모두 끔).
 - 설정은 기동 때만 읽는다. 요청 내용 말고는 동작을 바꾸는 입력이 없다(TU-18). 제출 서버와 로컬 평가 서버는 같은 설정으로 띄운다.
 - 개발 실행의 API 호출 상한(`eval.max_calls`, 기본 실행당 5,000)을 둔다(가드 GR-11과 같음).
@@ -537,6 +537,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - 2026-11-14(#139 리뷰 pataegonia 반영, 사용자 결정): 과제 대행 보정은 밝힘일 때만, classify 합치기 앞에 둔다(TU-06). 대행 신호에서 "정답 전부" 갈래를 빼고 "답안 전부"는 작성 동사가 붙을 때만, 영어 `do`는 목적어가 붙을 때만 본다(TU-05·TU-06). `scaffold_state_rule`이 대행 보정도 함께 켜고 끈다는 것을 토글 목록(TU-14)에 적었다. 보정 손익은 폴드별·홀드아웃 따로 보고하고 경계 짝은 점검 세트로 본다(TU-06). §3 표에 잠정 표시.
 - 2026-11-14(#139 측정, 사용자 결정): answer_seeking scaffold 기본을 숨김(`scaffold_state_rule: false`)으로 되돌렸다. 공개 200행 판정 포함 3회에서 전체 점수가 같고(79.9 대 80.1) 과제 대행 행 0점이 늘었다(3 → 5). 밝힘은 운영진 답(§11-1-4)과 행별 응함 확인 뒤 T3에서 다시 본다(TU-06·§3).
 - 2026-11-14(#83 T3.3 준비): `run_local --guard`로 폴드별 가드를 붙여 잰다(TU-16). S2.11(#119) 전에는 가드에 `classify`·`judge_output`이 없어 튜터가 그 단계를 건너뛰고, 결과 화면에 건너뜀 사유별 횟수를 낸다.
+- 2026-11-14(#83, 사용자 결정): `vote`와 TU-09 ① 자체 검증(`verify: self`)은 요청당 nano 절대 4회(TU-13)를 넘어 동결 설정에 쓸 수 없고 자르는 순서(§15.4)에서 먼저 빠지므로 만들지 않는다. 켜도 끔처럼 조용히 돌지 않게 설정 로드에서 거부한다. #83 비교는 범주 판정 ⓐ·ⓑ·ⓒ와 검증 끔/②만 한다.
 
 ## 14. v1과의 차이
 

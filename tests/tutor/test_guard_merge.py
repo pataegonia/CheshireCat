@@ -730,10 +730,10 @@ def test_judge_skip_s_default_is_read_from_shared_runtime_config():
     assert load_runtime().judge_skip_s == JUDGE_SKIP_S
 
 
-@pytest.mark.parametrize("mode", ["off", "self"])
-def test_verify_other_than_guard_never_calls_judge_output(mode):
+def test_verify_off_never_calls_judge_output():
+    # verify: self는 만들지 않아 설정 로드에서 거부한다(#83, test_tutor_config)
     guard = FakeGuard("normal")
-    run(build(guard, **{"toggles.verify": mode}))
+    run(build(guard, **{"toggles.verify": "off"}))
     assert guard.judge_calls == []
 
 

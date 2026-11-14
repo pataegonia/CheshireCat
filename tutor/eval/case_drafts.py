@@ -122,7 +122,8 @@ AXIS_FORMS = {
 LEAKED_SID = re.compile(r"(?:PY|PR|FIN)-\d{2}-\d{2}")  # 대화에 섹션 ID(학생은 모른다)
 # nano에는 섹션 ID를 보이지 않고 이 이름으로 부른다. 근거도 이 이름으로 받는다. 11/14 런박스
 # 진단: 프롬프트 세 곳(섹션 머리·원문 머리말·표 자리)에 ID가 보였고 premise·mixed 초안이 모두
-# 메타로 빠졌다. 메타 종류는 나눠 세지 않아서 ID 노출을 유력한 원인으로 보고 막는다(_leak가 나눠 센다)
+# 메타로 빠졌다. 메타 종류는 나눠 세지 않아서 ID 노출을 유력한 원인으로 보고 막는다
+# (이제 _leak가 나눠 센다)
 SECTION_NAMES = ("A", "B")
 LEAKED_NAME = re.compile(r"섹션\s*[AB](?![A-Za-z])")  # 대화에 섹션 이름
 TABLE_REF = re.compile(r"\(표: [^)]*\)")  # 원문의 표 자리(표 내용은 원문 끝에 붙어 있다)

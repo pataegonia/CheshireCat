@@ -94,7 +94,8 @@ def test_keep_drop_and_change_action_until_the_goal(files):
         ("m1", "drop"),
         ("m2", "keep"),
     ]
-    assert "p2" not in out  # 목표를 채워서 더 보이지 않았다
+    # 목표를 채워서 더 보이지 않았다(초안 머리 줄로 본다: 화면의 임시 경로에 p2가 들 수 있다)
+    assert "] p2 ·" not in out
 
 
 def test_screen_shows_axis_form_asked_category_dialog_and_labels(files):
@@ -156,7 +157,7 @@ def test_resume_skips_reviewed_drafts_and_counts_kept_rows(monkeypatch, files, c
     monkeypatch.setattr("builtins.input", keys("q"))
     assert team_cases.main(["review"]) == 0
     out = capsys.readouterr().out
-    assert "[paraphrase] p2" in out and "p1" not in out and "[mixed]" not in out
+    assert "[paraphrase] p2 ·" in out and "] p1 ·" not in out and "[mixed]" not in out
     assert "mixed 1" in out and "모두 1개" in out
 
 

@@ -400,6 +400,32 @@ def kb_batches():
     return math.ceil(len(default_index().chunks) / emb.BATCH)
 
 
+def _english_targets(rows):
+    """임베딩을 부르는 판단 대상 발화(측정 경로의 query_parts, 영어 위주이고 2-gram이 있다)."""
+    from tutor.eval.recall import query_parts
+
+    targets = (query_parts(row["messages"])[0] for row in rows)
+    return [text for text in targets if emb.is_english(text) and bigrams(text)]
+
+
+def assert_no_holdout_queries(fake):
+    """기동 묶음 뒤에 임베딩으로 보낸 질의 텍스트(이력 + 판단 대상)에 홀드아웃 행의 질의가 없다.
+
+    개수만 보면 홀드아웃 행이 섞여도 수가 맞을 수 있다(#167 리뷰). 홀드아웃은 공유 분할
+    (splits/v1.json)로 고른다. 보낸 텍스트는 모두 교차 검증 행의 질의를 담아야 한다(빈 검사가
+    아니다).
+    """
+    from tutor.eval import run_local
+
+    rows, held = run_local.public_tutor_rows(), run_local.holdout_ids()
+    held_targets = _english_targets(row for row in rows if row["id"] in held)
+    cv_targets = _english_targets(row for row in rows if row["id"] not in held)
+    sent = [text for call in fake.calls[kb_batches() :] for text in call]
+    assert held_targets and sent
+    assert all(any(target in text for target in cv_targets) for text in sent)
+    assert not any(target in text for target in held_targets for text in sent)
+
+
 def test_expected_embedding_calls_are_kb_batches_plus_english_queries_per_run():
     from tutor.eval import run_local
     from tutor.eval.recall import (
@@ -541,6 +567,7 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     out = capsys.readouterr().out  # 자기 state 경로에서도 행마다 지연을 잰다
     assert "(요청 160개)" in out  # 홀드아웃 40행은 재지 않는다(TU-16·#84)
     assert all(len(texts) == 1 for texts in fake.calls[kb_batches() :])  # 질의마다 한 문장씩
+    assert_no_holdout_queries(fake)  # 보낸 질의 텍스트에도 홀드아웃 행이 없다
     assert code == 0 and saved["tainted"] is False
 
 

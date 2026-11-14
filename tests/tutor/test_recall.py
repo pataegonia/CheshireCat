@@ -95,7 +95,7 @@ def embedding_env(monkeypatch):
 
 @pytest.mark.usefixtures("embedding_env")
 def test_embedding_run_counts_calls_before_and_after(monkeypatch, capsys):
-    from tests.tutor.test_embedding import FakeEmbed
+    from tests.tutor.test_embedding import FakeEmbed, assert_no_holdout_queries
     from tutor.eval import recall
 
     fake = FakeEmbed()  # 운영진 API 대신(런박스에서는 openai_embed)
@@ -105,6 +105,7 @@ def test_embedding_run_counts_calls_before_and_after(monkeypatch, capsys):
     # KB 조각 244개 = 64개씩 4번 + 정답 근거가 있는 교차 검증 행의 영어 질의 11개(홀드아웃 제외)
     assert "임베딩 예상 호출 15회" in out and "임베딩 호출 15회" in out
     assert len(fake.calls) == 15
+    assert_no_holdout_queries(fake)  # 보낸 질의 텍스트에도 홀드아웃 행이 없다
 
 
 @pytest.mark.usefixtures("embedding_env")

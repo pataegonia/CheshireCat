@@ -49,6 +49,8 @@ RUNS_DIR = ROOT / "runs"
 DEFAULT_CONFIG = "configs/default.yaml"
 DEFAULT_BASELINE = "configs/baseline.yaml"
 EXIT_USAGE, EXIT_OVER_BUDGET, EXIT_HOLDOUT, EXIT_BUDGET_HIT = 2, 3, 4, 5
+EXIT_INPUT_FAIL_RATE = 8  # 6·7은 위 브랜치(#151)의 연속 429 멈춤·probe 실패가 쓴다
+INPUT_FAIL_RATE_LIMIT = 0.02  # R14-D8: 역할별 호출 실패율 2% 초과면 무효
 BASELINE, DEFAULT = "baseline", "default"
 
 
@@ -603,6 +605,15 @@ def add_variance(summary: dict) -> None:
     }
 
 
+def input_call_failures(summary: dict) -> tuple[int, int]:
+    """입력 판정 호출 (실패 수, 시도 수). 모든 설정·반복의 합이다."""
+    scores = [s for c in summary["configs"].values() for s in c["scores"]]
+    return (
+        sum(s["errors"].get("input_judge", 0) for s in scores),
+        sum(s["calls"]["total"] for s in scores),
+    )
+
+
 def _banner(summary: dict) -> list[str]:
     lines = []
     if summary.get("fake") or summary.get("judge_kind") == "ConstantGuard":
@@ -613,6 +624,8 @@ def _banner(summary: dict) -> list[str]:
         )
     if summary.get("input_only"):
         lines.append("# 입력 단독 실행 — 출력·가드 점수는 상수 출력 기준이라 비교에 쓰지 않는다")
+    if f := summary.get("input_fail"):
+        lines.append(f"# 입력 판정 호출 실패 {f['failed']}/{f['calls']}")
     if summary.get("invalid"):
         lines.append(f"# 무효 실행 — {summary['invalid']}")
     return lines
@@ -856,7 +869,7 @@ async def _measure(
                     "errors": list(j.errors),
                     "knn_major": j.knn_major,
                     "lr_pred": j.lr_pred,
-                    "llm": llm_out.get(rid, []),
+                    "llm": [] if plan.split.cluster[rid] in held else llm_out.get(rid, []),
                 }
                 for rid, j in out.judgements.items()
             ]
@@ -914,14 +927,26 @@ async def amain(
     summary["input_only"] = args.input_only
     summary["output_only"] = args.output_only
     spent = sum(e == "budget" for _, e, _ in tap.records)
+    failed, tried = input_call_failures(summary) if args.input_only else (0, 0)
+    too_flaky = tried > 0 and failed / tried > INPUT_FAIL_RATE_LIMIT
+    if args.input_only:
+        summary["input_fail"] = {"failed": failed, "calls": tried}
     if spent:
         summary["invalid"] = f"budget 오류 {spent}회: 결과를 비교에 쓰지 않는다"
+    elif too_flaky:  # 종료 코드 우선순위: budget이 먼저다
+        summary["invalid"] = (
+            f"입력 판정 호출 실패율 {failed}/{tried} = {failed / tried:.1%}가 "
+            f"{INPUT_FAIL_RATE_LIMIT:.0%}를 넘는다: 결과를 비교에 쓰지 않는다"
+        )
     out_dir = Path(args.out) / args.name
     _write(out_dir, records, summary, render_report(args.name, summary))
     _say(f"wrote {out_dir}")
     if spent:
         _err(f"호출 상한에 걸려 budget 오류 {spent}회. 결과는 무효다")
         return EXIT_BUDGET_HIT
+    if too_flaky:
+        _err(f"입력 판정 호출 실패율 {failed}/{tried}가 상한 초과. 결과는 무효다")
+        return EXIT_INPUT_FAIL_RATE
     return 0
 
 

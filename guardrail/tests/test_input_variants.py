@@ -30,7 +30,7 @@ def test_examples_default_order_keeps_nearest_last():
 
 
 def test_examples_nearest_first_reverses_the_given_order():
-    cfg = load_config(overrides={"input.knn.order": "nearest_first"})
+    cfg = load_config(overrides={"input.knn.order": "nearest_first", **V2A})
     assert _shown(cfg) == ["가까운 예시", "먼 예시"]
 
 

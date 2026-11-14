@@ -318,11 +318,12 @@ def test_cli_rejects_values_that_hang_or_break_the_run(flag, capsys):
 
 def test_tutor_and_guard_calls_all_go_through_one_gate():
     report = run(n_tutor=20, n_guard=20, scale=0.001, seed=2)
-    stages = report.classify_calls + report.judge_output_calls  # 튜터가 부른 가드 단계도 가드 몫
+    stages = report.classify_calls + report.judge_output_calls  # 튜터가 부른 가드 단계는 따로 센다
     assert stages > 0
     assert dict(report.gate_entries) == {
         "tutor": report.llm_calls,
-        "guard": report.guard_calls + stages,
+        "guard": report.guard_calls,
+        "stage": stages,
     }
 
 
@@ -334,7 +335,7 @@ def test_tutor_calls_the_guard_classify_and_judge_output_once_per_llm_request():
     assert report.classify_calls == report.judge_output_calls == report.llm_requests
     assert report.llm_requests == 40 - direct_count(40, 11)  # 직접 판정은 셋 다 0회
     assert report.guard_skips == ()  # 가짜 가드의 반환 형식을 튜터가 받는다(invalid·error 없음)
-    assert dict(report.gate_entries)["guard"] == 2 * report.llm_requests
+    assert dict(report.gate_entries)["stage"] == 2 * report.llm_requests
 
 
 def test_judge_output_waits_for_the_main_call_and_classify_runs_alongside(monkeypatch):
@@ -372,7 +373,7 @@ def test_fake_guard_stages_hold_the_shared_gate_and_answer_like_the_guard():
         return await asyncio.gather(guard.classify([]), guard.judge_output([], "답", "normal"))
 
     category, verdict = asyncio.run(both())
-    assert gate.entries == {"guard": 2} and gate.queued == 1 and fake.peak == 1
+    assert gate.entries == {"stage": 2} and gate.queued == 1 and fake.peak == 1
     assert guard.stage_calls == {"classify": 1, "judge_output": 1}
     assert category in get_args(Category) and category not in guard_merge.ATTACK_CATEGORIES
     assert isinstance(verdict, OutputVerdict) and verdict.safe and verdict.grounded
@@ -390,9 +391,12 @@ def test_fake_guard_stages_give_up_past_the_read_limit():
 @pytest.mark.parametrize(
     "missing, reasons",
     [
-        (("classify",), "가드 classify 안 부름"),
-        (("judge_output",), "가드 judge_output 안 부름"),
-        (("classify", "judge_output"), "가드 classify 안 부름, 가드 judge_output 안 부름"),
+        (("classify",), "가드 classify 안 부름, 가드 단계 건너뜀(missing·error·invalid)"),
+        (("judge_output",), "가드 judge_output 안 부름, 가드 단계 건너뜀(missing·error·invalid)"),
+        (
+            ("classify", "judge_output"),
+            "가드 classify 안 부름, 가드 judge_output 안 부름, 가드 단계 건너뜀(missing·error·invalid)",
+        ),
     ],
 )
 def test_a_guard_without_the_tutor_stages_fails_the_run(monkeypatch, capsys, missing, reasons):
@@ -406,6 +410,22 @@ def test_a_guard_without_the_tutor_stages_fails_the_run(monkeypatch, capsys, mis
     assert all(skips[f"{stage[name]} missing"] == report.llm_requests for name in missing)
     ok, last = judged(report, capsys)
     assert not ok and last == f"실패: {reasons}"
+
+
+def test_a_fake_guard_answer_the_tutor_rejects_fails_the_run(monkeypatch, capsys):
+    """리뷰: 한 번이라도 부르면 통과하던 검사. 튜터가 형식 밖(invalid)으로 버리면 실패로 낸다."""
+    stage = mock_load.FakeGuard._stage_call
+
+    async def odd_classify(self, messages):
+        await stage(self, "classify")
+        return "not_a_category"
+
+    monkeypatch.setattr(mock_load.FakeGuard, "classify", odd_classify)
+    report = run(n_tutor=10, n_guard=0, scale=0.001, seed=15)
+    assert report.classify_calls == report.llm_requests > 0
+    assert dict(report.guard_skips)["classify invalid"] == report.llm_requests
+    ok, last = judged(report, capsys)
+    assert not ok and last == "실패: 가드 단계 건너뜀(missing·error·invalid)"
 
 
 def test_gate_waits_are_measured_when_the_gate_is_tight():

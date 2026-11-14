@@ -80,7 +80,8 @@ from tutor.runtime.llm import Result, TutorLLM, build_llm
 # 가드 호출: 가드 #105 런박스 실측(InputOut = 입력 판정, 동시 64). /guard 판정 호출과 튜터가 부르는
 # classify·judge_output에 같이 쓴다. classify는 입력 판정이라 이 실측 그대로다. judge_output은 출력
 # 판정이고 가드 #144 실측(동시 16)은 p50 4.1초·p95 8.7초인데, 튜터 timeout_s.verify 5초를 넘는
-# 비율이 두 분포 모두 약 33%라 따로 두지 않는다(값 하나로 두어 스모크 검사도 하나로 본다)
+# 비율이 두 분포 모두 약 33%라 따로 두지 않는다(값 하나로 두어 스모크 검사도 하나로 본다). 다만
+# judge_output의 꼬리(p95 8.7초)는 이 값보다 무거워, 판정 시간 초과 뒤의 꼬리 지연은 낙관이다
 P50_S, P95_S = 4.51, 6.62
 # 튜터 주 호출: 런박스 run_local 실측(main d7464a0, v2, 공개 200행 3회, 동시 8). 요청 지연이라
 # LLM 없이 끝난 요청(주 호출 576회/600요청)도 들어 있고(낙관), 앱 처리 시간도 들어 있어 모의 앱
@@ -96,6 +97,7 @@ BASE_URL = "http://localhost"  # 프로세스 안 ASGI 호출(네트워크 없�
 GUARD_CALLS = 2  # 후보 답이 있는 가드 요청의 nano 판정 호출 수(입력·출력, 병렬). 없으면 1회
 N_TUTOR = N_GUARD = 300  # SPEC §3: 한 제출은 튜터·가드 각 약 300 요청
 CONCURRENCY = 64  # SPEC §3: 채점기는 최대 64개 요청을 동시에 보낸다
+BAD_SKIPS = frozenset({"missing", "error", "invalid"})  # 가짜 가드가 서버와 다르게 답한 건너뜀
 MIN_LLM_SHARE = 0.9  # LLM을 부른 튜터 요청의 최소 비율(고정 문장으로 바로 끝나는 경로는 적다)
 # 응답 스키마 이름별 가짜 정상 답(과목 사실 없음). 없는 이름에는 JSON이 아닌 답(bad_json)을 낸다
 REPLIES: dict[str, dict[str, Any]] = {
@@ -279,7 +281,8 @@ class FakeGuard:
 
         부른 때 센다(게이트에서 기다리다 튜터 시간 제한으로 취소돼도 부른 것이다)."""
         self.stage_calls[stage] += 1
-        async with self.gate.slot("guard"), asyncio.timeout(self.read_s):
+        # 게이트 진입은 "stage"로 따로 센다(/guard 판정 호출의 게이트 우회 검사를 흐리지 않게)
+        async with self.gate.slot("stage"), asyncio.timeout(self.read_s):
             await self.fake.hold()
 
 
@@ -631,6 +634,13 @@ def _failures(report: Report, bar: Bar, t50: float, t95: float) -> list[str]:
             report.judge_output_on
             and report.llm_requests > report.llm_failed
             and not report.judge_output_calls,
+        ),
+        # 튜터가 가드 단계를 없음·오류·형식 밖으로 건너뛰었으면 가짜 가드가 서버와 다르게
+        # 답한 것이다.
+        # 시간 초과·남은 시간 없음(timeout·no_time)은 튜터 설계대로라 실패로 보지 않는다
+        (
+            "가드 단계 건너뜀(missing·error·invalid)",
+            any(name.split()[-1] in BAD_SKIPS for name, _n in report.guard_skips),
         ),
         # 보낸 호출은 모두 게이트를 지난다. 들어간 뒤 시간이 모자라 보내지 않고 나오면 진입이
         # 더 많아지는데, 그 호출은 오류로 끝나 "LLM 실패"로 따로 걸린다(일부 우회가 가려져도

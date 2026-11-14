@@ -493,7 +493,7 @@ def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys)
 def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys, rows):
     """TU-16 "항목별(실행별 값과 3회 범위), 응함으로 잡힌 문항 ID(실행별)". 숫자와 행 id만 낸다.
 
-    실행마다 보는 값이라 교차 검증 행으로만 낸다. 홀드아웃 행의 결과가 실행마다 드러나지 않는다.
+    실행마다 보는 값이라 교차 검증 행으로만 낸다. 홀드아웃 행의 id와 행별 결과를 내지 않는다.
     """
     held = run_local.holdout_ids()
 

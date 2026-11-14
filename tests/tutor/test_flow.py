@@ -12,7 +12,14 @@ from tests.tutor.tutor_testlib import assert_contract
 from tutor import pipeline
 from tutor.answer.templates import NOT_IN_MATERIAL_NOTE, TEXT, Fixed
 from tutor.judge import flow
-from tutor.judge.main_call import EvidenceOut, MainCallOut, MainCallPrompt, SentenceOut
+from tutor.judge.main_call import (
+    SANDWICH,
+    SANDWICH_EN,
+    EvidenceOut,
+    MainCallOut,
+    MainCallPrompt,
+    SentenceOut,
+)
 from tutor.request import parse_request
 from tutor.retrieval import default_index
 from tutor.runtime.config import load_config
@@ -85,6 +92,29 @@ def test_prepare_judge_follows_scaffold_state_rule_toggle(state_rule):
     flow.prepare_judge(s)
     assert ("정답 사실(값·이름·조건)을" in s.tutor_prompt.system) is state_rule
     assert ("최종 정답을 말하지 않습니다" in s.tutor_prompt.system) is (not state_rule)
+
+
+@pytest.mark.parametrize("lang", ["ko", "en"])
+@pytest.mark.parametrize("state_rule", [True, False])
+def test_prepare_judge_follows_prompt_lang_toggle(lang, state_rule):
+    # T3.2: 프롬프트 언어는 설정 토글이 정하고 기동 때 한 번 만든다(기본 ko)
+    overrides = {"toggles.prompt_lang": lang, "toggles.scaffold_state_rule": state_rule}
+    s = types.SimpleNamespace(tutor_cfg=load_config(overrides=overrides))
+    flow.prepare_judge(s)
+    assert s.tutor_prompt == MainCallPrompt.from_rules(scaffold_state_rule=state_rule, lang=lang)
+
+
+def test_request_path_sends_the_english_prompt_when_toggled():
+    ko_llm, en_llm = FakeLLM(out()), FakeLLM(out())
+    ko_resp = ask(state_with(ko_llm), QUESTION)
+    en_resp = ask(state_with(en_llm, **{"toggles.prompt_lang": "en"}), QUESTION)
+    (ko_call,), (en_call,) = ko_llm.calls, en_llm.calls
+    en_system = MainCallPrompt.from_rules(lang="en").system
+    assert en_call["messages"][0] == {"role": "system", "content": en_system}
+    assert en_call["messages"][1]["content"].endswith(SANDWICH_EN)
+    assert ko_call["messages"][0]["content"] == MainCallPrompt.from_rules().system
+    assert ko_call["messages"][1]["content"].endswith(SANDWICH)
+    assert en_resp == ko_resp  # 답변·action·인용 처리는 프롬프트 언어와 상관없다
 
 
 # --- 빈 판단 대상·실패 ---

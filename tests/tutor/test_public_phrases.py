@@ -26,6 +26,7 @@ _MUST_SCAN = {
     "tutor/judge/examples.py",
     "tutor/judge/signals.py",
     "tutor/prompts/main_call.md",
+    "tutor/prompts/main_call.en.md",  # 영어 번역본(T3.2, `toggles.prompt_lang: en`)
     "tutor/answer/templates.py",
     "tutor/contract/tutor.schema.json",
     "config/actions.yaml",

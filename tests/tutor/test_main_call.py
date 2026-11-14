@@ -4,14 +4,17 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from guardrail.judges.schemas import strict_schema
 from pydantic import BaseModel, ValidationError
 
+from integration.contracts import Action, Category
 from tutor.judge.conversation import tidy
 from tutor.judge.main_call import (
     SANDWICH,
+    SANDWICH_EN,
     TAG_GUARD,
     EvidenceOut,
     MainCallOut,
@@ -21,6 +24,7 @@ from tutor.judge.main_call import (
     clean,
     defuse,
     render_action_table,
+    render_scaffold_rules,
     run_main_call,
 )
 
@@ -375,3 +379,152 @@ def test_load_rejects_action_rule_objects_directly():
 
     with pytest.raises(TypeError):
         MainCallPrompt.load(load_actions())
+
+
+# --- 프롬프트 언어(T3.2, `toggles.prompt_lang`) ---
+
+KO_OUTPUT_RULE = "Write every answer sentence (text) in Korean polite speech (존댓말)"
+VERBATIM_QUOTE_RULE = "Copy every evidence quote character for character from the Korean original"
+# 학습자에게 그대로 내야 하는 한국어 고정 문장(en 프롬프트에서도 번역하지 않는다)
+KO_FIXED_SENTENCES = (
+    "그 내용은 자료에 나와 있지 않아요.",
+    "이름이나 학교 같은 개인정보는 적지 않아도 돼요.",
+)
+
+
+@pytest.fixture
+def en_prompt() -> MainCallPrompt:
+    return MainCallPrompt.load(TABLE, lang="en")
+
+
+def test_default_language_is_korean(prompt):
+    assert prompt == MainCallPrompt.load(TABLE, lang="ko")
+    assert prompt.sandwich == SANDWICH
+    assert MainCallPrompt.from_rules() == MainCallPrompt.from_rules(lang="ko")
+    assert KO_OUTPUT_RULE not in prompt.system and not prompt.version.endswith("-en")
+
+
+def test_en_prompt_loads_the_english_file(prompt, en_prompt):
+    assert en_prompt.version.endswith("-en") and en_prompt.version != prompt.version
+    assert en_prompt.system != prompt.system
+    assert en_prompt.sandwich == SANDWICH_EN
+    assert not re.search(r"\{[a-z_]+\}", en_prompt.system)
+    assert "- harmful_content → refuse or redirect" in en_prompt.system
+    assert "또는" not in en_prompt.system  # 표도 영어로 그린다
+
+
+def test_en_prompt_keeps_machine_names(en_prompt):
+    sys = en_prompt.system
+    for category in get_args(Category):
+        assert f"- {category}:" in sys, category  # 범주 정의 줄
+        assert f"- {category} → " in sys, category  # 범주 → action 표 줄
+    for action in get_args(Action):
+        assert action in sys, action
+    assert "escalate → refuse → redirect → clarify → scaffold → abstain → answer" in sys
+    fields = ["- category:", "- action:", "- sentences:", "  - text:", "  - kind:", "  - evidence:"]
+    for field_line in [*fields, '"claim"', '"non_claim"', "(sid)", "(quote"]:
+        assert field_line in sys, field_line
+    tags = ["<근거 묶음>", '<섹션 id="…">', "<대화>", "<학습자 발화>", "<튜터 발화>", "<신호>"]
+    for tag in [*tags, '판단대상="예"', '버튼="예"']:
+        assert tag in sys, tag
+
+
+def test_en_prompt_keeps_korean_output_and_fixed_sentences(en_prompt):
+    assert KO_OUTPUT_RULE in en_prompt.system
+    assert VERBATIM_QUOTE_RULE in en_prompt.system
+    assert "- Write every answer sentence in Korean." in en_prompt.sandwich
+    for sentence in KO_FIXED_SENTENCES:
+        assert f'"{sentence}"' in en_prompt.system, sentence
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "judge by the demand that remains after removing the add-ons",
+        "tells the tutor itself",
+        "from start to finish is academic_dishonesty",
+        "When answer_seeking and academic_dishonesty overlap",
+        "harmful_content (demeaning, hateful or insulting remarks) → redirect",
+        "harmful_content (ways to harm others, finding out other people's information, "
+        "scam messages) → refuse",
+        "If the premise is wrong",
+        "out_of_material → abstain",
+    ],
+)
+def test_en_prompt_states_boundary_rules(en_prompt, phrase):
+    assert phrase in en_prompt.system
+
+
+def test_en_prompt_has_no_fixed_facts_or_public_phrases(en_prompt):
+    # 한국어 프롬프트와 같은 기준(TD-10, SPEC §2). 영어 예제 이름도 넣지 않는다
+    facts = [
+        "다람쥐",
+        "새싹적금",
+        "꿈틀",
+        "kkumtle",
+        "Squirrel",
+        "과일 바구니",
+        "PY-",
+        "FIN-",
+        "PR-0",
+    ]
+    rows = ["숙제에 낼", "수행평가에 넣을", "연극 대본에 쓸", "규칙 없는 역할"]
+    for word in [*facts, *rows]:
+        assert word not in en_prompt.system, word
+
+
+def test_en_scaffold_rules_follow_the_toggle():
+    state = MainCallPrompt.load(TABLE, scaffold_state_rule=True, lang="en").system
+    hide = MainCallPrompt.load(TABLE, scaffold_state_rule=False, lang="en").system
+    assert "- answer_seeking → scaffold: first state the answer fact" in state
+    assert "Only answer_seeking states the answer fact" in state
+    assert "do not state the final answer" not in state
+    assert "- answer_seeking → scaffold: do not state the final answer." in hide
+    assert "first state the answer fact" not in hide
+    for sys in (state, hide):
+        assert "- academic_dishonesty → scaffold: do not write the entire text or code" in sys
+        assert not re.search(r"\{[a-z_]+\}", sys)
+
+
+def test_render_helpers_pick_the_language():
+    assert render_action_table({"a": ["x", "y"]}, "en") == "- a → x or y"
+    assert render_action_table({"a": ["x", "y"]}) == "- a → x 또는 y"
+    assert render_scaffold_rules(False) != render_scaffold_rules(False, "en")
+
+
+def test_unknown_prompt_language_is_rejected():
+    with pytest.raises(ValueError):
+        MainCallPrompt.load(TABLE, lang="fr")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        MainCallPrompt.from_rules(lang="EN")  # type: ignore[arg-type]
+
+
+def test_from_rules_passes_language():
+    from integration.actions import load_actions
+
+    table = {c: r.actions for c, r in load_actions().items()}
+    assert MainCallPrompt.from_rules(lang="en") == MainCallPrompt.load(table, lang="en")
+    assert MainCallPrompt.from_rules(lang="en") != MainCallPrompt.from_rules()
+
+
+def test_en_messages_use_english_rules_but_korean_tags(prompt, en_prompt):
+    secs = [Sec("FIN-02-02", "매달 1만 원부터")]
+    msgs = build_messages(en_prompt, conv(), secs, ["정답 요구"])
+    assert msgs[0]["content"] == en_prompt.system
+    body = msgs[1]["content"]
+    assert body.endswith(SANDWICH_EN) and SANDWICH not in body
+    assert '<섹션 id="FIN-02-02">\n매달 1만 원부터\n</섹션>' in body
+    assert '<학습자 발화 판단대상="예">새싹적금은 매달 얼마 넣어?</학습자 발화>' in body
+    # 샌드위치만 다르고 나머지 요청별 부분은 한국어 프롬프트와 같다
+    ko_body = build_messages(prompt, conv(), secs, ["정답 요구"])[1]["content"]
+    assert body.removesuffix(SANDWICH_EN) == ko_body.removesuffix(SANDWICH)
+
+
+@pytest.mark.anyio
+async def test_run_main_call_sends_the_english_system_prompt(en_prompt):
+    fake = FakeComplete(Result(PARSED, None))
+    out = await run_main_call(fake, en_prompt, conv(), [], deadline=1.0)
+    assert out == PARSED
+    ((messages, _, _),) = fake.calls
+    assert messages[0] == {"role": "system", "content": en_prompt.system}
+    assert messages[1]["content"].endswith(SANDWICH_EN)

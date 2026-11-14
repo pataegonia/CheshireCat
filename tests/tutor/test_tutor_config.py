@@ -9,7 +9,9 @@ from pydantic import ValidationError
 
 import tutor
 from tutor.eval import run_local
+from tutor.judge.main_call import MainCallPrompt
 from tutor.runtime import config
+from tutor.startup import prepare
 
 
 def repo_raw():
@@ -31,6 +33,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.guard_classify == "parallel"  # TU-14 기본 parallel
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
     assert toggles.max_citations == 1  # TU-07 기본 1
+    assert toggles.prompt_lang == "ko"  # T3.2 기본은 한국어 프롬프트
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     assert cfg.llm.max_completion_tokens == 1600  # 주 호출 상한(가드 판정 호출과 따로)
     assert cfg.eval.max_calls == 5000  # TU-14
@@ -74,6 +77,9 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("retrieval.k", True),
         ("toggles.signals", "yes"),
         ("toggles.signals", 1),
+        ("toggles.prompt_lang", "fr"),
+        ("toggles.prompt_lang", "EN"),
+        ("toggles.prompt_lang", True),
     ],
 )
 def test_invalid_values_fail_at_load(dotted, value):
@@ -147,6 +153,32 @@ def test_startup_reads_the_config_once():
     state = types.SimpleNamespace()
     asyncio.run(tutor.startup(state))
     assert state.tutor_cfg == config.load_config()
+
+
+@pytest.fixture
+def api_names(monkeypatch):
+    # tutor 프리셋은 운영진 API 환경변수가 있어야 설정 확인을 넘는다. API는 부르지 않는다
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_MODEL", "m")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
+
+
+def test_tutor_set_switches_the_prompt_language(api_names):
+    # T3.2 비교 명령: run_local --preset tutor --tutor-set toggles.prompt_lang=en
+    ap = run_local._parser()
+    args = ap.parse_args(["--preset", "tutor", "--tutor-set", "toggles.prompt_lang=en"])
+    cfg, overrides = run_local._tutor_config(ap, args)
+    assert cfg.toggles.prompt_lang == "en" and run_local._own_state(cfg, overrides)
+    state = types.SimpleNamespace()
+    prepare(state, cfg)  # run_local이 덮은 설정으로 만드는 state와 같은 길(_tutor_state)
+    assert state.tutor_prompt == MainCallPrompt.from_rules(lang="en")
+
+
+def test_tutor_set_rejects_an_unknown_prompt_language(api_names):
+    ap = run_local._parser()
+    args = ap.parse_args(["--preset", "tutor", "--tutor-set", "toggles.prompt_lang=fr"])
+    with pytest.raises(SystemExit):
+        run_local._tutor_config(ap, args)
 
 
 def test_local_run_cap_comes_from_the_config(capsys):

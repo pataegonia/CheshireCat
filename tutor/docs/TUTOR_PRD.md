@@ -287,7 +287,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 
 ### TU-14 설정·ablation (P0)
 - 모델 파라미터, 근거 묶음 크기 K, 예시 수, 프롬프트 버전, 단별 켜기·끄기를 설정 파일로 뺀다. 형식은 가드 GR-11과 같게 하고, 통합 `config/`(actions.yaml·ablation 프리셋·공유 키 `budget_s`·`judge_skip_s`·`fallback_action`)와 한 형식으로 둔다. 튜터 의견은 **위치도 루트 `config/` 한 곳**(튜터 토글은 `config/tutor.yaml`)이다 `[회의]`. ablation 프리셋 실행은 통합 하네스가 한다(통합 IN-06).
-- 켜기·끄기: 이름 사전(`name_dict`) / 판단 예시(`fewshot: off | fixed | knn`, 정답 답변 붙이기 `fewshot.with_answer`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | self | guard`) / 가드 범주(`guard_classify: off | serial | parallel`, 기본 parallel) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결) / scaffold 기준 밝히기(`scaffold_state_rule`, 켜면 과제 대행 보정도 함께 켠다, TU-06) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`. 켜면 근거 1개 문항에서 둘 중 하나만 맞을 때 인용 F1이 0.67이 되므로, 켜기 전에 통합 하네스로 공개 세트·점검 세트의 "두 대상 명시 비교" 문항 수를 센다). 값: `retrieval.k`(기본 5, 비교 3·5), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
+- 켜기·끄기: 이름 사전(`name_dict`) / 판단 예시(`fewshot: off | fixed | knn`, 정답 답변 붙이기 `fewshot.with_answer`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | self | guard`) / 가드 범주(`guard_classify: off | serial | parallel`, 기본 parallel) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결) / scaffold 기준 밝히기(`scaffold_state_rule`, 켜면 과제 대행 보정도 함께 켠다, TU-06) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`. 켜면 근거 1개 문항에서 둘 중 하나만 맞을 때 인용 F1이 0.67이 되므로, 켜기 전에 통합 하네스로 공개 세트·점검 세트의 "두 대상 명시 비교" 문항 수를 센다) / 주 호출 프롬프트 언어(`prompt_lang: ko | en`, 기본 ko. en은 영어 번역본 `tutor/prompts/main_call.en.md`와 코드가 그리는 표·scaffold 정책·샌드위치 규칙의 영어판을 쓴다. 범주·action·필드·태그 이름, 한국어 답변, 고정 문장은 같다. T3.2 ablation). 값: `retrieval.k`(기본 5, 비교 3·5), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
 - 모드 `mode: v2 | baseline`. **베이스라인**은 "검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리"다(위 항목 모두 끔).
 - 설정은 기동 때만 읽는다. 요청 내용 말고는 동작을 바꾸는 입력이 없다(TU-18). 제출 서버와 로컬 평가 서버는 같은 설정으로 띄운다.
 - 개발 실행의 API 호출 상한(`eval.max_calls`, 기본 실행당 5,000)을 둔다(가드 GR-11과 같음).
@@ -539,6 +539,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - 2026-11-14(T3.1): 튜터 KB 색인의 BM25를 가드 `KbIndex`(#129)로 바꿨다(TD-03). 공개 200행의 조각 점수(비트 단위)·섹션 순위·상위 5와 recall@1·3·5(0.824·0.916·0.958)가 그대로다. BM25 값과 질의 상한은 가드 설정에서 읽는다(TU-03).
 - 2026-11-14(#158 리뷰 반영, yang-co1): TD-03을 실제 구조에 맞게 고쳤다(가드 `KbIndex` 인스턴스는 튜터가 따로 만들고 설정은 가드 설정 `kb`·`retrieval.max_query_chars`를 같이 쓴다). 가드 기본 설정이 TU-03 값에서 바뀌면 튜터 테스트가 실패하게 했다.
 - 2026-11-14(#158 후속, T3.1): 서버의 튜터 KB 색인을 가드가 기동 때 읽은 설정 객체(`app.state.cfg`)로 만들고(`tutor.startup` → `build_index(cfg)`), 요청 처리의 검색(v2·baseline)이 그 색인(`app.state.tutor_kb`)을 쓰게 했다(TU-01·TU-03·TD-03). `retrieve`에 `index=` 인자를 더했다. 앱 state가 없는 로컬 측정·테스트는 `default_index()`를 그대로 쓴다.
+- 2026-11-14(T3.2, 리더 요청): 주 호출 프롬프트 언어 토글 `toggles.prompt_lang: ko | en`(기본 ko)을 더했다(TU-14). en은 v0.3 영어 번역본(`main_call.en.md`, `0.3-en`)과 표·scaffold 정책·샌드위치 규칙의 영어판을 기동 때 한 번 읽고, 답변·근거 문구·고정 문장은 한국어로 낸다. ko 프롬프트와 메시지는 바이트 단위로 그대로다. 채택은 공개 200행 판정 포함 3회의 교차 검증 점수(범주·action)로 정한다. 부록 B.1에 행을 더했다.
 
 ## 14. v1과의 차이
 
@@ -679,6 +680,7 @@ P0(TU-01–03, TU-05–07, TU-10, TU-12–19)는 자르지 않는다. 특히 TU-
 | 신호 정규식 `tutor/judge/signals.py`(저신호 직접 판정, 위기·지시 무력화·정답 요구·과제 대행·자기 개인정보·채점 조작 표현 조합) | — | 팀이 직접 씀, 코드 안에 둠. 공개 세트 예제·학교·상품 이름 없음(TD-10) | TU-05, 구현(#74). 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
 | 버튼 문구 판별 어휘 `tutor/judge/conversation.py`(일반 대상 말·요청 행위·조사·어미) | — | 팀이 직접 씀, 코드 안에 둠. 공개 세트 문구 목록이 아님(TD-10) | TU-02, 구현(#72) |
 | 주 호출 프롬프트 `tutor/prompts/main_call.md`(범주 정의는 가드 §3, 답변 방식, 출력 형식. 범주 → action 표는 기동 때 `config/actions.yaml`에서 받아 그림) | 공개 세트를 보고 팀이 씀. 과목 사실·예제 이름 없음(테스트) | 팀 | TU-06, v0 구현(#72). 고정 예시는 아직 없음(kNN은 TU-08) |
+| 주 호출 프롬프트 영어판 `tutor/prompts/main_call.en.md`(위 프롬프트 v0.3의 번역, 머리말 version `0.3-en`) | 위 한국어 프롬프트를 옮김. 답변·근거 문구·고정 문장은 한국어 그대로. 과목 사실·예제 이름·공개 세트 문구 없음(테스트) | 팀이 씀(AI 코딩 도구로 옮긴 것도 프롬프트 안이면 팀이 쓴 것, SPEC §7.1). 예시 없음 | TU-14, `toggles.prompt_lang: en`일 때만(기본 ko, T3.2 ablation). 한국어 프롬프트를 고치면 같이 고친다 |
 | 베이스라인 프롬프트(`tutor/baseline.py`, `mode: baseline`일 때만) | action 설명은 SPEC §4 정의 그대로 | 팀이 씀(AI 코딩 도구로 쓴 것도 프롬프트 안이면 팀이 쓴 것, SPEC §7.1). 예시 없음 | TU-14(#108) |
 | 채점 지시 문장 제거 규칙 `tutor/answer/postprocess.py`(채점자 호칭·"정답으로 처리" 같은 표현 조합, 숨김 문자 목록) | — | 팀이 직접 씀, 코드 안에 둠. KB 전 문장·공개 정답 답변을 바꾸지 않음(테스트) | TU-07, 구현(#76). 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
 | 고정 문장 `tutor/answer/templates.py`(거절·전환·위기 안내·되묻기·과목 사실 없는 scaffold·abstain·빈 답변) | — | 팀이 직접 씀. 전화번호·기관명·과목 사실 없음(테스트) | TU-12, 구현(#72) |

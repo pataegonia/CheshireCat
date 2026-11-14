@@ -39,6 +39,7 @@ class Toggles(_Strict):
     scaffold_state_rule: bool
     inline_cite: bool
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
+    prompt_lang: Literal["ko", "en"]  # 주 호출 프롬프트 언어(T3.2). 답변은 둘 다 한국어
 
 
 class Fewshot(_Strict):

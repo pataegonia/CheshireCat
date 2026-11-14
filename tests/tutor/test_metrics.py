@@ -12,10 +12,13 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from tests.tutor import tutor_testlib
 from tests.tutor.tutor_testlib import (
     answer_openai,
     block_openai,
@@ -283,6 +286,79 @@ def test_cli_flags_a_run_whose_tutor_llm_calls_failed(monkeypatch, tmp_path, cap
     assert at == sorted(at)  # 호출 → 지연 → 최종 실패
     data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
     assert data["tainted"] is True
+
+
+def test_tutor_call_summary_shows_failed_attempts_and_token_distribution(capsys):
+    """실패한 시도를 갈래별로, 성공한 시도의 토큰 구간을 역할별 p50·p95·최대로 낸다(시도 단위).
+
+    없으면 줄을 내지 않는다.
+    """
+    llm = SimpleNamespace(
+        calls=Counter({"main": 23, "baseline": 1}),
+        failures=Counter({("main", "bad_json"): 1}),
+        attempt_errors=Counter({("main", "length"): 2, ("main", "timeout"): 1}),
+        completion_buckets=Counter(
+            {("main", 400): 10, ("main", 900): 9, ("main", 1200): 1, ("baseline", 300): 1}
+        ),
+    )
+    run_local._show_tutor_calls(
+        SimpleNamespace(tutor_llm=llm), 0, [1.0], cap=(0, 0, 0, 0), stopped=False
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2] == "실패한 시도(갈래별, 재시도 포함): main length 2회, main timeout 1회"
+    assert lines[-1] == (  # 최종 실패 다음. 가까운 순위: p50은 10번째, p95는 19번째 값
+        "성공한 시도의 completion_tokens(추론 포함, 100 단위로 올린 구간"
+        ", 2000은 초과 포함, 토큰 수 없는 시도 제외): "
+        "baseline p50 300 · p95 300 · 최대 300 (1회), main p50 400 · p95 900 · 최대 1200 (20회)"
+    )
+    empty = SimpleNamespace(calls={}, failures={}, attempt_errors={}, completion_buckets={})
+    run_local._show_tutor_calls(
+        SimpleNamespace(tutor_llm=empty), 0, [], cap=(0, 0, 0, 0), stopped=False
+    )
+    out = capsys.readouterr().out
+    assert "실패한 시도" not in out and "completion_tokens" not in out
+
+
+def test_cli_saves_tutor_llm_counts_and_still_compares_with_old_results(
+    monkeypatch, tmp_path, capsys
+):
+    """보낸 시도·최종 실패·실패한 시도 갈래·토큰 구간을 결과 JSON에 남긴다(터미널 없이 비교).
+
+    처음 10개 요청은 주 호출 첫 시도가 시간 초과로 끝나고 재시도로 살아난다. tutor_llm이 없는
+    옛 결과 JSON도 --compare 기준으로 그대로 읽는다.
+    """
+    seen: dict[int, object] = {}  # 메시지 목록을 쥐고 있어 id가 다시 쓰이지 않는다
+
+    def reply(kwargs):
+        messages = kwargs["messages"]
+        if id(messages) not in seen and len(seen) < 10:
+            seen[id(messages)] = messages
+            raise TimeoutError  # 호출당 시간 제한과 같은 코드(timeout)
+        return tutor_testlib._ok_reply(kwargs)
+
+    tutor_testlib._fake_send(monkeypatch, reply)
+    assert run_local.main(["--preset", "tutor", "--out", str(tmp_path)]) == 0
+    saved = next(tmp_path.glob("tutor-*.json"))
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    counts = data["tutor_llm"]
+    sent = counts["calls"]["main"]
+    assert counts["failures"] == {} and counts["attempt_errors"] == {"main": {"timeout": 10}}
+    assert counts["completion_buckets"] == {"main": {"100": sent - 10}}  # 가짜 답은 5토큰
+    out = capsys.readouterr().out
+    assert "실패한 시도(갈래별, 재시도 포함): main timeout 10회" in out
+    assert f"main p50 100 · p95 100 · 최대 100 ({sent - 10}회)" in out
+
+    old = tmp_path / "old.json"  # 이 필드가 생기기 전 결과
+    before = {k: v for k, v in data.items() if k != "tutor_llm"}
+    old.write_text(json.dumps(before), encoding="utf-8")
+    for path in (saved, old):
+        assert run_local.load_previous(path, judge=False) == data["report"]["points"]
+    ref_dir = tmp_path / "ref"
+    argv = ["--preset", "reference", "--out", str(ref_dir), "--compare", str(old)]
+    assert run_local.main(argv) == 0
+    assert "새로 틀린 문항" in capsys.readouterr().out
+    ref = json.loads(next(ref_dir.glob("reference-*.json")).read_text(encoding="utf-8"))
+    assert "tutor_llm" not in ref  # 튜터 LLM을 부르지 않는 프리셋은 남기지 않는다
 
 
 def test_cli_compare_needs_points_and_the_same_judge_mode(tmp_path):

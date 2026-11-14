@@ -20,6 +20,8 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 포함)을 보내지 않고, 결과를 무효(invalid)로 남기고 종료 코드 EXIT_RATE_LIMITED로 끝난다(가드
 하네스와 같은 규칙).
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
+tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
+결과 JSON의 tutor_llm에 남긴다.
 """
 
 import argparse
@@ -54,8 +56,8 @@ from tutor.eval.recall import (
 from tutor.judge.examples import build_index, load_examples
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
-from tutor.runtime.config import TutorConfig, load_config
-from tutor.runtime.llm import missing_api_env
+from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig, load_config
+from tutor.runtime.llm import TOKEN_BUCKET, missing_api_env
 from tutor.startup import build_embedding, prepare
 
 PRESETS = ("tutor", "reference", "reference_top1")
@@ -310,10 +312,13 @@ def _write(
     tainted: bool,
     embedding: "EmbeddingUse | None",
     invalid: str | None,
+    llm: Any = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
     invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
+    llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
+    읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -323,9 +328,24 @@ def _write(
         data["invalid"] = invalid
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
+    if llm is not None:
+        data["tutor_llm"] = {
+            "calls": dict(sorted(llm.calls.items())),  # 보낸 시도 수(아래 시도 단위 수의 분모)
+            "failures": _by_role(llm.failures),  # 호출 단위 최종 오류
+            "attempt_errors": _by_role(llm.attempt_errors),  # 시도 단위 갈래(재시도 포함)
+            "completion_buckets": _by_role(llm.completion_buckets),  # 성공한 시도의 토큰 구간
+        }
     data["report"] = asdict(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return path
+
+
+def _by_role(counts: Mapping[tuple[str, Any], int]) -> dict[str, dict[Any, int]]:
+    """(역할, 갈래)별 수를 역할 → 갈래 → 수로 묶는다(갈래 순서대로)."""
+    out: dict[str, dict[Any, int]] = {}
+    for (role, key), n in sorted(counts.items()):
+        out.setdefault(role, {})[key] = n
+    return out
 
 
 def _ids(ids: Sequence[str]) -> str:
@@ -348,6 +368,27 @@ def _latency_line(latency: Sequence[float]) -> str:
         f"튜터 요청 지연(초, 동시 {metrics.WORKERS}): p50 {p50:.2f} · p95 {p95:.2f}"
         f" · 최대 {top:.2f} (요청 {len(latency)}개)\n"
     )
+
+
+def _token_line(buckets: Mapping[tuple[str, int], int]) -> str:
+    """성공한 시도의 completion_tokens 분포 한 줄(역할별 p50·p95·최대 구간). 없으면 빈 문자열.
+
+    구간은 TOKEN_BUCKET 단위로 올린 값이라, 상한을 최대 구간까지만 낮추면 성공한 시도는 잘리지
+    않았을 것이다.
+    """
+    parts = []
+    for role, hist in _by_role(buckets).items():
+        values = [bucket for bucket, n in hist.items() for _ in range(n)]
+        p50, p95 = _pct(values, 0.5), _pct(values, 0.95)
+        parts.append(f"{role} p50 {p50:.0f} · p95 {p95:.0f} · 최대 {max(values)} ({len(values)}회)")
+    if not parts:
+        return ""
+    # 상한 구간은 그보다 큰 값도 담고, usage가 없는 시도는 빠진다(괄호 안 횟수는 구간에 든 수)
+    head = (
+        f"성공한 시도의 completion_tokens(추론 포함, {TOKEN_BUCKET} 단위로 올린 구간"
+        f", {PROXY_MAX_COMPLETION_TOKENS}은 초과 포함, 토큰 수 없는 시도 제외)"
+    )
+    return f"{head}: {', '.join(parts)}\n"
 
 
 def _show(report: metrics.Report, out: TextIO) -> None:
@@ -635,6 +676,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tainted=tainted,
         embedding=use,
         invalid=invalid,
+        llm=state.tutor_llm if state is not None else None,
     )
     _show(report, sys.stdout)
     if state is not None:
@@ -662,6 +704,9 @@ def _show_tutor_calls(
 ) -> None:
     """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 실패한 호출, 상한에 막힌 호출 수.
 
+    실패한 시도의 갈래(시도 단위)와 성공한 시도의 completion_tokens 분포도 낸다. 둘 다 위
+    "호출"(보낸 시도 수)과 같은 단위라, max_completion_tokens를 정할 때 length·timeout 비율과
+    토큰 분포를 함께 본다(본문은 내지 않는다).
     cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다. stopped면 속도 제한으로 멈춘 실행이라
     막힌 호출을 상한이 아니라 속도 제한 몫으로 낸다(멈출 때 상한을 0으로 내린다).
     """
@@ -674,6 +719,11 @@ def _show_tutor_calls(
         # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다
         failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
         sys.stdout.write(f"튜터 LLM 최종 실패: {failed}: 기본값이 섞인 결과다\n")
+    errors = state.tutor_llm.attempt_errors
+    if errors:  # bad_json은 원인 갈래(length 등), 그 밖은 오류 코드(timeout 등)
+        shown = ", ".join(f"{role} {label} {n}회" for (role, label), n in sorted(errors.items()))
+        sys.stdout.write(f"실패한 시도(갈래별, 재시도 포함): {shown}\n")
+    sys.stdout.write(_token_line(state.tutor_llm.completion_buckets))
     if blocked and stopped:
         sys.stdout.write(f"속도 제한(429)으로 멈춰 보내지 못한 튜터 호출 {blocked}회")
         sys.stdout.write(": 기본값이 섞인 결과다\n")

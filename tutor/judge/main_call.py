@@ -86,6 +86,44 @@ SANDWICH = (
 )
 
 
+# answer_seeking의 scaffold 정책(TU-06 `scaffold_state_rule`, #75). 공개 8행 3회 측정(11/11):
+# state(정답 사실을 먼저 밝힘) 97.9 · hide 77.1, 응함 판정은 state만 24번 중 3번.
+# 운영진 답(§11-1-4) 전까지 state를 기본으로 두고 토글로 되돌릴 수 있게 한다. 이 기본값은 잠정이고
+# 과제 대행 행 측정(#139) 뒤 확정한다.
+# academic_dishonesty는 어느 쪽이든 사실을 밝히지 않는다
+_ANSWER_SEEKING_STATE = (
+    "- answer_seeking → scaffold: 문제가 묻는 정답 사실(값·이름·조건)을 근거 묶음의 표현 그대로 "
+    "먼저 밝히고(claim 문장, 근거 문구 포함), 이어서 그 정답이 자료의 어떤 기준에서 나오는지와 "
+    "학습자가 직접 확인해 볼 다음 단계를 안내합니다. 선택지 기호만 골라 주지 않습니다."
+)
+_ANSWER_SEEKING_HIDE = (
+    "- answer_seeking → scaffold: 최종 정답을 말하지 않습니다. 자료에서 확인할 기준과 다음 단계를 "
+    "안내해 학습자가 직접 고르게 합니다."
+)
+_SCAFFOLD_LEAK_STATE = (
+    "scaffold에서는 근거 섹션의 퀴즈(### Q. 다음의 A.)를 문제·답 형식 그대로 옮기지 않고, "
+    "완성 코드와 제출용 전체 답을 쓰지 않습니다. 정답 사실을 밝히는 것은 answer_seeking뿐입니다. "
+    "자료가 직접 주는 힌트는 써도 됩니다."
+)
+_SCAFFOLD_LEAK_HIDE = (
+    "scaffold에서는 근거 섹션에 있는 퀴즈의 답(### Q. 다음의 A.), 완성 코드, 최종 선택지를 "
+    "옮기지 않습니다. 자료가 직접 주는 힌트는 써도 됩니다."
+)
+
+
+def render_scaffold_rules(state_rule: bool) -> dict[str, str]:
+    """프롬프트의 scaffold 자리 두 곳을 `scaffold_state_rule` 값으로 채운다."""
+    if state_rule:
+        return {
+            "answer_seeking_rule": _ANSWER_SEEKING_STATE,
+            "scaffold_leak_rule": _SCAFFOLD_LEAK_STATE,
+        }
+    return {
+        "answer_seeking_rule": _ANSWER_SEEKING_HIDE,
+        "scaffold_leak_rule": _SCAFFOLD_LEAK_HIDE,
+    }
+
+
 def render_action_table(table: Mapping[str, Sequence[str]]) -> str:
     """통합 표(범주 → 허용 action)를 프롬프트 줄로 그린다. 표 순서를 그대로 쓴다."""
     lines = []
@@ -103,7 +141,11 @@ class MainCallPrompt:
 
     @classmethod
     def load(
-        cls, action_table: Mapping[str, Sequence[str]], prompt_dir: Path = PROMPT_DIR
+        cls,
+        action_table: Mapping[str, Sequence[str]],
+        prompt_dir: Path = PROMPT_DIR,
+        *,
+        scaffold_state_rule: bool = True,
     ) -> "MainCallPrompt":
         # Windows 체크아웃(autocrlf)의 CRLF도 같은 프롬프트로 읽는다(런박스는 LF)
         raw = (prompt_dir / f"{PROMPT_ID}.md").read_text(encoding="utf-8")
@@ -117,11 +159,17 @@ class MainCallPrompt:
         if not action_table:
             raise ValueError("범주 → action 표가 비어 있다")
         body = text[m.end() :].replace("{action_table}", render_action_table(action_table))
+        for key, rule in render_scaffold_rules(scaffold_state_rule).items():
+            body = body.replace("{" + key + "}", rule)
         return cls(version=str(head["version"]), system=body.strip())
 
     @classmethod
     def from_rules(
-        cls, rules: Mapping[str, ActionRule] | None = None, prompt_dir: Path = PROMPT_DIR
+        cls,
+        rules: Mapping[str, ActionRule] | None = None,
+        prompt_dir: Path = PROMPT_DIR,
+        *,
+        scaffold_state_rule: bool = True,
     ) -> "MainCallPrompt":
         """통합 표(`integration.actions.load_actions()`, 기본은 `config/actions.yaml`)로 만든다.
 
@@ -129,7 +177,11 @@ class MainCallPrompt:
         둘 다 들어간다. 표를 복사하지 않고 기동 때 읽기만 한다(TD-12).
         """
         table = load_actions() if rules is None else rules
-        return cls.load({c: r.actions for c, r in table.items()}, prompt_dir)
+        return cls.load(
+            {c: r.actions for c, r in table.items()},
+            prompt_dir,
+            scaffold_state_rule=scaffold_state_rule,
+        )
 
 
 class SectionLike(Protocol):

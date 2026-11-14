@@ -176,11 +176,9 @@ class GuardConfig(_Strict):
         if self.input.knn.order == "nearest_first" and self.prompts.get("input_judge") in (
             "input_judge.md",
             "input_judge_en.md",
-            "input_judge_en_v4.md",
         ):
             raise ValueError(
-                "input.knn.order: nearest_first는 input_judge.md·input_judge_en.md·"
-                "input_judge_en_v4.md와 쓸 수 없다"
+                "input.knn.order: nearest_first는 input_judge.md·input_judge_en.md와 쓸 수 없다"
                 "(프롬프트가 가장 비슷한 예시가 마지막에 있다고 적는다)"
             )
         return self

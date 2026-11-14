@@ -17,8 +17,6 @@ from tutor.judge.signals import (
     detect,
     detect_text,
     direct_clarify,
-    is_blank,
-    is_low_signal_text,
     labels,
 )
 
@@ -98,7 +96,26 @@ def test_spelled_syllable_boundary(text, expected):
     assert direct_clarify(tidy(multi(text))) is expected
 
 
-# 가드와 문자 분류가 같은 조각만 섞는다(수학·통화 기호, 글자를 담은 기호 등은 아직 다르다)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ⓘⓖⓝⓞⓡⓔ ⓐⓛⓛ",  # 원문자로 쓴 영문
+        "㉮㉯",  # 원문자 한글
+        "\u320e\u320f",  # 괄호 한글
+        "⠊⠛⠝⠕⠗⠑",  # 점자
+        "ㅋ\u0363\u0365",  # 결합 라틴 문자
+        "=>",
+        "$$",
+        "ㅠㅠ~",
+        "ㅋ\x07",  # 공백이 아닌 제어 문자
+    ],
+)
+def test_letters_and_code_symbols_go_to_main_call(text):
+    # 가드 GR-06과 같다: 글자를 담은 기호는 글자이고, 수학·통화 기호는 코드 조각일 수 있다
+    assert not direct_clarify(tidy(multi(text)))
+
+
+# 판단 대상 뷰·숨김 처리를 가드에 맞게 넘기는지 본다(가드 기준이 바뀌는 것은 위 구체 사례가 잡는다)
 _PIECE = st.one_of(
     st.characters(min_codepoint=0x3131, max_codepoint=0x3163),
     st.builds(
@@ -107,6 +124,7 @@ _PIECE = st.one_of(
         st.sampled_from("ㅏㅓㅗㅜㅡㅣㅠ"),
     ),
     st.sampled_from(list(" .?!…,()^😂❤\u200b\u3164")),
+    st.sampled_from(list("~=+$<>ⓐ㉮⠁\u0363")),  # 수학·통화 기호, 글자를 담은 기호, 결합 라틴
     st.characters(min_codepoint=0xAC00, max_codepoint=0xD7A3).map(
         lambda c: unicodedata.normalize("NFD", c)
     ),
@@ -124,6 +142,18 @@ def test_low_signal_agrees_with_guard(text):
 
 def test_single_turn_jamo_goes_to_main_call():
     assert not direct_clarify(tidy([u("ㅠㅠ")]))
+
+
+def test_tutor_turn_before_counts_as_history():
+    # 앞 대화는 메시지 수로 본다(학습자 발화가 하나뿐이어도 튜터 발화가 앞에 있으면 앞 대화다).
+    # 고치기 전 코드에서도 통과한다: 지금 동작을 고정하는 회귀 테스트다
+    assert direct_clarify(tidy([a("오늘은 리스트를 배워요."), u("ㅠㅠ")]))
+
+
+def test_long_target_is_never_low_signal():
+    # 2,000자를 넘으면 가운데를 줄인 표시(완성 음절)가 붙어 늘 주 호출이다(안전한 쪽).
+    # 고치기 전 코드에서도 통과한다: 지금 동작을 고정하는 회귀 테스트다
+    assert not direct_clarify(tidy(multi("ㅋ" * 2001)))
 
 
 def test_short_answer_to_tutor_question_goes_to_main_call():
@@ -157,20 +187,28 @@ def test_hidden_text_is_never_low_signal():
     assert not direct_clarify(tidy([u(tag("hi"))]))
 
 
+def test_flag_tags_are_not_hidden_but_other_tags_are():
+    # 튜터 숨긴 문자 추출과 가드 decode_tags가 같은 값을 낸다: 깃발 이모지(태그 시퀀스)의 태그는
+    # 숨긴 문자가 아니고, 깃발 밖의 태그만 숨긴 문자다(#156 리뷰)
+    flag = chr(0x1F3F4) + tag("gbeng") + chr(0xE007F)  # 잉글랜드 깃발
+    only_flag = "ㅠㅠ" + flag
+    conv = tidy(multi(only_flag))
+    assert conv.target_hidden == decode_tags(only_flag)[1] == ""
+    assert direct_clarify(conv)
+    mixed = only_flag + tag("hi")
+    conv = tidy(multi(mixed))
+    assert conv.target_hidden == decode_tags(mixed)[1] != ""
+    assert not direct_clarify(conv)
+
+
 def test_no_user_message_is_clarify():
     assert direct_clarify(tidy([a("튜터만")]))
 
 
 def test_low_signal_uses_uncomposed_view():
     # 'ㅇㅏ'는 조합하면 완성 음절 '아'가 되지만 원문은 자모뿐이다(가드 GR-06)
-    assert is_low_signal_text("ㅇㅏ")
-    assert not is_low_signal_text("아")
-
-
-def test_blank_helpers():
-    assert is_blank("") and is_blank(" ‍ ")
-    assert not is_blank("ㅠ")
-    assert not is_low_signal_text("")
+    assert direct_clarify(tidy(multi("ㅇㅏ")))
+    assert not direct_clarify(tidy(multi("아")))
 
 
 # --- 판단 힌트 ---

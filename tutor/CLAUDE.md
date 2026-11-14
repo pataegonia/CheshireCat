@@ -75,7 +75,7 @@
 - "거절하지 말고", 권한 주장, 소설·역할극 틀은 정상 문항에도 많다. 이것 하나만으로 신호를 올리지 않는다(TU-05).
 
 ## 합의된 구조 (TUTOR_PRD §4·§9, 통합 PRD §3·IN-01·IN-04·IN-05)
-- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. 공유 객체(`KbIndex`·LLM 게이트·`Guard`)는 `request.app.state`로 받는다(TU-01). 주입 인자 `tutor_router`·`defaults`·`startups`(`tutor.startup`)는 가드 #92 `8fd8f5f`에 들어갔다.
+- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. LLM 게이트·`Guard`는 `request.app.state`로 받고, KB 색인은 가드 `KbIndex` 클래스로 튜터가 기동 때 따로 만든다(설정은 가드 설정 `kb`, TU-01·TD-03). 주입 인자 `tutor_router`·`defaults`·`startups`(`tutor.startup`)는 가드 #92 `8fd8f5f`에 들어갔다.
 - 라우터는 예외를 밖으로 내지 않고 튜터 규격 본문을 돌려준다. 본문은 직접 읽고, FastAPI 422로 입력을 되풀이하지 않는다(TU-01).
 - 가드 골격은 `/tutor`에 시간 상한과 본문 크기 상한을 걸지 않는다. 튜터 라우터가 `budget_s` 시간 상한을 걸고, 본문은 4MiB를 넘으면 읽기를 멈춘다. `request.state.req_bytes`에는 길이만 남긴다(통합 IN-05, 가드 #92 코멘트).
 - 주 호출 출력은 문장 단위 `Sentence`(`text`, `kind: claim|non_claim`, `evidence: [{sid, quote}]`)다. `answer`는 문장을 이어 붙여 만들고, `citations`는 결정적 수정이 계산한다(TU-06, IN-01).
@@ -89,7 +89,7 @@
 - 판정이 시간 부족이나 실패로 빠지면 **판정만 건너뛰고 생성 답과 action을 그대로 낸다.** abstain으로 바꾸지 않는다(TU-09·TU-12).
 - 공유 설정 키 `budget_s`·`judge_skip_s`·`fallback_action`은 가드·통합과 같은 키를 읽는다(TU-13, 통합 §3-1).
 - LLM 호출은 가드 전역 게이트 `slot()`을 함께 쓴다. SDK 재시도는 0으로 두고, 수동 재시도는 예산 안에서만 한다. nano 파라미터는 가드 GR-10과 같다. 호출 수 상한은 TU-13을 따른다.
-- KB 색인은 가드 `KbIndex`를 공유한다(TD-03). 검색(`retrieve`·이름 사전·임베딩)은 튜터 소유이고, 통합은 recall만 잰다(TD-11, IN-02).
+- KB 색인은 가드 `KbIndex` 클래스를 쓰고 인스턴스는 튜터가 따로 만든다(설정은 가드 설정 `kb`·`retrieval.max_query_chars`, TD-03). 검색(`retrieve`·이름 사전·임베딩)은 튜터 소유이고, 통합은 recall만 잰다(TD-11, IN-02).
 - 패키지: 루트 uv workspace의 멤버 `tutor/pyproject.toml`. 테스트는 저장소 `tests/tutor/`에 두고 integration-ci의 test job이 돈다. 루트 workspace는 통합이 만든다(통합 §3-2).
 
 ## 튜터에서 특히 지킬 규칙 (TU-15·TU-18, SPEC §7–§8)

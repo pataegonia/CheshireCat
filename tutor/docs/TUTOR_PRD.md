@@ -150,7 +150,7 @@ HTTP 200 + JSON
 우선순위: **P0** 제출에 필수 / **P1** 점수에 직접 기여 / **P2** 시간이 남으면(ablation).
 
 ### TU-01 HTTP 계약·형식 보장 (P0)
-- 튜터는 `async tutor.handle(body: dict) -> dict`와 그것을 감싼 **`tutor.router`(FastAPI `APIRouter`, `POST /tutor`) 하나를 내보낸다.** 조립은 **가드 `create_app(guard_factory, *, tutor_router=, defaults=, startups=)`에 주입**한다(통합 IN-05, 11/10): 루트 `app.py`는 통합이 한 줄로 만들고 `tutor_router=tutor.router`, `defaults={"/tutor": tutor.TUTOR_DEFAULT}`를 넘긴다. 인증(`TEAM_TOKEN` Bearer, 실패 401)·메타 로그·lifespan은 가드 골격 하나를 쓴다. 공유 객체(가드 `KbIndex`·LLM 게이트·`Guard`)는 `create_app` lifespan이 `app.state`에 두고 튜터는 `request.app.state`로 받는다. 튜터 자체 색인(예시 kNN·이름 사전)도 기동 때 만들어야 하므로 `tutor.startup(app_state)`를 `startups=`로 넘겨 lifespan에서 `setup_guard` 다음에 부르게 한다(가드 #92 `8fd8f5f`). `handle`은 헤더를 받지 않는다(TU-18).
+- 튜터는 `async tutor.handle(body: dict) -> dict`와 그것을 감싼 **`tutor.router`(FastAPI `APIRouter`, `POST /tutor`) 하나를 내보낸다.** 조립은 **가드 `create_app(guard_factory, *, tutor_router=, defaults=, startups=)`에 주입**한다(통합 IN-05, 11/10): 루트 `app.py`는 통합이 한 줄로 만들고 `tutor_router=tutor.router`, `defaults={"/tutor": tutor.TUTOR_DEFAULT}`를 넘긴다. 인증(`TEAM_TOKEN` Bearer, 실패 401)·메타 로그·lifespan은 가드 골격 하나를 쓴다. 공유 객체(LLM 게이트·`Guard`)는 `create_app` lifespan이 `app.state`에 두고 튜터는 `request.app.state`로 받는다. 가드 `KbIndex`는 클래스만 쓰고 인스턴스는 `tutor.startup`이 같은 설정으로 따로 만든다(TU-03). 튜터 자체 색인(예시 kNN·이름 사전)도 기동 때 만들어야 하므로 `tutor.startup(app_state)`를 `startups=`로 넘겨 lifespan에서 `setup_guard` 다음에 부르게 한다(가드 #92 `8fd8f5f`). `handle`은 헤더를 받지 않는다(TU-18).
 - `handle`과 튜터 라우터는 **예외를 밖으로 내지 않고** 언제나 튜터 규격 본문을 돌려준다(앱 수준 예외·422 처리기는 `request.url.path`로 `/tutor`면 `defaults["/tutor"]`를 내지만 이중 안전망일 뿐이다, 통합 IN-05). 서버는 이것을 HTTP 200 JSON 하나(비스트리밍, 256KB 미만)로 낸다. 요청 검증 실패를 FastAPI 기본 422로 내보내지 않는다(입력을 되풀이함, 가드 GR-01과 같음). 본문을 못 읽으면 TU-12 기본값.
 - 응답: `answer`는 문자열, **유니코드 문자 4,000자 이하**(SPEC §4). `action`은 7개 소문자 값 중 하나. `citations`는 문자열 목록(없으면 `[]`, `null` 금지). 규격에 없는 필드는 넣지 않는다.
 - `/tutor` → `/tutor/`·`http` → `https` 리다이렉트 없음(`redirect_slashes=False`, SPEC §3).
@@ -166,7 +166,7 @@ HTTP 200 + JSON
 - **수용 기준**: 임의 유니코드 입력에서 예외 0건, p95 ≤10ms.
 
 ### TU-03 KB 색인·검색 (P0)
-- **가드 GR-03의 KB 색인을 공유한다**(가드 §9 D2에 동의). 조각 = 섹션 텍스트(md + 붙은 CSV)를 `## ` 줄 앞에서 자른 것, 토큰 = `scoring.normalize` 뒤 문자 2-gram, BM25(k1 1.2, b 0.75), HTML은 읽지 않는다. 공유가 정해지기 전에는 같은 코드를 튜터 모듈에서 기동한다.
+- **가드 GR-03의 KB 색인을 공유한다**(가드 §9 D2에 동의). 조각 = 섹션 텍스트(md + 붙은 CSV)를 `## ` 줄 앞에서 자른 것, 토큰 = `scoring.normalize` 뒤 문자 2-gram, BM25(k1 1.2, b 0.75), HTML은 읽지 않는다. 튜터는 기동 때 가드 `KbIndex`(`guardrail.kb`, #129)를 가드 설정 `kb`(n-gram·k1·b) 값으로 만들고, 질의 상한도 가드 설정 `retrieval.max_query_chars`를 읽는다.
 - 튜터는 조각 점수를 섹션 최고 점수로 접어 **섹션 상위 5개**를 쓴다(`KbIndex.search` → 섹션 순위). 근거 묶음에는 섹션 원문 전체(`KbIndex.section_text`, 표 포함)를 넣는다.
 - 질의 = 창 안의 학습자 발화(버튼 문구 제외). 가드와 달리 후보 답변이 없다.
 - 공개 함수(통합 IN-02가 recall 측정에 쓴다): `async retrieve(query, history, *, subject=None, k=5, embedding=None) -> list[Section]`(`embedding`은 기동 때 만든 임베딩 검색 `EmbeddingSearch`, TU-11)(`Section`은 통합 `integration/contracts.py`, 통합 IN-01). 생성에 넣는 섹션 수 K의 기본값은 5다(#81). recall@5와 @8이 같아서 8은 더 잡는 행이 없고, 3이면 정답이 4위인 5행을 잃는다. 3과 5를 판정 포함 3회씩 끝까지 비교(11/13, 런박스, v2)하니 k=5 80.58(78.62~82.00), k=3 79.62(78.62~81.00)로 범위가 겹쳐 5로 정했다(TU-16). k=3은 주 호출 입력 토큰만 27% 줄고 추론 꼬리와 잘림은 같았다. 통합 O8의 top-2 제안은 k=5보다 정답 6행을 더 잃는다(recall@2 0.908).
@@ -417,7 +417,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 |---|---|---|---|
 | D1 | 입력 범주 판정을 `/tutor`가 쓸지 | **쓴다(v1).** 가드 `classify`를 주 호출과 병렬로 돌려 공격 4범주에서만 덮어쓴다(TU-10, 통합 I13). 범주만으로는 action이 다 정해지지 않으므로(harmful 두 갈래, abstain, 섹션 선택) 비공격 범주는 주 호출을 따른다. 동결본은 TU-10 기준으로 11/18에 고른다. 범주 정의는 가드 §3을 그대로 쓴다 | v1 확정(11/10), 동결은 측정 |
 | D1-2 | 출력 판정을 `/tutor`가 쓸지 | **쓴다(v1).** 생성 경로에 `judge_output(category=)`(TU-09 ②, 범위는 TU-09). 자체 검증·끔과의 비교는 ablation | v1 확정(11/10) |
-| D2 | KB 색인 공유 | **동의.** 튜터는 가드 `KbIndex`(`search`·`section_text`)를 그대로 쓴다(TU-03). 튜터 쪽 추가(이름 사전·임베딩)는 그 위에 얹는다 | 제안 수용 |
+| D2 | KB 색인 공유 | **동의.** 튜터는 가드 `KbIndex`의 `chunks`·`scores`로 조각 점수를 내고, 섹션 접기·`section_text`는 튜터 `tutor.retrieval.KbIndex`가 한다(TU-03). 튜터 쪽 추가(이름 사전·임베딩)는 그 위에 얹는다 | 제안 수용 |
 | D3 | 범주 → action 대응 | **동의.** 튜터 공개 세트 200/200으로 같은 표를 확인했다(§3) | 일치 |
 | D4 | 서버·게이트 | **동의.** 한 앱에 두 라우터, 전역 LLM 게이트 하나, 앱 수준 `TEAM_TOKEN` 검사. 가드 `create_app(tutor_router=, defaults=, startups=)`에 튜터 라우터와 `/tutor` 기본값, `tutor.startup`을 주입한다(TU-01, 통합 IN-05) | 통합 IN-05 반영, 가드 #92 `8fd8f5f` 반영(11/11) |
 | D5 | 토큰·제출 | 팀 정책(가드 master-plan §2: 관문마다 한 번 제출, 11/24 18:00 최종, 11/25 아침 제출 없음)을 따른다. **제출은 팀원 4명이 각자 자기 계정·자기 런박스 주소로 한다**(SPEC §7, §9: 계정별 마지막 제출 중 최고가 팀 점수). 관문마다 4개 런박스에 같은 커밋을 띄운다. 튜터 일정은 그 관문에 맞춘다(§15.1) | 제출 방식 확정(11/10), 토큰은 리더 결정 |
@@ -501,7 +501,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 |---|---|---|
 | TD-01 | 섹션 단위로 인용하고 기본은 1개만 낸다. answer·scaffold(answer_seeking)는 항상 1개(없으면 검색 1위). 두 대상을 명시적으로 비교하는 질문의 2개 인용은 ablation(`max_citations`) | 공개 세트 근거가 0–1개, 인용 F1 계산(§1). 근거 충실은 우리 citations로 판정(통합 IN-04). 실전에 근거 2개 문항이 있을 가능성(§1 실전 데이터 변수) |
 | TD-02 | 청크를 따로 두지 않고 섹션 원문 상위 5개를 근거 묶음으로 | 섹션이 작고 recall@5 0.96(§1) |
-| TD-03 | KB 색인은 가드 GR-03을 공유 | 가드 §9 D2, ADR-0010. 같은 결과를 두 번 만들지 않는다 |
+| TD-03 | KB 색인은 가드 GR-03의 `KbIndex`를 쓴다. 인스턴스는 튜터가 따로 만들고, 설정은 가드 설정 `kb`(n-gram·k1·b)와 `retrieval.max_query_chars`를 같이 쓴다 | 가드 §9 D2, ADR-0010. 조각·점수 코드를 두 번 두지 않는다. 가드 기본 설정이 TU-03 값(문자 2-gram, k1 1.2, b 0.75, 질의 상한 4,000자)에서 바뀌면 튜터 테스트가 실패하므로, 바꿀 때는 튜터 검색을 다시 재고 두 트랙이 같이 정한다 |
 | TD-04 | 주 호출은 nano 1회(범주 → action → 문장 목록과 문장별 근거). 판단·생성을 나누지 않는다 | 정답 답변이 짧고 근거가 하나라 판단·생성 분리의 이득이 불확실. 문장 단위 출력은 통합 결정적 수정(IN-04)을 위해. 가드 `classify`·`judge_output`은 TD-13 |
 | TD-05 | 범주 정의는 가드 §3, 범주 → action은 §3 표 | 공개 세트 200/200, 가드 §9 D3, ADR-0012 |
 | TD-06 | nano 파라미터·게이트는 가드 GR-10과 같게(effort low, minimal 금지) | 가드 R13 S3, ADR-0011, 같은 키·같은 프로세스 |
@@ -536,6 +536,8 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - 2026-11-14(#139 리뷰 pataegonia 반영): TD-10 공개 문구 검사를 `examples.py` 하나에서 서버 텍스트 자산 전체(`tutor/` 코드·프롬프트·스키마, `config/`)와 공개 세트 400행 대화 메시지의 15자 대조로 넓혔다.
 - 2026-11-14(#139 리뷰 pataegonia 반영, 사용자 결정): 과제 대행 보정은 밝힘일 때만, classify 합치기 앞에 둔다(TU-06). 대행 신호에서 "정답 전부" 갈래를 빼고 "답안 전부"는 작성 동사가 붙을 때만, 영어 `do`는 목적어가 붙을 때만 본다(TU-05·TU-06). `scaffold_state_rule`이 대행 보정도 함께 켜고 끈다는 것을 토글 목록(TU-14)에 적었다. 보정 손익은 폴드별·홀드아웃 따로 보고하고 경계 짝은 점검 세트로 본다(TU-06). §3 표에 잠정 표시.
 - 2026-11-14(#139 측정, 사용자 결정): answer_seeking scaffold 기본을 숨김(`scaffold_state_rule: false`)으로 되돌렸다. 공개 200행 판정 포함 3회에서 전체 점수가 같고(79.9 대 80.1) 과제 대행 행 0점이 늘었다(3 → 5). 밝힘은 운영진 답(§11-1-4)과 행별 응함 확인 뒤 T3에서 다시 본다(TU-06·§3).
+- 2026-11-14(T3.1): 튜터 KB 색인의 BM25를 가드 `KbIndex`(#129)로 바꿨다(TD-03). 공개 200행의 조각 점수(비트 단위)·섹션 순위·상위 5와 recall@1·3·5(0.824·0.916·0.958)가 그대로다. BM25 값과 질의 상한은 가드 설정에서 읽는다(TU-03).
+- 2026-11-14(#158 리뷰 반영, yang-co1): TD-03을 실제 구조에 맞게 고쳤다(가드 `KbIndex` 인스턴스는 튜터가 따로 만들고 설정은 가드 설정 `kb`·`retrieval.max_query_chars`를 같이 쓴다). 가드 기본 설정이 TU-03 값에서 바뀌면 튜터 테스트가 실패하게 했다.
 - 2026-11-14(#83 T3.3 준비): `run_local --guard`로 폴드별 가드를 붙여 잰다(TU-16). S2.11(#119) 전에는 가드에 `classify`·`judge_output`이 없어 튜터가 그 단계를 건너뛰고, 결과 화면에 건너뜀 사유별 횟수를 낸다.
 - 2026-11-14(#83, 사용자 결정): `vote`와 TU-09 ① 자체 검증(`verify: self`)은 요청당 nano 절대 4회(TU-13)를 넘어 동결 설정에 쓸 수 없고 자르는 순서(§15.4)에서 먼저 빠지므로 만들지 않는다. 켜도 끔처럼 조용히 돌지 않게 설정 로드에서 거부한다. #83 비교는 범주 판정 ⓐ·ⓑ·ⓒ와 검증 끔/②만 한다.
 
@@ -670,7 +672,7 @@ P0(TU-01–03, TU-05–07, TU-10, TU-12–19)는 자르지 않는다. 특히 TU-
 
 | 자산 | 출처 | 작성 | 상태 |
 |---|---|---|---|
-| KB 색인(문자 2-gram BM25, 소제목 조각), `normalize` 복사본 | `kb/`에서 기동 때 만듦(배포 자료 가공). 가드 `KbIndex`가 생기기 전까지 튜터 `tutor/retrieval/`에 가드 R13과 같은 조각·점수로 둔다(#103) | 팀(코드) | TU-03 |
+| KB 색인(문자 2-gram BM25, 소제목 조각), `normalize` 복사본 | `kb/`에서 기동 때 만듦(배포 자료 가공). 조각·점수는 가드 `KbIndex`(#129)를 쓰고, 튜터 `tutor/retrieval/`은 섹션 정보와 섹션 접기만 든다(T3.1) | 팀(코드) | TU-03 |
 | 전역 LLM 게이트 | 가드와 공유(`app.state.guard.llm.slot()`, 출처는 가드 provenance 1절). 튜터 호출기 `tutor/runtime/llm.py`가 그 게이트와 probe 결과를 쓴다(#107). 가드 판정기에 LLM이 없으면 같은 크기의 튜터 게이트(`asyncio.Semaphore`)를 둔다 | 가드 | TU-13 |
 | 튜터 설정 `config/tutor.yaml`(모드·토글·검색 K·호출당 시간 제한·호출 상한) | — | 팀이 직접 씀. 키·주소 없음 | TU-14 |
 | 이름 사전(이름 → 섹션 ID) | `kb/`에서 기동 때 코드로 추출(배포 자료 가공) | 팀(코드) | TU-04. 상위 5개 안 순위 올리기 방식은 채택 안 함(#81 측정: recall@1 0.824 → 최선 0.782, 고친 행 0). 주 호출에 "이름 → 후보 섹션"을 넘기는 힌트 방식은 v2 연결 뒤 #82에서 잰다 |

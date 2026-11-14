@@ -493,11 +493,11 @@ def test_run_local_builds_and_uses_the_embedding_when_turned_on(monkeypatch, tmp
     assert code == 0 and isinstance(state.tutor_emb, emb.EmbeddingSearch)  # 그 state로 잰다
     assert len(fake.calls) == batches + 1  # 기동 묶음 + 질의 1회(실행 1회)
     captured = capsys.readouterr()
-    assert "임베딩 예상 호출 24회" in captured.out
+    assert "임베딩 예상 호출 20회" in captured.out  # 홀드아웃 행의 영어 질의 4개는 재지 않는다
     assert (
-        f"임베딩 호출 {batches + 1}회(기동 {batches}회 + 질의 1회 / 영어 질의 20회" in captured.out
+        f"임베딩 호출 {batches + 1}회(기동 {batches}회 + 질의 1회 / 영어 질의 16회" in captured.out
     )
-    assert "영어 질의 20회 중 1회만" in captured.out  # 일부만 써도 실패는 아니고 알린다
+    assert "영어 질의 16회 중 1회만" in captured.out  # 일부만 써도 실패는 아니고 알린다
     sample = run_local.public_tutor_rows()[0]["messages"][-1]["content"]
     assert QUERY not in captured.out + captured.err and sample not in captured.out  # 본문 없음
     saved = _saved(tmp_path)
@@ -539,7 +539,7 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     assert saved["embedding"]["calls"] == len(english) and saved["embedding"]["failures"] == 0
     assert len(fake.calls) == kb_batches() + len(english)
     out = capsys.readouterr().out  # 자기 state 경로에서도 행마다 지연을 잰다
-    assert f"(요청 {len(run_local.public_tutor_rows())}개)" in out
+    assert "(요청 160개)" in out  # 홀드아웃 40행은 재지 않는다(TU-16·#84)
     assert all(len(texts) == 1 for texts in fake.calls[kb_batches() :])  # 질의마다 한 문장씩
     assert code == 0 and saved["tainted"] is False
 
@@ -550,7 +550,7 @@ def test_run_local_reports_query_failures_over_several_runs(monkeypatch, tmp_pat
     code, _state = _run_local(monkeypatch, tmp_path, fake, *ON, "--runs", "2", query=QUERY)
     out = capsys.readouterr().out
     assert code == 1 and len(fake.calls) == kb_batches() + 2
-    assert "임베딩 예상 호출 44회" in out and "질의 2회" in out and "실패 2회" in out
+    assert "임베딩 예상 호출 36회" in out and "질의 2회" in out and "실패 2회" in out
     assert "BM25로 떨어졌다" in out
     saved = _saved(tmp_path)
     assert saved["tainted"] is True and saved["embedding"]["failures"] == 2
@@ -572,7 +572,7 @@ def test_run_local_blocked_calls_taint_the_result_even_with_a_good_embedding(
     out = capsys.readouterr().out  # 튜터 상한에서 임베딩 몫도 뺐다고 알린다
     assert "상한에 막혀 보내지 못한 튜터 호출 1회" in out
     assert f"(튜터 상한 {state.tutor_llm.max_calls}회" in out  # 실제로 건 상한과 같다
-    assert f"- 임베딩 몫 {kb_batches() + 20})" in out  # 기동 묶음 + 영어 질의 20개
+    assert f"- 임베딩 몫 {kb_batches() + 16})" in out  # 기동 묶음 + 교차 검증 행 영어 질의 16개
     marks = ["튜터 LLM 호출:", "튜터 요청 지연", "상한에 막혀 보내지 못한", "임베딩 호출 "]
     at = [out.index(mark) for mark in marks]
     assert at == sorted(at)  # 호출 → 지연(#122) → 상한 막힘 → 임베딩 요약 순
@@ -638,15 +638,16 @@ def test_run_local_checks_the_embedding_env_before_building(
 def test_run_local_counts_the_embedding_in_the_call_cap(monkeypatch, tmp_path, capsys):
     from tutor.eval import run_local
 
-    rows = run_local.public_tutor_rows()
+    held = run_local.holdout_ids()  # 홀드아웃 행은 재지 않는다(TU-16·#84)
+    rows = [row for row in run_local.public_tutor_rows() if row["id"] not in held]
     assert (
-        run_local.expected_calls(rows, preset="tutor", runs=1, judge=False) == 660
-    )  # 3 × 200 × 1.1
-    exact = 660 + 24  # 튜터 + 임베딩(기동 4 + 영어 질의 20)
+        run_local.expected_calls(rows, preset="tutor", runs=1, judge=False) == 528
+    )  # 3 × 160 × 1.1
+    exact = 528 + 20  # 튜터 + 임베딩(기동 4 + 영어 질의 16)
     code, state = _run_local(
         monkeypatch, tmp_path, FakeEmbed(), "--max-calls", str(exact), *ON, query=QUERY
     )
-    assert code == 0 and state.tutor_llm.max_calls == exact - 24  # 실행 중 튜터 상한에서도 뺀다
+    assert code == 0 and state.tutor_llm.max_calls == exact - 20  # 실행 중 튜터 상한에서도 뺀다
     capsys.readouterr()
     with pytest.raises(SystemExit) as stop:  # 하나 모자라면 시작 전에 멈춘다
         _run_local(monkeypatch, tmp_path, FakeEmbed(), "--max-calls", str(exact - 1), *ON)

@@ -145,9 +145,10 @@ def api_env(monkeypatch):
 def test_local_run_measures_the_baseline(api_env, tmp_path, capsys):
     argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--out", str(tmp_path)]
     assert run_local.main(argv) == 0
-    assert "튜터 LLM 호출: baseline 200회" in capsys.readouterr().out  # 요청당 1회
+    # 요청당 1회, 홀드아웃 40행은 재지 않는다(TU-16·#84)
+    assert "튜터 LLM 호출: baseline 160회" in capsys.readouterr().out
     data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
-    assert data["report"]["confusion"]["answer"] == {"answer": 111}
+    assert data["report"]["confusion"]["answer"] == {"answer": 91}
 
 
 @pytest.mark.parametrize(
@@ -197,7 +198,7 @@ def test_tutor_preset_needs_the_api_settings(
 def test_call_counts_add_up_over_runs(api_env, tmp_path, capsys):
     argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--runs", "2"]
     assert run_local.main([*argv, "--out", str(tmp_path)]) == 0
-    assert "튜터 LLM 호출: baseline 400회" in capsys.readouterr().out
+    assert "튜터 LLM 호출: baseline 320회" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -216,9 +217,9 @@ def test_same_key_twice_is_rejected(api_env, tmp_path):
 
 
 def test_baseline_estimate_counts_one_call_per_request(api_env, tmp_path, capsys):
-    argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--max-calls", "220"]
-    assert run_local.main([*argv, "--out", str(tmp_path)]) == 0  # 200 × 1 × 1.1 = 220
-    assert "예상 호출 220회" in capsys.readouterr().out
+    argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--max-calls", "176"]
+    assert run_local.main([*argv, "--out", str(tmp_path)]) == 0  # 160 × 1 × 1.1 = 176
+    assert "예상 호출 176회" in capsys.readouterr().out
 
 
 def test_tutor_calls_stop_at_the_cap_while_running(api_env, monkeypatch, tmp_path, capsys):
@@ -227,11 +228,11 @@ def test_tutor_calls_stop_at_the_cap_while_running(api_env, monkeypatch, tmp_pat
 
     monkeypatch.setattr(llm_mod, "_openai_send", lambda: failing)
     monkeypatch.setattr(llm_mod, "RETRY_JITTER_S", (0.0, 0.0))
-    argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--max-calls", "220"]
+    argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--max-calls", "176"]
     # 상한에 막힌 호출이 있으면 기본값이 섞인 측정이라 알리고 1로 끝난다(#108 리뷰)
     assert run_local.main([*argv, "--out", str(tmp_path)]) == 1
     out = capsys.readouterr().out
-    assert "튜터 LLM 호출: baseline 220회" in out  # 재시도까지 400회가 아니라 상한에서 멈춘다
+    assert "튜터 LLM 호출: baseline 176회" in out  # 재시도까지 320회가 아니라 상한에서 멈춘다
     assert "상한에 막혀 보내지 못한 튜터 호출" in out and "기본값이 섞인 결과" in out
 
 
@@ -250,10 +251,11 @@ def test_tutor_cap_leaves_room_for_the_judge(api_env, monkeypatch, tmp_path, cap
     monkeypatch.setattr(llm_mod, "_openai_send", lambda: failing)
     monkeypatch.setattr(llm_mod, "RETRY_JITTER_S", (0.0, 0.0))
     monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
-    argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--judge", "--max-calls", "561"]
+    argv = ["--preset", "tutor", "--tutor-set", "mode=baseline", "--judge", "--max-calls", "451"]
     assert run_local.main([*argv, "--out", str(tmp_path)]) == 1
-    # 예상 561회 = (튜터 200 + 판정 310) × 1.1. 판정 몫 341회를 남기고 튜터는 220회에서 멈춘다
-    assert "튜터 LLM 호출: baseline 220회" in capsys.readouterr().out
+    # 예상 451회 = (튜터 160 + 판정 250) × 1.1(홀드아웃 40행은 재지 않는다).
+    # 판정 몫 275회를 남기고 튜터는 176회에서 멈춘다
+    assert "튜터 LLM 호출: baseline 176회" in capsys.readouterr().out
 
 
 def test_help_works_and_runs_stop_cleanly_with_a_broken_config(monkeypatch, tmp_path):

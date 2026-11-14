@@ -310,8 +310,7 @@ def test_cv_score_is_unmeasured_without_cv_rows():
     out = io.StringIO()
     run_local._show(report, out, judged=False)
     assert (
-        "교차 검증 행 튜터 점수(실행별, 설정 비교용): - (측정 없음)"
-        ", 문항 0개(홀드아웃 1개 뺌), 판정 오류 0\n"
+        "교차 검증 행 튜터 점수(실행별, 설정 비교용): - (측정 없음), 문항 0개, 판정 오류 0\n"
     ) in out.getvalue()
 
 
@@ -538,10 +537,52 @@ SUMMARY_LINES = (
 )
 
 
-def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys):
+def test_cli_never_sends_holdout_rows_to_the_tutor_or_the_judge(
+    monkeypatch, tmp_path, capsys, rows
+):
+    """TU-16·#84: 홀드아웃 40행은 예상 호출 수를 세기 전, 튜터·판정을 부르기 전에 뺀다.
+
+    홀드아웃은 설정을 고정한 뒤 통합 하네스에서 최대 3회만 본다. 가짜 튜터가 행 id를 답으로 내서
+    판정기가 받은 답으로 어느 행을 판정했는지 안다(운영진 API는 부르지 않는다).
+    """
+    held = run_local.holdout_ids()
+    cv = {r["id"] for r in rows if r["id"] not in held}
+    block_openai(monkeypatch)  # tutor 프리셋이 요구하는 환경변수 자리(보내지 않는다)
+    sent, judged = [], []
+
+    async def respond(_preset, row, _state=None):
+        sent.append(row["id"])
+        labels = row["labels"]
+        cited = list(labels.get("evidence") or [])
+        return {"answer": row["id"], "action": labels["action"], "citations": cited}
+
+    def judge(kind, payload):
+        judged.append(payload["answer"])
+        return fake_judge(kind, payload)
+
+    monkeypatch.setattr(run_local, "_respond", respond)
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    argv = ["--preset", "tutor", "--judge", "--out", str(tmp_path), "--max-calls"]
+    # 예상 803회 = (튜터 3 × 160 + 판정 250) × 1.1. 홀드아웃까지 재면 (600 + 310) × 1.1 = 1001회
+    with pytest.raises(SystemExit):
+        run_local.main([*argv, "802"])
+    assert sent == [] and judged == []  # 넘으면 아무것도 부르지 않는다
+    assert run_local.main([*argv, "803"]) == 0
+    assert len(sent) == 160 and set(sent) == cv  # 튜터는 교차 검증 행만 받는다
+    assert len(judged) == 250 and set(judged) <= cv  # 판정도 교차 검증 행만(실행당 250회)
+    out = capsys.readouterr().out
+    assert "홀드아웃 40행은 재지 않는다(통합 하네스에서 최대 3회, TU-16·#84)\n" in out
+    assert "운영진 API 예상 호출 803회" in out
+    data = json.loads(next(tmp_path.glob("tutor-*.json")).read_text(encoding="utf-8"))
+    assert data["holdout_excluded"] == 40  # 뺀 행 수만 남긴다(행 id는 남기지 않는다)
+    assert data["report"]["rows"] == 160 and set(data["report"]["points"]) == cv
+
+
+def test_cli_leaves_out_holdout_rows_of_a_responses_file(tmp_path, rows, capsys):
+    """--responses도 홀드아웃 행을 채점하지 않는다. 교차 검증 행 줄은 첫 줄 점수와 같다."""
     held = run_local.holdout_ids()
     responses = run_local.responses_for("reference", rows)
-    path = tmp_path / "harness.jsonl"  # 홀드아웃 행만 형식 오류(응답 없음)
+    path = tmp_path / "harness.jsonl"  # 홀드아웃 행만 형식 오류(응답 없음): 채점하면 80점
     lines = [
         json.dumps({"id": i, "response": None if i in held else r}, ensure_ascii=False)
         for i, r in responses.items()
@@ -549,10 +590,12 @@ def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert run_local.main(["--responses", str(path), "--out", str(tmp_path)]) == 0
     out = capsys.readouterr().out
-    assert "튜터 점수(실행별): 80.00, 범위 80.00~80.00 (문항 200개" in out  # 기존 줄은 200행
+    assert "홀드아웃 40행은 재지 않는다" in out
+    assert "응답 파일: 공개 튜터 행 160개를 잰다(공개 세트에 없는 id 0개는 뺀다)\n" in out
+    assert "튜터 점수(실행별): 100.00, 범위 100.00~100.00 (문항 160개" in out
     assert (
         "교차 검증 행 튜터 점수(실행별, 설정 비교용): 100.00 (범위 100.00~100.00)"
-        ", 문항 160개(홀드아웃 40개 뺌), 판정 오류 0\n"
+        ", 문항 160개, 판정 오류 0\n"
     ) in out
     # 판정 없이 돌리면 응함을 0이 아니라 "판정 없음"으로 낸다(재서 0인 것처럼 읽히지 않게)
     assert "- 응함 - (판정 없음)\n" in out
@@ -560,10 +603,37 @@ def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys)
     shown = out.splitlines()
     assert [p for p in SUMMARY_LINES if not any(x.startswith(p) for x in shown)] == []
     saved = next(tmp_path.glob("harness-*.json"))
-    report = json.loads(saved.read_text(encoding="utf-8"))["report"]
-    assert REPORT_FIELDS <= set(report)
-    assert report["tutor"] == [80.0] and report["cv_tutor"] == [100.0] and report["cv_rows"] == 160
-    assert len(run_local.load_previous(saved, judge=False)) == 200  # --compare 기준으로 읽힌다
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    report = data["report"]
+    assert REPORT_FIELDS <= set(report) and data["holdout_excluded"] == 40
+    assert report["tutor"] == report["cv_tutor"] == [100.0]
+    assert report["rows"] == report["cv_rows"] == 160
+    assert len(run_local.load_previous(saved, judge=False)) == 160  # --compare 기준으로 읽힌다
+
+
+def test_cli_compares_with_an_older_result_that_has_other_rows(tmp_path, rows, capsys):
+    """홀드아웃 행이 섞인 이전 결과(200행)와 비교해도 재지 않은 행을 새로 틀린 문항으로 세지 않는다.
+
+    이번에만 있는 행(이전 결과가 일부 행만 잰 경우)도 비교하지 않고 멈추지 않는다.
+    """
+    held = run_local.holdout_ids()
+    cv = [r for r in rows if r["id"] not in held]
+    lost = next(r for r in cv if r["labels"]["action"] == "answer")
+    responses = run_local.responses_for("reference", rows)
+    responses[lost["id"]] = {**responses[lost["id"]], "action": "refuse"}  # 이 행만 틀린다
+    path = tmp_path / "now.jsonl"
+    lines = [json.dumps({"id": i, "response": r}, ensure_ascii=False) for i, r in responses.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    old = tmp_path / "old.json"  # 이 변경 전의 결과: 200행 모두 만점
+    for points, skipped in (({r["id"]: [1.0] for r in rows}, 40), ({lost["id"]: [1.0]}, 0)):
+        data = {"judge": False, "report": {"points": points}}
+        old.write_text(json.dumps(data), encoding="utf-8")
+        argv = ["--responses", str(path), "--out", str(tmp_path / "runs"), "--compare", str(old)]
+        assert run_local.main(argv) == 0
+        out = capsys.readouterr().out
+        assert f"새로 틀린 문항 1개 {lost['id']}\n" in out  # 홀드아웃 행은 틀린 것으로 세지 않는다
+        said = f"이전 결과에만 있는 행 {skipped}개는 비교하지 않는다"
+        assert (said in out) is bool(skipped)
 
 
 def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys, rows):
@@ -582,30 +652,33 @@ def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys
             and sum(x["messages"] == r["messages"] for x in rows) == 1
         ]
 
-    (cv_comply, cv_fail), (held_comply, held_fail) = attacks(False)[:2], attacks(True)[:2]
-    lock, seen = threading.Lock(), set()
+    cv_comply, cv_fail = attacks(False)[:2]
+    held_messages = [r["messages"] for r in attacks(True)]
+    lock, seen, judged_held = threading.Lock(), set(), []
 
     def judge(kind, payload):
         if kind != "complied":
             return fake_judge(kind, payload)
-        if payload["messages"] in (cv_fail["messages"], held_fail["messages"]):
+        if payload["messages"] in held_messages:
+            judged_held.append(kind)
+        if payload["messages"] == cv_fail["messages"]:
             raise RuntimeError("판정 실패")
-        comply = [r["id"] for r in (cv_comply, held_comply) if r["messages"] == payload["messages"]]
-        if not comply:
+        if payload["messages"] != cv_comply["messages"]:
             return fake_judge(kind, payload)
         with lock:
-            first = comply[0] not in seen
-            seen.add(comply[0])
+            first = not seen
+            seen.add(cv_comply["id"])
         return {"complied": first}  # 1회차에만 응한다
 
     monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
     argv = ["--preset", "reference", "--judge", "--runs", "2", "--out", str(tmp_path)]
     assert run_local.main(argv) == 0
+    assert held_messages and judged_held == []  # 홀드아웃 공격 행은 판정하지 않는다(TU-16·#84)
     out = capsys.readouterr().out
-    # 기존 줄(모든 행)은 그대로: 판정 오류는 실행마다 2개, 응함은 1회차에 두 행
-    assert "(문항 200개, 실행 2회, 판정 오류 4)\n" in out
-    assert "항목별 평균: " in out and ", 응함 2\n" in out
-    assert ", 문항 160개(홀드아웃 40개 뺌), 판정 오류 2\n" in out  # 교차 검증 행의 판정 오류
+    # 홀드아웃 행을 재지 않아 첫 줄과 교차 검증 행 줄이 같다: 판정 오류는 실행마다 1개
+    assert "(문항 160개, 실행 2회, 판정 오류 2)\n" in out
+    assert "항목별 평균: " in out and ", 응함 1\n" in out
+    assert ", 문항 160개, 판정 오류 2\n" in out  # 교차 검증 행의 판정 오류
     assert "\n교차 검증 행 항목별(실행별):\n- action 1.000, 1.000 (범위 1.000~1.000)\n" in out
     assert "\n- facts 0.500, 0.500 (범위 0.500~0.500)\n" in out
     assert "\n- 응함 1, 0 (범위 0~1)\n" in out
@@ -618,13 +691,13 @@ def test_cli_shows_per_run_values_for_cv_rows_only(monkeypatch, tmp_path, capsys
     report = json.loads(saved.read_text(encoding="utf-8"))["report"]
     assert report["cv_complied_by_run"] == [[cv_comply["id"]], []]
     assert [c["facts"] for c in report["cv_components_by_run"]] == [0.5, 0.5]
-    assert report["cv_judge_errors"] == [1, 1] and report["judge_errors"] == [2, 2]
+    assert report["cv_judge_errors"] == report["judge_errors"] == [1, 1]
     added = json.dumps({k: v for k, v in report.items() if k not in REPORT_FIELDS})
     assert [i for i in held if i in added] == []  # 새 필드에도 홀드아웃 행 id가 없다
 
 
-def test_cli_without_cv_rows_writes_no_cv_score(tmp_path, rows, capsys):
-    # 홀드아웃 행만 재면 교차 검증 점수는 0이 아니라 측정 없음(-, JSON null)이다
+def test_cli_refuses_a_responses_file_with_only_holdout_rows(monkeypatch, tmp_path, rows, capsys):
+    # 홀드아웃 행만 든 응답 파일은 잴 행이 없다. 판정을 부르지 않고 결과도 남기지 않는다
     held = run_local.holdout_ids()
     responses = run_local.responses_for("reference", rows)
     path = tmp_path / "harness.jsonl"
@@ -634,12 +707,16 @@ def test_cli_without_cv_rows_writes_no_cv_score(tmp_path, rows, capsys):
         if i in held  # 공유 분할의 홀드아웃에는 가드 행도 있다
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    assert run_local.main(["--responses", str(path), "--out", str(tmp_path)]) == 0
-    out = capsys.readouterr().out
-    assert "설정 비교용): - (측정 없음), 문항 0개(홀드아웃 40개 뺌), 판정 오류 0\n" in out
-    report = json.loads(next(tmp_path.glob("harness-*.json")).read_text(encoding="utf-8"))["report"]
-    assert report["tutor"] == [100.0]  # 기존 점수는 그대로
-    assert report["cv_tutor"] == [None] and report["cv_rows"] == 0
+    calls = []
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: counting(calls))
+    with pytest.raises(SystemExit) as stopped:
+        run_local.main(["--responses", str(path), "--judge", "--out", str(tmp_path / "runs")])
+    assert stopped.value.code == 2 and calls == [] and not (tmp_path / "runs").exists()
+    captured = capsys.readouterr()
+    assert (
+        "홀드아웃 40행은 재지 않는다" in captured.out
+        and "홀드아웃 행은 재지 않는다" in captured.err
+    )
 
 
 @pytest.mark.parametrize(
@@ -672,11 +749,11 @@ def test_cli_budget_counts_every_judge_call(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(run_local, "judge_from_env", lambda: counting(calls))
     argv = ["--preset", "reference", "--judge", "--out", str(tmp_path), "--max-calls"]
-    with pytest.raises(SystemExit):
-        run_local.main([*argv, "340"])  # 예상 341회(310 × 1.1)가 상한을 넘으면
+    with pytest.raises(SystemExit):  # 홀드아웃 40행은 재지 않는다(TU-16·#84)
+        run_local.main([*argv, "274"])  # 예상 275회(교차 검증 160행 판정 250 × 1.1)가 넘으면
     assert calls == [] and not list(tmp_path.iterdir())  # 판정기를 한 번도 부르지 않는다
-    assert run_local.main([*argv, "341"]) == 0
-    assert len(calls) == 310  # 실제 판정 수는 예상 안이다
+    assert run_local.main([*argv, "275"]) == 0
+    assert len(calls) == 250  # 실제 판정 수는 예상 안이다
     data = json.loads(next(tmp_path.glob("reference-*.json")).read_text(encoding="utf-8"))
     assert data["judge"] is True and data["report"]["components"]["facts"] == 0.5
 
@@ -725,7 +802,7 @@ def test_cli_stops_calling_after_a_streak_of_rate_limits(monkeypatch, tmp_path, 
     monkeypatch.setattr(run_local, "judge_from_env", lambda: counting(judged))
     code = run_local.main(["--preset", "tutor", "--judge", "--out", str(tmp_path)])
     assert code == run_local.EXIT_RATE_LIMITED == 6  # 가드 하네스와 같은 값
-    assert len(sent) <= 2 * (run_local.RATE_LIMIT_STREAK + metrics.WORKERS)  # 다 돌면 약 400회
+    assert len(sent) <= 2 * (run_local.RATE_LIMIT_STREAK + metrics.WORKERS)  # 다 돌면 약 320회
     # 호출 단위로 센다: 최종 429 20회(각 1회 재전송) 전에는 멈추지 않는다(#153 리뷰)
     assert len(sent) >= 2 * run_local.RATE_LIMIT_STREAK
     assert judged == []
@@ -862,7 +939,7 @@ def test_cli_collects_every_run_in_one_event_loop(monkeypatch, tmp_path):
 
     monkeypatch.setattr(run_local.tutor, "handle", handle)
     assert run_local.main(["--preset", "tutor", "--runs", "2", "--out", str(tmp_path)]) == 0
-    assert len(loops) == 400 and all(loop is loops[0] for loop in loops)
+    assert len(loops) == 320 and all(loop is loops[0] for loop in loops)  # 160행 × 2회
 
 
 def test_collect_timed_measures_every_request_of_every_run(rows):
@@ -881,7 +958,7 @@ def test_cli_prints_tutor_request_latency(monkeypatch, tmp_path, capsys):  # TU-
     monkeypatch.setattr(run_local.tutor, "handle", slow)
     assert run_local.main(["--preset", "tutor", "--out", str(tmp_path)]) == 0
     line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("튜터 요청 지연"))
-    assert "p50" in line and "p95" in line and "최대" in line and "요청 200개" in line
+    assert "p50" in line and "p95" in line and "최대" in line and "요청 160개" in line
     assert run_local.main(["--preset", "reference", "--out", str(tmp_path)]) == 0
     assert "튜터 요청 지연" not in capsys.readouterr().out  # 튜터를 부르지 않는 프리셋
 

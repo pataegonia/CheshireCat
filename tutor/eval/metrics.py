@@ -196,7 +196,8 @@ def build_report(runs: Sequence[Sequence[Scored]], *, holdout: Collection[str] =
 def regressions(previous: Mapping[str, Sequence[float | None]], report: Report) -> list[str]:
     """새로 틀린 행: 전에는 모든 실행에서 만점이었는데 이번에 만점이 아닌 실행이 있는 행.
 
-    판정 오류(None)는 틀린 것으로 보지 않는다.
+    판정 오류(None)는 틀린 것으로 보지 않는다. 이번에 재지 않은 행(홀드아웃 행이 섞인 이전 200행
+    결과의 홀드아웃 행 등)도 세지 않는다.
     """
     return sorted(
         row_id

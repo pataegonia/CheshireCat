@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.1"
+    assert cfg.version == "6.0.2"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -203,7 +203,6 @@ def test_paths_from_file_when_env_unset():
     [
         {"third_call": True, "knn_vote": False},
         {"third_call": True, "lr": False},
-        {"nano_span": True, "literal_rule": False},
     ],
 )
 def test_forbidden_toggle_combinations(toggles):
@@ -239,6 +238,13 @@ def test_allowed_toggle_combinations():
         overrides={"toggles.third_call": True, "toggles.nano_span": True},
     )
     assert cfg.toggles.third_call and cfg.toggles.nano_span
+    # nano 구간은 규칙 ②와 무관하다(확인된 answer_quote를 ③에서 낸다)
+    cfg = load_config(DEFAULT, overrides={"toggles.nano_span": True, "toggles.literal_rule": False})
+    assert cfg.toggles.nano_span and not cfg.toggles.literal_rule
+    # ③을 끄면 nano 구간은 낼 자리가 없을 뿐이다(S2.9: 기본이 켬이라 한 줄로 ③을 끌 수 있어야 한다)
+    cfg = load_config(DEFAULT, overrides={"toggles.nano_tier3": False})
+    assert cfg.toggles.nano_span and not cfg.toggles.nano_tier3
+    assert cfg.llm.max_completion_tokens == 1600
 
 
 # --- ablation ---

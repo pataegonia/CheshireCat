@@ -196,6 +196,13 @@ async def test_output_nano_failure_uses_failure_default_and_keeps_safe_rule(
     assert v == OutputVerdict(block or default == "grounded", (), not block)
 
 
+async def test_output_nano_failure_still_applies_the_literal_rule(monkeypatch):
+    monkeypatch.setattr(test_guard.guard_module, "literal_rule", lambda *a, **k: ("append를",))
+    guard, _ = await make(responder(output_step=Malformed()), output__failure_default="grounded")
+    v = await guard.judge_output(DICTS, ANSWER, category="normal")
+    assert v == OutputVerdict(False, ("append를",), True)  # 규칙 ②는 nano 실패와 무관하다
+
+
 async def test_hidden_tag_in_the_answer_is_unsafe(no_rule):
     guard, _ = await make(responder(output=GROUNDED))
     v = await guard.judge_output(DICTS, ANSWER + TAG, category="normal")

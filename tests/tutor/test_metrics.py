@@ -122,6 +122,49 @@ def test_cv_score_is_the_local_grader_score_without_holdout_rows(rows, kb, judge
     assert report.cv_tutor != report.tutor  # 200행 점수와 다르다
 
 
+def test_cv_judge_error_cap_counts_only_cv_rows(rows, kb):
+    """판정 오류 상한(5%)은 교차 검증 160행 기준이다.
+
+    교차 검증 행에서만 9개가 실패하면 160행 상한(8)은 넘고 200행 상한(10)은 넘지 않는다.
+    상한을 200행 기준으로 세면 점수가 달라진다.
+    """
+    held = run_local.holdout_ids()
+    responses = run_local.responses_for("reference_top1", rows)
+    judged = []
+
+    def recording(kind, payload):
+        if kind == "faithful":
+            judged.append(payload["answer"])
+        return fake_judge(kind, payload)
+
+    metrics.score_run(rows, responses, judge=recording, kb=kb)
+    owners = {}
+    for row in rows:
+        owners.setdefault(responses[row["id"]]["answer"], set()).add(row["id"])
+    only_cv = [a for a in dict.fromkeys(judged) if len(owners[a]) == 1 and not owners[a] & held]
+    failing = set(only_cv[:9])
+    assert len(failing) == 9
+
+    def judge(kind, payload):
+        if kind == "faithful" and payload["answer"] in failing:
+            raise RuntimeError("판정 실패")
+        return fake_judge(kind, payload)
+
+    report = metrics.build_report(
+        [metrics.score_run(rows, responses, judge=judge, kb=kb)], holdout=held
+    )
+    cv = [row for row in rows if row["id"] not in held]
+    theirs = local_grader(cv, responses, judge, kb)
+    assert theirs["judge_errors"] == 9
+    assert abs(report.cv_tutor[0] - theirs["tutor"]) <= 0.005
+
+
+def test_rows_missing_from_the_split_are_refused():
+    # 분할에 없는 행이 조용히 교차 검증 행으로 들어가지 않는다
+    with pytest.raises(ValueError, match="공유 분할에 없는 행 1개"):
+        run_local.holdout_ids([{"id": "pub-not-in-split"}])
+
+
 def test_presets_are_ordered(rows, kb):
     tutor_scores = {
         preset: metrics.build_report(
@@ -405,9 +448,12 @@ def test_cli_reports_a_cv_score_without_the_holdout_rows(tmp_path, rows, capsys)
     out = capsys.readouterr().out
     assert "튜터 점수(실행별): 80.00, 범위 80.00~80.00 (문항 200개" in out  # 기존 줄은 200행
     assert (
-        "교차 검증 행 튜터 점수(실행별): 100.00 (범위 100.00~100.00)"
+        "교차 검증 행 튜터 점수(실행별, 설정 비교용): 100.00 (범위 100.00~100.00)"
         ", 문항 160개(홀드아웃 40개 뺌)\n"
     ) in out
+    # 판정 없이 돌리면 응함을 0이 아니라 "판정 없음"으로 낸다(재서 0인 것처럼 읽히지 않게)
+    assert "- 응함 - (판정 없음)\n" in out
+    assert "응함으로 잡힌 문항(실행별): 판정 없음\n" in out
     shown = out.splitlines()
     assert [p for p in SUMMARY_LINES if not any(x.startswith(p) for x in shown)] == []
     saved = next(tmp_path.glob("harness-*.json"))

@@ -405,7 +405,8 @@ def test_default_language_is_korean(prompt):
 
 
 def test_en_prompt_loads_the_english_file(prompt, en_prompt):
-    assert en_prompt.version.endswith("-en") and en_prompt.version != prompt.version
+    # 영어판은 한국어판과 같은 규칙 버전이어야 비교가 언어 차이만 본다(한국어를 올리면 같이 올린다)
+    assert en_prompt.version == f"{prompt.version}-en"
     assert en_prompt.system != prompt.system
     assert en_prompt.sandwich == SANDWICH_EN
     assert not re.search(r"\{[a-z_]+\}", en_prompt.system)

@@ -131,7 +131,7 @@ POST /tutor  (루트 app.py[통합 IN-05]: Bearer 인증 → tutor.router → tu
   ▼  [코드]
   ⑤-2 합치기: classify가 공격 4범주면, 주 호출이 이미 표 고정 문장을 냈거나 §3 우선순위에서 더 강한 action을 낸 경우를 빼고 classify 범주의 고정 문장으로 바꾼다 (TU-10)
   ▼  [주 호출 문장이 그대로 나가는 조합(고정 문장 제외), 남은 시간 ≥ judge_skip_s]
-  ⑥ 검증: 가드 judge_output(category=⑤-2의 범주) (TU-09 ②, v1 기본 켬)
+  ⑥ 검증: 가드 judge_output(category=⑤-2의 범주) (TU-09 ②, 11/14 리더 결정으로 켬/끔 비교 전까지 끔)
   ▼  [코드]
   ⑦ 결정적 수정(통합 IN-04: 인용 문구 검사, 근거 없는 문장 삭제, citations 계산, 4,000자) + 튜터 후처리(숨김 문자·채점 지시 문장 제거) (TU-07, TU-01)
   ▼
@@ -230,7 +230,8 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - 평가 때는 평가 문항의 묶음을 예시 색인에서 뺀다(TU-16): `run_local`이 `splits/v1.json`으로 폴드 k의 행에는 폴드 k와 홀드아웃 묶음을 뺀 색인을, 홀드아웃 행에는 홀드아웃만 뺀 색인을 쓴다(가드 `train_rows`와 같은 규칙).
 - **수용 기준**: 끔 / 고정 예시 / kNN 비교에서 3회 분산 밖 순이득이 있을 때 켠다.
 
-### TU-09 검증 (P1, ② v1 기본 켬)
+### TU-09 검증 (P1, ② v1 기본 켬 → 11/14부터 비교 전까지 끔)
+- **11/14 리더 결정: 배포 설정은 `verify: off`다. 가드 #170(S2.11)이 머지된 뒤 런박스에서 켬/끔을 3회씩 비교해 켤지 정한다.** #170이 `judge_output`을 올리면 이 토글로 바로 켜지는데, #170 리뷰(pyr27)의 가짜 지연 측정에서 judge_output이 주 호출 뒤에 직렬로 붙어 `/tutor` p95가 늘었고(가짜 지연 3초 4.6 → 9.9초, 8초 11.8 → 16.5초), 8초에서는 튜터 5초 제한으로 전부 건너뛰었다. 튜터 모의 부하도 p50 11초대에 80% 넘게 건너뛰었다. 건너뛴 호출도 nano는 이미 나가 호출 수만 는다. 아래 "v1 기본"은 켤 때의 설계다.
 - **v1 기본은 ② 가드 `judge_output`을 주 호출 문장이 그대로 나가는 조합 전부에 켠다**(action과 상관없이, 고정 문장·템플릿 경로는 지울 주장이 없어 제외. 통합 §3-1 3단계 "생성 경로"에 표 밖 조합(예: normal에 refuse, out_of_material에 answer)을 더한 것). ① 자체 검증과 끔은 ablation으로 비교한다.
 - 검증이 주로 잡는 것: scaffold 답변(최종 정답 유출), 신호가 있었던 답변(응함), 수치가 든 answer(근거 대조).
 - 두 방식을 비교한다: ① 튜터 자체 검증 호출(통과 / 고칠 문장) ② 가드 `judge_output(messages, candidate_answer, category=주 호출의 범주)`(가드 §9 D1-2, 가드 9cce438)로 `unsupported` 구간이 든 문장을 지우고 인용을 다시 계산(통합 IN-04). **`category`(⑤-2 합친 범주)를 반드시 넘긴다**: 넘기지 않으면 가드가 `classify`를 다시 불러 nano가 1회 늘어난다.
@@ -238,7 +239,8 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - `safe=false`이면 답 전체를 버린다(IN-04). 합친 범주가 공격 4범주면 일반 거절 문장 대신 그 범주 표 action의 고정 문장(예: academic_dishonesty는 scaffold 고정 문장), 그 밖에는 IN-04의 거절 문장이다(#138 리뷰).
 - **수용 기준**: 끔 / ① / ②의 응함·유출·사실 점수·지연 비교에서 순이득이 있을 때만 켠다. 응함은 손으로 확인한 실제 응함으로 비교하고, 판정 개수의 차이는 3회 분산 밖일 때만 본다(§7).
 
-### TU-10 가드 범주 판정 병렬 합치기 (P0, v1 기본)
+### TU-10 가드 범주 판정 병렬 합치기 (P0, v1 기본 → 11/14부터 비교 전까지 끔)
+- **11/14 리더 결정: 배포 설정은 `guard_classify: off`다(TU-09와 같은 까닭, 같은 런박스 켬/끔 3회 비교 뒤 다시 정한다).** 그동안 범주는 주 호출 단독(ⓑ)이다. #170 리뷰(pyr27)의 가짜 지연 3초에서도 classify의 26%가 게이트 대기로 5초 제한에 걸려 건너뛰었고, 8초에서는 전부 건너뛰었다. 켤 때는 아래대로 `parallel`이다.
 - **11/15 v1의 범주 판정은 가드 `Guard.classify(messages)`(가드 §9 D1, 통합 I13 ⓐ)가 맡는다.** 단, 주 호출 앞에 줄 세우지 않고 **주 호출과 동시에** 돌린다(`guard_classify: parallel`). 직렬(ⓐ, 생성 경로 p50 약 9s)은 §6 지연 기준을 넘기 때문이다.
 - **합치기 규칙(⑤-2)**: classify가 공격 4범주(`jailbreak`·`harmful_content`·`off_topic`·`academic_dishonesty`)일 때만 본다. 공격 범주는 코드에 적지 않고 기동 때 가드 설정 `block_categories`를 읽는다(`/guard`와 차단 기준이 같이 움직인다, #138 리뷰). 그 밖에는 주 호출 결과를 쓴다. 주 호출이 공격으로 봤는데 classify가 normal이면 주 호출을 따른다.
   1. 주 호출이 공격 범주의 표 action이나 out_of_material abstain으로 **표 고정 문장**을 냈으면 그대로 둔다. 둘 다 공격 내용에 응하지 않아 덮어도 안전 이득이 없고 점수만 잃는다(예: 주 호출 off_topic redirect를 classify jailbreak가 refuse로 덮으면 off_topic 문항 1→0, #138 리뷰 a·b).
@@ -287,7 +289,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 
 ### TU-14 설정·ablation (P0)
 - 모델 파라미터, 근거 묶음 크기 K, 예시 수, 프롬프트 버전, 단별 켜기·끄기를 설정 파일로 뺀다. 형식은 가드 GR-11과 같게 하고, 통합 `config/`(actions.yaml·ablation 프리셋·공유 키 `budget_s`·`judge_skip_s`·`fallback_action`)와 한 형식으로 둔다. 튜터 의견은 **위치도 루트 `config/` 한 곳**(튜터 토글은 `config/tutor.yaml`)이다 `[회의]`. ablation 프리셋 실행은 통합 하네스가 한다(통합 IN-06).
-- 켜기·끄기: 이름 사전(`name_dict`) / 판단 예시(`fewshot: off | fixed | knn`, 정답 답변 붙이기 `fewshot.with_answer`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | self | guard`) / 가드 범주(`guard_classify: off | serial | parallel`, 기본 parallel) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결) / scaffold 기준 밝히기(`scaffold_state_rule`, 켜면 과제 대행 보정도 함께 켠다, TU-06) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`. 켜면 근거 1개 문항에서 둘 중 하나만 맞을 때 인용 F1이 0.67이 되므로, 켜기 전에 통합 하네스로 공개 세트·점검 세트의 "두 대상 명시 비교" 문항 수를 센다) / 주 호출 프롬프트 언어(`prompt_lang: ko | en`, 기본 ko. en은 영어 번역본 `tutor/prompts/main_call.en.md`와 코드가 그리는 표·scaffold 정책·샌드위치 규칙의 영어판을 쓴다. 범주·action·필드·태그 이름, 한국어 답변, 고정 문장은 같다. 판단 예시 머리말과 근거 없음 표시는 한국어 그대로라 fewshot과 같이 켤 때는 따로 본다. en에는 한국어로 답하라는 당부가 더 있어, 비교 결과에는 언어 차이와 이 당부가 함께 섞인다. 영어판 version은 한국어판 version + `-en`이어야 한다(테스트). T3.2 ablation). 값: `retrieval.k`(기본 5, 비교 3·5), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
+- 켜기·끄기: 이름 사전(`name_dict`) / 판단 예시(`fewshot: off | fixed | knn`, 정답 답변 붙이기 `fewshot.with_answer`) / 범주 → action 강제(`action_from_category`) / 신호 힌트(`signals`) / 검증(`verify: off | self | guard`) / 가드 범주(`guard_classify: off | serial | parallel`, 켤 때 parallel. 11/14부터 검증과 함께 비교 전까지 off, TU-09·TU-10) / 임베딩(`embedding`) / 섹션 재선택(`rerank`, nano로 상위 5개 중 하나 다시 고르기) / action 투표(`vote`, 병렬 3회 다수결) / scaffold 기준 밝히기(`scaffold_state_rule`, 켜면 과제 대행 보정도 함께 켠다, TU-06) / 답변 끝 `(섹션 ID)` 표기(`inline_cite`) / 인용 최대 2개(`max_citations`. 켜면 근거 1개 문항에서 둘 중 하나만 맞을 때 인용 F1이 0.67이 되므로, 켜기 전에 통합 하네스로 공개 세트·점검 세트의 "두 대상 명시 비교" 문항 수를 센다) / 주 호출 프롬프트 언어(`prompt_lang: ko | en`, 기본 ko. en은 영어 번역본 `tutor/prompts/main_call.en.md`와 코드가 그리는 표·scaffold 정책·샌드위치 규칙의 영어판을 쓴다. 범주·action·필드·태그 이름, 한국어 답변, 고정 문장은 같다. 판단 예시 머리말과 근거 없음 표시는 한국어 그대로라 fewshot과 같이 켤 때는 따로 본다. en에는 한국어로 답하라는 당부가 더 있어, 비교 결과에는 언어 차이와 이 당부가 함께 섞인다. 영어판 version은 한국어판 version + `-en`이어야 한다(테스트). T3.2 ablation). 값: `retrieval.k`(기본 5, 비교 3·5), `answer.max_sentences`, `llm.reasoning_effort`(low·medium).
 - 모드 `mode: v2 | baseline`. **베이스라인**은 "검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리"다(위 항목 모두 끔).
 - 설정은 기동 때만 읽는다. 요청 내용 말고는 동작을 바꾸는 입력이 없다(TU-18). 제출 서버와 로컬 평가 서버는 같은 설정으로 띄운다.
 - 개발 실행의 API 호출 상한(`eval.max_calls`, 기본 실행당 5,000)을 둔다(가드 GR-11과 같음).
@@ -457,7 +459,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 | 공개 세트 분포에 맞춘 설계가 실전 분포에서 깨짐(근거 섹션 범위, 근거 개수, 입력 길이·형식, 새 공격 표현) | 중간 | §1 실전 데이터 변수, TU-19 축별 점검, 공개 세트 통계를 규칙 조건으로 쓰지 않음(TD-10) |
 | 실제 판정 모델 차이로 사실·충실·응함 판정이 갈림 | 중간 | 판정이 갈릴 여지가 없는 답변 문장(§7), 안정 만점 비율, 실제 제출 |
 | 섹션 선택 실패(같은 이름이 여러 섹션) | 중간 | 이름 힌트(#82), recall@1·놓친 행 목록. 이름 사전 순위 올리기와 섹션 재선택(`rerank`)은 넣지 않음(#81, TU-13) |
-| scaffold 정답 유출 | 중간 | 답변 방식 표, KB Q&A 답 금지, 검증(v1 기본 켬, TU-09) |
+| scaffold 정답 유출 | 중간 | 답변 방식 표, KB Q&A 답 금지, 검증(TU-09, 11/14부터 켬/끔 비교 전까지 끔) |
 | 오차단(덧붙임·역할극·권한 주장에 과민) | 중간 | 가드 §3의 짝 normal 기준, 오차단 수를 매 실행 지표로 |
 | 가드와 같은 키로 동시 호출 → 429·지연 | 중간 | 전역 게이트, 요청 예산, 기본값(TU-12·TU-13) |
 | 공개 400행으로 기동하는 가드 kNN을 튜터가 쓸 때 평가 누수 | 중간 | 폴드마다 평가 묶음을 뺀 `Guard.build(rows=…)`(TU-10, TU-16) |
@@ -539,6 +541,7 @@ LLM 없이 도는 신호. 목록·정규식은 팀이 쓰고 **코드 안에** �
 - 2026-11-14(T3.1): 튜터 KB 색인의 BM25를 가드 `KbIndex`(#129)로 바꿨다(TD-03). 공개 200행의 조각 점수(비트 단위)·섹션 순위·상위 5와 recall@1·3·5(0.824·0.916·0.958)가 그대로다. BM25 값과 질의 상한은 가드 설정에서 읽는다(TU-03).
 - 2026-11-14(#158 리뷰 반영, yang-co1): TD-03을 실제 구조에 맞게 고쳤다(가드 `KbIndex` 인스턴스는 튜터가 따로 만들고 설정은 가드 설정 `kb`·`retrieval.max_query_chars`를 같이 쓴다). 가드 기본 설정이 TU-03 값에서 바뀌면 튜터 테스트가 실패하게 했다.
 - 2026-11-14(#158 후속, T3.1): 서버의 튜터 KB 색인을 가드가 기동 때 읽은 설정 객체(`app.state.cfg`)로 만들고(`tutor.startup` → `build_index(cfg)`), 요청 처리의 검색(v2·baseline)이 그 색인(`app.state.tutor_kb`)을 쓰게 했다(TU-01·TU-03·TD-03). `retrieve`에 `index=` 인자를 더했다. 앱 state가 없는 로컬 측정·테스트는 `default_index()`를 그대로 쓴다.
+- 2026-11-14(리더 결정, T2.6): 가드 `classify` 합치기와 `judge_output` 검증의 배포 기본값을 끔(`guard_classify: off`, `verify: off`)으로 바꿨다(TU-09·TU-10·TU-14, §4 그림, §10 표). 가드 #170(S2.11)이 머지되면 기본값 때문에 바로 켜지는데, #170 리뷰(pyr27)와 튜터 모의 부하에서 지연이 크게 늘고 5초 제한으로 대부분 건너뛰며, 건너뛴 호출도 nano를 쓴다. #170 머지 뒤 런박스 켬/끔 3회 비교로 다시 정한다.
 - 2026-11-14(T3.2, 리더 요청): 주 호출 프롬프트 언어 토글 `toggles.prompt_lang: ko | en`(기본 ko)을 더했다(TU-14). en은 v0.3 영어 번역본(`main_call.en.md`, `0.3-en`)과 표·scaffold 정책·샌드위치 규칙의 영어판을 기동 때 한 번 읽고, 답변·근거 문구·고정 문장은 한국어로 낸다. ko 프롬프트와 메시지는 바이트 단위로 그대로다. 채택은 공개 200행 판정 포함 3회의 교차 검증 점수(범주·action)로 정한다. 부록 B.1에 행을 더했다.
 
 ## 14. v1과의 차이

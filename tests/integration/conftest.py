@@ -67,6 +67,20 @@ def app_env(monkeypatch, fake_guard_send):
 
 
 @pytest.fixture
+def tutor_guard_stages_on(app_env, tmp_path, monkeypatch):
+    """튜터의 가드 단계를 켠 설정 사본(`applib.TUTOR_GUARD_STAGES_ON`)을 TUTOR_CONFIG로 넣는다.
+
+    튜터→가드 연결(부르는 횟수 · 건너뜀 · nano 상한 · 요청 내용)을 보는 앱은 기본값이 아니라 이
+    픽스처로 두 단계를 켜고 띄운다. 기본값(끔)은 test_real_guard.py가 따로 본다.
+    """
+    from tests.integration.applib import TUTOR_GUARD_STAGES_ON, write_tutor_config
+
+    path = write_tutor_config(tmp_path / "tutor-stages-on.yaml", **TUTOR_GUARD_STAGES_ON)
+    monkeypatch.setenv("TUTOR_CONFIG", str(path))
+    return path
+
+
+@pytest.fixture
 def fake_send(monkeypatch):
     """튜터 LLM의 전송 함수만 가짜로 바꾼다. 게이트 · 카운터 · 상한은 실제 TutorLLM 그대로다."""
     from tests.integration.applib import FakeSend
@@ -112,11 +126,12 @@ def open_app(app_env, fake_send):
 
 
 @pytest.fixture
-def open_llm_guard_app(app_env, fake_send):
+def open_llm_guard_app(app_env, fake_send, tutor_guard_stages_on):
     """루트 app.py와 같은 조립에서 판정기만 LLM을 쓰는 대역(`llm_guard`)으로 바꾼 앱을 여는 함수.
 
     대역에는 튜터가 맡기는 classify · judge_output이 있다. 지금 main의 Guard에는 둘이 없어(#119)
     튜터→가드 호출은 이 앱으로만 본다. 가드가 올리고 test_real_guard.py가 그 경로를 덮으면 지운다.
+    튜터 설정은 두 단계를 켠 사본이다(`tutor_guard_stages_on`).
     """
     from fastapi.testclient import TestClient
 
@@ -176,13 +191,15 @@ def open_real_guard_app(real_guard_env, fake_send):
 
 
 @pytest.fixture
-def real_guard_client(open_real_guard_app, caplog):
-    """저장소 설정 그대로 진짜 판정기로 연 TestClient.
+def real_guard_client(open_real_guard_app, tutor_guard_stages_on, caplog):
+    """튜터의 가드 단계를 켠 설정(`tutor_guard_stages_on`)으로 진짜 판정기와 함께 연 TestClient.
 
     기동 로그를 보려고 caplog를 DEBUG로 둔다(기동 기록은 `caplog.get_records("setup")`).
     """
     caplog.set_level(logging.DEBUG)
     with open_real_guard_app() as c:
+        toggles = c.app.state.tutor_cfg.toggles
+        assert (toggles.guard_classify, toggles.verify) == ("parallel", "guard")
         yield c
 
 

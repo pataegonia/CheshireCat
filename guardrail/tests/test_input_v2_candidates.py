@@ -204,3 +204,9 @@ def test_prompt_label_mode_mismatch_fails_at_load(overrides):
 @pytest.mark.parametrize("overrides", [{}, C2, C3, C23, ACT])
 def test_matching_prompt_label_mode_loads(overrides):
     load_prompt(load_config(overrides=overrides), "input_judge")
+
+
+async def test_cached_prompt_does_not_skip_the_label_mode_check():
+    await _judge('{"evidence": "e", "category": "normal"}', {})  # 기본 설정으로 캐시를 채운다
+    with pytest.raises(ValueError, match="label_mode"):
+        await _judge('{"evidence": "e", "mode": "use", "category": "normal"}', V1_MODE)

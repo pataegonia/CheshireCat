@@ -22,12 +22,12 @@ from guardrail.schema import Category, Message
 
 _ROLES = frozenset({"user", "assistant"})
 # 프로세스당 한 번 읽는다(요청마다 디스크 읽기·YAML 파싱을 하지 않고, 평가 중 파일이 바뀌어도
-# 같은 system 메시지). 키 = (프롬프트 폴더, 파일 이름)
-_SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
+# 같은 system 메시지). 키 = (프롬프트 폴더, 파일 이름, label_mode): 짝 검사가 캐시에 가리지 않게
+_SYSTEM_PROMPTS: dict[tuple[str, str, str], str] = {}
 
 
 def _system_prompt(cfg: GuardConfig) -> str:
-    key = (cfg.paths.prompts, cfg.prompts.get("input_judge", ""))
+    key = (cfg.paths.prompts, cfg.prompts.get("input_judge", ""), cfg.input.label_mode)
     if key not in _SYSTEM_PROMPTS:
         _SYSTEM_PROMPTS[key] = load_prompt(cfg, "input_judge")[1]
     return _SYSTEM_PROMPTS[key]

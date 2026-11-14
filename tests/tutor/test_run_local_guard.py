@@ -6,7 +6,9 @@
 """
 
 import asyncio
+import json
 from collections import Counter
+from types import SimpleNamespace
 
 import pytest
 from guardrail.config import load_config as load_guard_config
@@ -25,16 +27,26 @@ class FakeGuardLLM:
     """가드 LLM 자리. start(probe)를 한 루프에서 몇 번 불렀는지 기록한다."""
 
     made: list["FakeGuardLLM"] = []
+    probe = {"base": None}  # 기동 시험 결과(맨 요청이 실패하면 오류 코드)
 
     def __init__(self, cfg):
         self.cfg = cfg
         self.calls: Counter[str] = Counter()
         self.max_calls = None
         self.loops = []
+        self.probe_result = {}
         FakeGuardLLM.made.append(self)
 
     async def start(self):
         self.loops.append(asyncio.get_running_loop())
+        self.probe_result = dict(FakeGuardLLM.probe)
+
+    async def complete(self, role, error=None):
+        """가드 판정이 부르는 자리. 상한이 0이면 보내지 않고 budget이다."""
+        if self.max_calls is not None and sum(self.calls.values()) >= self.max_calls:
+            return SimpleNamespace(error="budget")
+        self.calls[role] += 1
+        return SimpleNamespace(error=error)
 
 
 class FakeGuard:
@@ -53,17 +65,23 @@ class FakeGuard:
 @pytest.fixture
 def fakes(monkeypatch):
     FakeGuardLLM.made = []
+    FakeGuardLLM.probe = {"base": None}
     monkeypatch.setattr(run_local, "LLM", FakeGuardLLM)
     monkeypatch.setattr(run_local, "Guard", FakeGuard)
 
 
-def measure(monkeypatch, tmp_path, *argv):
-    """main을 끝까지 돌리고 행마다 받은 state와 그때의 루프를 모은다."""
+def measure(monkeypatch, tmp_path, *argv, during=None):
+    """main을 끝까지 돌리고 행마다 받은 state와 그때의 루프를 모은다.
+
+    during(state)이 있으면 행마다 응답 전에 부른다(가드 호출·건너뜀을 흉내 낸다).
+    """
     block_openai(monkeypatch)
     seen = {}
 
     async def respond(preset, row, state=None):
         seen[row["id"]] = (state, asyncio.get_running_loop())
+        if during is not None:
+            await during(state)
         return dict(TUTOR_DEFAULT)
 
     monkeypatch.setattr(run_local, "_respond", respond)
@@ -74,7 +92,9 @@ def measure(monkeypatch, tmp_path, *argv):
 def assert_guard_never_trained_on_the_row(seen):
     split = load_splits()
     held = set(split.holdout)
-    assert set(seen) == {row["id"] for row in run_local.public_tutor_rows()}
+    # 홀드아웃 행은 재지 않는다(#84): 교차 검증 행만 폴드 가드로 잰다
+    cv_rows = {row["id"] for row in run_local.public_tutor_rows()} - run_local.holdout_ids()
+    assert set(seen) == cv_rows
     for row_id, (state, _loop) in seen.items():
         guard = state.guard
         clusters = {split.cluster[i] for i in guard.ids}
@@ -108,18 +128,81 @@ def test_cli_guard_attaches_a_fold_guard_to_every_row(monkeypatch, tmp_path, cap
     assert_guard_never_trained_on_the_row(seen)
     (llm,) = FakeGuardLLM.made
     states = [state for state, _loop in seen.values()]
-    assert len({id(s.guard) for s in states}) == load_splits().folds + 1
+    assert len({id(s.guard) for s in states}) == load_splits().folds
     assert all(s.guard.llm is llm for s in states)
     # 가드 LLM은 응답을 모으는 루프에서 한 번 기동한다(클라이언트가 루프에 묶인다)
     loops = {id(loop) for _state, loop in seen.values()}
     assert len(llm.loops) == 1 and loops == {id(llm.loops[0])}
-    # 호출 몫: probe 5 + 요청당 2회 × 200행 × 1.1, 그만큼 튜터 몫에서 뗀다(합은 그대로)
-    assert llm.max_calls == 5 + 440
-    assert states[0].tutor_llm.max_calls + llm.max_calls == 5000
+    # 호출 몫: probe 5 + 요청당 2회 × 160행 × 1.1을 튜터 몫에서 뗀다(합은 그대로). probe는
+    # complete를 거치지 않아 calls에 세지 않으므로 가드 LLM 상한에서는 뺀다
+    probe = run_local.guard_probe_calls(load_guard_config().llm)
+    assert probe == 5
+    assert llm.max_calls == 352
+    assert states[0].tutor_llm.max_calls + llm.max_calls + probe == 5000
     out = capsys.readouterr().out
-    assert "운영진 API 예상 호출 665회" in out  # 660 + probe 5
-    assert "가드 LLM 호출: 0회 (상한 445회)" in out
+    assert "운영진 API 예상 호출 533회" in out  # 528 + probe 5
+    assert "가드 LLM 호출: 0회 (상한 352회)" in out
+    assert "가드 LLM 최종 오류: 없음" in out
     assert "가드 단계 건너뜀(모든 실행 합): 없음" in out
+    (saved,) = tmp_path.glob("tutor-*.json")
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    assert data["tainted"] is False
+    assert data["guard_run"] == {
+        "calls": {},
+        "max_calls": 352,
+        "errors": {},
+        "skips": {},
+        "clean": True,
+    }
+
+
+def test_cli_guard_marks_skipped_or_failed_guard_rows_tainted(monkeypatch, tmp_path, fakes):
+    """가드 단계를 건너뛰었거나 가드 호출이 오류로 끝나면 결과 JSON에 남고 비교 기준이 못 된다."""
+
+    async def during(state):
+        await state.guard.llm.complete("input", error="timeout")
+        state.guard_skips[("classify", "missing")] += 1
+
+    code, seen = measure(monkeypatch, tmp_path, "--guard", during=during)
+    assert code == 1
+    (saved,) = tmp_path.glob("tutor-*.json")
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    assert data["tainted"] is True
+    run = data["guard_run"]
+    assert run["errors"] == {"timeout": len(seen)}
+    assert run["skips"] == {"classify missing": len(seen)}
+    assert run["clean"] is False
+    with pytest.raises(ValueError, match="tainted"):
+        run_local.load_previous(saved, judge=False)
+
+
+def test_cli_guard_rate_limit_stops_both_guard_and_tutor(monkeypatch, tmp_path, fakes):
+    """가드 쪽 429가 이어져도 멈추고, 멈추면 튜터 LLM과 가드 LLM 모두 더 보내지 않는다."""
+
+    async def during(state):
+        await state.guard.llm.complete("input", error="rate_limit")
+
+    code, seen = measure(monkeypatch, tmp_path, "--guard", during=during)
+    assert code == run_local.EXIT_RATE_LIMITED
+    state, _loop = next(iter(seen.values()))
+    assert state.guard.llm.max_calls == 0
+    assert state.tutor_llm.max_calls == 0
+
+
+def test_cli_guard_stops_when_the_probe_base_request_fails(monkeypatch, tmp_path, fakes):
+    """가드 probe의 맨 요청이 실패하면(429 등, 예외 없이 결과로 온다) 튜터를 부르기 전에 멈춘다."""
+    FakeGuardLLM.probe = {"base": "rate_limit"}
+    with pytest.raises(SystemExit) as stopped:
+        measure(monkeypatch, tmp_path, "--guard")
+    assert stopped.value.code == 2
+    assert not list(tmp_path.glob("tutor-*.json"))
+
+
+def test_guard_flag_is_only_for_the_public_set(monkeypatch, tmp_path):
+    block_openai(monkeypatch)
+    with pytest.raises(SystemExit) as stopped:
+        run_local.main(["--preset", "tutor", "--guard", "--cases", "team", "--out", str(tmp_path)])
+    assert stopped.value.code == 2
 
 
 def test_cli_guard_with_examples_keeps_both_per_row(monkeypatch, tmp_path, fakes):

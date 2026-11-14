@@ -49,6 +49,7 @@ import secrets
 import sys
 import threading
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -62,6 +63,7 @@ from guardrail.config import config_hash, resolve_path
 from guardrail.config import load_config as load_guard_config
 from guardrail.data import labeled_rows, load_public
 from guardrail.eval.cv import load_splits, train_rows
+from guardrail.eval.run import probe_calls as guard_probe_calls
 from guardrail.guard import Guard
 from guardrail.llm import LLM
 
@@ -90,9 +92,8 @@ RUNS_DIR = Path(__file__).resolve().parent / "runs"
 TUTOR_CALLS = 3
 CALLS_PER_REQUEST = {"v2": TUTOR_CALLS, "baseline": 1}  # 모드별 요청당 nano 호출(재시도 제외)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
-# --guard: 가드 LLM 기동 시험(probe) 호출 상한(맨 요청 1 + 파라미터 3 + json_schema 1)과
-# 요청당 가드 호출(classify + judge_output, TU-13). 둘 다 TUTOR_CALLS 안에서 나눠 쓴다
-GUARD_PROBE_CALLS = 5
+# --guard: 요청당 가드 호출(classify + judge_output, TU-13). TUTOR_CALLS 안에서 나눠 쓴다.
+# 가드 LLM 기동 시험(probe) 호출 수는 가드 설정에서 센다(guard_probe_calls)
 GUARD_CALLS_PER_REQUEST = 2
 # 운영진 API 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속
 # 보내면 어뷰징으로 보일 수 있다(SPEC §7.1). 값과 종료 코드는 가드 하네스(#151)와 같다
@@ -276,6 +277,7 @@ class RateLimitStop:
         self.tripped = False
         self.by: str | None = None  # 멈추게 한 호출: "llm" 또는 "judge"
         self._lock = threading.Lock()
+        self._llms: list[Any] = []  # watch_llm으로 감싼 LLM(튜터·가드). 멈추면 모두 막는다
 
     def record(self, error: str | None, by: str = "llm") -> bool:
         """호출 하나의 최종 오류 코드를 센다. 이번 호출로 멈췄으면 True."""
@@ -303,16 +305,19 @@ class RateLimitStop:
         return f"속도 제한(429)이 {RATE_LIMIT_STREAK}회 이어져 멈췄다"
 
     def watch_llm(self, llm: Any) -> None:
-        """튜터 LLM의 complete를 감싼다(서버 코드는 그대로다).
+        """튜터 LLM·가드 LLM의 complete를 감싼다(서버·가드 코드는 그대로다). 둘 다 같은 팀 키다.
 
-        멈추면 max_calls를 0으로 내린다. 뒤의 호출과 진행 중인 재시도는 보내지 않고 budget이 된다.
+        멈추면 감싼 LLM 모두의 max_calls를 0으로 내린다. 어느 쪽 429로 멈췄든 뒤의 호출과 진행 중인
+        재시도는 보내지 않고 budget이 된다.
         """
         inner = llm.complete
+        self._llms.append(llm)
 
         async def complete(*args: Any, **kwargs: Any) -> Any:
             result = await inner(*args, **kwargs)
             if self.record(result.error):
-                llm.max_calls = 0
+                for watched in self._llms:
+                    watched.max_calls = 0
             return result
 
         llm.complete = complete
@@ -366,6 +371,7 @@ def _write(
     invalid: str | None,
     holdout_excluded: int,
     guard: dict[str, Any] | None = None,
+    guard_run: Mapping[str, Any] | None = None,
     llm: Any = None,
     team: Mapping[str, Any] | None = None,
 ) -> Path:
@@ -384,6 +390,8 @@ def _write(
     data["holdout_excluded"] = holdout_excluded
     if guard is not None:
         data["guard_config"] = guard
+    if guard_run is not None:  # --guard: 가드 호출·오류·건너뜀 수(본문 없음)
+        data["guard_run"] = dict(guard_run)
     if invalid is not None:
         data["invalid"] = invalid
     if team is not None:
@@ -853,7 +861,7 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         tutor_calls=CALLS_PER_REQUEST[cfg.mode],
     )
     if args.guard:  # 가드 classify·judge_output은 TUTOR_CALLS 안에 이미 있다. probe만 더한다
-        calls += GUARD_PROBE_CALLS
+        calls += guard_probe_calls(load_guard_config().llm)
     sys.stdout.write(f"운영진 API 예상 호출 {calls}회")
     sys.stdout.write(f"(재시도 여유 1.1배, 상한 {args.max_calls}회)\n")
     embedding = 0
@@ -877,10 +885,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     team = args.cases != "public"
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
-    guard_cap = 0
+    guard_cap, guard_probe = 0, 0
     if args.guard:  # 가드 몫(probe + 요청당 classify·judge_output)을 튜터 몫에서 떼어 준다
+        guard_probe = guard_probe_calls(load_guard_config().llm)
         per_run = GUARD_CALLS_PER_REQUEST * len(rows) * args.runs
-        guard_cap = GUARD_PROBE_CALLS + (per_run * 11 + 9) // 10
+        guard_cap = guard_probe + (per_run * 11 + 9) // 10
         tutor_cap -= guard_cap
     stop = RateLimitStop()  # 튜터 LLM·판정이 같이 쓴다(같은 팀 키)
     state, counted, built = None, None, (0, 0)
@@ -900,7 +909,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if own is None:
                 ap.error("가드를 붙인 측정은 자기 state가 있어야 한다")
             guard_llm = LLM(load_guard_config().llm)
-            guard_llm.max_calls = guard_cap
+            # probe는 complete를 거치지 않아 calls에 세지 않는다. 그 몫을 빼야 합이 가드 몫이다
+            guard_llm.max_calls = guard_cap - guard_probe
+            guard_llm.run_errors = _count_errors(guard_llm)
+            stop.watch_llm(guard_llm)  # 가드 쪽 429도 세고, 어느 쪽에서 멈춰도 둘 다 막는다
             setup = _guard_setup(ap, own, cfg, rows, guard_llm)
         elif own is not None and cfg.toggles.fewshot != "off":
             # 평가 묶음(점검 세트는 홀드아웃 묶음)을 예시 색인에서 뺀다(TU-08·TU-16)
@@ -935,7 +947,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs)
+    guard_run = _guard_run(guard_llm, getattr(state, "guard_skips", None))
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
+    # 가드 단계를 건너뛰었거나 가드 호출이 오류로 끝난 행은 튜터 단독·가드 기본값 결과다(#165 리뷰)
+    tainted = tainted or (guard_run is not None and not guard_run["clean"])
     invalid = stop.reason()
     name = (args.preset or args.responses.stem) + ("-team" if team else "")
     path = _write(
@@ -948,6 +963,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         invalid=invalid,
         holdout_excluded=excluded,
         guard=guard,
+        guard_run=guard_run,
         llm=state.tutor_llm if state is not None else None,
         team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
     )
@@ -957,8 +973,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if state is not None:
         cap = (tutor_cap, args.max_calls, reserve, embedding)
         _show_tutor_calls(state, blocked, latency, cap=cap, stopped=llm_stopped)
-    if guard_llm is not None:
-        _show_guard(guard_llm, getattr(state, "guard_skips", None))
+    if guard_run is not None:
+        _show_guard(guard_run)
     if use is not None:
         embedding_summary(use, sys.stdout)
     if previous is not None and invalid is None:  # 멈춘 실행은 기본값이 섞여 비교하지 않는다
@@ -987,7 +1003,10 @@ def _guard_setup(
     """
 
     async def setup() -> FoldStates:
-        await llm.start()
+        await llm.start()  # 인증 거절은 여기서 예외다
+        base_error = (getattr(llm, "probe_result", None) or {}).get("base")
+        if base_error:  # 막힌 키에 가드 호출을 보내지 않는다(가드 하네스 #151과 같다)
+            ap.error(f"가드 LLM probe의 맨 요청이 {base_error}로 실패했다. 측정을 시작하지 않는다")
         states = fold_states(state, cfg, rows, guards=await build_fold_guards(rows, llm=llm))
         if not isinstance(states, FoldStates):
             # 폴드별 가드가 아니면 평가 행이 가드 kNN·LR에 든다(TU-10). 튜터를 부르기 전에 멈춘다
@@ -997,17 +1016,57 @@ def _guard_setup(
     return setup
 
 
-def _show_guard(llm: Any, skips: Any) -> None:
-    """--guard: 가드 LLM 호출 수(probe 제외, 모든 실행 합)와 튜터가 가드 단계를 건너뛴 사유별 횟수.
+def _count_errors(llm: Any) -> Counter[str]:
+    """가드 LLM complete의 최종 오류 코드(budget·rate_limit 등)를 센다(본문 없음).
 
-    가드에 classify·judge_output이 아직 없으면(S2.11 전) 건너뜀이 missing으로 잡힌다.
+    가드 판정은 nano 호출이 실패해도 예외 없이 kNN·LR 기본값으로 답한다. 그런 행은 튜터의 가드
+    건너뜀으로 잡히지 않으므로, 호출 결과 오류를 따로 세어 결과를 믿을 수 있는지 본다(#165 리뷰).
     """
-    calls = ", ".join(f"{role} {n}회" for role, n in sorted(llm.calls.items())) or "0회"
-    sys.stdout.write(f"가드 LLM 호출: {calls} (상한 {llm.max_calls}회)\n")
-    shown = ", ".join(
-        f"{stage} {reason} {n}회" for (stage, reason), n in sorted((skips or {}).items())
-    )
+    errors: Counter[str] = Counter()
+    inner = llm.complete
+
+    async def complete(*args: Any, **kwargs: Any) -> Any:
+        result = await inner(*args, **kwargs)
+        if result.error:
+            errors[result.error] += 1
+        return result
+
+    llm.complete = complete
+    return errors
+
+
+def _guard_run(llm: Any, skips: Any) -> dict[str, Any] | None:
+    """--guard 결과 JSON의 guard_run: 가드 호출 수(probe 제외)·상한·오류 코드별·건너뜀 사유별 수.
+
+    clean은 건너뜀과 오류가 모두 0일 때만 참이다. 아니면 그 행은 튜터 단독이나 가드 기본값 결과라
+    범주 판정·검증 비교에 쓰지 않는다(tainted). 가드에 classify·judge_output이 아직 없으면(S2.11
+    전) 건너뜀이 missing으로 잡혀 clean이 거짓이다.
+    """
+    if llm is None:
+        return None
+    errors = dict(sorted(getattr(llm, "run_errors", {}).items()))
+    skipped = {f"{stage} {reason}": n for (stage, reason), n in sorted((skips or {}).items())}
+    return {
+        "calls": dict(sorted(llm.calls.items())),
+        "max_calls": llm.max_calls,
+        "errors": errors,
+        "skips": skipped,
+        "clean": not errors and not skipped,
+    }
+
+
+def _show_guard(run: Mapping[str, Any]) -> None:
+    """--guard: 가드 LLM 호출 수(probe 제외, 모든 실행 합), 오류, 튜터가 가드 단계를 건너뛴 횟수."""
+    calls = ", ".join(f"{role} {n}회" for role, n in run["calls"].items()) or "0회"
+    sys.stdout.write(f"가드 LLM 호출: {calls} (상한 {run['max_calls']}회)\n")
+    errors = ", ".join(f"{code} {n}회" for code, n in run["errors"].items())
+    sys.stdout.write(f"가드 LLM 최종 오류: {errors or '없음'}\n")
+    shown = ", ".join(f"{name} {n}회" for name, n in run["skips"].items())
     sys.stdout.write(f"가드 단계 건너뜀(모든 실행 합): {shown or '없음'}\n")
+    if not run["clean"]:
+        sys.stdout.write(
+            "가드가 돌지 않았거나 기본값으로 답한 호출이 있다: 비교 기준으로 쓰지 않는다\n"
+        )
 
 
 def _show_tutor_calls(

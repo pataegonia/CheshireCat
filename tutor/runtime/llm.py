@@ -9,6 +9,8 @@
 - 게이트 대기도 요청 마감 안에 든다. 호출당 시간 제한은 보내는 시간 전체의 상한이다.
 - 파라미터·구조화 방식은 부를 때마다 가드 LLM(probe 결과)에서 읽는다. 튜터 설정 값은 그 위에
   덮되, probe가 끈 파라미터(None)는 끈 채로 둔다.
+- 측정용 수(calls·failures·attempt_errors·completion_buckets)는 역할·고정 갈래·토큰 구간을 키로
+  수만 센다. 답과 재시도 판단에서 읽지 않고 본문은 남기지 않는다.
 """
 
 import asyncio
@@ -30,7 +32,7 @@ from guardrail.judges.schemas import strict_schema
 from guardrail.llm import ErrorCode
 from pydantic import BaseModel
 
-from tutor.runtime.config import TutorConfig
+from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig
 
 Send = Callable[[dict[str, Any]], Awaitable[Any]]  # chat.completions.create(**kwargs)와 같은 모양
 Gate = Callable[[], AbstractAsyncContextManager[Any]]
@@ -38,6 +40,7 @@ Structured = Literal["json_schema", "json_object"]
 Outcome = Literal["sent", "budget", "gate", "no_time"]
 OPTIONAL_PARAMS = ("reasoning_effort", "verbosity", "max_completion_tokens")
 RETRY_JITTER_S = (0.2, 0.5)  # 가드 기본 설정(llm.retry_jitter_s)과 같다
+TOKEN_BUCKET = 100  # 성공한 시도의 completion_tokens 분포 구간 폭
 
 
 @dataclass(frozen=True)
@@ -58,7 +61,16 @@ class _Attempt:
     headers: Mapping[str, str] | None = None
     finish_reason: str | None = None
     completion_tokens: int | None = None
-    cause: str | None = None  # bad_json의 갈래(_bad_json_cause)
+    cause: str | None = None  # bad_json의 갈래(_bad_json_cause). attempt_errors 키로 쓴다
+
+
+def _token_bucket(tokens: int) -> int:
+    """completion_tokens의 구간: TOKEN_BUCKET 단위로 올리고 0~프록시 상한 안에 둔다.
+
+    구간 b는 (b - TOKEN_BUCKET, b] 토큰이다(상한 b 이하). 키는 역할마다 21개를 넘지 않는다.
+    """
+    bucket = math.ceil(tokens / TOKEN_BUCKET) * TOKEN_BUCKET
+    return min(max(bucket, 0), PROXY_MAX_COMPLETION_TOKENS)
 
 
 def _bad_json_cause(resp: Any) -> str:
@@ -131,8 +143,12 @@ class TutorLLM:
         # 재시도 뒤 최종 오류·게이트 대기 초과도 1회(calls는 보낸 시도 수라 단위가 다르다).
         # 예산 막힘은 blocked에만 센다
         self.failures: Counter[tuple[str, str]] = Counter()
-        # 형식 오류(bad_json)로 돌아온 시도 수((역할, 갈래)별). 재시도로 살아난 시도도 센다
-        self.bad_json: Counter[tuple[str, str]] = Counter()
+        # 실패한 시도 수((역할, 갈래)별, 보낸 시도 단위). 재시도로 살아난 시도도 센다. 갈래는
+        # bad_json이면 그 원인(_bad_json_cause), 그 밖은 오류 코드(timeout·server·rate_limit·
+        # auth·bad_request)다. 게이트·마감·예산으로 보내지 못한 것은 세지 않는다
+        self.attempt_errors: Counter[tuple[str, str]] = Counter()
+        # 성공한 시도의 completion_tokens(추론 토큰 포함) 분포((역할, _token_bucket 구간)별 수)
+        self.completion_buckets: Counter[tuple[str, int]] = Counter()
         self._base = base
         self._overrides = dict(overrides or {})
         self._send = send
@@ -237,11 +253,16 @@ class TutorLLM:
                 async with asyncio.timeout(cap):  # 호출당 시간 제한(보내는 시간 전체)
                     resp = await self._send({**kwargs, "timeout": cap})
             except Exception as exc:  # noqa: BLE001 - 코드로만 돌려준다(메시지·본문은 보지 않는다)
-                return "sent", self._fail(exc)
-        a = self._parse(resp, schema)
-        if a.cause is not None:
-            self.bad_json[(role, a.cause)] += 1
-        return "sent", a
+                return "sent", self._tally(role, self._fail(exc))
+        return "sent", self._tally(role, self._parse(resp, schema))
+
+    def _tally(self, role: str, a: _Attempt) -> _Attempt:
+        """보낸 시도 하나를 측정용으로 센다. 답과 재시도 판단에는 쓰지 않는다."""
+        if a.error is not None:
+            self.attempt_errors[(role, a.cause or a.error)] += 1
+        elif a.completion_tokens is not None:
+            self.completion_buckets[(role, _token_bucket(a.completion_tokens))] += 1
+        return a
 
     def _request(self, messages: list[dict[str, str]], schema: type[BaseModel]) -> dict[str, Any]:
         msgs = [dict(m) for m in messages]

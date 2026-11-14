@@ -28,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 from guardrail.config import Llm
 from guardrail.judges.schemas import OutputOut, strict_schema
 
-Role = Literal["input_judge", "output_judge"]
+Role = Literal["input_judge", "output_judge", "jb_check"]
 ErrorCode = Literal["timeout", "rate_limit", "server", "bad_json", "auth", "bad_request", "budget"]
 Send = Callable[[dict[str, Any]], Awaitable[Any]]  # chat.completions.create(**kwargs)와 같은 모양
 

@@ -16,7 +16,7 @@ from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
-from guardrail.judges.schemas import ACT_TO_CATEGORY, InputActOut, InputOut
+from guardrail.judges.schemas import ACT_TO_CATEGORY, InputActOut, InputOut, JbCheckOut
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
@@ -27,10 +27,10 @@ _ROLES = frozenset({"user", "assistant"})
 _SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
 
 
-def _system_prompt(cfg: GuardConfig) -> str:
-    key = (cfg.paths.prompts, cfg.prompts.get("input_judge", ""))
+def _system_prompt(cfg: GuardConfig, name: str = "input_judge") -> str:
+    key = (cfg.paths.prompts, cfg.prompts.get(name, ""))
     if key not in _SYSTEM_PROMPTS:
-        _SYSTEM_PROMPTS[key] = load_prompt(cfg, "input_judge")[1]
+        _SYSTEM_PROMPTS[key] = load_prompt(cfg, name)[1]
     return _SYSTEM_PROMPTS[key]
 
 
@@ -120,8 +120,40 @@ async def judge_input(
             "input_judge", messages, InputActOut, deadline=deadline, retries=retries
         )
         parsed = result.parsed
-        return ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
+        category = ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
+    else:
+        result = await llm.complete(
+            "input_judge", messages, InputOut, deadline=deadline, retries=retries
+        )
+        category = result.parsed.category if isinstance(result.parsed, InputOut) else None
+    if category == "jailbreak_injection" and cfg.input.jb_check:
+        verdict = await check_jailbreak(
+            window, target, llm, cfg, deadline=deadline, retries=retries
+        )
+        if verdict == "study":
+            return "normal"
+    return category
+
+
+async def check_jailbreak(
+    window: list[Message],
+    target: str,
+    llm: LLM,
+    cfg: GuardConfig,
+    *,
+    deadline: float,
+    retries: int | None = None,
+) -> str | None:
+    """S3.3 탈옥 2차 판정: "apply"(튜터에게 지금 적용) | "study"(다루는 대상) | 실패면 None.
+
+    1차와 같은 대화·대상 발화를 보되 few-shot 예시는 넣지 않는다. 실패하면 호출자는 1차 판정을 둔다.
+    """
+    user = "\n\n".join([_conversation(window, cfg), f"<target>{_data(target, cfg)}</target>"])
+    messages = [
+        {"role": "system", "content": _system_prompt(cfg, "jb_check")},
+        {"role": "user", "content": user},
+    ]
     result = await llm.complete(
-        "input_judge", messages, InputOut, deadline=deadline, retries=retries
+        "jb_check", messages, JbCheckOut, deadline=deadline, retries=retries
     )
-    return result.parsed.category if isinstance(result.parsed, InputOut) else None
+    return result.parsed.verdict if isinstance(result.parsed, JbCheckOut) else None

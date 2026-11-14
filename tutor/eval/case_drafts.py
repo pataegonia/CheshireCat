@@ -252,7 +252,12 @@ def shown_section(sid: str, text: str) -> str:
 
 
 def _named(job: Job) -> dict[str, str]:
-    """섹션 이름(A, B) → 섹션 ID. 호출 하나에 섹션은 둘까지다(plan_jobs)."""
+    """섹션 이름(A, B) → 섹션 ID. 호출 하나에 섹션은 둘까지다(plan_jobs).
+
+    이름보다 섹션이 많으면 남는 섹션이 프롬프트에서 조용히 빠지므로 멈춘다.
+    """
+    if len(job.sections) > len(SECTION_NAMES):
+        raise ValueError(f"호출 하나에 섹션은 {len(SECTION_NAMES)}개까지다: {len(job.sections)}개")
     return dict(zip(SECTION_NAMES, job.sections, strict=False))
 
 

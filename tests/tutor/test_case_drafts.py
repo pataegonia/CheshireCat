@@ -240,6 +240,13 @@ def test_section_names_map_back_only_to_the_sections_given_in_that_call():
     assert rows[0]["labels"]["evidence"] == ["PY-01-03", "PY-01-01"]  # nano가 낸 순서
 
 
+def test_a_call_never_names_more_sections_than_there_are_names():
+    assert all(len(j.sections) <= len(cd.SECTION_NAMES) for j in all_jobs())  # 계획은 둘까지
+    three = cd.Job("mixed", "꼴", ("PY-01-01", "PY-01-02", "PY-01-03"))
+    with pytest.raises(ValueError, match="2개까지"):  # 셋째가 프롬프트에서 조용히 빠지지 않게
+        cd.messages_for(three, KB, TABLE)
+
+
 @pytest.mark.parametrize("text", ["자료 3개를 봤어요", "섹션별로 정리해 줘", "섹션 Apple 예제"])
 def test_ordinary_words_are_not_section_name_leaks(text):
     rows, dropped = cd.assemble([(cd.Job("mixed", "꼴", ("PY-01-01",)), case(text))], KB, TABLE)

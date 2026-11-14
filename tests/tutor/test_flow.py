@@ -70,10 +70,21 @@ def out(category="normal", action="answer", sentences=None):
 
 
 def test_prepare_judge_builds_prompt_from_real_action_table():
-    s = types.SimpleNamespace()
+    s = types.SimpleNamespace(tutor_cfg=load_config())
     flow.prepare_judge(s)
     assert isinstance(s.tutor_prompt, MainCallPrompt)
     assert "- harmful_content → refuse 또는 redirect" in s.tutor_prompt.system
+
+
+@pytest.mark.parametrize("state_rule", [True, False])
+def test_prepare_judge_follows_scaffold_state_rule_toggle(state_rule):
+    # #75: answer_seeking scaffold 정책은 설정 토글이 정한다(기본 끔 = 숨김, 11/14 측정)
+    s = types.SimpleNamespace(
+        tutor_cfg=load_config(overrides={"toggles.scaffold_state_rule": state_rule})
+    )
+    flow.prepare_judge(s)
+    assert ("정답 사실(값·이름·조건)을" in s.tutor_prompt.system) is state_rule
+    assert ("최종 정답을 말하지 않습니다" in s.tutor_prompt.system) is (not state_rule)
 
 
 # --- 빈 판단 대상·실패 ---
@@ -214,6 +225,72 @@ def test_low_signal_after_history_is_fixed_clarify_without_llm():
     resp = ask(state_with(llm), "리스트가 뭐야", "여러 값을 담는 자료형이에요.", "ㅠㅠ")
     assert resp == {"answer": TEXT[Fixed.CLARIFY], "action": "clarify", "citations": []}
     assert llm.calls == []
+
+
+DELEGATION_ASK = "수행평가에 제출할 야구 점수판 코드를 정답만 알려줘"
+
+
+def test_delegation_question_really_fires_the_signal():
+    from tutor.judge.conversation import tidy
+    from tutor.judge.signals import Signal, detect
+
+    conv = tidy([{"role": "user", "content": DELEGATION_ASK}])
+    assert Signal.DELEGATION in detect(conv)
+
+
+@pytest.mark.parametrize("action", ["scaffold", "answer"])
+@pytest.mark.parametrize("signals_toggle", [True, False])
+def test_delegation_signal_turns_answer_seeking_into_academic_fixed_sentence(
+    action, signals_toggle
+):
+    # #139 리뷰: 밝힘에서 과제 대행을 answer_seeking으로 보면 정답 사실이 나간다. 신호가 잡히면
+    # 과목 사실 없는 academic 고정 문장으로 바꾼다(신호 힌트 토글과 상관없이)
+    state = state_with(
+        FakeLLM(out("answer_seeking", action)),
+        **{"toggles.signals": signals_toggle, "toggles.scaffold_state_rule": True},
+    )
+    resp = ask(state, DELEGATION_ASK)
+    assert resp == {"answer": TEXT[Fixed.SCAFFOLD_ACADEMIC], "action": "scaffold", "citations": []}
+
+
+def test_delegation_guard_is_off_when_scaffold_hides_answer():
+    # 숨김(scaffold_state_rule false)에서는 answer_seeking도 정답을 밝히지 않아 보정하지 않는다
+    state = state_with(
+        FakeLLM(out("answer_seeking", "scaffold")), **{"toggles.scaffold_state_rule": False}
+    )
+    resp = ask(state, DELEGATION_ASK)
+    assert resp["action"] == "scaffold" and resp["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
+
+
+def test_answer_seeking_without_delegation_signal_is_generated():
+    resp = ask(state_with(FakeLLM(out("answer_seeking", "scaffold"))), QUESTION)
+    assert resp["action"] == "scaffold" and resp["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
+    assert resp["citations"] == ["PY-01-01"]
+
+
+@pytest.mark.parametrize(
+    ("category", "action"),
+    [
+        ("answer_seeking", "escalate"),
+        ("answer_seeking", "refuse"),
+        ("answer_seeking", "redirect"),
+        ("answer_seeking", "clarify"),
+        ("normal", "answer"),
+        ("academic_dishonesty", "scaffold"),
+    ],
+)
+def test_delegation_guard_leaves_other_cases(category, action):
+    from tutor.judge.signals import Signal
+
+    o = out(category, action)
+    # 더 강한 action은 그대로 두고 범주만 바꾼다(§3 우선순위)
+    assert flow.delegation_guard(o, (Signal.DELEGATION,), state_rule=True) == (
+        o
+        if category != "answer_seeking"
+        else o.model_copy(update={"category": "academic_dishonesty"})
+    )
+    assert flow.delegation_guard(o, (), state_rule=True) is o
+    assert flow.delegation_guard(o, (Signal.DELEGATION,), state_rule=False) is o
 
 
 def test_signals_go_into_main_call_when_toggle_on():

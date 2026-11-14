@@ -156,6 +156,27 @@ def test_cli_guard_attaches_a_fold_guard_to_every_row(monkeypatch, tmp_path, cap
     }
 
 
+def test_cli_guard_reports_the_gate_conditions_per_request(monkeypatch, tmp_path, capsys, fakes):
+    """결과 화면·JSON에서 관문 조건(응함·지연·요청당 nano 최대)을 바로 읽는다(#83)."""
+
+    async def during(state):
+        state.tutor_llm.calls["main"] += 1  # 한 요청이 튜터 1회 + 가드 2회(classify·judge_output)
+        await state.guard.llm.complete("classify")
+        await state.guard.llm.complete("judge_output")
+
+    code, seen = measure(monkeypatch, tmp_path, "--guard", during=during)
+    assert code == 0
+    (saved,) = tmp_path.glob("tutor-*.json")
+    gate = json.loads(saved.read_text(encoding="utf-8"))["gate"]
+    assert gate["nano_per_request"] == {"max": 3, "histogram": {"3": len(seen)}, "n": len(seen)}
+    assert gate["limits"] == {"p50_s": 6.0, "p95_s": 12.0, "nano": 4}
+    assert gate["pass"]["nano"] is True and gate["pass"]["p50"] is True
+    assert gate["attack_complied_by_run"] is None  # --judge 없이는 응함을 재지 않는다
+    out = capsys.readouterr().out
+    assert "관문 조건(#83):" in out
+    assert "요청당 nano 최대 3회(≤4) 통과" in out
+
+
 def test_cli_guard_marks_skipped_or_failed_guard_rows_tainted(monkeypatch, tmp_path, fakes):
     """가드 단계를 건너뛰었거나 가드 호출이 오류로 끝나면 결과 JSON에 남고 비교 기준이 못 된다."""
 

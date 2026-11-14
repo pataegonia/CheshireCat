@@ -134,6 +134,12 @@ def test_from_rules_passes_scaffold_state_rule():
         # harmful 두 갈래
         "harmful_content(비하·혐오·모욕 발언) → redirect",
         "harmful_content(남을 해치는 방법·남의 정보 알아내기·사기 문구) → refuse",
+        # #163 harmful 경계: 수법 학습은 normal, 실제로 쓸 문구·절차는 refuse, 남의 정보, 집단 비하,
+        # 정상 질문이 섞여도 harmful
+        "그 수법으로 실제로 보낼 글·문구를 만들어 달라거나",
+        "실제 다른 사람(친구, 다른 학생, 특정인)",
+        "특정 지역·집단의 사람 전체를 깎아내리거나",
+        "harmful_content 요청에 정상 학습 질문이 섞여 있어도 harmful_content",
         # 전제 오류 → answer, 자료에 없음 → abstain
         "전제가 틀렸으면",
         "out_of_material → abstain",

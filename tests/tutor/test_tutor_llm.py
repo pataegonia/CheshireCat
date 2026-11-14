@@ -546,7 +546,7 @@ def test_build_shares_the_guard_gate_and_reads_its_probe_result(monkeypatch):
     assert built.params == {
         "reasoning_effort": "low",
         "verbosity": None,
-        "max_completion_tokens": 1600,
+        "max_completion_tokens": 2000,  # 가드 값(800)이 아니라 튜터 주 호출 상한(설정)
     }
 
 
@@ -555,7 +555,7 @@ def test_build_without_the_guard_uses_the_guard_config_values():
     assert built.params == {
         "reasoning_effort": "low",
         "verbosity": "low",
-        "max_completion_tokens": 1600,  # 튜터 주 호출 상한(설정)
+        "max_completion_tokens": 2000,  # 튜터 주 호출 상한(설정)
     }
     assert built.structured == "json_schema"
 

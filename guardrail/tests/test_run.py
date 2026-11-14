@@ -3,6 +3,7 @@
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fakes import FakeLLM, Ok
@@ -290,3 +291,36 @@ async def test_budget_invalid_banner_is_in_report(tmp_path):
     )
     report = (tmp_path / "runs" / "t" / "report.md").read_text(encoding="utf-8")
     assert "# 무효 실행" in report.split("# 평가 보고서")[0]
+
+
+async def test_measure_writes_no_nano_output_for_held_out_rows(monkeypatch):
+    # 홀드아웃 행의 nano 파싱 출력(학습자 발화를 옮겨 적은 문장)이 responses.jsonl에 남으면 안 된다
+    split = SimpleNamespace(cluster={"a": "c1", "b": "c2"}, holdout=("c2",))
+    tap = run.Tap()
+
+    async def fake_run_once(*a, **k):
+        tap.parsed += [("a", "input", {"evidence": "x"}), ("b", "input", {"evidence": "y"})]
+        return SimpleNamespace(
+            judgements={i: SimpleNamespace(
+                input_source="s", output_tier=None, calls=1, errors=(), knn_major=None, lr_pred=None
+            ) for i in "ab"},
+            judge_kind="K",
+        )  # fmt: skip
+
+    monkeypatch.setattr(run, "run_once", fake_run_once)
+    monkeypatch.setattr(run, "summarize", lambda *a: {})
+    monkeypatch.setattr(run, "_responses", lambda out, block: {i: {} for i in out.judgements})
+    monkeypatch.setattr(run, "row_points", lambda rows, resp: {})
+    monkeypatch.setattr(run, "add_variance", lambda s: None)
+    cfg = load_config(BASELINE)
+    plan = SimpleNamespace(
+        split=split, configs={"c": cfg}, public=[SimpleNamespace(id="a"), SimpleNamespace(id="b")],
+        labeled=[],
+    )  # fmt: skip
+    args = SimpleNamespace(name="t", repeat=1, holdout=True)
+
+    _, records = await run._measure(plan, args, None, tap, None)
+
+    llm_by_id = {r["id"]: r["llm"] for r in records}
+    assert llm_by_id["a"] == [{"role": "input", "parsed": {"evidence": "x"}}]
+    assert llm_by_id["b"] == []

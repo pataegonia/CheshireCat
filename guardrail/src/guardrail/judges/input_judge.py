@@ -15,7 +15,7 @@ from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
-from guardrail.judges.schemas import InputOut
+from guardrail.judges.schemas import ACT_TO_CATEGORY, InputActOut, InputOut
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
@@ -49,7 +49,10 @@ def _data(text: str, cfg: GuardConfig) -> str:
 
 
 def _examples(examples: Sequence[LabeledRow], cfg: GuardConfig) -> str:
-    # LabeledRow.text는 이미 정규화본이다. 순서는 kNN이 정한 그대로(가장 비슷한 것 마지막)
+    # LabeledRow.text는 이미 정규화본이다. 순서는 kNN이 정한 그대로(가장 비슷한 것 마지막).
+    # input.knn.order가 nearest_first면 뒤집는다(S3.2 선별용 변형)
+    if cfg.input.knn.order == "nearest_first":
+        examples = list(reversed(examples))
     lines = [
         f'<example category="{ex.category}">'
         f"{html.escape(ex.text[: cfg.input.max_chars], quote=False)}</example>"
@@ -110,5 +113,9 @@ async def judge_input(
     일시적 오류에만 1회 한다.
     """
     messages = build_messages(window, target, examples, cfg, kb_snippet)
+    if cfg.input.label_mode == "act":  # 요청 유형을 받아 범주로 대응시킨다(S3.2 선별용 변형)
+        result = await llm.complete("input_judge", messages, InputActOut, deadline=deadline)
+        parsed = result.parsed
+        return ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
     result = await llm.complete("input_judge", messages, InputOut, deadline=deadline)
     return result.parsed.category if isinstance(result.parsed, InputOut) else None

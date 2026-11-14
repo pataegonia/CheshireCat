@@ -11,7 +11,7 @@ import pytest
 from guardrail.config import load_config as load_guard_config
 from guardrail.schema import OutputVerdict
 
-from tests.tutor.test_flow import QUESTION, FakeLLM, out, state_with
+from tests.tutor.test_flow import DELEGATION_ASK, QUESTION, FakeLLM, out, state_with
 from tutor.answer.templates import TEXT, Fixed
 from tutor.judge import flow, guard_merge
 from tutor.judge.guard_merge import (
@@ -289,6 +289,27 @@ def test_answer_seeking_scaffold_with_classify_academic_does_not_leak_main_text(
         "action": "scaffold",
         "citations": [],
     }
+
+
+@pytest.mark.parametrize(
+    "classified", ["normal", "jailbreak_injection", "harmful_content", "off_topic"]
+)
+def test_delegation_guard_runs_before_merge(classified):
+    # #139: 제출물 대행 보정은 합치기 앞이다. 보정된 academic scaffold는 표 고정 문장이라
+    # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다(TU-13)
+    guard = FakeGuard(classified)
+    state = build(
+        guard,
+        out(category="answer_seeking", action="scaffold", sentences=[GOOD]),
+        **{"toggles.scaffold_state_rule": True},  # 보정은 밝힘일 때만 건다
+    )
+    resp = run(state, DELEGATION_ASK)
+    assert resp == {
+        "answer": TEXT[Fixed.SCAFFOLD_ACADEMIC],
+        "action": "scaffold",
+        "citations": [],
+    }
+    assert guard.judge_calls == []
 
 
 @pytest.mark.parametrize("value", ["?", "Normal", 3, None, ["jailbreak_injection"]])

@@ -25,6 +25,8 @@ OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 ac
 평균·범주별 점수·오차단·혼동표·흔들리는 문항·--compare의 새로 틀린 문항, 결과 JSON의 행별
 points)에는 홀드아웃 행이 섞여 있다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
+tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
+결과 JSON의 tutor_llm에 남긴다.
 """
 
 import argparse
@@ -35,7 +37,7 @@ import secrets
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,10 +58,11 @@ from tutor.eval.recall import (
     missing_embedding_env,
     query_parts,
 )
+from tutor.judge.examples import build_index, load_examples
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
-from tutor.runtime.config import TutorConfig, load_config
-from tutor.runtime.llm import missing_api_env
+from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig, load_config
+from tutor.runtime.llm import TOKEN_BUCKET, missing_api_env
 from tutor.startup import build_embedding, prepare
 
 PRESETS = ("tutor", "reference", "reference_top1")
@@ -128,8 +131,9 @@ async def _collect(
     async def one(row: dict[str, Any]) -> tuple[str, Any, float]:
         async with gate:
             started = time.perf_counter()
+            own = state.for_row(row["id"]) if isinstance(state, FoldStates) else state
             try:
-                response = await _respond(preset, row, state)
+                response = await _respond(preset, row, own)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
                 sys.stderr.write(f"{row['id']}: {type(exc).__name__}\n")  # 메시지는 내지 않는다
                 response = None
@@ -326,10 +330,13 @@ def _write(
     tainted: bool,
     embedding: "EmbeddingUse | None",
     invalid: str | None,
+    llm: Any = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
     invalid는 실행을 멈춘 사유다(연속 429·판정 최종 실패). 있으면 tainted도 참이다.
+    llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
+    읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -339,9 +346,24 @@ def _write(
         data["invalid"] = invalid
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
+    if llm is not None:
+        data["tutor_llm"] = {
+            "calls": dict(sorted(llm.calls.items())),  # 보낸 시도 수(아래 시도 단위 수의 분모)
+            "failures": _by_role(llm.failures),  # 호출 단위 최종 오류
+            "attempt_errors": _by_role(llm.attempt_errors),  # 시도 단위 갈래(재시도 포함)
+            "completion_buckets": _by_role(llm.completion_buckets),  # 성공한 시도의 토큰 구간
+        }
     data["report"] = asdict(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return path
+
+
+def _by_role(counts: Mapping[tuple[str, Any], int]) -> dict[str, dict[Any, int]]:
+    """(역할, 갈래)별 수를 역할 → 갈래 → 수로 묶는다(갈래 순서대로)."""
+    out: dict[str, dict[Any, int]] = {}
+    for (role, key), n in sorted(counts.items()):
+        out.setdefault(role, {})[key] = n
+    return out
 
 
 def _ids(ids: Sequence[str]) -> str:
@@ -373,6 +395,27 @@ def _per_run(values: Sequence[float | None], spec: str) -> str:
     if not present:
         return f"{shown} (범위 -)"
     return f"{shown} (범위 {min(present):{spec}}~{max(present):{spec}})"
+
+
+def _token_line(buckets: Mapping[tuple[str, int], int]) -> str:
+    """성공한 시도의 completion_tokens 분포 한 줄(역할별 p50·p95·최대 구간). 없으면 빈 문자열.
+
+    구간은 TOKEN_BUCKET 단위로 올린 값이라, 상한을 최대 구간까지만 낮추면 성공한 시도는 잘리지
+    않았을 것이다.
+    """
+    parts = []
+    for role, hist in _by_role(buckets).items():
+        values = [bucket for bucket, n in hist.items() for _ in range(n)]
+        p50, p95 = _pct(values, 0.5), _pct(values, 0.95)
+        parts.append(f"{role} p50 {p50:.0f} · p95 {p95:.0f} · 최대 {max(values)} ({len(values)}회)")
+    if not parts:
+        return ""
+    # 상한 구간은 그보다 큰 값도 담고, usage가 없는 시도는 빠진다(괄호 안 횟수는 구간에 든 수)
+    head = (
+        f"성공한 시도의 completion_tokens(추론 포함, {TOKEN_BUCKET} 단위로 올린 구간"
+        f", {PROXY_MAX_COMPLETION_TOKENS}은 초과 포함, 토큰 수 없는 시도 제외)"
+    )
+    return f"{head}: {', '.join(parts)}\n"
 
 
 def _show(report: metrics.Report, out: TextIO, *, judged: bool) -> None:
@@ -473,9 +516,43 @@ def _tutor_config(
 def _own_state(cfg: TutorConfig, overrides: dict[str, Any]) -> bool:
     """tutor 프리셋이 handle의 기본 state 대신 자기 state를 만들어 재는가.
 
-    설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다).
+    설정을 덮었거나 임베딩을 켰을 때다(기본 state는 기동 때 임베딩을 만들지 못한다). 판단 예시를
+    켰을 때도다(기본 state의 예시 색인은 200행 전부라 평가 행 자신이 예시로 들어간다).
     """
-    return bool(overrides) or cfg.toggles.embedding
+    return bool(overrides) or cfg.toggles.embedding or cfg.toggles.fewshot != "off"
+
+
+@dataclass(frozen=True)
+class FoldStates:
+    """판단 예시(TU-08)를 켠 측정: 행마다 그 행의 평가 묶음을 뺀 예시 색인을 쓰는 state.
+
+    폴드 k의 행은 폴드 k와 홀드아웃 묶음을 뺀 색인을, 홀드아웃 행은 홀드아웃 묶음만 뺀 색인을
+    쓴다(가드 `train_rows`와 같은 규칙, TU-16·TD-14). 나머지 기동 결과(LLM 호출기 등)는 같이 쓴다.
+    """
+
+    by_row: Mapping[str, Any]
+
+    def for_row(self, row_id: str) -> Any:
+        return self.by_row[row_id]
+
+
+def fold_states(state: Any, cfg: TutorConfig, rows: Sequence[dict[str, Any]]) -> FoldStates:
+    split = load_splits()
+    pool = load_examples()
+    holdout = set(split.holdout)
+
+    def key(row_id: str) -> str:
+        cluster = split.cluster[row_id]
+        return "holdout" if cluster in holdout else str(split.fold[cluster])
+
+    per_key: dict[str, Any] = {}
+    for k in sorted({key(row["id"]) for row in rows}):
+        excluded = holdout | (
+            set() if k == "holdout" else {c for c, f in split.fold.items() if str(f) == k}
+        )
+        index = build_index(cfg.fewshot, [e for e in pool if split.cluster[e.id] not in excluded])
+        per_key[k] = SimpleNamespace(**{**vars(state), "tutor_examples": index})
+    return FoldStates({row["id"]: per_key[key(row["id"])] for row in rows})
 
 
 def _tutor_state(
@@ -615,6 +692,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     latency: list[float] = []
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides) else None
+        if own is not None and cfg.toggles.fewshot != "off":
+            own = fold_states(own, cfg, rows)  # 평가 묶음을 예시 색인에서 뺀다(TU-08·TU-16)
+        if (
+            args.preset == "tutor"
+            and cfg.toggles.fewshot != "off"
+            and not isinstance(own, FoldStates)
+        ):
+            # 행별 색인이 아니면 평가 행 자신이 예시 풀에 든다. 조용히 부풀린 점수를 내지 않는다
+            ap.error("판단 예시를 켠 측정은 행마다 평가 묶음을 뺀 예시 색인을 써야 한다(TU-16)")
         all_responses, latency = collect_timed(args.preset, rows, args.runs, own)
     else:
         all_responses = [fixed] * args.runs
@@ -640,6 +726,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tainted=tainted,
         embedding=use,
         invalid=invalid,
+        llm=state.tutor_llm if state is not None else None,
     )
     _show(report, sys.stdout, judged=judge is not None)
     if state is not None:
@@ -667,6 +754,9 @@ def _show_tutor_calls(
 ) -> None:
     """튜터가 보낸 LLM 호출 수(모든 실행 합, TU-16), 요청 지연, 실패한 호출, 상한에 막힌 호출 수.
 
+    실패한 시도의 갈래(시도 단위)와 성공한 시도의 completion_tokens 분포도 낸다. 둘 다 위
+    "호출"(보낸 시도 수)과 같은 단위라, max_completion_tokens를 정할 때 length·timeout 비율과
+    토큰 분포를 함께 본다(본문은 내지 않는다).
     cap은 (튜터 상한, --max-calls, 판정 몫, 임베딩 몫)이다. stopped면 속도 제한으로 멈춘 실행이라
     막힌 호출을 상한이 아니라 속도 제한 몫으로 낸다(멈출 때 상한을 0으로 내린다).
     """
@@ -679,6 +769,11 @@ def _show_tutor_calls(
         # 호출 단위(재시도 뒤 최종 오류)라 위 "호출"(보낸 시도 수)과 단위가 다르다
         failed = ", ".join(f"{role} {code} {n}회" for (role, code), n in sorted(failures.items()))
         sys.stdout.write(f"튜터 LLM 최종 실패: {failed}: 기본값이 섞인 결과다\n")
+    errors = state.tutor_llm.attempt_errors
+    if errors:  # bad_json은 원인 갈래(length 등), 그 밖은 오류 코드(timeout 등)
+        shown = ", ".join(f"{role} {label} {n}회" for (role, label), n in sorted(errors.items()))
+        sys.stdout.write(f"실패한 시도(갈래별, 재시도 포함): {shown}\n")
+    sys.stdout.write(_token_line(state.tutor_llm.completion_buckets))
     if blocked and stopped:
         sys.stdout.write(f"속도 제한(429)으로 멈춰 보내지 못한 튜터 호출 {blocked}회")
         sys.stdout.write(": 기본값이 섞인 결과다\n")

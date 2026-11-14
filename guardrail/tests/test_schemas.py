@@ -10,7 +10,7 @@ from guardrail.schema import Category
 
 MODELS = {
     InputOut: ["evidence", "category"],
-    OutputOut: ["reason", "grounded"],
+    OutputOut: ["answer_quote", "kb_quote", "grounded", "refuses"],
     OutputBaselineOut: ["reason", "grounded", "safe"],
 }
 
@@ -24,7 +24,7 @@ def test_field_order_is_fixed(model, order):
     ("model", "data"),
     [
         (InputOut, {"evidence": "e", "category": "normal"}),
-        (OutputOut, {"reason": "r", "grounded": True}),
+        (OutputOut, {"answer_quote": "", "kb_quote": "", "grounded": True, "refuses": False}),
         (OutputBaselineOut, {"reason": "r", "grounded": True, "safe": False}),
     ],
 )
@@ -33,7 +33,9 @@ def test_rejects_unknown_and_missing_keys(model, data):
     with pytest.raises(ValidationError):
         model.model_validate({**data, "extra": 1})
     with pytest.raises(ValidationError):
-        model.model_validate({k: v for k, v in data.items() if k != "reason" and k != "evidence"})
+        model.model_validate(
+            {k: v for k, v in data.items() if k not in ("reason", "evidence", "answer_quote")}
+        )
 
 
 def test_category_outside_enum_rejected():
@@ -55,6 +57,10 @@ def test_strict_schema_category_enum_matches_type():
 
 def test_lax_coercion_rejected():
     with pytest.raises(ValidationError):
-        OutputOut.model_validate_json('{"reason": "r", "grounded": "true"}')
+        OutputOut.model_validate_json(
+            '{"answer_quote": "", "kb_quote": "", "grounded": "true", "refuses": false}'
+        )
     with pytest.raises(ValidationError):
-        OutputOut.model_validate_json('{"reason": "r", "grounded": 1}')
+        OutputOut.model_validate_json(
+            '{"answer_quote": "", "kb_quote": "", "grounded": 1, "refuses": false}'
+        )

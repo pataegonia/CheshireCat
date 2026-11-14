@@ -155,6 +155,8 @@ async def guard_route(request: Request) -> JSONResponse:
         async with asyncio.timeout(state.cfg.budget_s + BACKSTOP_MARGIN_S):
             judgement = await state.guard.judge(parse_request(raw))
         body = judgement.response.to_json(state.block)
+        # 200이어도 기본값으로 떨어진 판정을 로그에서 센다. 코드뿐이다(역할·예외 클래스 이름)
+        request.state.error = ",".join(judgement.errors) or None
     except Exception as exc:  # 메시지는 남기지 않는다(GR-12)
         request.state.error = type(exc).__name__
         body = _safe_default(state, raw)

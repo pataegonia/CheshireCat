@@ -35,6 +35,15 @@ def run(**kw):
     return asyncio.run(mock_load.run_load(**kw))
 
 
+# 배포 설정(config/tutor.yaml)은 가드 classify·judge_output을 끈다(11/14 리더 결정, #170 뒤 런박스
+# 켬/끔 비교 전까지). 가드 단계 경로를 보는 테스트는 이 덮어쓰기로 켠다
+STAGES_ON = {"toggles.guard_classify": "parallel", "toggles.verify": "guard"}
+
+
+def run_stages_on(**kw):
+    return run(tutor_overrides=STAGES_ON, **kw)
+
+
 def judged(report, capsys):
     """show()의 판정과 마지막 줄."""
     ok = mock_load.show(report, mock_load.Bar())
@@ -317,7 +326,7 @@ def test_cli_rejects_values_that_hang_or_break_the_run(flag, capsys):
 
 
 def test_tutor_and_guard_calls_all_go_through_one_gate():
-    report = run(n_tutor=20, n_guard=20, scale=0.001, seed=2)
+    report = run_stages_on(n_tutor=20, n_guard=20, scale=0.001, seed=2)
     stages = report.classify_calls + report.judge_output_calls  # 튜터가 부른 가드 단계는 따로 센다
     assert stages > 0
     assert dict(report.gate_entries) == {
@@ -329,8 +338,8 @@ def test_tutor_and_guard_calls_all_go_through_one_gate():
 
 def test_tutor_calls_the_guard_classify_and_judge_output_once_per_llm_request():
     """#138: v2는 가드 classify(주 호출과 병렬)·judge_output(주 호출 뒤)을 부른다(#159 리뷰)."""
-    report = run(n_tutor=40, n_guard=0, scale=0.001, seed=11)
-    assert report.classify_on and report.judge_output_on  # config/tutor.yaml: parallel·guard
+    report = run_stages_on(n_tutor=40, n_guard=0, scale=0.001, seed=11)
+    assert report.classify_on and report.judge_output_on  # STAGES_ON: parallel·guard
     # 가짜 주 호출은 늘 normal·answer라 LLM을 부른 요청은 모두 judge_output까지 간다
     assert report.classify_calls == report.judge_output_calls == report.llm_requests
     assert report.llm_requests == 40 - direct_count(40, 11)  # 직접 판정은 셋 다 0회
@@ -356,7 +365,7 @@ def test_judge_output_waits_for_the_main_call_and_classify_runs_alongside(monkey
     monkeypatch.setattr(mock_load.FakeLLM, "send", logged_send)
     monkeypatch.setattr(mock_load.FakeGuard, "_stage_call", logged_stage)
     assert direct_count(1, 0) == 0  # 첫 튜터 행은 LLM을 부른다
-    run(n_tutor=1, n_guard=0, scale=0.001, seed=0)
+    run_stages_on(n_tutor=1, n_guard=0, scale=0.001, seed=0)
     assert events == ["classify start", "main start", "main end", "judge_output start"]
 
 
@@ -403,7 +412,7 @@ def test_a_guard_without_the_tutor_stages_fails_the_run(monkeypatch, capsys, mis
     """#159 리뷰: 가짜 가드에 없으면 튜터가 건너뛰어(missing) 주 호출만 잰다. 통과로 내지 않는다."""
     for name in missing:
         monkeypatch.delattr(mock_load.FakeGuard, name)
-    report = run(n_tutor=10, n_guard=0, scale=0.001, seed=15)
+    report = run_stages_on(n_tutor=10, n_guard=0, scale=0.001, seed=15)
     stage = {"classify": "classify", "judge_output": "judge"}  # guard_merge의 단계 이름
     skips = dict(report.guard_skips)
     assert report.llm_requests > 0
@@ -421,7 +430,7 @@ def test_a_fake_guard_answer_the_tutor_rejects_fails_the_run(monkeypatch, capsys
         return "not_a_category"
 
     monkeypatch.setattr(mock_load.FakeGuard, "classify", odd_classify)
-    report = run(n_tutor=10, n_guard=0, scale=0.001, seed=15)
+    report = run_stages_on(n_tutor=10, n_guard=0, scale=0.001, seed=15)
     assert report.classify_calls == report.llm_requests > 0
     assert dict(report.guard_skips)["classify invalid"] == report.llm_requests
     ok, last = judged(report, capsys)
@@ -553,21 +562,23 @@ def test_requests_past_the_client_limit_are_cut_and_counted(monkeypatch):
 
 
 def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
-    report = run(n_tutor=20, n_guard=20, scale=0.001, seed=4)
+    report = run(n_tutor=20, n_guard=20, scale=0.001, seed=4)  # 배포 설정 그대로(가드 단계 끔)
     ok = mock_load.show(report, mock_load.Bar())
     out = capsys.readouterr().out
     assert ok and "튜터 p50" in out and "시간 초과(30초 이상) 0" in out
     assert (
         "가정: 튜터 모드 v2, 가짜 지연 튜터 주 호출 p50 4.9초·p95 8.3초"
         "·가드 판정 p50 4.51초·p95 6.62초(배율 0.001)"
-        ", 가드 판정 최대 2회 병렬(읽기 제한 12초·마감 20초), 게이트 64, 동시 64\n" in out
+        ", 가드 판정 최대 2회 병렬(읽기 제한 12초·마감 20초), 게이트 64, 동시 64"
+        ", 튜터 가드 단계 classify 끔·judge_output 끔\n" in out
     )
     assert f"튜터 {report.llm_calls}회" in out  # 튜터는 직접 판정을 뺀 수
     assert f"가드 {report.guard_calls}회" in out and report.guard_calls == report.guard_expected
     assert report.llm_calls >= mock_load.MIN_LLM_SHARE * 20  # 출력 숫자 자체도 하한을 지킨다
-    n = report.llm_requests  # 튜터가 부른 가드 classify·judge_output(배율 0.001이라 시간 초과 없음)
-    assert f"튜터의 가드 호출 classify {n}회 · judge_output {n}회(건너뜀 없음)\n" in out
-    # 튜터 요청이 classify·주 호출을 함께 쥐어 요청 40개로도 게이트 64가 찰 수 있다
+    # 끈 단계는 부르지 않고 건너뜀으로도 세지 않는다. "안 부름" 실패도 아니다(설정이 끈 것)
+    assert not report.classify_on and not report.judge_output_on
+    assert "stage" not in dict(report.gate_entries) and report.guard_skips == ()
+    assert "튜터의 가드 호출 classify 0회 · judge_output 0회(건너뜀 없음)\n" in out
     assert f"게이트 줄 선 호출 {report.gate_queued}회" in out
     assert out.splitlines()[-1] == (  # 배율·요청 수가 기준과 달라 실측이 아니다
         "통과(스모크: 배율 0.001, 튜터 요청 20 < 300, 가드 요청 20 < 300, 실측 아님)"
@@ -575,6 +586,15 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     for reply in mock_load.REPLIES.values():  # 가짜 답 본문도 내지 않는다
         assert json.dumps(reply, ensure_ascii=False) not in out
     assert TUTOR_DEFAULT["answer"] not in out
+
+
+def test_summary_says_which_guard_stages_the_run_turned_on(capsys):
+    report = run_stages_on(n_tutor=20, n_guard=20, scale=0.001, seed=4)
+    assert mock_load.show(report, mock_load.Bar())
+    out = capsys.readouterr().out
+    assert ", 동시 64, 튜터 가드 단계 classify 켬·judge_output 켬\n" in out
+    n = report.llm_requests  # 튜터가 부른 가드 classify·judge_output(배율 0.001이라 시간 초과 없음)
+    assert f"튜터의 가드 호출 classify {n}회 · judge_output {n}회(건너뜀 없음)\n" in out
 
 
 def test_a_real_time_pass_names_the_bar_and_says_when_the_gate_never_filled(capsys):

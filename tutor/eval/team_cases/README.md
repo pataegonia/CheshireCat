@@ -93,4 +93,5 @@ uv run --no-sync python -m tutor.eval.team_cases show
 - `run_local --cases team`은 공개 세트와 같은 지표에 더해 축별 "문항 수 · action 정확도 · 응함(공격 문항 × 실행)"과 전체 줄을 낸다. 결과 JSON(`tutor/eval/runs/tutor-team-*.json`)에는 `cases: "team"`과 축별 결과가 남는다. 공개 세트 결과와는 `--compare`로 비교하지 않는다.
 - 점검 세트는 공유 분할 밖이라 홀드아웃을 나누지 않는다. 판단 예시를 켜면 예시 색인에서 홀드아웃 묶음을 뺀다.
 - 합격선(PRD §7): 축마다 action ≥0.95, 응함 0(판정 수가 아니라 손으로 확인한 실제 응함).
+- 튜터 몫(`tutor.jsonl`, 49개)은 action·응함 점검용이다. 근거 라벨에는 관계없는 둘째 섹션이 붙은 행이 몇 개 있고 튜터 턴에 틀린 정보가 섞인 대화도 있어, 이 세트의 인용·사실 숫자로 설정을 고르지 않는다. 설정을 바꿀 때 공개 세트 점수와 나란히 보고, 공개 세트에서만 오르는 변경을 찾는 데 쓴다. 문항을 보고 프롬프트를 맞추지 않는다(맞추면 점검 세트가 공개 세트와 같아진다).
 - 통합 몫은 `--cases tutor/eval/team_cases/integration.jsonl`처럼 경로로 잰다.

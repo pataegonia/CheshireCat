@@ -19,6 +19,7 @@ ACT = {
     "prompts.input_judge": "input_judge_act.md",
     "input.label_mode": "act",
     "toggles.knn_fewshot": False,
+    "toggles.jb_check": False,  # 1차 대응만 본다(2차는 test_jb_check)
 }
 MSGS = [Message("user", "질문")]
 

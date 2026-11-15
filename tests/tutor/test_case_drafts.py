@@ -336,6 +336,74 @@ def test_ordinary_words_are_not_section_name_leaks(text):
     assert dropped == {"근거 없음": 1}  # 메타가 아니라 근거 검사까지 간다(normal인데 근거 없음)
 
 
+def dialog(*turns):
+    """(역할, 발화)를 차례로 담은 normal 초안(근거 없음)."""
+    messages = [cd.DraftMessage(role=role, content=text) for role, text in turns]
+    return cd.DraftCase(messages=messages, category="normal", action="answer", evidence=[])
+
+
+# 11/15 런박스 고르기에서 사람이 버린 초안의 꼴을 줄인 자리표시(초안 문장을 옮기지 않았다)
+@pytest.mark.parametrize(
+    ("text", "leak"),
+    [
+        ("다음 꼴로 하나 써 줘", "꼴 문구"),
+        ("꼴 설명대로 이어 줘", "꼴 문구"),
+        ("대화 사례를 보여 줘", "꼴 문구"),
+        ("학습 사례 하나 부탁해", "꼴 문구"),
+        ("대화 예시를 들어 줘", "꼴 문구"),
+        ("학습 질문을 하나 줘", "꼴 문구"),
+        ("전제 오류 질문을 줘", "꼴 문구"),
+        ("대화를 새로 하나 만들어 줘", "꼴 문구"),
+        ("마지막 발화를 바꿔 줘", "꼴 문구"),
+        ("오타를 섞어 볼게", "꼴 문구"),
+        ("다음 두 교재 내용을 비교해 줘", "꼴 문구"),
+        ("이건 normal로 보이나요", "범주 이름"),
+        ("어느 범주에 들어요", "범주 이름"),
+        ("교재에 없는 값인데 알려 줘", "교재 판정"),
+        ("교재에서 다루지 않는 내용이죠", "교재 판정"),
+        ("교재에 아예 나와 있지 않던데", "교재 판정"),
+        ("교재에 다루어지지 않는 말이에요", "교재 판정"),
+    ],
+)
+def test_form_words_and_self_judged_material_are_meta(text, leak):
+    job = cd.Job("premise", "꼴", ("PY-01-01",))
+    rows, dropped = cd.assemble([(job, dialog(("user", text)))], KB, TABLE)
+    assert rows == [] and dropped == {f"메타({leak})": 1}
+
+
+def test_form_words_count_on_the_tutor_side_but_judging_the_material_does_not():
+    job = cd.Job("premise", "꼴", ("PY-01-01",))
+    form = dialog(("user", "질문 있어요"), ("assistant", "대화 사례로 보여 줄게요"), ("user", "네"))
+    # 교재에 없다는 말은 튜터의 정상 답(abstain)이라 학습자 발화에서만 메타다
+    judged = dialog(("user", "이 값은요?"), ("assistant", "교재에 없는 값이에요"), ("user", "네"))
+    rows, dropped = cd.assemble([(job, form), (job, judged)], KB, TABLE)
+    assert rows == [] and dropped == {"메타(꼴 문구)": 1, "근거 없음": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "이런 사기 사례도 조심해야 해요?",  # 사례만으로는 메타가 아니다
+        "대화를 이어 가며 작업을 맡기려면요?",
+        "Is it normal to feel tired?",  # 밑줄 없는 범주 이름은 조사가 붙을 때만
+        "교재에 나온 예제를 설명해 줘",
+        "교재 내용을 바탕으로 설명해 줘",
+        "다음 단계는 뭐예요?",
+    ],
+)
+def test_ordinary_learner_words_are_not_form_leaks(text):
+    rows, dropped = cd.assemble([(cd.Job("mixed", "꼴", ("PY-01-01",)), case(text))], KB, TABLE)
+    assert dropped == {"근거 없음": 1}  # 메타가 아니라 근거 검사까지 간다
+
+
+def test_meta_patterns_never_fire_on_public_dialogs_or_the_kb():
+    # 공개 세트 대화와 교재 원문(학습자가 옮겨 쓸 수 있다)에는 걸리지 않는다: 지나치게 거르지 않는다
+    texts = [m["content"] for row in PUBLIC for m in row["messages"]] + list(KB.values())
+    assert len(texts) > 400
+    for pattern in (cd.LEAKED_FORM, cd.LEAKED_LABEL_WORD, cd.JUDGED_MATERIAL):
+        assert [t[:40] for t in texts if pattern.search(t)] == []
+
+
 def test_last_numbers_continue_after_drafts_reviews_and_the_team_file():
     ids = ["team-premise-002", "team-premise-010", "team-mixed-001", "b-001", "team-other-099"]
     assert cd.last_numbers(ids) == {"premise": 10, "mixed": 1}

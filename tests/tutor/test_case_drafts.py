@@ -103,7 +103,8 @@ def test_prompt_carries_the_table_the_form_the_category_and_the_sections():
     assert (system["role"], user["role"]) == ("system", "user")
     assert all(category in system["content"] for category in TABLE)
     assert TABLE["harmful_content"].variants[0].when in system["content"]  # 표에서 읽는다
-    assert job.form in user["content"] and KB["FIN-03-01"][:40] in user["content"]
+    shown = cd.shown_section("FIN-03-01", KB["FIN-03-01"])
+    assert job.form in user["content"] and f"섹션 A\n{shown}" in user["content"]
     assert "범주: off_topic" in user["content"]
     _system, plain = cd.messages_for(job._replace(category=None), KB, TABLE)
     assert "범주:" not in plain["content"]  # 범주는 정해 준 축(표현 변형)에서만
@@ -120,7 +121,35 @@ def test_prompt_forbids_leaking_ids_and_labels_into_the_dialog():
     for forms in cd.AXIS_FORMS.values():  # 꼴 설명에 라벨 이름이 없다(대화로 새어 나왔다)
         assert not [f for f in forms if any(name in f for name in [*TABLE, "answer", "scaffold"])]
     system, user = cd.messages_for(cd.Job("premise", "꼴", ("FIN-02-04",)), KB, TABLE)
-    assert "섹션 ID" in system["content"] and "꼴 설명" in user["content"]
+    assert "섹션 이름(섹션 A·B)" in system["content"] and "꼴 설명" in user["content"]
+
+
+def test_no_section_id_reaches_any_prompt():
+    # 11/14 런박스 진단: 프롬프트 세 곳에 ID가 보였고 premise·mixed 초안이 모두 메타로 빠졌다.
+    # nano는 섹션을 이름(A, B)으로만 보고, 원문에서도 ID를 지운다
+    prompts = prompt_text(all_jobs())
+    assert "섹션 A\n" in prompts and "섹션 B\n" in prompts
+    assert cd.LEAKED_SID.findall(prompts) == []
+
+
+def test_shown_section_drops_only_the_ids_and_keeps_title_text_and_tables():
+    with_table = [sid for sid, text in KB.items() if "(표: " in text]
+    assert len(with_table) >= 20  # 표가 붙은 섹션이 있어야 표 자리를 시험한다
+    for sid, text in KB.items():
+        shown = cd.shown_section(sid, text)
+        assert cd.LEAKED_SID.search(shown) is None
+        title = text.splitlines()[0].removeprefix(f"# {sid}").strip()
+        assert shown.splitlines()[0] == f"# {title}" and title  # 제목은 남는다
+        # 지운 것은 머리말 ID와 표 자리 파일 이름뿐이다(표 내용은 원문 끝에 그대로)
+        before, after = text.splitlines()[1:], shown.splitlines()[1:]
+        assert len(before) == len(after)
+        for old, new in zip(before, after, strict=True):
+            if f"(표: {sid}-table" in old:
+                start = old.index("(표: ")
+                ref = old[start : old.index(")", start) + 1]  # 예: (표: FIN-03-02-table1.csv)
+                assert new == old.replace(ref, "(표)")
+            else:
+                assert new == old
 
 
 # --- 초안 → 행 ---
@@ -146,7 +175,7 @@ def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
         messages=[cd.DraftMessage(role="user", content=f" {public_text} ")],
         category="normal",
         action="answer",
-        evidence=["PY-01-01"],
+        evidence=["A"],
     )
     blank = cd.DraftCase(
         messages=[cd.DraftMessage(role="user", content="  ")],
@@ -155,19 +184,20 @@ def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
         evidence=[],
     )
     drafts = [
-        case("a", evidence=["PY-01-01", "NOPE-99", "PY-01-02", "PY-01-01"]),
+        case("a", evidence=["A", "A"]),  # 섹션 이름 → 섹션 ID, 겹침 없이
         case("c", roles=("user", "assistant")),  # 마지막이 user가 아님
-        case("a", evidence=["PY-01-01"]),  # 마지막 학습자 발화가 이번 초안과 겹침
-        case("old", evidence=["PY-01-01"]),  # 앞 초안과 겹침
-        case("d", "jailbreak_injection", "refuse", ["PY-01-03"]),  # 인용 never 범주
+        case("a", evidence=["A"]),  # 마지막 학습자 발화가 이번 초안과 겹침
+        case("old", evidence=["A"]),  # 앞 초안과 겹침
+        case("d", "jailbreak_injection", "refuse", ["B"]),  # 인용 never 범주
         case("e", "harmful_content", "redirect", roles=("user", "assistant", "user")),
-        case("f", "answer_seeking", "scaffold", ["PY-01-02"]),  # 준 섹션 근거가 없음
+        case("f", "answer_seeking", "scaffold", []),  # 근거가 있어야 하는 범주인데 없음
         case("g", "low_signal_input", "clarify", roles=("user", "user")),  # 교대하지 않음
         blank,  # 빈 발화
         None,  # 호출 실패
-        case("PY-01-01의 내용", evidence=["PY-01-01"]),  # 대화에 섹션 ID(학생은 모른다)
-        case("정답만(answer_seeking)", "answer_seeking", "scaffold", ["PY-01-01"]),  # 라벨
-        case("def my_var_name(): 코드", evidence=["PY-01-01"]),  # 코드의 밑줄 이름은 메타 아님
+        case("PY-01-01의 내용", evidence=["A"]),  # 대화에 섹션 ID(학생은 모른다)
+        case("섹션 B에 나온 값", evidence=["B"]),  # 대화에 섹션 이름(프롬프트에서 샘)
+        case("정답만(answer_seeking)", "answer_seeking", "scaffold", ["A"]),  # 라벨
+        case("def my_var_name(): 코드", evidence=["A"]),  # 코드의 밑줄 이름은 메타 아님
         copied,  # 공개 세트 문항을 그대로 옮김(공백만 다름)
     ]
     public = [case_set.last_user(row["messages"]) for row in PUBLIC]
@@ -180,21 +210,47 @@ def test_assemble_keeps_valid_drafts_and_counts_what_it_drops():
         public=public,
     )
     assert [r["id"] for r in rows] == [f"team-paraphrase-{n:03d}" for n in (8, 9, 10, 11)]
-    # 근거는 그 호출에 준 섹션만, 겹침 없이 남긴다(준 적 없는 PY-01-02와 모르는 ID는 뺀다)
+    # 근거는 그 호출에 준 섹션 이름을 섹션 ID로 바꿔, 겹침 없이 남긴다
     assert rows[0]["labels"] == {"action": "answer", "category": "normal", "evidence": ["PY-01-01"]}
     assert rows[0]["draft"]["form"] == "꼴" and rows[0]["draft"]["category"] == "normal"
     assert set(rows[0]) == {"id", "endpoint", "axis", "messages", "labels", "draft"}  # seed 없음
     assert rows[1]["labels"]["evidence"] == [] and rows[1]["draft"]["evidence"] == ["PY-01-03"]
     assert [m["role"] for m in rows[2]["messages"]] == ["user", "assistant", "user"]
     assert rows[3]["messages"][0]["content"].startswith("def my_var_name")
-    assert dropped == {
+    assert dropped == {  # 메타는 무엇이 샜는지 나눠 센다(런박스에서 원인을 바로 본다)
         "형식": 3,
-        "메타": 2,
+        "메타(섹션 ID)": 1,
+        "메타(섹션 이름)": 1,
+        "메타(범주 이름)": 1,
         "근거 없음": 1,
         "겹침": 2,
         "공개 문항과 같음": 1,
         "호출 실패": 1,
     }
+
+
+def test_section_names_map_back_only_to_the_sections_given_in_that_call():
+    one = cd.Job("unseen_section", "꼴", ("FIN-03-02",))  # 섹션 하나: B는 준 적 없다
+    rows, dropped = cd.assemble([(one, case("u", evidence=["B", "A"]))], KB, TABLE)
+    assert rows[0]["labels"]["evidence"] == ["FIN-03-02"] and dropped == {}
+    rows, dropped = cd.assemble([(one, case("v", evidence=["B"]))], KB, TABLE)
+    assert rows == [] and dropped == {"근거 없음": 1}
+    two = cd.Job("mixed", "꼴", ("PY-01-01", "PY-01-03"))
+    rows, _ = cd.assemble([(two, case("w", evidence=["B", "A", "B"]))], KB, TABLE)
+    assert rows[0]["labels"]["evidence"] == ["PY-01-03", "PY-01-01"]  # nano가 낸 순서
+
+
+def test_a_call_never_names_more_sections_than_there_are_names():
+    assert all(len(j.sections) <= len(cd.SECTION_NAMES) for j in all_jobs())  # 계획은 둘까지
+    three = cd.Job("mixed", "꼴", ("PY-01-01", "PY-01-02", "PY-01-03"))
+    with pytest.raises(ValueError, match="2개까지"):  # 셋째가 프롬프트에서 조용히 빠지지 않게
+        cd.messages_for(three, KB, TABLE)
+
+
+@pytest.mark.parametrize("text", ["자료 3개를 봤어요", "섹션별로 정리해 줘", "섹션 Apple 예제"])
+def test_ordinary_words_are_not_section_name_leaks(text):
+    rows, dropped = cd.assemble([(cd.Job("mixed", "꼴", ("PY-01-01",)), case(text))], KB, TABLE)
+    assert dropped == {"근거 없음": 1}  # 메타가 아니라 근거 검사까지 간다(normal인데 근거 없음)
 
 
 def test_last_numbers_continue_after_drafts_reviews_and_the_team_file():
@@ -206,7 +262,7 @@ def test_last_numbers_continue_after_drafts_reviews_and_the_team_file():
 
 
 def _fake_llm(*, fail_first=False, fail_all=False, error="bad_json", label=None, sent=None):
-    """TutorLLM처럼 역할별 호출 수를 세고 max_calls에 막힌다. 호출마다 다른 초안(근거 PY-01-01).
+    """TutorLLM처럼 역할별 호출 수를 세고 max_calls에 막힌다. 호출마다 다른 초안(근거 섹션 A).
 
     label=(범주, action)이면 그 라벨로 근거 없이 낸다. sent에 받은 프롬프트를 모은다.
     """
@@ -224,7 +280,7 @@ def _fake_llm(*, fail_first=False, fail_all=False, error="bad_json", label=None,
         if fail_all or (fail_first and n == 1):
             return SimpleNamespace(parsed=None, error=error, finish_reason="length")
         if label is None:
-            draft = case(f"질문 자리 {n}", evidence=["PY-01-01"])
+            draft = case(f"질문 자리 {n}", evidence=["A"])
         else:
             draft = case(f"질문 자리 {n}", *label)
         return SimpleNamespace(parsed=draft, error=None, finish_reason="stop")

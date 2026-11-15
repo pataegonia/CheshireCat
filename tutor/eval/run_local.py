@@ -28,8 +28,9 @@ JSON의 holdout_excluded에 남는다. 홀드아웃 행이 섞인 이전 결과(
 이번에 재지 않은 행은 새로 틀린 문항으로 세지 않는다.
 결과는 tutor/eval/runs/에 JSON으로 남는다(git 제외). 질문·답변 본문은 출력하지 않는다.
 결과 JSON의 report.cv_emitted_by_run에는 실행마다 행 id → 낸 action·인용 수·인용한 섹션 ID(KB에
-있는 것만)·응함 판정을 남긴다(형식이 틀린 응답이면 action·인용 수·인용 ID가 null, 판정하지
-않았거나 판정 오류면 응함이 null, 본문은 남기지 않는다, TU-15). 화면에는 정답이 abstain·refuse인데
+있는 것만)·응함 판정·사실 점수·충실 판정을 남긴다(형식이 틀린 응답이면 action·인용 수·인용 ID가
+null, 판정하지 않았거나 판정 오류면 응함·사실·충실이 null, 본문은 남기지 않는다, TU-15). 사실
+점수를 어느 행에서 잃는지 행별로 볼 수 있다. 화면에는 정답이 abstain·refuse인데
 answer를 낸 행 id와 그중 인용 0인 수를 실행별로 낸다(#162·#163). 이 필드가 없는 이전 결과와도
 --compare할 수 있다.
 프리셋 실행 결과 JSON의 guard_config에는 튜터 검색에 닿는 가드 설정(읽은 파일, KB 폴더, kb

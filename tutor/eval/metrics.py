@@ -3,10 +3,10 @@
 튜터 점수는 채점기 `aggregate`로 내므로 로컬 채점기와 같다. 판정 오류가 난 문항은 로컬 채점기처럼
 범주별 점수·항목별 평균에서 빼고 문항 점수를 None으로 둔다. action과 인용에서 나오는 지표
 (혼동행렬·오차단·놓친 근거·기본값 분포)는 모든 문항으로 낸다.
-실행마다 교차 검증 행별로 낸 action·인용 수·인용한 섹션 ID·응함 판정을 남기고, 정답이
-abstain·refuse인데 answer를 낸 행을 모은다(#162·#163). 라벨·숫자·행 id·KB 섹션 ID만 남기고 본문은
-남기지 않는다(TU-15). 섹션 ID를 남기지 않는 것은 서버 로그 규칙이고, 이 결과는 git에서 뺀 평가
-결과다.
+실행마다 교차 검증 행별로 낸 action·인용 수·인용한 섹션 ID·응함 판정·사실 점수·충실 판정을
+남기고, 정답이 abstain·refuse인데 answer를 낸 행을 모은다(#162·#163). 라벨·숫자·행 id·KB 섹션
+ID만 남기고 본문은 남기지 않는다(TU-15). 섹션 ID를 남기지 않는 것은 서버 로그 규칙이고, 이 결과는
+git에서 뺀 평가 결과다.
 """
 
 from collections import Counter, defaultdict
@@ -162,12 +162,18 @@ def _emitted(s: Scored) -> dict[str, Any]:
     action·인용 수·인용한 섹션 ID는 형식이 틀린 응답(응답 없음 포함)이면 None이다. 인용한 섹션
     ID는 KB에 있는 것만 남긴다(정답 근거 대신 무엇을 인용했는지 행별로 본다). 응함은 채점기 판정
     그대로라 공격 문항이 아니거나 판정하지 않았거나 판정 오류면 None이다.
+    사실 점수(0~1)·충실 판정은 채점기 판정 그대로라 정답 사실이 없거나(사실) 정답이 내용 action이
+    아니거나(충실) 판정하지 않았으면 None이다. 판정 오류 문항은 채점기처럼 항목 평균에서 빠지므로
+    판정 하나가 성공했어도 둘 다 None이다(사실 점수를 어느 행에서 잃는지 행별로 본다).
     """
+    judged = not s.result["judge_error"]
     return {
         "action": s.pred_action,
         "citations": s.citations,
         "cited": None if s.cited is None else list(s.cited),
         "complied": s.result["complied"],
+        "facts": s.result["facts"] if judged else None,
+        "faithful": s.result["faithful"] if judged else None,
     }
 
 

@@ -62,6 +62,10 @@ class FakeGuard:
         return cls(llm, rows)
 
 
+# 배포 기본값은 두 토글이 모두 off라 가드를 부르지 않는다. 가드를 붙인 측정은 하나를 켠다
+GUARD = ("--guard", "--tutor-set", "toggles.guard_classify=parallel")
+
+
 @pytest.fixture
 def fakes(monkeypatch):
     FakeGuardLLM.made = []
@@ -123,7 +127,7 @@ def test_fold_guards_leave_out_the_eval_fold_and_holdout():
 
 
 def test_cli_guard_attaches_a_fold_guard_to_every_row(monkeypatch, tmp_path, capsys, fakes):
-    code, seen = measure(monkeypatch, tmp_path, "--guard")
+    code, seen = measure(monkeypatch, tmp_path, *GUARD)
     assert code == 0
     assert_guard_never_trained_on_the_row(seen)
     (llm,) = FakeGuardLLM.made
@@ -147,6 +151,12 @@ def test_cli_guard_attaches_a_fold_guard_to_every_row(monkeypatch, tmp_path, cap
     (saved,) = tmp_path.glob("tutor-*.json")
     data = json.loads(saved.read_text(encoding="utf-8"))
     assert data["tainted"] is False
+    config = data["tutor_config"]  # 비교군 조건(적용된 토글·--tutor-set 값)을 결과에서 확인한다
+    assert config["mode"] == "v2"
+    assert config["overrides"] == {"toggles.guard_classify": "parallel"}
+    assert config["toggles"]["guard_classify"] == "parallel"
+    assert config["toggles"]["verify"] == "off"
+    assert config["toggles"]["jailbreak_needs_signal"] is False
     assert data["guard_run"] == {
         "calls": {},
         "max_calls": 352,
@@ -164,7 +174,7 @@ def test_cli_guard_reports_the_gate_conditions_per_request(monkeypatch, tmp_path
         await state.guard.llm.complete("classify")
         await state.guard.llm.complete("judge_output")
 
-    code, seen = measure(monkeypatch, tmp_path, "--guard", during=during)
+    code, seen = measure(monkeypatch, tmp_path, *GUARD, during=during)
     assert code == 0
     (saved,) = tmp_path.glob("tutor-*.json")
     gate = json.loads(saved.read_text(encoding="utf-8"))["gate"]
@@ -177,24 +187,117 @@ def test_cli_guard_reports_the_gate_conditions_per_request(monkeypatch, tmp_path
     assert "요청당 nano 최대 3회(≤4) 통과" in out
 
 
-def test_cli_guard_marks_skipped_or_failed_guard_rows_tainted(monkeypatch, tmp_path, fakes):
-    """가드 단계를 건너뛰었거나 가드 호출이 오류로 끝나면 결과 JSON에 남고 비교 기준이 못 된다."""
+def test_cli_guard_marks_failed_guard_calls_tainted(monkeypatch, tmp_path, fakes):
+    """가드 호출이 오류로 끝나면(가드 기본값으로 답함) 결과 JSON에 남고 비교 기준이 못 된다."""
 
     async def during(state):
         await state.guard.llm.complete("input", error="timeout")
-        state.guard_skips[("classify", "missing")] += 1
 
-    code, seen = measure(monkeypatch, tmp_path, "--guard", during=during)
+    code, seen = measure(monkeypatch, tmp_path, *GUARD, during=during)
     assert code == 1
     (saved,) = tmp_path.glob("tutor-*.json")
     data = json.loads(saved.read_text(encoding="utf-8"))
     assert data["tainted"] is True
     run = data["guard_run"]
     assert run["errors"] == {"timeout": len(seen)}
-    assert run["skips"] == {"classify missing": len(seen)}
+    assert run["skips"] == {}
     assert run["clean"] is False
     with pytest.raises(ValueError, match="tainted"):
         run_local.load_previous(saved, judge=False)
+
+
+@pytest.mark.parametrize("reason", ["missing", "error", "invalid"])
+@pytest.mark.parametrize("stage", ["classify", "judge"])
+def test_cli_guard_marks_rows_the_guard_did_not_answer_tainted(
+    monkeypatch, tmp_path, fakes, stage, reason
+):
+    """가드가 서버와 다르게 답한 건너뜀(없음·오류·형식)은 한 번이라도 있으면 tainted다."""
+    first = []
+
+    async def during(state):
+        if not first:
+            first.append(True)
+            state.guard_skips[(stage, reason)] += 1
+
+    code, _seen = measure(monkeypatch, tmp_path, *GUARD, during=during)
+    assert code == 1
+    (saved,) = tmp_path.glob("tutor-*.json")
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    assert data["tainted"] is True
+    assert data["guard_run"]["skips"] == {f"{stage} {reason}": 1}
+    assert data["guard_run"]["clean"] is False
+
+
+@pytest.mark.parametrize("reason", ["timeout", "no_time"])
+@pytest.mark.parametrize("stage", ["classify", "judge"])
+def test_cli_guard_counts_time_limit_skips_without_tainting(
+    monkeypatch, tmp_path, capsys, fakes, stage, reason
+):
+    """시간 제한 건너뜀은 설계대로 작동한 것이라(재려는 효과) 수로만 남기고 비교 기준에 둔다."""
+
+    async def during(state):
+        state.guard_skips[(stage, reason)] += 1
+
+    code, seen = measure(monkeypatch, tmp_path, *GUARD, during=during)
+    assert code == 0
+    (saved,) = tmp_path.glob("tutor-*.json")
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    assert data["tainted"] is False
+    assert data["guard_run"]["skips"] == {f"{stage} {reason}": len(seen)}
+    assert data["guard_run"]["clean"] is True
+    run_local.load_previous(saved, judge=False)  # --compare 기준으로 쓸 수 있다
+    out = capsys.readouterr().out
+    assert f"가드 단계 건너뜀(모든 실행 합): {stage} {reason} {len(seen)}회" in out
+    assert "시간 제한 건너뜀은 설계대로라 비교 기준에서 빼지 않는다" in out
+
+
+def test_cli_guard_mixed_skips_are_tainted_by_the_bad_reason(monkeypatch, tmp_path, fakes):
+    """시간 제한 건너뜀과 missing이 함께 있으면 missing 때문에 tainted다."""
+
+    async def during(state):
+        state.guard_skips[("classify", "timeout")] += 1
+        state.guard_skips[("judge", "missing")] += 1
+
+    code, seen = measure(monkeypatch, tmp_path, *GUARD, during=during)
+    assert code == 1
+    (saved,) = tmp_path.glob("tutor-*.json")
+    run = json.loads(saved.read_text(encoding="utf-8"))["guard_run"]
+    assert run["skips"] == {"classify timeout": len(seen), "judge missing": len(seen)}
+    assert run["clean"] is False
+
+
+@pytest.mark.parametrize(
+    "toggles",
+    [
+        (),  # 배포 기본값: guard_classify off · verify off
+        ("--tutor-set", "toggles.guard_classify='off'", "--tutor-set", "toggles.verify='off'"),
+        ("--tutor-set", "mode=baseline"),  # 베이스라인은 가드를 쓰지 않는다
+        ("--tutor-set", "mode=baseline", "--tutor-set", "toggles.guard_classify=parallel"),
+    ],
+)
+def test_cli_guard_refuses_a_config_that_never_calls_the_guard(
+    monkeypatch, tmp_path, fakes, toggles
+):
+    """가드를 한 번도 부르지 않는 설정에 --guard를 주면 API를 부르기 전에 멈춘다."""
+    with pytest.raises(SystemExit) as stopped:
+        measure(monkeypatch, tmp_path, "--guard", *toggles)
+    assert stopped.value.code == 2
+    assert not FakeGuardLLM.made
+    assert not list(tmp_path.glob("tutor-*.json"))
+
+
+@pytest.mark.parametrize(
+    "toggle",
+    [
+        "toggles.guard_classify=serial",
+        "toggles.guard_classify=parallel",
+        "toggles.verify=guard",
+    ],
+)
+def test_cli_guard_accepts_either_guard_toggle(monkeypatch, tmp_path, fakes, toggle):
+    code, seen = measure(monkeypatch, tmp_path, "--guard", "--tutor-set", toggle)
+    assert code == 0
+    assert_guard_never_trained_on_the_row(seen)
 
 
 def test_cli_guard_rate_limit_stops_both_guard_and_tutor(monkeypatch, tmp_path, fakes):
@@ -203,7 +306,7 @@ def test_cli_guard_rate_limit_stops_both_guard_and_tutor(monkeypatch, tmp_path, 
     async def during(state):
         await state.guard.llm.complete("input", error="rate_limit")
 
-    code, seen = measure(monkeypatch, tmp_path, "--guard", during=during)
+    code, seen = measure(monkeypatch, tmp_path, *GUARD, during=during)
     assert code == run_local.EXIT_RATE_LIMITED
     state, _loop = next(iter(seen.values()))
     assert state.guard.llm.max_calls == 0
@@ -214,7 +317,7 @@ def test_cli_guard_stops_when_the_probe_base_request_fails(monkeypatch, tmp_path
     """가드 probe의 맨 요청이 실패하면(429 등, 예외 없이 결과로 온다) 튜터를 부르기 전에 멈춘다."""
     FakeGuardLLM.probe = {"base": "rate_limit"}
     with pytest.raises(SystemExit) as stopped:
-        measure(monkeypatch, tmp_path, "--guard")
+        measure(monkeypatch, tmp_path, *GUARD)
     assert stopped.value.code == 2
     assert not list(tmp_path.glob("tutor-*.json"))
 
@@ -227,7 +330,7 @@ def test_guard_flag_is_only_for_the_public_set(monkeypatch, tmp_path):
 
 
 def test_cli_guard_with_examples_keeps_both_per_row(monkeypatch, tmp_path, fakes):
-    code, seen = measure(monkeypatch, tmp_path, "--guard", "--tutor-set", "toggles.fewshot=knn")
+    code, seen = measure(monkeypatch, tmp_path, *GUARD, "--tutor-set", "toggles.fewshot=knn")
     assert code == 0
     assert_guard_never_trained_on_the_row(seen)
     split = load_splits()
@@ -239,7 +342,7 @@ def test_cli_guard_with_examples_keeps_both_per_row(monkeypatch, tmp_path, fakes
 def test_cli_refuses_a_guard_that_is_not_per_fold(monkeypatch, tmp_path, fakes):
     monkeypatch.setattr(run_local, "fold_states", lambda state, _cfg, _rows, **_kw: state)
     with pytest.raises(SystemExit) as stopped:
-        measure(monkeypatch, tmp_path, "--guard")
+        measure(monkeypatch, tmp_path, *GUARD)
     assert stopped.value.code == 2
     assert not list(tmp_path.glob("tutor-*.json"))
 

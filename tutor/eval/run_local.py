@@ -99,6 +99,10 @@ SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
 # --guard: 요청당 가드 호출(classify + judge_output, TU-13). TUTOR_CALLS 안에서 나눠 쓴다.
 # 가드 LLM 기동 시험(probe) 호출 수는 가드 설정에서 센다(guard_probe_calls)
 GUARD_CALLS_PER_REQUEST = 2
+# --guard 결과를 비교 기준에서 빼는 가드 단계 건너뜀 사유: 가드가 서버와 다르게 답한 것이다.
+# timeout·no_time은 시간 제한이 설계대로 작동한 것이라 ⓐ·ⓒ·검증 켬에서 재려는 효과 자체다.
+# 수로만 남긴다(#165 리뷰 danielcho02 2차, mock_load.BAD_SKIPS와 같은 판정)
+GUARD_BAD_SKIPS = frozenset({"missing", "error", "invalid"})
 # 운영진 API 호출이 이만큼 연달아 429로 끝나면(각각 재시도 포함) 더 보내지 않는다. 막힌 키에 계속
 # 보내면 어뷰징으로 보일 수 있다(SPEC §7.1). 값과 종료 코드는 가드 하네스(#151)와 같다
 RATE_LIMIT_STREAK = 20
@@ -411,6 +415,7 @@ def _write(
     check_summary: "EvidenceCheckSummary | None" = None,
     team: Mapping[str, Any] | None = None,
     gate_summary: Mapping[str, Any] | None = None,
+    tutor: Mapping[str, Any] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
@@ -420,6 +425,7 @@ def _write(
     llm(튜터 LLM)이 있으면 그 수를 tutor_llm에 남긴다(본문 없음). load_previous는 이 필드를
     읽지 않아, 필드가 없는 옛 결과도 --compare에 쓴다. team(점검 세트)이면 cases=team도 남긴다.
     checks가 있으면(근거 대조 칸을 켠 측정, #162) 실행마다 행 → 칸 값과 그 진단을 남긴다.
+    tutor가 있으면(tutor 프리셋) 적용된 mode·토글과 --tutor-set 값을 남겨 비교군 조건을 확인한다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -428,6 +434,8 @@ def _write(
     data["holdout_excluded"] = holdout_excluded
     if guard is not None:
         data["guard_config"] = guard
+    if tutor is not None:
+        data["tutor_config"] = dict(tutor)
     if guard_run is not None:  # --guard: 가드 호출·오류·건너뜀 수(본문 없음)
         data["guard_run"] = dict(guard_run)
     if gate_summary is not None:  # #83 관문 조건(응함·재현율·지연·요청당 nano 호출)
@@ -728,6 +736,21 @@ def _tutor_config(
     return cfg, overrides
 
 
+def _tutor_config_used(cfg: TutorConfig, overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """결과 JSON의 tutor_config: 적용된 mode·토글 전부와 --tutor-set으로 덮은 값(본문 없음)."""
+    return {
+        "mode": cfg.mode,
+        "toggles": cfg.toggles.model_dump(),
+        "overrides": dict(sorted(overrides.items())),
+    }
+
+
+def _guard_used(cfg: TutorConfig) -> bool:
+    """이 설정이 요청마다 가드를 부르는가(classify 합치기·직렬이나 judge_output 검증, v2만)."""
+    toggles = cfg.toggles
+    return cfg.mode == "v2" and (toggles.guard_classify != "off" or toggles.verify == "guard")
+
+
 def _own_state(cfg: TutorConfig, overrides: dict[str, Any], *, guard: bool = False) -> bool:
     """tutor 프리셋이 handle의 기본 state 대신 자기 state를 만들어 재는가.
 
@@ -968,6 +991,14 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         ap.error("--guard는 --preset tutor에서만 쓴다")
     if args.guard and cases is not None:  # 점검 세트 행은 공유 분할 밖이라 폴드별 가드가 없다
         ap.error("--guard는 공개 세트(--cases public)에서만 쓴다")
+    if args.guard and not _guard_used(cfg):
+        # 가드를 한 번도 부르지 않는데 clean으로 끝나 "가드 붙인 측정"처럼 --compare 기준이 되고,
+        # 가드 몫만 튜터 상한에서 빠진다(#165 리뷰 danielcho02 2차)
+        ap.error(
+            "--guard인데 가드를 부르는 설정이 없다: "
+            "--tutor-set으로 toggles.guard_classify(serial·parallel)나 "
+            "toggles.verify=guard를 켠다(mode=baseline은 가드를 쓰지 않는다)"
+        )
     calls = expected_calls(
         rows,
         preset=args.preset,
@@ -1097,6 +1128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     path = _write(
         report,
         gate_summary=gate_summary,
+        tutor=_tutor_config_used(cfg, overrides) if args.preset == "tutor" else None,
         name=name,
         judge=judge is not None,
         out_dir=args.out,
@@ -1186,20 +1218,23 @@ def _count_errors(llm: Any) -> Counter[str]:
 def _guard_run(llm: Any, skips: Any) -> dict[str, Any] | None:
     """--guard 결과 JSON의 guard_run: 가드 호출 수(probe 제외)·상한·오류 코드별·건너뜀 사유별 수.
 
-    clean은 건너뜀과 오류가 모두 0일 때만 참이다. 아니면 그 행은 튜터 단독이나 가드 기본값 결과라
-    범주 판정·검증 비교에 쓰지 않는다(tainted). 가드에 classify·judge_output이 아직 없으면(S2.11
-    전) 건너뜀이 missing으로 잡혀 clean이 거짓이다.
+    clean은 가드 LLM 최종 오류가 0이고 `GUARD_BAD_SKIPS`(missing·error·invalid) 건너뜀이 0일 때
+    참이다. 아니면 그 행은 가드가 서버와 다르게 답한 튜터 단독·가드 기본값 결과라 범주 판정·검증
+    비교에 쓰지 않는다(tainted). timeout·no_time 건너뜀은 시간 제한이 설계대로 작동한 것이라
+    skips에 수로만 남기고 clean을 바꾸지 않는다(#165 리뷰 danielcho02 2차).
     """
     if llm is None:
         return None
     errors = dict(sorted(getattr(llm, "run_errors", {}).items()))
-    skipped = {f"{stage} {reason}": n for (stage, reason), n in sorted((skips or {}).items())}
+    pairs = sorted((skips or {}).items())
+    skipped = {f"{stage} {reason}": n for (stage, reason), n in pairs}
+    bad = any(n for (_stage, reason), n in pairs if reason in GUARD_BAD_SKIPS)
     return {
         "calls": dict(sorted(llm.calls.items())),
         "max_calls": llm.max_calls,
         "errors": errors,
         "skips": skipped,
-        "clean": not errors and not skipped,
+        "clean": not errors and not bad,
     }
 
 
@@ -1215,6 +1250,8 @@ def _show_guard(run: Mapping[str, Any]) -> None:
         sys.stdout.write(
             "가드가 돌지 않았거나 기본값으로 답한 호출이 있다: 비교 기준으로 쓰지 않는다\n"
         )
+    elif run["skips"]:
+        sys.stdout.write("시간 제한 건너뜀은 설계대로라 비교 기준에서 빼지 않는다(수만 남긴다)\n")
 
 
 def _show_tutor_calls(

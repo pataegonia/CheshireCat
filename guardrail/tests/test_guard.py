@@ -202,7 +202,7 @@ def _verdict(v: str) -> Ok:
 
 
 async def test_jb_study_turns_into_normal_and_goes_down_the_normal_output_path(no_rule):
-    guard, fake = await make(jb_responder(_verdict("study")))
+    guard, fake = await make(jb_responder(_verdict("study")), toggles__jb_check=True)
     j = await guard.judge(req())
     assert j.response == GuardResponse("normal", OutputVerdict(True, (), True))
     assert decision_of("normal", guard.block) == "allow" and j.output_tier == 4  # ①이 아니라 nano
@@ -211,7 +211,7 @@ async def test_jb_study_turns_into_normal_and_goes_down_the_normal_output_path(n
 
 
 async def test_jb_apply_keeps_the_block(no_rule):
-    guard, _ = await make(jb_responder(_verdict("apply")))
+    guard, _ = await make(jb_responder(_verdict("apply")), toggles__jb_check=True)
     j = await guard.judge(req())
     assert j.response.category == "jailbreak_injection" and j.output_tier == 1
     assert (j.calls, j.errors) == (3, ())
@@ -221,14 +221,14 @@ async def test_jb_apply_keeps_the_block(no_rule):
     "step", [Malformed(), Timeout(), RateLimited(), ServerError(), Boom()], ids=type
 )
 async def test_jb_check_failure_keeps_the_block_and_is_counted(no_rule, step):
-    guard, _ = await make(jb_responder(step, step))  # 재시도까지 실패
+    guard, _ = await make(jb_responder(step, step), toggles__jb_check=True)  # 재시도까지 실패
     j = await guard.judge(req())
     assert j.response.category == "jailbreak_injection" and j.input_source == "nano"
     assert j.calls == 3 and "jb_check" in j.errors
 
 
 async def test_jb_check_that_hangs_past_the_deadline_keeps_the_block(no_rule):
-    guard, _ = await make(jb_responder(Hang(), Hang()), budget_s=1)
+    guard, _ = await make(jb_responder(Hang(), Hang()), budget_s=1, toggles__jb_check=True)
     j = await guard.judge(req(None, has=False))
     assert j.response.category == "jailbreak_injection" and "jb_check" in j.errors
 

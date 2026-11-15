@@ -310,8 +310,8 @@ async def test_fake_run_drives_the_real_guard_end_to_end(tmp_path, capsys):
     # 탈옥 2차 판정 몫(행마다 1)도 쓰지 않는다
     low = sum(r["source"] == "low_signal" for r in recs)
     cfg = load_config(DEFAULT)
-    assert cfg.toggles.jb_check
-    assert low > 0 and score["calls"]["total"] + run.probe_calls(cfg.llm) == est - low - len(recs)
+    unused = len(recs) * cfg.toggles.jb_check
+    assert low > 0 and score["calls"]["total"] + run.probe_calls(cfg.llm) == est - low - unused
     public = {r.id: r for r in load_public(cfg.paths.public)}
     for r in recs:
         has = bool(public[r["id"]].candidate_answer)

@@ -6,7 +6,10 @@
 합친 앱을 띄운다.
 
 - 기동: 진짜 판정기로 뜨고 probe를 마쳤고, 판정 호출은 아직 없다.
-- `/guard`: 후보 답변이 없으면 nano 1회(입력 판정), 있으면 2회(+ 출력 판정).
+- `/guard`: 후보 답변이 없으면 nano 1회(입력 판정), 있으면 2회(+ 출력 판정). 1차 입력 판정이
+  탈옥이고 가드 설정에 탈옥 2차 판정(`toggles.jb_check`, 가드 #183)이 켜져 있으면 1회 더.
+  2차가 study면 응답 input이 allow · normal, 꺼져 있거나 apply면 block · jailbreak_injection.
+- `/tutor`에서 classify가 탈옥이면: 2차 꺼짐 1회, 켜짐 + study 3회, 켜짐 + apply 2회.
 - `/tutor` → 가드: 가드에 classify · judge_output이 있으면 튜터가 각각 정확히 1회 부르고 건너뛴
   단계가 없다(`assert_tutor_uses_guard`). 없으면 건너뛴 수만 센다. 연결을 보는 것이라
   `real_guard_client`는 튜터의 두 단계를 켠 설정으로 띄운다(`tutor_guard_stages_on`).
@@ -129,6 +132,81 @@ def test_guard_calls_nano_once_per_judge(real_guard_client, fake_send, fake_guar
     assert fake_send.count == 0  # 가드는 튜터 전송을 쓰지 않는다
 
 
+JAILBREAK = {"category": "jailbreak_injection"}  # 가짜가 1차 입력 판정을 탈옥으로 내게 한다
+
+
+def jb_check_on(client) -> bool:
+    """가드 설정에 탈옥 2차 판정이 켜져 있는가. 가드 #183 전의 main에는 이 토글이 없다(False)."""
+    return bool(getattr(client.app.state.cfg.toggles, "jb_check", False))
+
+
+BLOCKED_JAILBREAK = {"decision": "block", "category": "jailbreak_injection"}
+ALLOWED_NORMAL = {"decision": "allow", "category": "normal"}
+
+
+def expected_input(jb: bool, verdict: str) -> dict:
+    """1차가 탈옥일 때 `/guard` 응답의 input. 2차가 꺼져 있거나 apply면 탈옥으로 막고, study(언급일
+    뿐)면 일반으로 바꿔 통과시킨다(가드 #183)."""
+    return ALLOWED_NORMAL if jb and verdict == "study" else BLOCKED_JAILBREAK
+
+
+def test_first_judge_jailbreak_calls_the_second_check_when_it_is_on(
+    real_guard_client, fake_guard_send
+):
+    """1차 입력 판정이 탈옥인 경로. 탈옥 2차 판정이 켜져 있으면 요청마다 nano 1회(JbCheckOut)가
+    더해지고, 2차 판정에 따라 응답의 input이 정해진다. #183 전의 main(토글 없음)과 #183을 합친
+    상태 둘 다에서 통과한다. main에서도 input을 보므로 가짜가 force를 무시하면 여기서 걸린다."""
+    client = real_guard_client
+    jb = jb_check_on(client)
+    # verdict를 걸지 않으면 가짜 기본값(study). 2차가 켜져 있을 때만 apply · study를 걸어 본다
+    verdicts = (None, "apply", "study") if jb else (None,)
+    counts: collections.Counter[tuple[str, bool]] = collections.Counter()
+    for verdict in verdicts:
+        force = dict(JAILBREAK) if verdict is None else {**JAILBREAK, "verdict": verdict}
+        used = verdict or "study"  # 가짜 기본값
+        fake_guard_send.force = force
+        for candidate, judges in ((None, 1), (CANDIDATE, 2)):
+            jb_before = fake_guard_send.by_schema["JbCheckOut"]
+            body = guard_body(QUESTION, candidate=candidate)
+            r, calls = sent(client, fake_guard_send, "/guard", body)
+            got = r.json().get("input")
+            seen = (
+                f"jb_check={jb}, verdict={used}(force {force}), 후보 답변 {candidate is not None}, "
+                f"input={got}, by_schema={dict(fake_guard_send.by_schema)}, 이번 요청 {calls}회"
+            )
+            assert calls == judges + jb, seen
+            assert_guard_contract(r.json(), has_candidate=candidate is not None)
+            assert got == expected_input(jb, used), seen
+            if jb:
+                assert fake_guard_send.by_schema["JbCheckOut"] - jb_before == 1, seen
+                counts[(used, candidate is not None)] += calls
+    if jb:  # 2차 판정이 apply · study 어느 쪽이어도 호출 수가 같다(study는 기본값 + 명시 두 번)
+        assert counts[("apply", False)] == 2 and counts[("apply", True)] == 3, counts
+        assert counts[("study", False)] == 4 and counts[("study", True)] == 6, counts
+
+
+def test_tutor_first_judge_jailbreak_calls(real_guard_client, fake_guard_send):
+    """`/tutor`에서 가드 classify가 탈옥을 낸 경로(튜터의 가드 두 단계를 켠 진짜 판정기 앱).
+
+    2차가 꺼져 있으면(main) classify 1회(InputOut)로 끝난다. 켜져 있으면 2차(JbCheckOut)가 더해지고,
+    study면 일반으로 바뀌어 judge_output(OutputOut)까지 3회 = `/tutor` 상한, apply면 2회다.
+    튜터가 낸 action은 튜터 소유 규칙이라 보지 않는다.
+    """
+    client = real_guard_client
+    guard = client.app.state.guard
+    assert all(hasattr(guard, name) for name in TUTOR_GUARD_METHODS), TUTOR_GUARD_HINT
+    jb = jb_check_on(client)
+    cases = (("study", 3), ("apply", 2)) if jb else ((None, 1),)
+    for verdict, expected in cases:
+        force = dict(JAILBREAK) if verdict is None else {**JAILBREAK, "verdict": verdict}
+        fake_guard_send.force = force
+        before = collections.Counter(fake_guard_send.by_schema)
+        _, calls = sent(client, fake_guard_send, "/tutor", user(QUESTION))
+        delta = dict(collections.Counter(fake_guard_send.by_schema) - before)
+        seen = f"jb_check={jb}, verdict={verdict}, 이번 요청 by_schema={delta} · {calls}회"
+        assert calls == expected, seen + " " + TUTOR_GUARD_HINT
+
+
 def test_tutor_hands_its_judges_to_the_real_guard(real_guard_client, fake_guard_send, monkeypatch):
     app = real_guard_client.app
     has = {name: hasattr(app.state.guard, name) for name in TUTOR_GUARD_METHODS}
@@ -237,6 +315,8 @@ MARKED_SENDS = [
     ("/guard", guard_body(f"{MARKER} {QUESTION}", candidate=f"{MARKER} {CANDIDATE}")),
     ("/tutor", user(f"{MARKER} {QUESTION}")),
 ]
+# 1차 입력 판정이 탈옥인 /guard(탈옥 2차 판정이 켜져 있으면 그 경로도 지난다)
+MARKED_JAILBREAK = guard_body(f"{MARKER} {QUESTION}", candidate=f"{MARKER} {CANDIDATE}")
 
 
 def test_request_content_is_not_kept_with_the_real_judge(
@@ -247,7 +327,10 @@ def test_request_content_is_not_kept_with_the_real_judge(
     assert find_text(state_roots(app), needles) == []
     caches_before = cache_sizes()
     texts = []
-    for path, body in MARKED_SENDS:
+    sends = [(path, body, {}) for path, body in MARKED_SENDS]
+    sends.append(("/guard", MARKED_JAILBREAK, JAILBREAK))
+    for path, body, force in sends:
+        fake_guard_send.force = dict(force)
         r, _ = sent(client, fake_guard_send, path, body)
         texts.append(r.text)
         # 요청마다 본다(뒤 요청이 앞 요청의 흔적을 덮어쓴 경우를 놓치지 않게)

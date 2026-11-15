@@ -81,6 +81,8 @@ def _show(
         out.write(f"  [{number}] {m['role']}: {_indent(m['content'])}\n")
     by = {"nano": "nano가 고름", "table": "표대로"}.get(meta.get("action_by"), "초안")
     _show_labels(draft["labels"], by, ctx, out)
+    if unmatched := meta.get("unmatched_evidence"):  # nano 제목이 그 호출의 섹션과 맞지 않았다
+        out.write(f"주의: 맞는 섹션이 없어 버린 근거 제목: {' · '.join(unmatched)}\n")
     actions = " · ".join(f"{i} {a}" for i, a in enumerate(scoring.ACTIONS, 1))
     out.write(f"action 번호: {actions}\n{KEYS}\n")
 

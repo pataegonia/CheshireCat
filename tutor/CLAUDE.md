@@ -82,7 +82,7 @@
 - 결정적 수정(인용 문구 검사, `unsupported` 문장 삭제, citations 계산, 4,000자 절단)은 `integration/actions.py`(IN-04)가 맡는다. 튜터 후처리는 튜터 고유 검사만 한다(TU-07).
 - 인용 규칙(TU-07, TD-01):
   - answer·scaffold(answer_seeking)는 citations를 항상 1개 낸다. 남은 claim이 없으면 검색 1위 섹션이다. 그 1개가 검색 1위가 아니면 1위를 뒤에 더해 2개를 낸다(`toggles.cite_top1`, 기본 켬, PRD TU-07).
-  - abstain·scaffold(academic_dishonesty)는 쓴 자료의 섹션만 인용하고, 없으면 `[]`다.
+  - abstain·scaffold(academic_dishonesty)는 쓴 자료의 섹션만 인용하고, 없으면 `[]`다. 인용이 있으면 `cite_top1`이 action과 상관없이 검색 1위를 더할 수 있다(정답 근거가 없는 문항이라 인용 F1은 채점되지 않고 충실 판정 근거만 는다).
   - clarify·redirect·refuse·escalate는 `[]`다.
 - v1 범주 판정: 가드 `classify`를 주 호출과 **병렬**로 돌리고, 공격 4범주에서만 덮어쓴다(TU-10, TD-13).
 - `judge_output`을 쓸 때는 `category=`(합친 범주)를 반드시 넘긴다(TU-09).

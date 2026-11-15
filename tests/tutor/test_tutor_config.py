@@ -77,6 +77,7 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("retrieval.k", 5.0),
         ("retrieval.k", True),
         ("toggles.signals", "yes"),
+        ("toggles.cite_top1", "yes"),
         ("toggles.signals", 1),
     ],
 )

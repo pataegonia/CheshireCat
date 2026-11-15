@@ -207,6 +207,8 @@ def test_from_rules_passes_scaffold_state_rule():
         # 전제 오류 → answer, 자료에 없음 → abstain
         "전제가 틀렸으면",
         "out_of_material → abstain",
+        # 수업 예시·실습을 가리키는 질문 → 그 예시의 구체 내용을 첫 문장에(11/15 사실 손실 분석)
+        "그 예시가 실린 섹션",
     ],
 )
 def test_prompt_states_boundary_rules(prompt, phrase):

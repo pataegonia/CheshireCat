@@ -170,7 +170,7 @@
 - **만들 파일**: `src/guardrail/eval/load.py`(stdlib `urllib` + 스레드 풀 또는 `asyncio`, 공개 세트 요청을 다시 보냄), `tests/test_load.py`(로컬 `create_app` 대상).
 - 런박스에서 동시 64·약 600요청(가드 300 + 튜터 300, 튜터가 없으면 가드 600). 시간 초과·형식 오류·3xx·p50·p95·전체 시간. 채점 수준을 넘는 시험은 하지 않는다.
 - 확인: BM25·TF-IDF·LR 같은 CPU 작업이 이벤트 루프를 막지 않는다. 스레드 풀(`asyncio.to_thread` 등)로 돌리거나 요청당 1ms 미만임을 동시 64에서 잰다. 1MB 이력 요청 몇 개를 섞어 보내도 다른 요청의 시간 초과가 0이고 p95가 늘지 않는지 함께 본다(상한 `retrieval.max_query_chars`·`input.max_chars`·`input.max_answer_chars`). 런박스에서 KB 검색(`rank` 1회) p95를 가드 86 + 튜터 200 질의로 다시 잰다(개발 머신 ≤20ms, 런박스가 더 느리면 ≤40ms, S2.2).
-- 통과하면 v1 제출(커밋 해시, 같은 런박스의 `/tutor` 포함, master-plan §3). 결과를 `results/2026-11-13-load.md`(가드 단독 600건으로 쟀다. 접근 로그 마지막 칸에 판정 오류 코드를 남겨 기본값으로 떨어진 비율을 센다). 11/15 밤에 못 끝나면 v1 제출은 11/16 오전으로 밀 수 있다(완충).
+- 통과하면 v1 제출(커밋 해시, 같은 런박스의 `/tutor` 포함, master-plan §3). 결과를 `results/2026-11-13-load.md`(가드 단독 600건으로 쟀다. 접근 로그 마지막 칸에 판정 오류 코드를 남겨 기본값으로 떨어진 비율을 센다)와 `results/2026-11-15-load.md`(가드 300 + 튜터 300 혼합, 시간 초과 0, 가드 p95 5.15초. v1 제출 `f7d386a` 총점 83.73, 튜터 77.75, 가드 89.71, 오류 0. 완료). 11/15 밤에 못 끝나면 v1 제출은 11/16 오전으로 밀 수 있다(완충).
 - **수용 기준**: GR-10 수용 기준(시간 초과 0, 가드 p95 ≤8s 목표, 전체 약 2분 수준). 넘으면 게이트·`budget_s`·`read` 한도를 조정하는 PR. **스킬**: `ecc:benchmark`.
 
 ### S2.11 튜터 공유 API (제안 T1·T2·T4)
@@ -179,7 +179,7 @@
 |---|---|---|---|
 | 선행 | S2.8 | 라벨 | + `orchestrator` |
 
-- `Guard.classify(messages) -> Category`, `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict`(PRD §9 T1-2. `category`가 None이면 먼저 `classify(messages)`를 부른다(nano 호출 +1). 3단 ①과 safe는 그 범주를 쓴다), `KbIndex` 재사용, `LLM.slot()`을 팀 서버에서 import하는 예제(`tests/test_tutor_api.py`). 범주 → action 대응(PRD §9 T3)을 docstring에 둔다. 리더에게 PR 링크로 전달한다. `/tutor` 코드는 고치지 않는다.
+- `async Guard.classify(messages) -> Category`, `async Guard.judge_output(messages, candidate_answer, category: Category | None = None) -> OutputVerdict`(PRD §9 T1-2. `category`가 None이면 입력·출력 nano를 병렬로 부른다(최대 2회). 두 메서드는 nano 재시도 0. 구현됨), `KbIndex` 재사용, `LLM.slot()`을 팀 서버에서 import하는 예제(`tests/test_tutor_api.py`). 범주 → action 대응(PRD §9 T3)을 docstring에 둔다. 리더에게 PR 링크로 전달한다. `/tutor` 코드는 고치지 않는다.
 
 ## 4. Phase 끝 점검
 

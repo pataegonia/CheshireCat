@@ -119,8 +119,10 @@ def test_input_judge_en_has_no_hedge_words():
         assert not re.search(rf"\b{w}\b", body, re.IGNORECASE), w
 
 
-def test_input_judge_en_does_not_leak_public_rows():
-    mine = _windows(_en())
+@pytest.mark.parametrize("name", ["input_judge", "jb_check"])
+def test_prompt_does_not_leak_public_rows(name):
+    # 8어절 창이라 2–4어절짜리 짧은 단서 조각(jb_check의 한국어 어미)은 잡지 못한다
+    mine = _windows(load_prompt(load_config(), name)[1])
     for button in BUTTONS:
         mine -= _windows(button)
     assert mine

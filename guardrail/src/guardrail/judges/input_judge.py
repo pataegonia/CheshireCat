@@ -108,11 +108,14 @@ async def judge_input(
     deadline: float,
     kb_snippet: str | None = None,
     retries: int | None = None,
+    trace: dict[str, str | None] | None = None,
 ) -> Category | None:
     """마지막 학습자 발화의 범주. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
 
     window는 대화 전체를 넘겨도 된다(`build_window`로 자른다). 재시도는 `LLM.complete`가
     일시적 오류에만 `retries`회(None이면 `llm.retries`) 한다.
+    trace를 넘기면 2차 판정을 부른 경우 `trace["jb_check"]`에 결과(apply·study, 실패면 None)를
+    남긴다. 호출자가 호출 수·오류를 센다.
     """
     messages = build_messages(window, target, examples, cfg, kb_snippet)
     if cfg.input.label_mode == "act":  # 요청 유형을 받아 범주로 대응시킨다(S3.2 선별용 변형)
@@ -127,9 +130,14 @@ async def judge_input(
         )
         category = result.parsed.category if isinstance(result.parsed, InputOut) else None
     if category == "jailbreak_injection" and cfg.toggles.jb_check:
-        verdict = await check_jailbreak(
-            window, target, llm, cfg, deadline=deadline, retries=retries
-        )
+        try:
+            verdict = await check_jailbreak(
+                window, target, llm, cfg, deadline=deadline, retries=retries
+            )
+        except Exception:  # noqa: BLE001 - 2차가 깨져도 1차(차단)를 지킨다. 이름은 trace로 센다
+            verdict = None
+        if trace is not None:
+            trace["jb_check"] = verdict
         if verdict == "study":
             return "normal"
     return category

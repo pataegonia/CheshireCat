@@ -20,7 +20,7 @@ from tutor.judge.main_call import (
     SentenceOut,
 )
 from tutor.request import parse_request
-from tutor.retrieval import default_index
+from tutor.retrieval import default_index, retrieve
 from tutor.runtime.config import load_config
 from tutor.runtime.llm import Result
 
@@ -223,6 +223,63 @@ def test_inline_cite_leaves_fixed_sentences_without_citations():
     o = out(category="jailbreak_injection", action="refuse")
     resp = respond(state_with(FakeLLM(o), **{"toggles.inline_cite": True}))
     assert resp == {"answer": TEXT[Fixed.REFUSE_JAILBREAK], "action": "refuse", "citations": []}
+
+
+# --- 검색 1위 섹션 인용 더하기(toggles.cite_top1, TU-07) ---
+
+# QUESTION의 검색 2위 섹션(PY-03-04)에만 있는 문구를 인용한 문장
+RANK2_CLAIM = SentenceOut(
+    text="중간 실력 확인은 4문제예요.",
+    kind="claim",
+    evidence=[EvidenceOut(sid="PY-03-04", quote="중간 실력 확인은 4문제이며")],
+)
+
+
+def test_cite_top1_premise_question_ranks():
+    # 아래 흐름 테스트의 전제: QUESTION의 검색 1위는 PY-01-01, 2위는 PY-03-04
+    top = asyncio.run(retrieve(QUESTION, [], k=5, index=default_index()))
+    assert [s.id for s in top[:2]] == ["PY-01-01", "PY-03-04"]
+
+
+@pytest.mark.parametrize(
+    "on, expected", [(False, ["PY-03-04"]), (True, ["PY-03-04", "PY-01-01"])], ids=["off", "on"]
+)
+def test_cite_top1_adds_the_top_section_after_the_verified_one(on, expected):
+    resp = respond(state_with(FakeLLM(out(sentences=[RANK2_CLAIM])), **{"toggles.cite_top1": on}))
+    assert resp["answer"] == "중간 실력 확인은 4문제예요."
+    assert (resp["action"], resp["citations"]) == ("answer", expected)
+
+
+def test_cite_top1_keeps_citations_that_already_hold_the_top_section():
+    resp = respond(state_with(FakeLLM(out()), **{"toggles.cite_top1": True}))
+    assert resp["citations"] == ["PY-01-01"]
+
+
+def test_cite_top1_leaves_fixed_sentences_without_citations():
+    o = out(category="jailbreak_injection", action="refuse")
+    resp = respond(state_with(FakeLLM(o), **{"toggles.cite_top1": True}))
+    assert resp == {"answer": TEXT[Fixed.REFUSE_JAILBREAK], "action": "refuse", "citations": []}
+
+
+def _sections(*ids):
+    return [types.SimpleNamespace(id=i) for i in ids]
+
+
+def test_add_top_citation_appends_without_changing_the_input():
+    body = {"answer": "가", "action": "answer", "citations": ["PY-03-04"]}
+    added = flow.add_top_citation(body, _sections("PY-01-01", "PY-03-04"))
+    assert added == {**body, "citations": ["PY-03-04", "PY-01-01"]}
+    assert body["citations"] == ["PY-03-04"]
+
+
+@pytest.mark.parametrize(
+    "cites, ranked",
+    [([], ("PY-01-01",)), (["PY-01-01"], ("PY-01-01", "PY-03-04")), (["PY-03-04"], ())],
+    ids=["no_citations", "top_already_cited", "no_sections"],
+)
+def test_add_top_citation_leaves_body_as_is(cites, ranked):
+    body = {"answer": "가", "action": "answer", "citations": cites}
+    assert flow.add_top_citation(body, _sections(*ranked)) == body
 
 
 def test_action_from_category_toggle_reaches_flow():

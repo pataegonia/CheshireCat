@@ -157,6 +157,19 @@ def fallback_body(signals: Sequence[Signal] = (), classified: str | None = None)
     return {"answer": empty_answer(action), "action": action, "citations": []}
 
 
+def add_top_citation(body: dict[str, Any], sections: Sequence[RetrievedSection]) -> dict[str, Any]:
+    """`toggles.cite_top1`(TU-07): 인용이 있는데 검색 1위 섹션이 빠졌으면 1위를 뒤에 더한다.
+
+    인용은 F1로 채점되고 인용한 섹션 본문이 근거 충실 판정에 쓰인다(SPEC §6). 1위로 바꾸지 않고
+    더하므로 답이 실제로 쓴 섹션은 판정 근거에 남는다. 인용이 빈 응답(고정 문장, 인용하지 않는
+    action)과 검색 결과가 없는 경우는 그대로 둔다. 입력을 바꾸지 않는다.
+    """
+    cites = body["citations"]
+    if not cites or not sections or sections[0].id in cites:
+        return body
+    return {**body, "citations": [*cites, sections[0].id]}
+
+
 def assemble(
     out: MainCallOut,
     sections: Sequence[RetrievedSection],
@@ -164,10 +177,12 @@ def assemble(
     action: Action,
     max_citations: int,
     verdict: OutputVerdict | None = None,
+    cite_top1: bool = False,
 ) -> dict[str, Any]:
     """주 호출 결과 → 규격 본문. 템플릿 조합이면 고정 문장, 아니면 결정적 수정(IN-04).
 
-    `verdict`는 가드 `judge_output` 결과다. None(판정 생략·실패)이면 판정 단계만 건너뛴다."""
+    `verdict`는 가드 `judge_output` 결과다. None(판정 생략·실패)이면 판정 단계만 건너뛴다.
+    `cite_top1`이면 결정적 수정이 정한 인용에 검색 1위 섹션을 더한다(`add_top_citation`)."""
     kind = template_for(out.category, action)
     if kind is not None:
         return fixed_body(kind)
@@ -185,7 +200,8 @@ def assemble(
         cfg,
         action=action,
     )
-    return result.model_dump()
+    body = result.model_dump()
+    return add_top_citation(body, sections) if cite_top1 else body
 
 
 def tutor_post(body: dict[str, Any], category: str | None = None) -> dict[str, Any]:
@@ -303,5 +319,6 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         action=action,
         max_citations=cfg.toggles.max_citations,
         verdict=verdict,
+        cite_top1=cfg.toggles.cite_top1,
     )
     return tutor_post(body, merged.category)

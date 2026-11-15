@@ -207,12 +207,28 @@ def test_from_rules_passes_scaffold_state_rule():
         # 전제 오류 → answer, 자료에 없음 → abstain
         "전제가 틀렸으면",
         "out_of_material → abstain",
-        # 수업 예시·실습을 가리키는 질문 → 그 예시의 구체 내용을 첫 문장에(11/15 사실 손실 분석)
-        "그 예시가 실린 섹션",
     ],
 )
 def test_prompt_states_boundary_rules(prompt, phrase):
     assert phrase in prompt.system
+
+
+def test_prompt_asks_for_the_referenced_example_right_under_normal(prompt):
+    # 11/15 사실 손실 분석: 정답 섹션을 인용하고도 질문이 가리킨 수업 예시의 구체 내용을 빠뜨렸다.
+    # normal → answer 바로 아래 줄이고, 근거에 없을 때(abstain)·scaffold(숨김)에는 쓰지 않는다
+    lines = prompt.system.splitlines()
+    at = next(i for i, line in enumerate(lines) if line.startswith("- normal → answer:"))
+    rule = lines[at + 1]
+    assert rule.startswith("  - normal 질문이")
+    for phrase in [
+        "그 예시가 실린 섹션",
+        "근거 묶음에 있으면 그 표현 그대로 첫 문장에",
+        '"아니요," 바로 뒤에',
+        "일반 원리로 대신하지 않습니다",
+        "근거 묶음에 없으면 비슷한 값으로 채우지 않습니다",
+        "scaffold로 답하는 요청에는 쓰지 않습니다",
+    ]:
+        assert phrase in rule, phrase
 
 
 def test_prompt_has_no_fixed_facts(prompt):

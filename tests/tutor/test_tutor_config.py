@@ -39,6 +39,16 @@ def test_repo_config_has_the_prd_defaults():
     assert cfg.eval.max_calls == 5000  # TU-14
 
 
+def test_main_call_timeout_uses_the_budget_headroom():
+    # TU-13: 주 호출 18초(11/15 점검 세트 실측: 15초에서 비교·계산 질문 4/98이 시간 초과로 기본값
+    # clarify). 요청 예산(가드 설정 budget_s) 안에서 검색·게이트 대기 몫 2초 이상을 남긴다
+    from guardrail.config import load_config as load_guard_config
+
+    main = config.load_config().llm.timeout_s.main
+    assert main == 18
+    assert main + 2 <= load_guard_config().budget_s < 30  # SPEC §3 요청당 30초
+
+
 @pytest.mark.parametrize(
     "change",
     [

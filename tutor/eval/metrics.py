@@ -3,8 +3,10 @@
 튜터 점수는 채점기 `aggregate`로 내므로 로컬 채점기와 같다. 판정 오류가 난 문항은 로컬 채점기처럼
 범주별 점수·항목별 평균에서 빼고 문항 점수를 None으로 둔다. action과 인용에서 나오는 지표
 (혼동행렬·오차단·놓친 근거·기본값 분포)는 모든 문항으로 낸다.
-실행마다 교차 검증 행별로 낸 action·인용 수·응함 판정을 남기고, 정답이 abstain·refuse인데
-answer를 낸 행을 모은다(#162·#163). 라벨·숫자·행 id만 남기고 본문은 남기지 않는다(TU-15).
+실행마다 교차 검증 행별로 낸 action·인용 수·인용한 섹션 ID·응함 판정을 남기고, 정답이
+abstain·refuse인데 answer를 낸 행을 모은다(#162·#163). 라벨·숫자·행 id·KB 섹션 ID만 남기고 본문은
+남기지 않는다(TU-15). 섹션 ID를 남기지 않는 것은 서버 로그 규칙이고, 이 결과는 git에서 뺀 평가
+결과다.
 """
 
 from collections import Counter, defaultdict
@@ -34,6 +36,8 @@ class Scored:
     gold_action: str
     pred_action: str | None  # 형식이 틀린 응답이면 None
     citations: int | None  # 낸 인용 수(형식이 틀린 응답이면 None)
+    # 인용한 섹션 ID(KB에 있는 것만, 낸 순서로 겹침 없이). 형식이 틀린 응답이면 None
+    cited: tuple[str, ...] | None
     points: float | None  # 문항 점수(0~1, 채점기 tutor_points). 판정 오류면 None
     result: Mapping[str, Any]  # 채점기 score_tutor 결과
     is_default: bool  # 기본값(TUTOR_DEFAULT)과 같은 응답. 같은 본문을 내는 정상 응답도 센다
@@ -83,6 +87,8 @@ def score_one(
         gold_action=row["labels"]["action"],
         pred_action=parsed["action"] if parsed else None,
         citations=len(parsed["citations"]) if parsed else None,
+        # KB 섹션 ID가 아닌 문자열은 남기지 않는다(응답에서 온 임의 문자열이 결과에 섞이지 않게)
+        cited=tuple(c for c in dict.fromkeys(parsed["citations"]) if c in kb) if parsed else None,
         points=None if result["judge_error"] else scoring.tutor_points(result),
         result=result,
         is_default=response == TUTOR_DEFAULT,
@@ -153,10 +159,16 @@ def _points_by_row(pooled: Sequence[Scored]) -> dict[str, tuple[float | None, ..
 def _emitted(s: Scored) -> dict[str, Any]:
     """행 하나에서 낸 것. 본문은 남기지 않는다(TU-15).
 
-    action·인용 수는 형식이 틀린 응답(응답 없음 포함)이면 None이다. 응함은 채점기 판정 그대로라
-    공격 문항이 아니거나 판정하지 않았거나 판정 오류면 None이다.
+    action·인용 수·인용한 섹션 ID는 형식이 틀린 응답(응답 없음 포함)이면 None이다. 인용한 섹션
+    ID는 KB에 있는 것만 남긴다(정답 근거 대신 무엇을 인용했는지 행별로 본다). 응함은 채점기 판정
+    그대로라 공격 문항이 아니거나 판정하지 않았거나 판정 오류면 None이다.
     """
-    return {"action": s.pred_action, "citations": s.citations, "complied": s.result["complied"]}
+    return {
+        "action": s.pred_action,
+        "citations": s.citations,
+        "cited": None if s.cited is None else list(s.cited),
+        "complied": s.result["complied"],
+    }
 
 
 def _answered(run: Iterable[Scored], gold: str) -> tuple[str, ...]:

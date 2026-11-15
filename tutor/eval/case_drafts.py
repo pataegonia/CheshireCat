@@ -16,10 +16,10 @@
   예시 발화도 넣지 않는다(문항은 nano가 쓴다, TU-16).
 - action은 nano가 고른 범주에서 표로 정한다. 표에 action이 둘 이상인 범주만 nano가 고른 것을
   쓰고, 누가 정했는지 draft.action_by에 남긴다.
-- 형식 오류(빈 발화·교대하지 않는 대화 포함), 메타(대화에 섹션 ID·옛 이름표·범주 이름이 나옴,
-  무엇이 샜는지 나눠 센다), 근거가 있어야 하는 범주인데 근거가 없는 것, 마지막 학습자 발화가 앞
-  초안이나 공개 세트와 같은 것은 뺀다. 근거는 그 호출에 준 섹션만 남기고, 라벨에는 공개 세트와
-  같은 꼴로만 둔다
+- 형식 오류(빈 발화·교대하지 않는 대화 포함), 메타(대화에 섹션 ID·옛 이름표·범주 이름·꼴 문구가
+  나오거나 학습자가 교재에 없다고 스스로 판정함, 무엇이 샜는지 나눠 센다), 근거가 있어야 하는
+  범주인데 근거가 없는 것, 마지막 학습자 발화가 앞 초안이나 공개 세트와 같은 것은 뺀다.
+  근거는 그 호출에 준 섹션만 남기고, 라벨에는 공개 세트와 같은 꼴로만 둔다
   (case_set.label_evidence).
 - 초안은 받는 대로 `team_cases/draft.jsonl`(git 제외)에 덧붙인다(끊겨도 받은 초안은 남는다). id는
   남길 때 쓸 id(team-<축>-<번호>)이고 번호는 앞 초안·고른 기록·점검 세트 다음부터다. 화면에는
@@ -129,6 +129,25 @@ LEAKED_SID = re.compile(r"(?:PY|PR|FIN)-\d{2}-\d{2}")  # 대화에 섹션 ID(학
 # 대화에 옛 이름표 꼴이 나오면 여전히 메타로 본다
 MAX_SECTIONS = 2  # 호출 하나에 넣는 섹션 수 상한(plan_jobs는 하나 또는 둘)
 LEAKED_NAME = re.compile(r"섹션\s*[AB](?![A-Za-z])")  # 대화에 옛 이름표
+# 11/15 런박스 고르기 두 차례: 사람이 버린 초안 중 대화가 남은 35개 가운데 32개가, 학습자가
+# 대화·사례·질문을 만들어 달라고 하거나 꼴 설명·말투 지시를 대화에 옮긴 것, 또는 학습자가 교재에
+# 없다고 스스로 판정한 것이었다(시스템 프롬프트의 내용 규칙이 막는데도 나왔다). 아래 셋은 그중
+# 30개를 잡고(놓친 2개는 꼴을 다른 말로 옮겼다), 사람이 남긴 28개 중에서는 첫 턴이 메타인 5개를
+# 잡는다. 공개 세트 대화와 KB 원문에는 셋 다 걸리지 않는다(테스트). 프롬프트 수업의 보통 질문
+# ("대화 예시를 넣으면", "대화를 구성하는 방법")은 잡지 않도록 "대화를 … 만들·작성"만 본다
+LEAKED_FORM = re.compile(
+    r"다음\s*(?:두\s*)?(?:꼴|교재\s*내용)|꼴\s*설명"
+    r"|(?:대화|학습)\s*사례|학습\s*질문|전제\s*오류"
+    r"|대화(?:를|로)\s*(?:\S+\s+){0,3}?(?:만들|작성)"
+    r"|발화|오타(?:를|도)\s*섞"
+)
+# "범주"라는 말, 그리고 밑줄 없는 범주 이름 normal은 조사 "로"가 붙을 때만(영어 문장의 normal은 둠)
+LEAKED_LABEL_WORD = re.compile(r"범주|[Nn]ormal\s*로")
+JUDGED_MATERIAL = re.compile(  # 학습자 발화에서만 본다(튜터가 교재에 없다고 답하는 것은 정상)
+    r"교재(?:에서|에선|에|엔)\s*(?:는\s*)?(?:아예\s*|실제로\s*|직접\s*|전혀\s*)?"
+    r"(?:없(?![애앴])|안\s*나|나와\s*있지\s*않|나오지\s*않|다루지\s*않|다루어지지\s*않"
+    r"|다뤄지지\s*않)"
+)
 # 근거 제목을 맞출 때 지우는 것: 공백, 머리 표시 #, 따옴표·괄호(nano가 감싸서 돌려줄 수 있다)
 _TITLE_NOISE = re.compile(r"[\s#'\"‘’“”「」『』<>《》〈〉\[\]()]")
 # 가운뎃점으로 쓰일 수 있는 글자는 제목의 · 하나로 맞춘다(NFKC는 이것들을 서로 바꾸지 않는다)
@@ -343,9 +362,10 @@ def _well_formed(case: DraftCase) -> bool:
 def _leak(case: DraftCase, table: Mapping[str, ActionRule]) -> str | None:
     """대화에 학생이 모르는 것이 나온다: 프롬프트·라벨이 새어 나온 초안. 무엇이 샜는지 돌려준다.
 
-    여럿이 샜으면 섹션 ID → 옛 이름표("섹션 A·B") → 범주 이름 순서로 앞의 하나만 센다. 범주 이름은
-    밑줄이 든 것만 본다(normal은 보통 말이고, 코드 이름과도 겹치지 않는다). 섹션 제목은 학생도
-    아는 주제 이름이라 메타로 보지 않는다.
+    여럿이 샜으면 섹션 ID → 옛 이름표("섹션 A·B") → 범주 이름 → 꼴 문구 → 교재 판정 순서로 앞의
+    하나만 센다. 범주 이름은 밑줄이 든 것과 "범주"·"normal로"만 본다(normal은 보통 말이고, 코드
+    이름과도 겹치지 않는다). 교재 판정은 학습자 발화에서만 본다. 섹션 제목은 학생도 아는 주제
+    이름이라 메타로 보지 않는다.
     """
     names = [c for c in table if "_" in c]
     texts = [m.content for m in case.messages]
@@ -353,8 +373,12 @@ def _leak(case: DraftCase, table: Mapping[str, ActionRule]) -> str | None:
         return "섹션 ID"
     if any(LEAKED_NAME.search(t) for t in texts):
         return "섹션 이름"
-    if any(n in t for t in texts for n in names):
+    if any(n in t for t in texts for n in names) or any(LEAKED_LABEL_WORD.search(t) for t in texts):
         return "범주 이름"
+    if any(LEAKED_FORM.search(t) for t in texts):
+        return "꼴 문구"
+    if any(JUDGED_MATERIAL.search(m.content) for m in case.messages if m.role == "user"):
+        return "교재 판정"
     return None
 
 

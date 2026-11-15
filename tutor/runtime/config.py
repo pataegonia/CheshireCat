@@ -33,6 +33,8 @@ class Toggles(_Strict):
     signals: bool
     verify: Literal["off", "self", "guard"]
     guard_classify: Literal["off", "serial", "parallel"]
+    # classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05)가 없으면 덮지 않는다(TU-10)
+    jailbreak_needs_signal: bool
     embedding: bool
     rerank: bool
     vote: bool

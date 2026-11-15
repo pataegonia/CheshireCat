@@ -11,6 +11,7 @@ toggles:
   signals: true                # 결정적 신호 힌트(TU-05)
   verify: "off"                # off | guard. 가드 judge_output 검증(TU-09). self(자체 검증)는 만들지 않음(#83, 로드에서 거부). 11/14 리더 결정으로 #170(S2.11) 머지 뒤 런박스 켬/끔 3회 비교 전까지 끔: 모의 부하·#170 리뷰 측정에서 지연이 크게 늘고 튜터 5초 제한으로 대부분 건너뛰는데, 건너뛴 호출도 nano는 이미 나간다
   guard_classify: "off"        # off | serial | parallel. 가드 classify 합치기(TU-10). 11/14 리더 결정으로 verify와 같은 까닭에 같은 비교 전까지 끔(켜면 parallel)
+  jailbreak_needs_signal: false  # classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05)가 없으면 주 호출을 덮지 않는다(TU-10). 11/15 가드 비교에서 오차단이 모두 "수업의 공격 기법을 배우는 정상 질문" → refuse였다. 3회 비교 뒤 정한다
   embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
   rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한(TU-13)을 넘어 만들지 않음(#83, true는 로드에서 거부)

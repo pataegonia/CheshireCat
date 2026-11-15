@@ -30,6 +30,8 @@ def test_repo_config_has_the_prd_defaults():
     # TU-09·TU-10: 가드 judge_output·classify는 #170(S2.11) 뒤 런박스 켬/끔 비교 전까지 끔(11/14)
     assert toggles.verify == "off"
     assert toggles.guard_classify == "off"
+    # TU-10 합치기 신호 조건 기본 끔(3회 비교 뒤 정함)
+    assert toggles.jailbreak_needs_signal is False
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)

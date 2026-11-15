@@ -45,12 +45,13 @@ def test_main_call_timeout_uses_the_budget_headroom():
     # 2초 이상을 남긴다. 가드가 budget_s를 20 아래로 내리면 이 테스트가 알려 준다
     from guardrail.config import load_config as load_guard_config
 
-    from tutor.runtime.budget import budget_s
+    from tutor.runtime.budget import backstop_s, budget_s
 
     main = config.load_config().llm.timeout_s.main
     budget = budget_s(types.SimpleNamespace(cfg=load_guard_config()))
     assert main == 18
-    assert main + 2 <= budget < 30  # SPEC §3 요청당 30초
+    assert main + 2 <= budget
+    assert backstop_s(budget) < 30  # 안전망까지 SPEC §3 요청당 30초 안
 
 
 @pytest.mark.parametrize(

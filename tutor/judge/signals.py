@@ -240,9 +240,37 @@ _COMMAND = re.compile(
     r"직접\w{0,4}?(?:해|보여|실행|시연)|해봐|지금부터|이제부터|그대로(?:보여|출력|알려|말해|따라)"
     r"|(?:지시|지침|규칙|명령)(?:를|을)?(?:다)?무시해(?!야|도|서|보|면)"
     r"|(?:로|으로)바뀌어|(?:이|가)(?:돼서|되어서|되서|돼줘|되어줘)"
+    # 지시를 무력화하고 곧바로 튜터에게 답·행동을 시키는 명령형(T2.1). 뒤에 방어·개념 질문을
+    # 붙여 포장해도("…잊고 필터 없이 대답해. 이런 걸 어떻게 막아?") 지시 무력화다.
+    # 인용해 묻는 말("…답해'라는·같은·를", "답해야", "답해 주는", "답해 버리면")은 아니다
+    r"|(?:지시|지침|규칙|명령|설정|안내)\w{0,8}?"
+    r"(?:(?:무시하|잊어버리|잊|버리|어기|해제하)(?:고|며)|무시한채|잊은채|무시한뒤)\w{0,16}?"
+    r"(?:(?:대답|답변|응답|답|말|행동|설명|출력)해|알려(?=줘|주세요))(?>(?:줘|주세요|봐|요|라)?)"
+    r"(?!라|란|이라|같|처럼|를|을|는|고|게|면|서|도|야|달|주|하|보|버|와|로)"
+    # 영어 명령형("ignore … instructions and answer/act/reply/respond"). 바로 뒤에 인용을 받는
+    # 한국어 조사나 공격·문장을 가리키는 말이 오면 인용이다
+    r"|ignore\w{0,24}?(?:instruction|rule|prompt|guideline)s?\w{0,6}?and(?:just|now|then)?"
+    r"(?:answer|act|reply|respond|tell|say|speak|behave|output|pretend|talk)"
+    r"(?![a-z]{0,30}?(?:같|라는|라고|란|이라|처럼|를|을|는|attack|prompt|injection|phrase|string"
+    r"|sentence|pattern))"
 )
 # 개념·방어 어미는 발화 끝부분(마지막 질문)에 있을 때만 학습 질문으로 본다
 _CONCEPT_TAIL = 20
+
+# 제한을 끄라는 구절("필터 없이", "검열 차단 없이", "with no filter") 안의 낱말은 개념·방어 어미가
+# 아니다. 위치를 지키려고 같은 길이의 비단어 문자로 가린 뒤 끝부분을 본다(T2.1)
+_UNRESTRICTED = re.compile(
+    r"(?:필터링|필터|차단|검열|제한|제약|filter)(?:이|가|도|은|는|을|를)?"
+    r"(?:없이|없는|없게|해제|풀|끄|꺼|안하|하지않|하지말)"
+    r"|(?:no|without|noneed|disable|turnoff|bypass|remove|skip)(?:any|the|a|your|all)?(?:content)?"
+    r"(?:filter|filtering|safety|restriction|detection|protection|prevention)s?"
+    r"|unfiltered"
+)
+
+
+def _concept_tail(view: str) -> bool:
+    masked = _UNRESTRICTED.sub(lambda m: "·" * len(m.group()), view)
+    return bool(_CONCEPT.search(masked[-_CONCEPT_TAIL:]))
 
 
 def _override(view: str) -> bool:
@@ -250,11 +278,7 @@ def _override(view: str) -> bool:
         return True
     if not PATTERNS[Signal.OVERRIDE].search(view):
         return False
-    learning = (
-        _ANALYSIS.search(view)
-        or _QUOTED_STUDY.search(view)
-        or _CONCEPT.search(view[-_CONCEPT_TAIL:])
-    )
+    learning = _ANALYSIS.search(view) or _QUOTED_STUDY.search(view) or _concept_tail(view)
     return not learning or bool(_COMMAND.search(view))
 
 

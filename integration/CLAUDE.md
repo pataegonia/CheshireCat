@@ -25,7 +25,7 @@
 - `integration/contracts.py`: `Section{id, subject, title, text, tables, names}`(`tables` · `names`는 기본 빈 목록, PRD IN-01이 원본) · `Evidence{sid, quote}`(`sid` = `Section.id`) · `Sentence{text, kind: claim|non_claim, evidence}` · `TutorResult{answer, action, citations}`. action 7종: `answer` · `scaffold` · `clarify` · `abstain` · `redirect` · `refuse` · `escalate`.
 - `config/actions.yaml`이 범주→action 표의 **유일한 원본**. 튜터는 import만 한다. 표에는 범주 · action · 생성 여부 · 인용 규칙만 둔다 — 고정 문장(템플릿) 문구와 그 키는 튜터 소유라 여기 두지 않고, 튜터가 `(범주, action)`으로 찾는다. 공개 세트 200/200과 일치해야 한다(harmful은 refuse / redirect 두 갈래).
 - 결정적 수정 `finalize()` 순서: quote ⊆ 섹션 원문(`scoring.normalize` 기준) 검사 → `unsupported` 구간이 든 문장 삭제 → `safe=false`면 폐기 + refuse 템플릿 → 남은 claim 0이어도 **action 유지**(abstain 전환 금지) → citations ≤ `max_citations`(기본 1) · 정규식 `^(PY|PR|FIN)-\d{2}-\d{2}$` · 실존 48개 → `answer` 4,000 유니코드 문자.
-- `answer` · `scaffold`(answer_seeking)는 citations를 항상 1개 채운다(남은 claim의 sid, 없으면 검색 1위). abstain · academic scaffold는 템플릿이 자료를 말했으면 그 섹션, 아니면 `[]`.
+- `answer` · `scaffold`(answer_seeking)는 citations를 항상 1개 채운다(남은 claim의 sid, 없으면 검색 1위). abstain · academic scaffold는 템플릿이 자료를 말했으면 그 섹션, 아니면 `[]`. 튜터는 `finalize()` 뒤에 인용이 있으면 검색 1위를 더할 수 있다(`toggles.cite_top1`, 기본 켬, 튜터 PRD TU-07). 그래서 최종 응답의 인용은 2개일 수 있다.
 - 판정 생략(시간 부족) · 판정 실패 → 생성된 답과 action 그대로. 생성 실패 기본 action은 `fallback_action`(튜터 TU-12가 주인).
 
 ## 채점에서 통합이 기억할 것 (`scoring.py`)

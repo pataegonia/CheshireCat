@@ -131,6 +131,8 @@ MAX_SECTIONS = 2  # 호출 하나에 넣는 섹션 수 상한(plan_jobs는 하�
 LEAKED_NAME = re.compile(r"섹션\s*[AB](?![A-Za-z])")  # 대화에 옛 이름표
 # 근거 제목을 맞출 때 지우는 것: 공백, 머리 표시 #, 따옴표·괄호(nano가 감싸서 돌려줄 수 있다)
 _TITLE_NOISE = re.compile(r"[\s#'\"‘’“”「」『』<>《》〈〉\[\]()]")
+# 가운뎃점으로 쓰일 수 있는 글자는 제목의 · 하나로 맞춘다(NFKC는 이것들을 서로 바꾸지 않는다)
+_MIDDLE_DOTS = str.maketrans(dict.fromkeys("∙ㆍ•‧・･", "·"))
 TABLE_REF = re.compile(r"\(표: [^)]*\)")  # 원문의 표 자리(표 내용은 원문 끝에 붙어 있다)
 ID_NUMBER = re.compile(r"team-(?P<axis>[a-z_]+)-(?P<n>\d+)")
 
@@ -263,8 +265,12 @@ def section_title(sid: str, text: str) -> str:
 
 
 def _title_key(title: str) -> str:
-    """근거 제목 맞추기용: NFKC 뒤 공백·#·따옴표·괄호를 지운다."""
-    return _TITLE_NOISE.sub("", unicodedata.normalize("NFKC", title))
+    """근거 제목 맞추기용: 가운뎃점을 하나로 맞춘 뒤 NFKC·소문자로, 공백·#·따옴표·괄호는 지운다.
+
+    가운뎃점은 NFKC보다 먼저 맞춘다(NFKC는 ㆍ U+318D를 다른 글자로 바꾼다).
+    """
+    folded = unicodedata.normalize("NFKC", title.translate(_MIDDLE_DOTS)).casefold()
+    return _TITLE_NOISE.sub("", folded)
 
 
 def _named(job: Job, kb: Mapping[str, str]) -> dict[str, str]:

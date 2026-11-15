@@ -143,9 +143,27 @@ def test_no_section_id_or_name_tag_reaches_any_prompt():
     assert all(f"# {title(sid)}\n" in prompts for j in all_jobs() for sid in j.sections)
 
 
+def test_no_word_section_reaches_the_prompt_outside_the_kb_text():
+    # 11/15 진단의 원인은 "아래 섹션"이라는 말이었다. 교재 원문(PR-04-01에 "섹션"이 있다)을 뺀
+    # 나머지(시스템 프롬프트, 꼴 설명, 머리 문구)에는 "섹션"이 없다
+    for job in all_jobs():
+        system, user = cd.messages_for(job, KB, TABLE)
+        rest = user["content"]
+        for sid in job.sections:
+            rest = rest.replace(cd.shown_section(sid, KB[sid]), "")
+        assert "섹션" not in system["content"] and "섹션" not in rest
+
+
 def test_section_titles_are_unique_so_evidence_maps_back():
     assert len({title(sid) for sid in KB}) == len(KB) == 48
+    assert len({cd._title_key(title(sid)) for sid in KB}) == 48  # 맞추는 데 쓰는 키도 서로 다르다
     assert all(title(sid) for sid in KB)
+
+
+def test_a_call_with_colliding_titles_stops_before_calling():
+    kb = {"PY-01-01": "# PY-01-01 같은 제목\n본문", "PY-01-02": "# PY-01-02 같은  「제목」\n본문"}
+    with pytest.raises(ValueError, match="겹친다"):  # 정규화하면 같은 키라 근거를 되돌릴 수 없다
+        cd.messages_for(cd.Job("mixed", "꼴", ("PY-01-01", "PY-01-02")), kb, TABLE)
 
 
 def test_shown_section_drops_only_the_ids_and_keeps_title_text_and_tables():
@@ -265,6 +283,27 @@ def test_evidence_title_matches_despite_quotes_spaces_and_heading_mark(wrap):
     loose = wrap.format(title("FIN-03-02"))
     rows, dropped = cd.assemble([(one, case("x", evidence=[loose]))], KB, TABLE)
     assert rows[0]["labels"]["evidence"] == ["FIN-03-02"] and dropped == {}
+
+
+FULL_WIDTH = str.maketrans({c: chr(ord(c) + 0xFEE0) for c in "abcdefghijklmnopqrstuvwxyz"})
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        str.upper,  # 대소문자
+        lambda t: t.replace("·", "∙"),  # 가운뎃점 모양(U+2219)
+        lambda t: t.replace("·", "ㆍ"),  # 한글 아래아(U+318D)
+        lambda t: t.translate(FULL_WIDTH),  # 전각 영문(NFKC)
+    ],
+    ids=["case", "bullet_operator", "arae_a", "full_width"],
+)
+def test_evidence_title_matches_despite_case_middle_dot_and_width(change):
+    one = cd.Job("unseen_section", "꼴", ("PY-02-04",))  # while 반복문과 break·continue·pass
+    loose = change(title("PY-02-04"))
+    assert loose != title("PY-02-04")
+    rows, dropped = cd.assemble([(one, case("y", evidence=[loose]))], KB, TABLE)
+    assert rows[0]["labels"]["evidence"] == ["PY-02-04"] and dropped == {}
 
 
 def test_a_call_never_names_more_sections_than_allowed():

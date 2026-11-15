@@ -32,6 +32,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.guard_classify == "off"
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
     assert toggles.max_citations == 1  # TU-07 기본 1
+    assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로

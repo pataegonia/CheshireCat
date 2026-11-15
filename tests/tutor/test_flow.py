@@ -12,7 +12,13 @@ from tests.tutor.tutor_testlib import assert_contract
 from tutor import pipeline
 from tutor.answer.templates import NOT_IN_MATERIAL_NOTE, TEXT, Fixed
 from tutor.judge import flow
-from tutor.judge.main_call import EvidenceOut, MainCallOut, MainCallPrompt, SentenceOut
+from tutor.judge.main_call import (
+    CheckedMainCallOut,
+    EvidenceOut,
+    MainCallOut,
+    MainCallPrompt,
+    SentenceOut,
+)
 from tutor.request import parse_request
 from tutor.retrieval import default_index
 from tutor.runtime.config import load_config
@@ -85,6 +91,16 @@ def test_prepare_judge_follows_scaffold_state_rule_toggle(state_rule):
     flow.prepare_judge(s)
     assert ("정답 사실(값·이름·조건)을" in s.tutor_prompt.system) is state_rule
     assert ("최종 정답을 말하지 않습니다" in s.tutor_prompt.system) is (not state_rule)
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_prepare_judge_follows_evidence_check_toggle(on):
+    # #162: 근거 대조 칸은 설정 토글이 정한다(기본 끔). 프롬프트와 출력 스키마가 함께 바뀐다
+    s = types.SimpleNamespace(tutor_cfg=load_config(overrides={"toggles.evidence_check": on}))
+    flow.prepare_judge(s)
+    assert s.tutor_prompt.evidence_check is on
+    assert s.tutor_prompt.schema is (CheckedMainCallOut if on else MainCallOut)
+    assert ("asked_in_evidence" in s.tutor_prompt.system) is on
 
 
 # --- 빈 판단 대상·실패 ---
@@ -188,6 +204,25 @@ def test_action_from_category_on_follows_table_but_never_toward_answer():
     assert flow.choose_action(out("harmful_content", "redirect"), from_category=True) == "redirect"
     # 표가 answer인 범주는 덮지 않는다(공격 문항이 answer로 덮이면 응함 위험)
     assert flow.choose_action(out("normal", "refuse"), from_category=True) == "refuse"
+
+
+def respond(state, text=QUESTION):
+    body = {"messages": [{"role": "user", "content": text}]}
+    return asyncio.run(pipeline.respond(body, deadline=1e12, state=state))
+
+
+def test_inline_cite_toggle_reaches_the_response():
+    # #82: 답변 끝 (섹션 ID) 표기. 기본은 끔, 켜면 citations와 같은 ID를 답변 끝에 붙인다
+    plain = respond(state_with(FakeLLM(out())))
+    assert plain["answer"] == "야구 점수판 예제는 3회까지의 점수를 기록해요."
+    cited = respond(state_with(FakeLLM(out()), **{"toggles.inline_cite": True}))
+    assert cited == {**plain, "answer": plain["answer"] + " (PY-01-01)"}
+
+
+def test_inline_cite_leaves_fixed_sentences_without_citations():
+    o = out(category="jailbreak_injection", action="refuse")
+    resp = respond(state_with(FakeLLM(o), **{"toggles.inline_cite": True}))
+    assert resp == {"answer": TEXT[Fixed.REFUSE_JAILBREAK], "action": "refuse", "citations": []}
 
 
 def test_action_from_category_toggle_reaches_flow():

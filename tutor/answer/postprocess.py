@@ -173,6 +173,29 @@ def cut_to_limit(text: str, limit: int = MAX_ANSWER_CHARS) -> str:
     return out.rstrip() or text[:limit].rstrip()
 
 
+# --- 답변 끝 섹션 ID(`inline_cite`) ---
+
+
+def inline_cite(body: Mapping[str, Any]) -> dict[str, Any]:
+    """답변 끝에 ` (섹션 ID, …)`를 붙인다(TU-07 `toggles.inline_cite`, PRD §1 정답 답변 형식).
+
+    citations가 비었으면 그대로 둔다(고정 문장·거절 등). citations는 바꾸지 않는다. 이미 같은 표기로
+    끝나면 다시 붙이지 않는다. 붙인 뒤에도 4,000자 이하가 되게 본문을 먼저 문장 경계에서 자른다.
+    채점 항목은 아니다(인용은 citations로만 채점, 근거 충실 판정이 답변 전체를 본다).
+    """
+    out = dict(body)
+    cites = [c for c in out.get("citations") or [] if isinstance(c, str)]
+    answer = out.get("answer")
+    if not cites or not isinstance(answer, str):
+        return out
+    tail = f"({', '.join(cites)})"
+    text = answer.rstrip()
+    if text.endswith(tail):
+        return out
+    out["answer"] = cut_to_limit(text, MAX_ANSWER_CHARS - len(tail) - 1) + " " + tail
+    return out
+
+
 # --- 전체 ---
 
 

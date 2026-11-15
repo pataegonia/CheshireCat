@@ -21,7 +21,7 @@ from guardrail.guard import ConstantGuard, Guard, Judgement, build_indexes
 from guardrail.kb import KbIndex
 from guardrail.llm import LLM
 from guardrail.preprocess import normalize
-from guardrail.schema import GuardRequest, GuardResponse, Message, OutputVerdict
+from guardrail.schema import GuardRequest, GuardResponse, Message, OutputVerdict, decision_of
 from guardrail.signals import Signals
 
 pytestmark = pytest.mark.anyio
@@ -95,7 +95,10 @@ def _indexes():
 
 
 def _role(kw) -> str:
-    return "input" if kw["response_format"]["json_schema"]["name"].startswith("Input") else "output"
+    name = kw["response_format"]["json_schema"]["name"]
+    if name.startswith("JbCheck"):
+        return "jb_check"
+    return "input" if name.startswith("Input") else "output"
 
 
 def responder(category="normal", output=GROUNDED, input_step=None, output_step=None):
@@ -175,6 +178,59 @@ async def test_tier1_block_category_is_grounded_and_unsafe(no_rule):
     j = await guard.judge(req())
     assert j.response.output == OutputVerdict(True, (), False) and j.output_tier == 1
     assert j.nano_grounded is False  # 원값은 남긴다
+
+
+def jb_responder(*check_steps):
+    """1차는 탈옥, 2차는 check_steps를 차례로(재시도 포함), 출력은 근거 있음."""
+    steps = iter(check_steps)
+
+    def respond(kw):
+        if kw["messages"] == PING:
+            return Ok()
+        role = _role(kw)
+        if role == "input":
+            return Ok(json.dumps({"evidence": "e", "category": "jailbreak_injection"}))
+        if role == "jb_check":
+            return next(steps)
+        return Ok(json.dumps(GROUNDED))
+
+    return respond
+
+
+def _verdict(v: str) -> Ok:
+    return Ok(json.dumps({"evidence": "e", "verdict": v}))
+
+
+async def test_jb_study_turns_into_normal_and_goes_down_the_normal_output_path(no_rule):
+    guard, fake = await make(jb_responder(_verdict("study")), toggles__jb_check=True)
+    j = await guard.judge(req())
+    assert j.response == GuardResponse("normal", OutputVerdict(True, (), True))
+    assert decision_of("normal", guard.block) == "allow" and j.output_tier == 4  # ①이 아니라 nano
+    assert (j.input_source, j.calls, j.errors) == ("nano", 3, ())
+    assert [len(calls(fake, r)) for r in ("input", "jb_check", "output")] == [1, 1, 1]
+
+
+async def test_jb_apply_keeps_the_block(no_rule):
+    guard, _ = await make(jb_responder(_verdict("apply")), toggles__jb_check=True)
+    j = await guard.judge(req())
+    assert j.response.category == "jailbreak_injection" and j.output_tier == 1
+    assert (j.calls, j.errors) == (3, ())
+
+
+@pytest.mark.parametrize(
+    "step", [Malformed(), Timeout(), RateLimited(), ServerError(), Boom()], ids=type
+)
+async def test_jb_check_failure_keeps_the_block_and_is_counted(no_rule, step):
+    guard, _ = await make(jb_responder(step, step), toggles__jb_check=True)  # 재시도까지 실패
+    j = await guard.judge(req())
+    assert j.response.category == "jailbreak_injection" and j.input_source == "nano"
+    assert j.calls == 3 and "jb_check" in j.errors
+
+
+async def test_jb_check_that_hangs_past_the_deadline_keeps_the_block(no_rule):
+    guard, _ = await make(jb_responder(Hang(), Hang()), budget_s=1, toggles__jb_check=True)
+    j = await guard.judge(req(None, has=False))
+    assert j.response.category == "jailbreak_injection" and "jb_check" in j.errors
 
 
 async def test_block_category_with_refusal_answer_is_safe(no_rule):

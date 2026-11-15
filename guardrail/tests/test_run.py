@@ -306,10 +306,12 @@ async def test_fake_run_drives_the_real_guard_end_to_end(tmp_path, capsys):
     score = summary["configs"]["t"]["scores"][0]
     assert summary["judge_kind"] == "Guard"
     assert score["cv"]["invalid"] == 0 and score["errors"] == {}
-    # 예상 호출 수는 상한이다. 저신호 직접 판정 행만큼만 덜 부른다
+    # 예상 호출 수는 상한이다. 저신호 직접 판정 행만큼 덜 부르고, 가짜 응답은 탈옥을 내지 않아
+    # 탈옥 2차 판정 몫(행마다 1)도 쓰지 않는다
     low = sum(r["source"] == "low_signal" for r in recs)
     cfg = load_config(DEFAULT)
-    assert low > 0 and score["calls"]["total"] + run.probe_calls(cfg.llm) == est - low
+    unused = len(recs) * cfg.toggles.jb_check
+    assert low > 0 and score["calls"]["total"] + run.probe_calls(cfg.llm) == est - low - unused
     public = {r.id: r for r in load_public(cfg.paths.public)}
     for r in recs:
         has = bool(public[r["id"]].candidate_answer)

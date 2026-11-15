@@ -235,10 +235,21 @@ RANK2_CLAIM = SentenceOut(
 )
 
 
+# QUESTION의 검색 3위 섹션(PY-02-03)에만 있는 문구를 인용한 문장
+RANK3_CLAIM = SentenceOut(
+    text="for 반복문은 값을 하나씩 꺼내요.",
+    kind="claim",
+    evidence=[EvidenceOut(sid="PY-02-03", quote="정해진 순서대로 값을 하나씩 꺼내")],
+)
+
+
+def ranked_sections():
+    return asyncio.run(retrieve(QUESTION, [], k=5, index=default_index()))
+
+
 def test_cite_top1_premise_question_ranks():
-    # 아래 흐름 테스트의 전제: QUESTION의 검색 1위는 PY-01-01, 2위는 PY-03-04
-    top = asyncio.run(retrieve(QUESTION, [], k=5, index=default_index()))
-    assert [s.id for s in top[:2]] == ["PY-01-01", "PY-03-04"]
+    # 아래 흐름 테스트의 전제: QUESTION의 검색 1·2·3위는 PY-01-01, PY-03-04, PY-02-03
+    assert [s.id for s in ranked_sections()[:3]] == ["PY-01-01", "PY-03-04", "PY-02-03"]
 
 
 @pytest.mark.parametrize(
@@ -248,6 +259,31 @@ def test_cite_top1_adds_the_top_section_after_the_verified_one(on, expected):
     resp = respond(state_with(FakeLLM(out(sentences=[RANK2_CLAIM])), **{"toggles.cite_top1": on}))
     assert resp["answer"] == "중간 실력 확인은 4문제예요."
     assert (resp["action"], resp["citations"]) == ("answer", expected)
+
+
+def test_cite_top1_with_max_citations_2_gives_up_to_three():
+    # PRD TU-07 표: max_citations 2와 함께 켜면 3개까지(뒤 단계가 자르지 않는다)
+    o = out(sentences=[RANK2_CLAIM, RANK3_CLAIM])
+    state = state_with(FakeLLM(o), **{"toggles.max_citations": 2, "toggles.cite_top1": True})
+    assert respond(state)["citations"] == ["PY-03-04", "PY-02-03", "PY-01-01"]
+
+
+def test_cite_top1_added_section_reaches_inline_cite():
+    # inline_cite는 cite_top1 뒤에 붙으므로 더한 ID도 답변 끝 표기에 들어가고 citations는 그대로다
+    state = state_with(
+        FakeLLM(out(sentences=[RANK2_CLAIM])),
+        **{"toggles.cite_top1": True, "toggles.inline_cite": True},
+    )
+    resp = respond(state)
+    assert resp["answer"] == "중간 실력 확인은 4문제예요. (PY-03-04, PY-01-01)"
+    assert resp["citations"] == ["PY-03-04", "PY-01-01"]
+
+
+def test_assemble_does_not_add_the_top_section_by_default():
+    body = flow.assemble(
+        out(sentences=[RANK2_CLAIM]), ranked_sections(), action="answer", max_citations=1
+    )
+    assert body["citations"] == ["PY-03-04"]
 
 
 def test_cite_top1_keeps_citations_that_already_hold_the_top_section():

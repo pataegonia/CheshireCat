@@ -160,9 +160,11 @@ def fallback_body(signals: Sequence[Signal] = (), classified: str | None = None)
 def add_top_citation(body: dict[str, Any], sections: Sequence[RetrievedSection]) -> dict[str, Any]:
     """`toggles.cite_top1`(TU-07): 인용이 있는데 검색 1위 섹션이 빠졌으면 1위를 뒤에 더한다.
 
-    인용은 F1로 채점되고 인용한 섹션 본문이 근거 충실 판정에 쓰인다(SPEC §6). 1위로 바꾸지 않고
-    더하므로 답이 실제로 쓴 섹션은 판정 근거에 남는다. 인용이 빈 응답(고정 문장, 인용하지 않는
-    action)과 검색 결과가 없는 경우는 그대로 둔다. 입력을 바꾸지 않는다.
+    인용은 F1로 채점되고(SPEC §6) 인용한 섹션 본문이 사실·충실 판정에 넘어간다(채점기
+    scoring.py). 1위로 바꾸지 않고 더하므로 답이 실제로 쓴 섹션은 판정 근거에 남는다. 모델이 쓴
+    근거가 아니라 검색 순위로 더하는 규칙이라 인용이 `max_citations`보다 1개 많아질 수 있다.
+    인용이 빈 응답(고정 문장, 인용하지 않는 action)과 검색 결과가 없는 경우는 그대로 둔다.
+    KB에 없는 ID는 뒤의 `tutor_post`(`clean_citations`)가 거른다. 입력을 바꾸지 않는다.
     """
     cites = body["citations"]
     if not cites or not sections or sections[0].id in cites:

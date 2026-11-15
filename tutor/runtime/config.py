@@ -40,7 +40,7 @@ class Toggles(_Strict):
     inline_cite: bool
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
-    cite_top1: bool  # 인용이 있으면 검색 1위 섹션을 더한다(TU-07, flow.add_top_citation)
+    cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
 
 
 class Fewshot(_Strict):

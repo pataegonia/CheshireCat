@@ -81,7 +81,7 @@
 - 주 호출 출력은 문장 단위 `Sentence`(`text`, `kind: claim|non_claim`, `evidence: [{sid, quote}]`)다. `answer`는 문장을 이어 붙여 만들고, `citations`는 결정적 수정이 계산한다(TU-06, IN-01).
 - 결정적 수정(인용 문구 검사, `unsupported` 문장 삭제, citations 계산, 4,000자 절단)은 `integration/actions.py`(IN-04)가 맡는다. 튜터 후처리는 튜터 고유 검사만 한다(TU-07).
 - 인용 규칙(TU-07, TD-01):
-  - answer·scaffold(answer_seeking)는 citations를 항상 1개 낸다. 남은 claim이 없으면 검색 1위 섹션이다.
+  - answer·scaffold(answer_seeking)는 citations를 항상 1개 낸다. 남은 claim이 없으면 검색 1위 섹션이다. 그 1개가 검색 1위가 아니면 1위를 뒤에 더해 2개를 낸다(`toggles.cite_top1`, 기본 켬, PRD TU-07).
   - abstain·scaffold(academic_dishonesty)는 쓴 자료의 섹션만 인용하고, 없으면 `[]`다.
   - clarify·redirect·refuse·escalate는 `[]`다.
 - v1 범주 판정: 가드 `classify`를 주 호출과 **병렬**로 돌리고, 공격 4범주에서만 덮어쓴다(TU-10, TD-13).

@@ -197,7 +197,8 @@ def test_all_400_public_rows_get_200_in_contract(llm_client, llm_mode, fake_send
     # 응답이 실제로 여러 모양을 지났다(가짜 LLM이 한 가지 답만 내면 후처리 대부분이 돌지 않는다).
     # 세어 본 분포(200행):
     #   v2       clarify 36 · refuse 33 · abstain 30 · escalate 30 · answer 27 · scaffold 25 ·
-    #            redirect 19 / 인용 0개 150 · 1개 50(v2는 max_citations 1)
+    #            redirect 19 / 인용 0개 150 · 1개 50(v2는 max_citations 1, cite_top1 켜기 전 집계.
+    #            켠 뒤로는 검색 1위가 더해진 2개도 나온다)
     #   baseline refuse 40 · scaffold 39 · answer 30 · escalate 27 · redirect 24 · clarify 22 ·
     #            abstain 18 / 인용 0개 64 · 1개 67 · 2개 69
     assert len(actions) >= 5, actions

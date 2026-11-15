@@ -3,6 +3,7 @@
 여기의 문항 내용은 테스트용 자리표시뿐이다(실제 초안은 런박스에서 nano가 쓴다).
 """
 
+import io
 import json
 import random
 import re
@@ -26,7 +27,7 @@ PROXY_CEILING = 2000  # 운영진 프록시: 스트리밍이 아닌 응답의 �
 
 def title(sid):
     """nano가 근거로 돌려줄 섹션 제목(원문 첫 줄 `# <ID> <제목>`의 제목)."""
-    return cd.section_title(sid, KB[sid])
+    return case_set.section_title(sid, KB[sid])
 
 
 def case(text="질문 자리", category="normal", action="answer", evidence=(), roles=("user",)):
@@ -270,11 +271,27 @@ def test_section_titles_map_back_only_to_the_sections_given_in_that_call():
     rows, dropped = cd.assemble([(one, case("u", evidence=[other, given]))], KB, TABLE)
     assert rows[0]["labels"]["evidence"] == ["FIN-03-02"] and dropped == {}
     rows, dropped = cd.assemble([(one, case("v", evidence=[other, "A"]))], KB, TABLE)
-    assert rows == [] and dropped == {"근거 없음": 1}  # 준 적 없는 제목·옛 이름표는 근거가 아니다
+    # 준 적 없는 제목·옛 이름표는 근거가 아니다. 근거를 안 낸 것과 나눠 센다
+    assert rows == [] and dropped == {"근거 제목 안 맞음": 1}
     two = cd.Job("mixed", "꼴", ("PY-01-01", "PY-01-03"))
     b = title("PY-01-03")
     rows, _ = cd.assemble([(two, case("w", evidence=[b, other, b]))], KB, TABLE)
     assert rows[0]["labels"]["evidence"] == ["PY-01-03", "PY-01-01"]  # nano가 낸 순서
+
+
+def test_partly_matched_evidence_is_kept_and_recorded_for_review():
+    # 두 섹션 중 하나만 맞으면 근거 하나로 남지만, 맞지 않은 제목을 남겨 고를 때 본다
+    two = cd.Job("mixed", "꼴", ("PY-01-01", "PY-01-03"))
+    rows, dropped = cd.assemble(
+        [(two, case("p", evidence=[title("PY-01-01"), "1. 변수"]))], KB, TABLE
+    )
+    assert dropped == {} and rows[0]["labels"]["evidence"] == ["PY-01-01"]
+    assert rows[0]["draft"]["unmatched_evidence"] == ["1. 변수"]
+    rows, _ = cd.assemble([(two, case("q", evidence=[title("PY-01-03")]))], KB, TABLE)
+    assert rows[0]["draft"]["unmatched_evidence"] == []
+    out = io.StringIO()
+    cd._show([*rows, {"axis": "mixed", "draft": {"unmatched_evidence": ["x"]}}], {}, [], out)
+    assert "근거 제목이 일부만 맞은 초안 1개" in out.getvalue()
 
 
 @pytest.mark.parametrize("wrap", ["「{}」", "'{}'", '"{}"', " {} ", "# {}", "<{}>"])

@@ -119,6 +119,16 @@ def test_screen_warns_when_the_draft_category_differs_from_the_asked_one(files):
     assert "주의: 정해 준 범주와 초안 범주(normal)가 다르다" in out
 
 
+def test_screen_warns_when_some_evidence_titles_did_not_match(files):
+    # nano가 낸 근거 제목 중 맞지 않은 것은 버려졌다: 두 섹션을 묻는 문항이 근거 하나로 남을 수 있다
+    row = draft("n1", "mixed", evidence=["PY-01-01"])
+    row["draft"]["unmatched_evidence"] = ["엉뚱한 제목"]
+    _counts, out = run_review([row], "q")
+    assert "주의: 맞는 섹션이 없어 버린 근거 제목: 엉뚱한 제목" in out
+    _counts, out = run_review([draft("n2", "mixed", evidence=["PY-01-01"])], "q")
+    assert "버린 근거 제목" not in out
+
+
 def test_changing_the_category_resets_action_and_evidence_from_the_table(files):
     drafts = [
         draft("u1", "unseen_section", evidence=["PY-01-01"]),

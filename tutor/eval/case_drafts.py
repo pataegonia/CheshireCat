@@ -259,11 +259,6 @@ def shown_section(sid: str, text: str) -> str:
     return TABLE_REF.sub("(표)", re.sub(rf"^# {re.escape(sid)}\s*", "# ", text))
 
 
-def section_title(sid: str, text: str) -> str:
-    """원문 첫 줄 `# <섹션 ID> <제목>`의 제목. nano에는 ID를 지운 `# <제목>`으로 보인다."""
-    return text.split("\n", 1)[0].removeprefix("# ").removeprefix(sid).strip()
-
-
 def _title_key(title: str) -> str:
     """근거 제목 맞추기용: 가운뎃점을 하나로 맞춘 뒤 NFKC·소문자로, 공백·#·따옴표·괄호는 지운다.
 
@@ -281,7 +276,7 @@ def _named(job: Job, kb: Mapping[str, str]) -> dict[str, str]:
     """
     if len(job.sections) > MAX_SECTIONS:
         raise ValueError(f"호출 하나에 섹션은 {MAX_SECTIONS}개까지다: {len(job.sections)}개")
-    named = {_title_key(section_title(sid, kb[sid])): sid for sid in job.sections}
+    named = {_title_key(case_set.section_title(sid, kb[sid])): sid for sid in job.sections}
     if len(named) != len(job.sections):
         raise ValueError(f"한 호출의 섹션 제목이 겹친다: {job.sections}")
     return named
@@ -310,8 +305,9 @@ def _row(
     job: Job, case: DraftCase, rule: ActionRule, row_id: str, kb: Mapping[str, str]
 ) -> dict[str, Any]:
     named = _named(job, kb)  # 그 호출에 준 섹션의 제목만 섹션 ID로 바꾼다(그 밖은 버린다)
-    keys = (_title_key(t) for t in case.evidence)
-    evidence = list(dict.fromkeys(named[k] for k in keys if k in named))
+    titles = list(dict.fromkeys(case.evidence))
+    evidence = list(dict.fromkeys(named[k] for t in titles if (k := _title_key(t)) in named))
+    unmatched = [t for t in titles if _title_key(t) not in named]  # 고를 때 보이고 따로 센다
     by_nano = len(rule.actions) > 1 and case.action in rule.actions
     action = case.action if by_nano else rule.action
     row: dict[str, Any] = {
@@ -330,6 +326,7 @@ def _row(
         "category": job.category,
         "sections": list(job.sections),
         "evidence": evidence,
+        "unmatched_evidence": unmatched,
         "action_by": "nano" if by_nano else "table",
     }
     return row
@@ -374,7 +371,8 @@ def _drop_reason(
     if (leak := _leak(case, table)) is not None:
         return f"메타({leak})"
     if table[case.category].cite == "always" and not row["labels"]["evidence"]:
-        return "근거 없음"
+        # nano가 근거를 안 냈는지, 낸 제목이 그 호출의 섹션과 맞지 않았는지 나눠 센다
+        return "근거 제목 안 맞음" if case.evidence else "근거 없음"
     text = last_user(row["messages"])
     if text in public:  # 공개 문항을 그대로 옮겼다(case_set.load_cases도 막는다)
         return "공개 문항과 같음"
@@ -483,6 +481,9 @@ def _show(
     out.write("새 초안(축별): " + ", ".join(f"{a} {axes[a]}" for a in AXES) + "\n")
     if dropped:
         out.write("뺀 초안: " + ", ".join(f"{k} {n}" for k, n in dropped.items()) + "\n")
+    partial = sum(bool(row["draft"].get("unmatched_evidence")) for row in rows)
+    if partial:  # 남긴 초안 중 근거 제목 일부가 버려진 것(고를 때 화면에 보인다)
+        out.write(f"근거 제목이 일부만 맞은 초안 {partial}개(고를 때 확인)\n")
     errors = Counter(r.error for r in results if r.error is not None)
     if errors:
         out.write("호출 실패 까닭: " + ", ".join(f"{k} {n}" for k, n in sorted(errors.items())))

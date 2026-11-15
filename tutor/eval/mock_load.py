@@ -108,11 +108,17 @@ REPLIES: dict[str, dict[str, Any]] = {
         "action": "answer",
         "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
     },
+    "CheckedMainCallOut": {
+        "asked_in_evidence": True,
+        "category": "normal",
+        "action": "answer",
+        "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
+    },
 }
 UNKNOWN_REPLY = "모르는 스키마"  # JSON이 아니다
 # 모드마다 튜터 LLM이 쓸 응답 스키마. 다른 이름이 오면(새 호출) 실패로 본다
 EXPECTED_SCHEMAS: dict[str, frozenset[str]] = {
-    "v2": frozenset({"MainCallOut"}),
+    "v2": frozenset({"MainCallOut", "CheckedMainCallOut"}),  # 근거 대조 칸 토글(#162)이면 뒤의 것
     "baseline": frozenset({"BaselineOut"}),
 }
 

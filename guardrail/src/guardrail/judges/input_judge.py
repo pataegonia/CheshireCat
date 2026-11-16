@@ -143,7 +143,7 @@ async def judge_input(
         )
         parsed = result.parsed
         category = ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
-    elif cfg.input.label_mode == "flags":  # 범주 앞 예/아니오 두 칸(S3.8 선별용 변형)
+    elif cfg.input.label_mode == "flags":  # 범주 앞 예/아니오 두 칸(S3.8, 6.0.7 기본값)
         result = await llm.complete(
             "input_judge", messages, InputFlagOut, deadline=deadline, retries=retries
         )

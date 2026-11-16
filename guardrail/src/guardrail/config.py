@@ -101,7 +101,8 @@ class LrCfg(Vectorizer):
 class InputCfg(_Strict):
     # S3.2 선별용 변형(R14 B3). category = nano가 범주를 고름(v1),
     # act = nano는 요청 유형을 고르고 코드가 범주로 대응
-    label_mode: Literal["category", "act", "flags"]  # flags: S3.8 예/아니오 두 칸
+    # flags = 범주 앞 예/아니오 두 칸(S3.8, 6.0.7 기본값)
+    label_mode: Literal["category", "act", "flags"]
     window_last: int
     max_chars: int
     max_answer_chars: int
@@ -177,9 +178,11 @@ class GuardConfig(_Strict):
         if self.input.knn.order == "nearest_first" and self.prompts.get("input_judge") in (
             "input_judge.md",
             "input_judge_en.md",
+            "input_judge_en_flags.md",
         ):
             raise ValueError(
-                "input.knn.order: nearest_first는 input_judge.md·input_judge_en.md와 쓸 수 없다"
+                "input.knn.order: nearest_first는 input_judge.md·input_judge_en.md·"
+                "input_judge_en_flags.md와 쓸 수 없다"
                 "(프롬프트가 가장 비슷한 예시가 마지막에 있다고 적는다)"
             )
         return self

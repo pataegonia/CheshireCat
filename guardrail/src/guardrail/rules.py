@@ -13,7 +13,7 @@ rule_spans의 창 위치는 원본 ans.find 대신 그 문자열을 가진 첫 �
 
 import re
 import unicodedata
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -145,23 +145,60 @@ def _eojeol_of(answer: str):
     return expand
 
 
+# 문장 끝: . ! ? 뒤에 공백·끝·인용 괄호(1.5 같은 소수는 아님), 또는 줄바꿈
+_SENT_END_RX = re.compile(r"[.!?]+(?=\s|$|\[|\()|\n")
+# 절 경계가 되는 연결 어미(어절 끝)
+# shortcut: 형태소 분석 없이 어절 끝 글자만 본다("화면"·"에서"도 자른다).
+# 오탐이 점수에 보이면 목록을 줄인다
+_CONN_RX = re.compile(r"(?:고|며|면|지만|는데|은데|서|니까|므로)$")
+
+
+def _clause_of(answer: str):
+    """(i, j) → (토큰 어절의 한 어절 앞과 절 시작 중 늦은 쪽, 절 끝). 경계는 한 번만 계산한다.
+
+    절 = 문장 안에서 쉼표·쌍점·연결 어미로 끝나는 어절 뒤를 경계로 자른 조각(S3.1 R3, 공개 개발
+    규칙 12행 재생에서 pm4 대비 4회 모두 +0.004 출력 평균).
+    """
+    words = [m.span() for m in re.finditer(r"\S+", answer)]
+    starts = [s for s, _ in words]
+    cuts = {0, len(answer)} | {m.end() for m in _SENT_END_RX.finditer(answer)}
+    for s, e in words:
+        w = answer[s:e]
+        core = w.rstrip(",;:")
+        if w != core or _CONN_RX.search(core):
+            cuts.add(e)
+    edges = sorted(cuts)
+
+    def window(i: int, j: int) -> tuple[int, int]:
+        c_start = edges[bisect_right(edges, i) - 1]
+        c_end = edges[bisect_left(edges, j)]
+        k = bisect_left(starts, c_start)  # 절 시작 뒤 첫 어절(앞 공백을 건너뜀)
+        first = starts[k] if k < len(starts) else i
+        w = bisect_right(starts, i) - 1  # 토큰이 든 어절
+        left = starts[max(w - 1, 0)] if w >= 0 else i
+        return min(i, max(first, left)), c_end
+
+    return window
+
+
 def rule_spans(
     answer_raw: str, tokens: Sequence[LiteralToken], mode: str = "pm4", k: int = 4
 ) -> tuple[str, ...]:
     """걸린 토큰 → 원문 부분 문자열 구간.
 
-    서로 다른 토큰 문자열마다 그 문자열을 가진 첫 토큰의 위치 하나에 창(pm4: ±k자, eojeol: 어절)을
+    서로 다른 토큰 문자열마다 그 문자열을 가진 첫 토큰의 위치 하나에 창(pm4: ±k자, eojeol: 어절,
+    clause: 한 어절 앞 → 절 끝)을
     만들고, 겹치거나 맞닿은 창은 합치고, 같은 구간은 한 번만, normalize 뒤 빈 구간은 버린다.
     원본 merged_pm4_spans는 ans.find(문자열)이라 "13개 총 3개"의 "3개"를 "13개" 안에서 찾는다
     (find는 20만 자에 1.5초 이상). 여기서는 실제 "3개" 토큰 위치를 쓴다.
     tokens는 위치순(extract_literals가 내는 순서)을 전제한다.
     """
-    if mode not in ("pm4", "eojeol"):
+    if mode not in ("pm4", "eojeol", "clause"):
         raise ValueError(f"모르는 rule_span: {mode}")
     first: dict[str, int] = {}  # 같은 문자열이 여러 번 나와도 첫 토큰 하나
     for t in tokens:
         first.setdefault(answer_raw[t.start : t.end], t.start)
-    expand = _eojeol_of(answer_raw) if mode == "eojeol" else None
+    expand = None if mode == "pm4" else (_eojeol_of if mode == "eojeol" else _clause_of)(answer_raw)
     wins = set()
     for text, i in first.items():
         if not text:

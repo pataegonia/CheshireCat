@@ -99,12 +99,13 @@ MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
 # - 기본 판정기는 가드 `default_factory`다: OPENAI_API_KEY가 없으면 상수 판정기라, 키를 지우는
 #   `app_env`로 띄우는 기존 테스트의 상한은 0이다(`real_guard=False`). 진짜 판정기 경로는
 #   test_real_guard.py가 `real_guard=True`로 본다.
-# - `/guard` 2: 입력 판정 1 + 출력 판정 1(후보 답변이 있을 때).
-# - `/tutor` 3: 가드가 튜터용 메서드를 올린 뒤(이슈 #119) classify 1 + judge_output 1,
-#   judge_output에 범주를 넘기지 않으면 classify +1(가드 interface.md의 judge_output 설명).
-#   지금 main의 Guard에는 두 메서드가 없어 0회다.
-# - 가짜 전송은 실패를 내지 않아 재시도 몫은 없다.
-MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 2}
+# - `/guard` 3: 입력 판정 1 + 탈옥 2차 판정 1(1차가 jailbreak_injection일 때만, 가드 #183
+#   `toggles.jb_check`) + 출력 판정 1(후보 답변이 있을 때).
+# - `/tutor` 3: 가드가 튜터용 메서드를 올린 뒤(이슈 #119) classify 1(탈옥이면 2차로 +1) +
+#   judge_output 1. 튜터는 judge_output에 범주를 넘긴다(넘기지 않으면 가드가 classify를 한 번 더
+#   부른다, 가드 interface.md의 judge_output 설명).
+# - 가짜 전송은 실패를 내지 않아 재시도 몫은 넣지 않는다. 키 없이 뜬 상수 판정기 앱은 0이다.
+MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 3}
 GUARD_BUDGET_HINT = (
     "가드 nano 호출이 상한을 넘었다. 판정기를 바꿨으면 "
     "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST · guard_call_budget을 고친다. "
@@ -293,8 +294,12 @@ class FakeGuardSend:
       learning_question), 출력 판정 grounded(· safe) true, 그 밖의 bool은 false다. 튜터 답을
       건드리지 않는 값이다.
     - `vary=True`: 범주 등 문자열 Literal과 grounded · safe를 프롬프트 해시로 고른다(무작위 없음).
+    - `force`: 필드 이름 → 값. 그 필드가 모델에 있으면 이 값을 쓴다(vary보다 먼저). 예:
+      `{"category": "jailbreak_injection"}`로 1차 입력 판정을 탈옥으로 만든다. 스키마에 맞지 않는
+      값이면 검증 실패로 `unknown`에 남는다.
     - 모르는 스키마로 부르거나, 만든 응답이 모델 검증을 통과하지 못하면 `UnknownSchema`를 던지고
-      `unknown`에 남긴다. 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send`
+      `unknown`에 남긴다. 가짜 안에서 그 밖의 예외가 나도 "가짜 내부 오류: <클래스 이름>"으로
+      남기고 다시 던진다. 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send`
       픽스처가 끝날 때 `unknown`을 본다.
     """
 
@@ -306,8 +311,20 @@ class FakeGuardSend:
         self.by_schema: collections.Counter[str] = collections.Counter()
         self.digests: list[str] = []
         self.unknown: list[str] = []
+        self.force: dict[str, Any] = {}
 
     async def __call__(self, kwargs: dict[str, Any]) -> Any:
+        try:
+            return await self._answer(kwargs)
+        except UnknownSchema:
+            raise  # `unknown`에 이미 남겼다
+        except Exception as exc:
+            # 가드 LLM이 삼키면 테스트가 조용히 지나간다. 종류 이름만 남긴다(요청 본문은 남기지
+            # 않는다)
+            self.unknown.append(f"가짜 내부 오류: {type(exc).__name__}")
+            raise
+
+    async def _answer(self, kwargs: dict[str, Any]) -> Any:
         messages = kwargs["messages"]
         if messages == _GUARD_PROBE:
             self.probes += 1
@@ -330,7 +347,7 @@ class FakeGuardSend:
             # (요청 본문은 남기지 않는다)
             self.unknown.append(name or UNKNOWN_JSON_OBJECT)
             raise UnknownSchema(name or UNKNOWN_JSON_OBJECT)
-        reply = _guard_reply(model, note, picks, vary=self.vary)
+        reply = _guard_reply(model, note, picks, vary=self.vary, force=self.force)
         try:
             if reply is None:
                 raise ValueError
@@ -351,23 +368,39 @@ _VARIED_BOOLS = {"grounded": 2, "safe": 4}
 # 문자열 Literal 필드의 기본값: 튜터 답을 건드리지 않는 값(입력 판정 normal). act는 가드
 # ACT_TO_CATEGORY로 normal이 된다(첫 값 no_meaningful_content는 low_signal_input이다). mode는 가드
 # 입력 v2(InputModeOut)의 필드다. 모델에 없는 이름은 쓰이지 않을 뿐이다. 표에 없는 Literal 필드는
-# 첫 값으로 채운다(가드가 새 판정 스키마를 올려도 tests/를 고치지 않고 돈다. 검증은 그대로 한다)
-_LITERAL_DEFAULTS = {"category": "normal", "act": "learning_question", "mode": "none"}
+# 첫 값으로 채운다(가드가 새 판정 스키마를 올려도 tests/를 고치지 않고 돈다. 검증은 그대로 한다).
+# verdict는 가드 #183 탈옥 2차 판정(JbCheckOut)의 필드다: study(공격 문구를 다루는 대상)는 범주를
+# normal로 되돌려 튜터 답을 건드리지 않는다
+_LITERAL_DEFAULTS = {
+    "category": "normal",
+    "act": "learning_question",
+    "mode": "none",
+    "verdict": "study",
+}
 
 
 def _guard_reply(
-    model: type[BaseModel], note: str, picks: Iterator[int], *, vary: bool
+    model: type[BaseModel],
+    note: str,
+    picks: Iterator[int],
+    *,
+    vary: bool,
+    force: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """스키마 모델의 필드를 차례로 돌며 가짜 응답을 만든다. 모르는 타입이 있으면 None.
 
+    - `force`에 있는 필드는 그 값을 그대로 쓴다(타입 · vary와 무관, 맞는지는 호출자가 검증한다).
     - bool: grounded · safe는 true, 그 밖은 false. vary면 grounded · safe를 해시로 고른다.
     - str: 이름이 "_quote"로 끝나면 ""(인용할 구절 없음), 아니면 `note`(판정 글 표식 + 해시).
     - 문자열 Literal: `_LITERAL_DEFAULTS`의 값, 표에 없으면 첫 값. vary면 해시로 고른다.
     """
     reply: dict[str, Any] = {}
+    force = force or {}
     for field, info in model.model_fields.items():
         kind = info.annotation
-        if kind is bool:
+        if field in force:
+            reply[field] = force[field]
+        elif kind is bool:
             if vary and field in _VARIED_BOOLS:
                 reply[field] = bool(next(picks) % _VARIED_BOOLS[field])
             else:

@@ -33,10 +33,26 @@ def test_repo_config_has_the_prd_defaults():
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
+    assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로
     assert cfg.eval.max_calls == 5000  # TU-14
+
+
+def test_main_call_timeout_uses_the_budget_headroom():
+    # TU-13: 주 호출 18초(11/15 점검 세트 실측: 15초에서 비교·계산 질문 4/98이 시간 초과로 기본값
+    # clarify). 요청 예산(가드 설정 budget_s를 튜터가 실제로 쓰는 값) 안에서 검색·게이트 대기 몫
+    # 2초 이상을 남긴다. 가드가 budget_s를 20 아래로 내리면 이 테스트가 알려 준다
+    from guardrail.config import load_config as load_guard_config
+
+    from tutor.runtime.budget import backstop_s, budget_s
+
+    main = config.load_config().llm.timeout_s.main
+    budget = budget_s(types.SimpleNamespace(cfg=load_guard_config()))
+    assert main == 18
+    assert main + 2 <= budget
+    assert backstop_s(budget) < 30  # 안전망까지 SPEC §3 요청당 30초 안
 
 
 @pytest.mark.parametrize(
@@ -76,6 +92,7 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("retrieval.k", 5.0),
         ("retrieval.k", True),
         ("toggles.signals", "yes"),
+        ("toggles.cite_top1", "yes"),
         ("toggles.signals", 1),
     ],
 )

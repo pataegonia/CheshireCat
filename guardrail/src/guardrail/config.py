@@ -72,6 +72,7 @@ class Toggles(_Strict):
     safe_rule: bool
     oom_kb_snippet: bool
     embedding: bool
+    jb_check: bool  # S3.3 탈옥 2차 판정(1차가 jailbreak_injection일 때만)
 
 
 class Vectorizer(_Strict):

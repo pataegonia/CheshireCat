@@ -145,7 +145,8 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
     probes = run.probe_calls(load_config(DEFAULT).llm)
     direct = sum(r["source"] == "low_signal" for r in recs)
     calls = _judge_calls(made[0])
-    assert est == probes + len(recs)  # 행당 1회(후보 답변이 있어도 출력 호출 없음)
+    # 행당 입력 1 + 탈옥 2차 1(상한). 후보 답변이 있어도 출력 호출은 없다
+    assert est == probes + (1 + load_config(DEFAULT).toggles.jb_check) * len(recs)
     assert direct > 0 and len(calls) == len(recs) - direct  # 저신호 직접 판정만큼 덜 부른다
     assert all("InputOut" in json.dumps(c.get("response_format")) for c in calls)
     assert summary["judge_kind"] == "InputOnlyGuard" and summary["input_only"] is True

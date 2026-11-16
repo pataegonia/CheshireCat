@@ -16,6 +16,7 @@ import importlib
 import json
 import logging
 import time
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
@@ -141,8 +142,37 @@ def test_fake_answers_the_guards_real_input_judge(app_env, structured):
 
     llm, category = asyncio.run(run())
     assert category == "normal"
-    assert dict(fake.by_schema) == {"InputOut": 1} and fake.unknown == []
+    assert dict(fake.by_schema) == {input_schema_name(cfg): 1} and fake.unknown == []
     assert dict(llm.unexpected) == {}
+
+
+# 가드 설정 input.label_mode → 입력 판정 nano의 출력 스키마 이름. 이름은 문자열로 둔다
+# (InputFlagOut은 가드 #203 전의 main에 없어 import하지 않는다)
+INPUT_SCHEMA_BY_LABEL_MODE = {
+    "category": "InputOut",
+    "act": "InputActOut",
+    "flags": "InputFlagOut",  # 가드 #203
+}
+
+
+def input_schema_name(cfg) -> str:
+    """입력 판정 스키마 이름. 모르는 label_mode면 조용히 넘어가지 않고 실패한다."""
+    mode = cfg.input.label_mode
+    if mode not in INPUT_SCHEMA_BY_LABEL_MODE:
+        pytest.fail(
+            f"모르는 input.label_mode={mode!r}: INPUT_SCHEMA_BY_LABEL_MODE에 스키마 이름을 더한다 "
+            "(가드 PR에서 이 실패가 나면 통합 담당(pyr27)을 부른다)"
+        )
+    return INPUT_SCHEMA_BY_LABEL_MODE[mode]
+
+
+def test_input_schema_name_follows_label_mode():
+    for mode, name in INPUT_SCHEMA_BY_LABEL_MODE.items():
+        cfg = SimpleNamespace(input=SimpleNamespace(label_mode=mode))
+        assert input_schema_name(cfg) == name
+    unknown = SimpleNamespace(input=SimpleNamespace(label_mode="spans"))
+    with pytest.raises(pytest.fail.Exception, match="'spans'"):
+        input_schema_name(unknown)
 
 
 class NewJudgeOut(BaseModel):
@@ -288,6 +318,63 @@ def test_fake_fills_a_literal_field_missing_from_the_defaults_with_its_first_val
     _, result = complete_once(lambda: LLM(load_config().llm, send=fake), NewLiteralOut)
     assert result.parsed == NewLiteralOut(verdict="block")
     assert fake.unknown == []
+
+
+class JbLikeOut(_StrictOut):
+    """가드 #183 탈옥 2차 판정(JbCheckOut)과 같은 모양. main에는 아직 없어 여기서 흉내 낸다."""
+
+    evidence: str
+    verdict: Literal["apply", "study"]
+
+
+def test_fake_force_sets_the_field_and_wins_over_vary(app_env):
+    """`force`의 값이 그 필드를 정한다(vary보다 먼저). 모델에 없는 필드면 쓰이지 않는다."""
+    jailbreak = {"category": "jailbreak_injection"}
+    for seed in range(20):  # vary면 범주가 해시로 갈리지만, force가 있으면 늘 그 값이다
+        picks = iter([seed] * 50)
+        reply = _guard_reply(InputOut, "x", picks, vary=True, force=jailbreak)
+        assert reply["category"] == "jailbreak_injection"
+    output = _guard_reply(OutputOut, "x", iter(()), vary=False, force=jailbreak)
+    assert "category" not in output and output["grounded"] is True
+    # 탈옥 2차 판정 모양의 기본값은 study(튜터 답을 건드리지 않는 쪽), force로 apply를 낼 수 있다
+    assert _guard_reply(JbLikeOut, "x", iter(()), vary=False)["verdict"] == "study"
+    forced = _guard_reply(JbLikeOut, "x", iter(()), vary=False, force={"verdict": "apply"})
+    assert forced["verdict"] == "apply"
+
+    fake = FakeGuardSend(vary=True)
+    fake.force = dict(jailbreak)
+    _, result = complete_once(lambda: LLM(load_config().llm, send=fake), InputOut)
+    assert isinstance(result.parsed, InputOut)
+    assert result.parsed.category == "jailbreak_injection"
+    assert fake.unknown == []
+
+
+@pytest.mark.parametrize("structured", ["json_schema", "json_object"])
+def test_fake_force_value_outside_the_schema_is_recorded(app_env, structured):
+    """스키마에 없는 값을 force하면 지어내지 않고 검증 실패로 `unknown`에 남는다."""
+    fake = FakeGuardSend()
+    fake.force = {"category": "탈옥"}
+    llm, result = complete_once(
+        lambda: LLM(load_config().llm, send=fake), InputOut, structured=structured
+    )
+    assert result.parsed is None
+    assert fake.unknown == ["InputOut: 가짜 응답이 스키마와 맞지 않음"]
+    assert dict(llm.unexpected) == {UnknownSchema.__name__: 1}
+
+
+def test_fake_internal_error_is_recorded(app_env, monkeypatch):
+    """가짜 안에서 UnknownSchema가 아닌 예외가 나도 `unknown`에 종류 이름을 남긴다(가드 LLM이
+    전송 예외를 삼키므로, 남기지 않으면 테스트가 조용히 지나간다)."""
+
+    def broken(*args, **kwargs):
+        raise KeyError("가짜 안의 실수")
+
+    monkeypatch.setattr(applib, "_guard_reply", broken)
+    fake = FakeGuardSend()
+    llm, result = complete_once(lambda: LLM(load_config().llm, send=fake), InputOut)
+    assert result.parsed is None
+    assert fake.unknown == ["가짜 내부 오류: KeyError"]
+    assert dict(llm.unexpected) == {KeyError.__name__: 1}
 
 
 def test_guard_schema_name_reads_only_the_appended_schema():

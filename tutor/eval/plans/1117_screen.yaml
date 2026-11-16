@@ -1,0 +1,52 @@
+# 11/17 오전 거르기(판정 없음). 예상 호출 약 3,100회. 목표 세트는 먼저 만든다(API 0회).
+# 비교 기준: main b4dcfd1 교차 검증 판정 없음 1회(11/16, 77.29) 결과 JSON(BASE).
+# 1) cv-base-exp: 이 브랜치 기본 설정(대행 신호 정밀화 포함, 토글 모두 끔). 신호 정밀화 효과 = 이것 - BASE
+# 2~4) 목표 세트(자료 밖 16 + 정상 answer 30) 3회: 기준, 1-5 자료 밖 경계 예시, 3-3 단원 닻
+# 5~8) 교차 검증 1회: 4-4 범주 경계, 1-5, 3-3, 2-2 판단 예시 knn + 답 예시
+# 2-3 답 형식 예시는 사실·충실을 봐야 해서 판정 포함 큐(오후)에 넣는다.
+items:
+  - name: cv-base-exp
+    cases: public
+    runs: 1
+    judge: false
+    tutor_set: []
+    compare: /home/elicer/competition/tutor/eval/runs/tutor-20261116T092540777627Z.json
+  - name: target-base
+    cases: tutor/eval/runs/target_set.jsonl
+    runs: 3
+    judge: false
+    tutor_set: []
+  - name: target-v15-oom-examples
+    cases: tutor/eval/runs/target_set.jsonl
+    runs: 3
+    judge: false
+    tutor_set: ['prompt.main_call="main_call_v15_oom_examples.md"']
+  - name: target-anchor
+    cases: tutor/eval/runs/target_set.jsonl
+    runs: 3
+    judge: false
+    tutor_set: ["toggles.anchor_unit=true"]
+  - name: cv-v44-boundary
+    cases: public
+    runs: 1
+    judge: false
+    tutor_set: ['prompt.main_call="main_call_v44_boundary.md"']
+    compare: /home/elicer/competition/tutor/eval/runs/tutor-20261116T092540777627Z.json
+  - name: cv-v15-oom-examples
+    cases: public
+    runs: 1
+    judge: false
+    tutor_set: ['prompt.main_call="main_call_v15_oom_examples.md"']
+    compare: /home/elicer/competition/tutor/eval/runs/tutor-20261116T092540777627Z.json
+  - name: cv-anchor
+    cases: public
+    runs: 1
+    judge: false
+    tutor_set: ["toggles.anchor_unit=true"]
+    compare: /home/elicer/competition/tutor/eval/runs/tutor-20261116T092540777627Z.json
+  - name: cv-knn-with-answer
+    cases: public
+    runs: 1
+    judge: false
+    tutor_set: ['toggles.fewshot="knn"', "fewshot.with_answer=true"]
+    compare: /home/elicer/competition/tutor/eval/runs/tutor-20261116T092540777627Z.json

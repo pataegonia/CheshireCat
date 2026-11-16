@@ -138,6 +138,16 @@ def test_queue_stops_at_the_first_failing_item(tmp_path, capsys):
     assert "b이 종료 코드 1로 끝나 멈춘다" in capsys.readouterr().out
 
 
+def test_keep_going_tainted_continues_but_still_stops_on_other_failures(tmp_path, capsys):
+    runner = FakeRunner(codes={"b.jsonl": rq.EXIT_TAINTED, "c.jsonl": 3})
+    summary = tmp_path / "s.md"
+    items = [item(n, cases=f"{n}.jsonl") for n in ("a", "b", "c", "d")]
+    code = rq.run_queue(plan(*items), summary, 1000, run=runner, keep_going_tainted=True)
+    assert code == 3
+    assert [args[3] for args in runner.real_runs()] == ["a.jsonl", "b.jsonl", "c.jsonl"]
+    assert "b은 tainted(기본값 섞임)로 끝났다" in capsys.readouterr().out
+
+
 def test_unreadable_estimate_refuses_to_start(tmp_path, capsys):
     runner = FakeRunner(estimate_ok=False)
     summary = tmp_path / "s.md"

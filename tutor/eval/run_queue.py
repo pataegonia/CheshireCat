@@ -31,6 +31,7 @@ EMBEDDING = re.compile(r"임베딩 예상 호출 (\d+)회")
 SAVED = "저장: "
 CAP_REFUSAL = "상한 0회를 넘는다"  # --max-calls 0 예상 실행이 정상으로 멈출 때 run_local 오류 문구
 EXIT_REFUSED = 2
+EXIT_TAINTED = 1  # run_local: 기본값 응답이 섞인 결과(tainted)
 # 요약 파일에 옮기는 run_local 출력 줄(접두어). 점수·항목별·범주별·지연·비교·튜터 실패 줄만
 SUMMARY_PREFIXES = (
     "공개 부분 세트 ",
@@ -187,8 +188,13 @@ def run_queue(
     max_calls: int,
     run: Runner = subprocess_runner,
     out: TextIO | None = None,
+    keep_going_tainted: bool = False,
 ) -> int:
-    """계획을 차례로 돈다. 시작 전 거절은 EXIT_REFUSED, 실패한 항목에서 멈추면 그 종료 코드."""
+    """계획을 차례로 돈다. 시작 전 거절은 EXIT_REFUSED, 실패한 항목에서 멈추면 그 종료 코드.
+
+    `keep_going_tainted`면 tainted(종료 코드 1, 기본값 응답이 섞임)는 요약에 남기고 다음 항목으로
+    간다(무인 실행에서 주 호출 시간 초과 한 번에 큐가 서지 않게). 그 밖의 실패에서는 멈춘다.
+    """
     out = sys.stdout if out is None else out
     try:
         planned = [(item, estimate(item, run)) for item in plan.items]
@@ -210,6 +216,9 @@ def run_queue(
         text = block(item, args, done)
         _append(summary, text)
         out.write(text)
+        if done.returncode == EXIT_TAINTED and keep_going_tainted:
+            out.write(f"{item.name}은 tainted(기본값 섞임)로 끝났다. 다음 항목으로 간다\n")
+            continue
         if done.returncode != 0:
             out.write(f"{item.name}이 종료 코드 {done.returncode}로 끝나 멈춘다\n")
             return done.returncode
@@ -221,12 +230,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("plan", type=Path, help="계획 YAML(items 목록)")
     ap.add_argument("--summary", type=Path, required=True, help="항목별 요약을 덧붙일 파일")
     ap.add_argument("--max-calls", type=int, required=True, help="모든 항목 예상 호출 합 상한")
+    ap.add_argument(
+        "--keep-going-tainted",
+        action="store_true",
+        help="tainted(기본값 섞임, 종료 코드 1) 항목은 남기고 다음으로 간다",
+    )
     args = ap.parse_args(argv)
     try:
         plan = load_plan(args.plan)
     except (OSError, ValueError, yaml.YAMLError) as exc:  # pydantic ValidationError도 ValueError
         ap.error(f"계획 파일을 읽지 못했다: {exc}")
-    return run_queue(plan, args.summary, args.max_calls)
+    return run_queue(plan, args.summary, args.max_calls, keep_going_tainted=args.keep_going_tainted)
 
 
 if __name__ == "__main__":

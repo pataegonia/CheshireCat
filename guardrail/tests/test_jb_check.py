@@ -4,7 +4,7 @@ import json
 import time
 
 import pytest
-from fakes import FakeLLM, Malformed, Ok, input_reply
+from fakes import FakeLLM, Malformed, Ok
 
 from guardrail.config import load_config, load_prompt
 from guardrail.judges.input_judge import judge_input
@@ -16,7 +16,7 @@ pytestmark = pytest.mark.anyio
 
 ON = {"toggles.jb_check": True, "toggles.knn_fewshot": False}
 MSGS = [Message("user", "질문")]
-JB = input_reply("jailbreak_injection")
+JB = '{"evidence": "e", "category": "jailbreak_injection"}'
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ async def test_failed_check_keeps_jailbreak():
 
 
 async def test_other_categories_are_not_checked():
-    got, reqs = await _judge([Ok(input_reply("off_topic"))])
+    got, reqs = await _judge([Ok('{"evidence": "e", "category": "off_topic"}')])
     assert got == "off_topic" and len(reqs) == 1
 
 

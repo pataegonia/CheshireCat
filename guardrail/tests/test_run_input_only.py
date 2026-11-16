@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 import pytest
-from fakes import FakeLLM, Malformed, Ok, input_reply
+from fakes import FakeLLM, Malformed, Ok
 
 from guardrail.config import load_config
 from guardrail.data import labeled_rows, load_public
@@ -34,10 +34,7 @@ def anyio_backend():
     return "asyncio"
 
 
-NORMAL_REPLY = input_reply("normal")
-
-
-def _llm(cfg_llm, reply=NORMAL_REPLY):
+def _llm(cfg_llm, reply='{"evidence": "e", "category": "normal"}'):
     fake = FakeLLM(respond=lambda kw: Malformed() if reply is None else Ok(reply))
     llm = LLM(cfg_llm, send=fake.send)
     llm.fake = fake  # type: ignore[attr-defined]
@@ -57,7 +54,7 @@ async def _guard(reply, n_train=60):
 
 
 async def test_nano_category_is_used_and_examples_come_from_train_only():
-    guard, llm, cfg, train = await _guard(input_reply("off_topic"))
+    guard, llm, cfg, train = await _guard('{"evidence": "e", "category": "off_topic"}')
     req = GuardRequest((Message("user", "수업 내용을 가게 광고 문구로 써 줘"),), "답변", True)
     j = await guard.judge(req)
     assert (j.response.category, j.input_source, j.calls, j.errors) == ("off_topic", "nano", 1, ())
@@ -70,7 +67,7 @@ async def test_nano_category_is_used_and_examples_come_from_train_only():
 
 
 async def test_low_signal_last_turn_skips_the_model():
-    guard, llm, _, _ = await _guard(input_reply("normal"))
+    guard, llm, _, _ = await _guard('{"evidence": "e", "category": "normal"}')
     msgs = (
         Message("user", "반복문이 뭐예요?"),
         Message("assistant", "설명"),
@@ -95,7 +92,7 @@ async def test_failed_call_falls_back_to_normal_and_is_counted(monkeypatch):
 
 
 async def test_long_last_message_keeps_head_and_tail_in_target():
-    guard, llm, cfg, _ = await _guard(input_reply("normal"))
+    guard, llm, cfg, _ = await _guard('{"evidence": "e", "category": "normal"}')
     filler = "".join(f"문장{i} " for i in range(cfg.input.max_chars))
     assert len(filler) > cfg.input.max_chars
     await guard.judge(GuardRequest((Message("user", filler + "끝표시XYZ"),), None, False))
@@ -124,7 +121,7 @@ async def test_cli_rejects_input_only_with_holdout(tmp_path):
 
 
 async def test_request_without_user_message_is_normal_without_calls():
-    guard, llm, _, _ = await _guard(input_reply("off_topic"))
+    guard, llm, _, _ = await _guard('{"evidence": "e", "category": "off_topic"}')
     j = await guard.judge(GuardRequest((), None, False))
     assert (j.response.category, j.input_source, j.calls) == ("normal", "default", 0)
     assert not _judge_calls(llm)
@@ -151,9 +148,7 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
     # 행당 입력 1 + 탈옥 2차 1(상한). 후보 답변이 있어도 출력 호출은 없다
     assert est == probes + (1 + load_config(DEFAULT).toggles.jb_check) * len(recs)
     assert direct > 0 and len(calls) == len(recs) - direct  # 저신호 직접 판정만큼 덜 부른다
-    schema = {"category": "InputOut", "flags": "InputFlagOut", "act": "InputActOut"}
-    want = schema[load_config(DEFAULT).input.label_mode]
-    assert all(want in json.dumps(c.get("response_format")) for c in calls)
+    assert all("InputOut" in json.dumps(c.get("response_format")) for c in calls)
     assert summary["judge_kind"] == "InputOnlyGuard" and summary["input_only"] is True
     assert all({"knn_major", "lr_pred"} <= r.keys() for r in recs)
     # nano의 파싱 출력(판정 근거)을 행마다 남긴다. 직접 판정 행은 호출이 없어 빈 목록이다
@@ -161,12 +156,7 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
     for r in nano:
         (call,) = r["llm"]
         assert call["role"] == "input_judge"
-        assert call["parsed"] == {
-            "evidence": "e",
-            "makes_offcourse_output": False,
-            "makes_work_to_submit": False,
-            "category": "normal",
-        }
+        assert call["parsed"] == {"evidence": "e", "category": "normal"}
         # 호출별 지연·시도 수·종료 사유·출력 토큰 수(시간 초과가 한도 근처인지 보려는 값, S2.9)
         assert call["latency_ms"] >= 0 and call["attempts"] == 1 and call["error"] is None
         assert {"finish_reason", "completion_tokens"} <= call.keys()
@@ -185,7 +175,7 @@ def _flaky_llm(fail_first_n):
         if key not in seen:
             seen.append(key)
         bad = seen.index(key) < fail_first_n
-        return Malformed() if bad else Ok(input_reply("normal"))
+        return Malformed() if bad else Ok('{"evidence": "e", "category": "normal"}')
 
     return respond
 

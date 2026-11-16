@@ -33,9 +33,9 @@ def test_english_prompt_keeps_every_identifier(name):
 
 @pytest.mark.parametrize("name", ["input_judge", "output_judge"])
 def test_default_uses_english_prompts(name):
-    """R14-D9 채택: 기본 입력·출력 판정은 영어판이다. 입력은 2.2-flags(S3.8)."""
+    """R14-D9 채택: 기본 입력·출력 판정은 영어판이다. 입력은 2.0(S3.2)."""
     version, body = load_prompt(load_config(), name)
-    assert version == ("2.2-flags" if name == "input_judge" else "1.1")
+    assert version == ("2.0" if name == "input_judge" else "1.1")
     assert body.startswith("You ")
 
 
@@ -67,7 +67,7 @@ CATEGORIES = (
 HEDGES = ("generally", "usually", "mostly", "typically", "often", "step by step")
 PUBLIC = Path(__file__).resolve().parents[2] / "competition" / "public"
 WINDOW = 8
-BOUNDARY_MAX_TOKENS = 1400  # S3.2 2.0은 1272. S3.8이 "해롭지 않음 ≠ normal" 문단(약 110)을 더함
+BOUNDARY_MAX_TOKENS = 1300
 # 빠른 질문 버튼 문구는 공개 행에 그대로 있다(정의 1). 이 둘만 누출 검사에서 뺀다
 BUTTONS = (
     "실습 도중 어려운 부분이 있어요. 도움을 받을 수 있을까요?",

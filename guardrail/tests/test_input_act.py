@@ -76,9 +76,8 @@ async def test_category_reply_is_rejected_in_act_mode():
     assert got is None
 
 
-async def test_category_mode_still_uses_the_category_schema():
-    category = {"input.label_mode": "category", "prompts.input_judge": "input_judge_en.md"}
-    got, req = await _judge('{"evidence": "e", "category": "off_topic"}', overrides=category)
+async def test_default_mode_still_uses_the_category_schema():
+    got, req = await _judge('{"evidence": "e", "category": "off_topic"}', overrides={})
     assert got == "off_topic"
     assert "InputOut" in str(req.get("response_format"))
 

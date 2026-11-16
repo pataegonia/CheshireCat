@@ -669,16 +669,7 @@ def _fake_guard_llm(monkeypatch, category="answer_seeking"):
         if kw["messages"] == [{"role": "user", "content": "ping"}]:
             return Ok()
         if kw["response_format"]["json_schema"]["name"].startswith("Input"):
-            return Ok(
-                json.dumps(
-                    {
-                        "evidence": "e",
-                        "makes_offcourse_output": False,
-                        "makes_work_to_submit": False,
-                        "category": category,
-                    }
-                )
-            )
+            return Ok(json.dumps({"evidence": "e", "category": category}))
         return Ok('{"answer_quote": "", "kb_quote": "", "grounded": true, "refuses": false}')
 
     fake = FakeLLM(respond=respond)

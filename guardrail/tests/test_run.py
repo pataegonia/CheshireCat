@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fakes import FakeLLM, Ok, input_reply
+from fakes import FakeLLM, Ok
 
 from guardrail.config import load_config
 from guardrail.data import load_public
@@ -76,20 +76,12 @@ async def test_without_holdout_flag_only_cv_rows_are_judged(tmp_path):
     assert not run.HOLDOUT_VIEWS.exists()
 
 
-FLAG_NORMAL = (
-    '{"evidence": "e", "makes_offcourse_output": false, '
-    '"makes_work_to_submit": false, "category": "normal"}'
-)
-
-
 def _counting_llm(cfg_llm):
     def respond(kw):
         text = json.dumps(kw["messages"], ensure_ascii=False)
         if "OutputBaselineOut" in json.dumps(kw.get("response_format", {})):
             return Ok('{"reason": "r", "grounded": true, "safe": true}')
         assert text
-        if "InputFlagOut" in json.dumps(kw.get("response_format", {})):
-            return Ok(FLAG_NORMAL)
         return Ok('{"evidence": "e", "category": "normal"}')
 
     fake = FakeLLM(respond=respond)
@@ -361,7 +353,7 @@ async def test_consecutive_rate_limits_stop_the_run(tmp_path):
     def make_llm(cfg_llm):
         def respond(kw):
             if len(fake.requests) <= probes:  # probe는 통과, 판정 호출은 전부 429
-                return Ok(input_reply("normal"))
+                return Ok('{"evidence": "e", "category": "normal"}')
             return RateLimited("0")
 
         fake = FakeLLM(respond=respond)
@@ -392,7 +384,7 @@ async def test_scattered_rate_limits_do_not_stop_the_run(tmp_path):
                 return RateLimited("0")
             if "OutputBaselineOut" in json.dumps(kw.get("response_format", {})):
                 return Ok('{"reason": "r", "grounded": true, "safe": true}')
-            return Ok(input_reply("normal"))
+            return Ok('{"evidence": "e", "category": "normal"}')
 
         fake = FakeLLM(respond=respond)
         return LLM(cfg_llm, send=fake.send, sleep=nosleep)
@@ -493,7 +485,7 @@ def _failing_llm(status_error, every=1):
                 return status_error
             if "OutputBaselineOut" in json.dumps(kw.get("response_format", {})):
                 return Ok('{"reason": "r", "grounded": true, "safe": true}')
-            return Ok(input_reply("normal"))
+            return Ok('{"evidence": "e", "category": "normal"}')
 
         fake = FakeLLM(respond=respond)
         made.append(fake)

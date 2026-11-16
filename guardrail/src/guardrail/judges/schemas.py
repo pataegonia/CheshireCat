@@ -21,7 +21,7 @@ class InputOut(_Out):
 
 
 class InputFlagOut(_Out):
-    """S3.8 선별용 변형: 범주 앞에 산출물 예/아니오 두 칸. 허용 범주인데 참이면 코드가 올린다."""
+    """Input judge output with two yes/no fields written before the category."""
 
     evidence: str  # 한 문장
     makes_offcourse_output: bool  # 수업과 무관한 산출물(광고·그림·공략 등)을 튜터가 만들게 되나

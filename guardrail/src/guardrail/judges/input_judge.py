@@ -104,19 +104,6 @@ def build_messages(
     ]
 
 
-# 예/아니오 칸으로 올릴 수 있는 허용 범주. 자기소개 + 차단 요청은 차단(우선순위 규칙)
-_LIFTABLE = frozenset({"normal", "answer_seeking", "pii_disclosure"})
-
-
-def lift_category(category: Category, offcourse: bool, submit: bool) -> Category:
-    """flags 모드: 허용 범주인데 산출물 칸이 참이면 그 차단 범주로. 둘 다면 제출물 쪽."""
-    if category not in _LIFTABLE:
-        return category
-    if submit:
-        return "academic_dishonesty"
-    return "off_topic" if offcourse else category
-
-
 async def judge_input(
     window: list[Message],
     target: str,
@@ -143,16 +130,13 @@ async def judge_input(
         )
         parsed = result.parsed
         category = ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
-    elif cfg.input.label_mode == "flags":  # 범주 앞 예/아니오 두 칸(S3.8, 6.0.7 기본값)
+    elif cfg.input.label_mode == "flags":  # 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔)
+        # 두 칸은 범주를 고르기 전에 쓰게 하는 장치일 뿐 판정에 쓰지 않는다(ADR-0012: 범주만 쓴다)
         result = await llm.complete(
             "input_judge", messages, InputFlagOut, deadline=deadline, retries=retries
         )
         p = result.parsed
-        category = (
-            lift_category(p.category, p.makes_offcourse_output, p.makes_work_to_submit)
-            if isinstance(p, InputFlagOut)
-            else None
-        )
+        category = p.category if isinstance(p, InputFlagOut) else None
     else:
         result = await llm.complete(
             "input_judge", messages, InputOut, deadline=deadline, retries=retries

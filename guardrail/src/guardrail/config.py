@@ -101,7 +101,7 @@ class LrCfg(Vectorizer):
 class InputCfg(_Strict):
     # S3.2 선별용 변형(R14 B3). category = nano가 범주를 고름(v1),
     # act = nano는 요청 유형을 고르고 코드가 범주로 대응
-    # flags = 범주 앞 예/아니오 두 칸(S3.8, 6.0.7 기본값)
+    # flags = 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔. results/2026-11-16-input-flags.md)
     label_mode: Literal["category", "act", "flags"]
     window_last: int
     max_chars: int

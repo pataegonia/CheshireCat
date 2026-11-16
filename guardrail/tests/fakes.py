@@ -134,16 +134,3 @@ class FakeLLM:
             case Hang():
                 await asyncio.Event().wait()
         raise AssertionError(f"알 수 없는 단계: {step!r}")
-
-
-def input_reply(category: str = "normal", evidence: str = "e") -> str:
-    """기본 입력 판정 스키마(flags 모드, InputFlagOut) 모양의 응답. 두 칸은 거짓."""
-    return json.dumps(
-        {
-            "evidence": evidence,
-            "makes_offcourse_output": False,
-            "makes_work_to_submit": False,
-            "category": category,
-        },
-        ensure_ascii=False,
-    )

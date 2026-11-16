@@ -72,6 +72,7 @@ class Toggles(_Strict):
     safe_rule: bool
     oom_kb_snippet: bool
     embedding: bool
+    jb_check: bool  # S3.3 탈옥 2차 판정(1차가 jailbreak_injection일 때만)
 
 
 class Vectorizer(_Strict):
@@ -100,7 +101,8 @@ class LrCfg(Vectorizer):
 class InputCfg(_Strict):
     # S3.2 선별용 변형(R14 B3). category = nano가 범주를 고름(v1),
     # act = nano는 요청 유형을 고르고 코드가 범주로 대응
-    label_mode: Literal["category", "act"]
+    # flags = 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔. results/2026-11-16-input-flags.md)
+    label_mode: Literal["category", "act", "flags"]
     window_last: int
     max_chars: int
     max_answer_chars: int
@@ -127,7 +129,7 @@ class OutputCfg(_Strict):
     call_nano_when_unused: bool
     rule_min_margin: float
     rule_emit_spans: bool
-    rule_span: Literal["pm4", "eojeol"]
+    rule_span: Literal["pm4", "eojeol", "clause"]
     rule_extra_tokens: list[Literal["value_norm", "units_extra", "bare_numeral", "backtick_latin"]]
     rule_require_same_kind: bool
     # R14-D2·D4(ADR-0014 R14 수정). nano "근거 없음" 가운데 ③에 쓰는 범위, 인용 확인의 최소 글자 수,
@@ -176,9 +178,11 @@ class GuardConfig(_Strict):
         if self.input.knn.order == "nearest_first" and self.prompts.get("input_judge") in (
             "input_judge.md",
             "input_judge_en.md",
+            "input_judge_en_flags.md",
         ):
             raise ValueError(
-                "input.knn.order: nearest_first는 input_judge.md·input_judge_en.md와 쓸 수 없다"
+                "input.knn.order: nearest_first는 input_judge.md·input_judge_en.md·"
+                "input_judge_en_flags.md와 쓸 수 없다"
                 "(프롬프트가 가장 비슷한 예시가 마지막에 있다고 적는다)"
             )
         return self

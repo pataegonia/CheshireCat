@@ -25,7 +25,7 @@
 - `integration/contracts.py`: `Section{id, subject, title, text, tables, names}`(`tables` · `names`는 기본 빈 목록, PRD IN-01이 원본) · `Evidence{sid, quote}`(`sid` = `Section.id`) · `Sentence{text, kind: claim|non_claim, evidence}` · `TutorResult{answer, action, citations}`. action 7종: `answer` · `scaffold` · `clarify` · `abstain` · `redirect` · `refuse` · `escalate`.
 - `config/actions.yaml`이 범주→action 표의 **유일한 원본**. 튜터는 import만 한다. 표에는 범주 · action · 생성 여부 · 인용 규칙만 둔다 — 고정 문장(템플릿) 문구와 그 키는 튜터 소유라 여기 두지 않고, 튜터가 `(범주, action)`으로 찾는다. 공개 세트 200/200과 일치해야 한다(harmful은 refuse / redirect 두 갈래).
 - 결정적 수정 `finalize()` 순서: quote ⊆ 섹션 원문(`scoring.normalize` 기준) 검사 → `unsupported` 구간이 든 문장 삭제 → `safe=false`면 폐기 + refuse 템플릿 → 남은 claim 0이어도 **action 유지**(abstain 전환 금지) → citations ≤ `max_citations`(기본 1) · 정규식 `^(PY|PR|FIN)-\d{2}-\d{2}$` · 실존 48개 → `answer` 4,000 유니코드 문자.
-- `answer` · `scaffold`(answer_seeking)는 citations를 항상 1개 채운다(남은 claim의 sid, 없으면 검색 1위). abstain · academic scaffold는 템플릿이 자료를 말했으면 그 섹션, 아니면 `[]`.
+- `answer` · `scaffold`(answer_seeking)는 citations를 항상 1개 채운다(남은 claim의 sid, 없으면 검색 1위). abstain · academic scaffold는 템플릿이 자료를 말했으면 그 섹션, 아니면 `[]`. 튜터는 `finalize()` 뒤에 인용이 있으면 검색 1위를 더할 수 있다(`toggles.cite_top1`, 기본 켬, 튜터 PRD TU-07). 그래서 최종 응답의 인용은 2개일 수 있다.
 - 판정 생략(시간 부족) · 판정 실패 → 생성된 답과 action 그대로. 생성 실패 기본 action은 `fallback_action`(튜터 TU-12가 주인).
 
 ## 채점에서 통합이 기억할 것 (`scoring.py`)
@@ -41,10 +41,12 @@
 - 테스트 폴더는 `tests/__init__.py` + `tests/integration/__init__.py`를 둘 다 둔다. `tests/__init__.py`가 없으면 pytest가 `tests/`를 경로 앞에 넣어 `import integration`이 테스트 폴더를 가리킨다(튜터 `tests/tutor`도 같은 이유).
 - 통합 테스트는 루트 `app.py`를 그대로 띄우고 LLM의 **전송만** 가짜로 바꾼다(`tests/integration/conftest.py`). 튜터는 `tutor.runtime.llm._openai_send`(`fake_send`), 가드는 `guardrail.llm` 모듈 안의 `openai_env` · `openai.AsyncOpenAI`(`fake_guard_send`, 앱을 띄우는 테스트가 모두 지나는 `app_env`에 묶여 있다). 가드가 클라이언트를 만드는 자리를 옮기면 `test_guard_llm.py`의 첫 테스트가 알려 준다.
 - 가드 기본 판정기는 `guardrail.server.default_factory`다: OPENAI_API_KEY가 있으면 진짜 판정기(`Guard.build`), 없거나 기동 실패면 상수 판정기. `app_env`가 키를 지우므로 기존 통합 테스트는 상수 판정기로 돈다. 진짜 판정기 + 튜터 경로는 `test_real_guard.py`가 `real_guard_client`(가짜 키 + 가짜 전송)로 본다.
-- 요청당 nano 호출 상한은 `tests/integration/applib.py` 한 곳에 둔다: `MAX_LLM_CALLS_PER_REQUEST`(튜터 전송, 모드별) + `MAX_GUARD_LLM_CALLS_PER_REQUEST`(가드 LLM, 경로별. probe 제외. `/guard` 2 = 입력 1 + 출력 1, `/tutor` 3 = classify 1 + judge_output 1 + 범주를 안 넘기면 classify 1). 가드 표는 진짜 판정기의 상한이고 `guard_call_budget(…, real_guard=)` · `guard_calls_per_request`로만 읽는다(키 없이 띄운 상수 판정기 앱은 0). 넘으면 호출 수 단언이 그 표를 가리키는 문구와 함께 실패한다.
+- 요청당 nano 호출 상한은 `tests/integration/applib.py` 한 곳에 둔다: `MAX_LLM_CALLS_PER_REQUEST`(튜터 전송, 모드별) + `MAX_GUARD_LLM_CALLS_PER_REQUEST`(가드 LLM, 경로별. probe 제외. `/guard` 3 = 입력 1 + 탈옥 2차 1(1차가 탈옥일 때만, 가드 #183 `toggles.jb_check`) + 출력 1, `/tutor` 3 = classify 1(탈옥이면 2차로 +1) + judge_output 1. 가짜 전송은 실패를 내지 않아 재시도 몫은 없다). 가드 표는 진짜 판정기의 상한이고 `guard_call_budget(…, real_guard=)` · `guard_calls_per_request`로만 읽는다(키 없이 띄운 상수 판정기 앱은 0). 넘으면 호출 수 단언이 그 표를 가리키는 문구와 함께 실패한다.
 - `tests/integration/llm_guard.py`는 판정기 대역이다(가드의 진짜 `LLM`으로 nano를 부르는 최소 판정기, classify · judge_output 포함). 튜터→가드 호출을 보는 테스트가 쓴다. 가드가 classify · judge_output(#119)을 올리고 `test_real_guard.py`가 그 경로를 덮은 뒤에 지운다.
 - 루트 `pyproject.toml`의 pytest 설정은 `-m 'not live'`다. 루트에서 `guardrail/tests`를 같이 돌려도 실제 API 테스트는 고르지 않는다.
 - 하네스: `uv run python -m harness.run_public --preset v1_parallel`(실행 전 예상 호출 수를 출력하고 상한을 넘으면 멈춘다). 실제 API 부하(600요청 · 64동시)는 대회 기간 2회만.
+- 걸러 보기 대조 호출 측정(#162): `python -m harness.oom_probe --effort low|medium [--main <run_local 결과 JSON> --main-p95 <초>]`. 주 호출과 같은 근거 묶음 · 대화 창(튜터 함수를 import, 서버 코드는 안 바꿈)으로 "묻는 것이 근거에 있는가"만 교차 검증 160행에 1회씩 묻고(재시도 없음, 연속 429 3번이면 멈춤) harness/runs/(git 제외)에 행별 기록, 화면에 실패 갈래 · 지연 · found 혼동 · answer→abstain 모의 · 채택 기준 판정. asked · quote 원문은 `--keep-text`일 때만 남긴다. system은 harness/prompts/oom_check.md.
+- 저장소 루트를 운영진 폴더(/home/elicer/competition) 자리에 둔 런박스에서는 팀 `harness/`(`oom_probe` 등)가 운영진 원본 `harness/`(`score_local.py`)와 같은 폴더에 놓인다. 이름이 겹치는 파일은 없다. 운영진 원본의 사본은 저장소의 `competition/harness/`에 있다.
 
 ## 작업 방식
 - 슬라이스 단위로 한다: plan 문서의 **테스트 먼저** 목록을 실패하는 테스트로 쓰고 → 구현 → 수용 기준 체크. 한 슬라이스 = 한 PR.

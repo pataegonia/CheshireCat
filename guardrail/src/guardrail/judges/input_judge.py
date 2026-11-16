@@ -16,7 +16,13 @@ from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
-from guardrail.judges.schemas import ACT_TO_CATEGORY, InputActOut, InputOut
+from guardrail.judges.schemas import (
+    ACT_TO_CATEGORY,
+    InputActOut,
+    InputFlagOut,
+    InputOut,
+    JbCheckOut,
+)
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
@@ -27,10 +33,10 @@ _ROLES = frozenset({"user", "assistant"})
 _SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
 
 
-def _system_prompt(cfg: GuardConfig) -> str:
-    key = (cfg.paths.prompts, cfg.prompts.get("input_judge", ""))
+def _system_prompt(cfg: GuardConfig, name: str = "input_judge") -> str:
+    key = (cfg.paths.prompts, cfg.prompts.get(name, ""))
     if key not in _SYSTEM_PROMPTS:
-        _SYSTEM_PROMPTS[key] = load_prompt(cfg, "input_judge")[1]
+        _SYSTEM_PROMPTS[key] = load_prompt(cfg, name)[1]
     return _SYSTEM_PROMPTS[key]
 
 
@@ -108,11 +114,14 @@ async def judge_input(
     deadline: float,
     kb_snippet: str | None = None,
     retries: int | None = None,
+    trace: dict[str, str | None] | None = None,
 ) -> Category | None:
     """마지막 학습자 발화의 범주. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
 
     window는 대화 전체를 넘겨도 된다(`build_window`로 자른다). 재시도는 `LLM.complete`가
     일시적 오류에만 `retries`회(None이면 `llm.retries`) 한다.
+    trace를 넘기면 2차 판정을 부른 경우 `trace["jb_check"]`에 결과(apply·study, 실패면 None)를
+    남긴다. 호출자가 호출 수·오류를 센다.
     """
     messages = build_messages(window, target, examples, cfg, kb_snippet)
     if cfg.input.label_mode == "act":  # 요청 유형을 받아 범주로 대응시킨다(S3.2 선별용 변형)
@@ -120,8 +129,52 @@ async def judge_input(
             "input_judge", messages, InputActOut, deadline=deadline, retries=retries
         )
         parsed = result.parsed
-        return ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
+        category = ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
+    elif cfg.input.label_mode == "flags":  # 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔)
+        # 두 칸은 범주를 고르기 전에 쓰게 하는 장치일 뿐 판정에 쓰지 않는다(ADR-0012: 범주만 쓴다)
+        result = await llm.complete(
+            "input_judge", messages, InputFlagOut, deadline=deadline, retries=retries
+        )
+        p = result.parsed
+        category = p.category if isinstance(p, InputFlagOut) else None
+    else:
+        result = await llm.complete(
+            "input_judge", messages, InputOut, deadline=deadline, retries=retries
+        )
+        category = result.parsed.category if isinstance(result.parsed, InputOut) else None
+    if category == "jailbreak_injection" and cfg.toggles.jb_check:
+        try:
+            verdict = await check_jailbreak(
+                window, target, llm, cfg, deadline=deadline, retries=retries
+            )
+        except Exception:  # noqa: BLE001 - 2차가 깨져도 1차(차단)를 지킨다. 이름은 trace로 센다
+            verdict = None
+        if trace is not None:
+            trace["jb_check"] = verdict
+        if verdict == "study":
+            return "normal"
+    return category
+
+
+async def check_jailbreak(
+    window: list[Message],
+    target: str,
+    llm: LLM,
+    cfg: GuardConfig,
+    *,
+    deadline: float,
+    retries: int | None = None,
+) -> str | None:
+    """S3.3 탈옥 2차 판정: "apply"(튜터에게 지금 적용) | "study"(다루는 대상) | 실패면 None.
+
+    1차와 같은 대화·대상 발화를 보되 few-shot 예시는 넣지 않는다. 실패하면 호출자는 1차 판정을 둔다.
+    """
+    user = "\n\n".join([_conversation(window, cfg), f"<target>{_data(target, cfg)}</target>"])
+    messages = [
+        {"role": "system", "content": _system_prompt(cfg, "jb_check")},
+        {"role": "user", "content": user},
+    ]
     result = await llm.complete(
-        "input_judge", messages, InputOut, deadline=deadline, retries=retries
+        "jb_check", messages, JbCheckOut, deadline=deadline, retries=retries
     )
-    return result.parsed.category if isinstance(result.parsed, InputOut) else None
+    return result.parsed.verdict if isinstance(result.parsed, JbCheckOut) else None

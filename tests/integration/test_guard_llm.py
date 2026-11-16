@@ -16,6 +16,7 @@ import importlib
 import json
 import logging
 import time
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
@@ -141,8 +142,37 @@ def test_fake_answers_the_guards_real_input_judge(app_env, structured):
 
     llm, category = asyncio.run(run())
     assert category == "normal"
-    assert dict(fake.by_schema) == {"InputOut": 1} and fake.unknown == []
+    assert dict(fake.by_schema) == {input_schema_name(cfg): 1} and fake.unknown == []
     assert dict(llm.unexpected) == {}
+
+
+# 가드 설정 input.label_mode → 입력 판정 nano의 출력 스키마 이름. 이름은 문자열로 둔다
+# (InputFlagOut은 가드 #203 전의 main에 없어 import하지 않는다)
+INPUT_SCHEMA_BY_LABEL_MODE = {
+    "category": "InputOut",
+    "act": "InputActOut",
+    "flags": "InputFlagOut",  # 가드 #203
+}
+
+
+def input_schema_name(cfg) -> str:
+    """입력 판정 스키마 이름. 모르는 label_mode면 조용히 넘어가지 않고 실패한다."""
+    mode = cfg.input.label_mode
+    if mode not in INPUT_SCHEMA_BY_LABEL_MODE:
+        pytest.fail(
+            f"모르는 input.label_mode={mode!r}: INPUT_SCHEMA_BY_LABEL_MODE에 스키마 이름을 더한다 "
+            "(가드 PR에서 이 실패가 나면 통합 담당(pyr27)을 부른다)"
+        )
+    return INPUT_SCHEMA_BY_LABEL_MODE[mode]
+
+
+def test_input_schema_name_follows_label_mode():
+    for mode, name in INPUT_SCHEMA_BY_LABEL_MODE.items():
+        cfg = SimpleNamespace(input=SimpleNamespace(label_mode=mode))
+        assert input_schema_name(cfg) == name
+    unknown = SimpleNamespace(input=SimpleNamespace(label_mode="spans"))
+    with pytest.raises(pytest.fail.Exception, match="'spans'"):
+        input_schema_name(unknown)
 
 
 class NewJudgeOut(BaseModel):

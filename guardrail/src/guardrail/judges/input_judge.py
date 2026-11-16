@@ -16,7 +16,13 @@ from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
-from guardrail.judges.schemas import ACT_TO_CATEGORY, InputActOut, InputOut, JbCheckOut
+from guardrail.judges.schemas import (
+    ACT_TO_CATEGORY,
+    InputActOut,
+    InputFlagOut,
+    InputOut,
+    JbCheckOut,
+)
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
@@ -124,6 +130,13 @@ async def judge_input(
         )
         parsed = result.parsed
         category = ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
+    elif cfg.input.label_mode == "flags":  # 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔)
+        # 두 칸은 범주를 고르기 전에 쓰게 하는 장치일 뿐 판정에 쓰지 않는다(ADR-0012: 범주만 쓴다)
+        result = await llm.complete(
+            "input_judge", messages, InputFlagOut, deadline=deadline, retries=retries
+        )
+        p = result.parsed
+        category = p.category if isinstance(p, InputFlagOut) else None
     else:
         result = await llm.complete(
             "input_judge", messages, InputOut, deadline=deadline, retries=retries

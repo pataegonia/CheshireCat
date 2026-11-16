@@ -39,6 +39,8 @@ V2 = q6_rule_fp.VARIANTS["V2"]
 
 
 def _cfg(**output):
+    # 원본(q6_rule_fp.merged_pm4_spans) 대조 테스트라 구간은 pm4로 둔다. 기본값 clause는 따로 본다
+    output.setdefault("rule_span", "pm4")
     return load_config(overrides={f"output.{k}": v for k, v in output.items()})
 
 
@@ -373,7 +375,7 @@ def test_rule_spans_is_linear_in_answer_length():
     a = " ".join(str(i) for i in range(100_000, 128_572))  # 서로 다른 6자리 수 약 20만 자
     toks = extract_literals(a)
     t0 = time.perf_counter()
-    for mode in ("pm4", "eojeol"):
+    for mode in ("pm4", "eojeol", "clause"):
         assert rule_spans(a, toks, mode)
     assert len(a) > 190_000
     assert time.perf_counter() - t0 < 1.0
@@ -393,7 +395,7 @@ def test_rule_spans_is_linear_without_spaces():
     a = "".join(f"{i}개" for i in range(10_000, 20_000))  # 공백 없는 한 어절 약 6만 자
     toks = extract_literals(a)
     assert len(a) > 59_000
-    for mode in ("pm4", "eojeol"):
+    for mode in ("pm4", "eojeol", "clause"):
         t0 = time.perf_counter()
         assert rule_spans(a, toks, mode)
         assert time.perf_counter() - t0 < 1.0, mode
@@ -404,6 +406,63 @@ def test_eojeol_expands_to_whitespace_boundaries():
     assert rule_spans(a, [_tok(a, "42개")], "eojeol") == ("42개입니다",)
     b = "총합=42개였다 끝"
     assert rule_spans(b, [_tok(b, "42개")], "eojeol") == ("총합=42개였다",)
+
+
+@pytest.mark.parametrize(
+    ("answer", "token", "want"),
+    [
+        # 토큰 어절의 한 어절 앞에서 시작해 절 끝(여기서는 문장 끝)까지
+        ("수강료는 월 5만 원입니다. 환불은 안 됩니다.", "5만 원", "월 5만 원입니다."),
+        # 연결 어미·쉼표로 끝나는 어절 뒤가 절 경계: 한 어절 앞보다 절 시작이 늦으면 절 시작
+        (
+            "기간은 연장되지만 5만 원은 그대로이고, 환불은 안 됩니다.",
+            "5만 원",
+            "5만 원은 그대로이고,",
+        ),
+        # 소수점은 문장을 자르지 않는다
+        ("비율은 1.5배 입니다. 끝.", "1.5배", "비율은 1.5배 입니다."),
+        # 숫자 안 쉼표는 절을 자르지 않는다(어절 끝 쉼표만 경계)
+        ("이용료는 1,000원이고, 환불은 안 됩니다.", "1,000원", "이용료는 1,000원이고,"),
+        # 어절 끝 글자만 보므로 조사 "에서"도 경계다(_CONN_RX 주석의 한계).
+        # 목록을 줄이면 이 줄이 바뀐다
+        (
+            "통장에서 3만 원을 뺀 뒤 남은 돈은 2만 원입니다.",
+            "3만 원",
+            "3만 원을 뺀 뒤 남은 돈은 2만 원입니다.",
+        ),
+        # 답변 맨 앞 토큰, 줄바꿈도 문장 끝
+        ("3개만 있어요\n다음 줄", "3개", "3개만 있어요\n"),
+    ],
+)
+def test_clause_window_one_eojeol_before_to_clause_end(answer, token, want):
+    assert rule_spans(answer, [_tok(answer, token)], "clause") == (want,)
+
+
+@given(
+    st.text(alphabet="ab 1개고,.[" + chr(10), min_size=1, max_size=40),
+    st.lists(st.tuples(st.integers(0, 39), st.integers(1, 4)), max_size=4),
+)
+def test_clause_spans_are_substrings_that_cover_each_token(answer, picks):
+    toks = sorted(
+        (
+            LiteralToken("latin", normalize(answer[s : s + n]), s, s + n)
+            for s, n in picks
+            if s + n <= len(answer) and normalize(answer[s : s + n])
+        ),
+        key=lambda t: t.start,
+    )
+    got = rule_spans(answer, toks, "clause")
+    assert all(x in answer for x in got)
+    for text in {answer[t.start : t.end] for t in toks}:
+        assert any(text in x for x in got)  # 첫 토큰의 창이 그 토큰을 덮는다
+
+
+def test_clause_windows_merge_only_when_overlapping():
+    a = "첫째 3개, 둘째 7개를 씁니다. 그다음 문장"
+    got = rule_spans(a, [_tok(a, "3개"), _tok(a, "7개")], "clause")
+    assert got == ("첫째 3개,", "둘째 7개를 씁니다.")  # 사이에 공백이 있으면 따로
+    b = "3개와 7개를 씁니다."
+    assert rule_spans(b, [_tok(b, "3개"), _tok(b, "7개")], "clause") == (b,)  # 겹치면 하나로
 
 
 def test_rule_spans_rejects_unknown_mode_and_skips_empty_token():
@@ -430,6 +489,8 @@ def test_literal_rule_fires_with_spans():
     r = kb.rank("리스트 append 원소")
     assert r.hits[0].section_id == "PY-01-01"
     assert literal_rule(a, r.hits, r.margin, kb, _cfg(rule_min_margin=0.0)) == (" 원소 7개를 넣어",)
+    clause = _cfg(rule_min_margin=0.0, rule_span="clause")
+    assert literal_rule(a, r.hits, r.margin, kb, clause) == ("원소 7개를 넣어요",)
 
 
 def test_literal_rule_none_when_all_tokens_in_section():

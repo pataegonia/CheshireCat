@@ -46,6 +46,7 @@ from tutor.judge.conversation import Conversation, tidy
 from tutor.judge.draft import draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
+    ATTACK_CATEGORIES,
     JUDGE_SKIP_S,
     GuardSkips,
     attack_fixed,
@@ -122,10 +123,29 @@ def choose_action(out: MainCallOut, *, from_category: bool) -> Action:
 _STRONGER_THAN_SCAFFOLD = frozenset({"escalate", "refuse", "redirect", "clarify"})
 # `delegation_override`가 academic 고정 scaffold로 바꾸는 action(abstain·더 강한 action은 그대로)
 _OVERRIDDEN_BY_DELEGATION = frozenset({"answer", "scaffold"})
+# 대행 덮기보다 앞인 것: 위기·지시 무력화 신호, 가드 classify의 위기·공격 범주(§3 우선순위).
+# 덮기를 거는 조건은 성공 경로와 주 호출 실패 기본값이 같고, classify 공격 범주에서는
+# parallel이 serial(주 호출 전 고정 문장)과 같은 고정 문장을 낸다
+_SIGNALS_BEFORE_DELEGATION = frozenset({Signal.CRISIS, Signal.OVERRIDE})
+_CLASSIFY_BEFORE_DELEGATION = ATTACK_CATEGORIES | {"emotional_distress"}
+
+
+def _delegation_wins(signals: Sequence[Signal], classified: str | None) -> bool:
+    """대행 신호가 있고, 위기·지시 무력화 신호와 classify 위기·공격 범주가 없다."""
+    return (
+        Signal.DELEGATION in signals
+        and _SIGNALS_BEFORE_DELEGATION.isdisjoint(signals)
+        and classified not in _CLASSIFY_BEFORE_DELEGATION
+    )
 
 
 def delegation_guard(
-    out: MainCallOut, signals: Sequence[Signal], *, state_rule: bool, override: bool = False
+    out: MainCallOut,
+    signals: Sequence[Signal],
+    *,
+    state_rule: bool,
+    override: bool = False,
+    classified: str | None = None,
 ) -> MainCallOut:
     """제출물 대행 신호가 잡히면 주 호출 결과를 academic_dishonesty로 바꾼다(TU-06).
 
@@ -134,16 +154,24 @@ def delegation_guard(
     주 호출이 과제 대행을 normal/answer로 보고 과제 설명을 써 주면 응함(0점)이 되기 때문이다
     (#195 S13: 실제 응함은 과제 대행 2행에서만 나왔다). 숨김에서도 건다. abstain은 바꾸지 않는다
     (과제 대행이 abstain으로 나간 기록이 없어 이득 없이 자료 밖 질문 오탐만 생긴다).
+    위기·지시 무력화 신호가 있거나 가드 classify(`classified`)가 위기·공격 범주면 덮지 않는다.
+    그 범주는 뒤의 classify 합치기(TU-10)나 주 호출이 정한다(#204 가드 리뷰: 덮은 academic
+    고정 문장은 합치기 규칙 1로 classify가 덮지 못해, 탈옥이 섞인 대행에 parallel만
+    refuse를 잃었다).
 
-    `override`가 꺼져 있으면 예전 규칙이다: 밝힘(`scaffold_state_rule`)에서 주 호출이
-    answer_seeking으로 볼 때만 바꾼다. 밝힘의 answer_seeking은 정답 사실을 먼저 밝혀 응함이 되고,
-    숨김에서는 answer_seeking도 정답을 밝히지 않아 막을 것이 없다(#139 리뷰).
+    `override`가 꺼져 있거나 위 이유로 덮지 않으면 예전 규칙이다: 밝힘(`scaffold_state_rule`)에서
+    주 호출이 answer_seeking으로 볼 때만 바꾼다. 밝힘의 answer_seeking은 정답 사실을 먼저 밝혀
+    응함이 되고, 숨김에서는 answer_seeking도 정답을 밝히지 않아 막을 것이 없다(#139 리뷰).
 
     어느 쪽이든 더 강한 action(escalate·refuse·redirect·clarify)은 그대로 둔다(§3 우선순위).
     """
     if Signal.DELEGATION not in signals:
         return out
-    if override and out.action in _OVERRIDDEN_BY_DELEGATION:
+    if (
+        override
+        and out.action in _OVERRIDDEN_BY_DELEGATION
+        and _delegation_wins(signals, classified)
+    ):
         return out.model_copy(update={"category": "academic_dishonesty", "action": "scaffold"})
     if not state_rule or out.category != "answer_seeking":
         return out
@@ -157,22 +185,21 @@ def fallback_body(
     """주 호출 실패(재시도 후)·예산 초과의 기본 응답(TU-12).
 
     신호가 위기거나 가드 classify가 emotional_distress면 escalate, 지시 무력화면 refuse 고정 문장.
-    `delegation`(`toggles.delegation_override`)이 켜져 있고 대행 신호가 잡히면 academic 고정
-    scaffold다(TU-06). 성공 경로와 같은 순서다: 성공 경로에서도 대행 보정이 classify 합치기 앞이라
-    보정된 academic 고정 문장을 classify가 덮지 않는다(#139 설계, TU-10 규칙 1).
     그다음 classify가 공격 4범주였으면 그 범주의 고정 문장(TU-10, 공격 재현율은 classify 단독 이상).
-    주 호출 결과가 없으니 classify를 쓰지 않을 이유가 없다. 그 밖에는 공유 설정
+    주 호출 결과가 없으니 classify를 쓰지 않을 이유가 없다.
+    `delegation`(`toggles.delegation_override`)이 켜져 있고 대행 신호가 잡히면 academic 고정
+    scaffold다(TU-06). 성공 경로의 대행 덮기와 같은 순서다(`_delegation_wins`). 그 밖에는 공유 설정
     `fallback_action`(잠정 clarify)의 고정 문장. 위기가 먼저다(PRD §3 우선순위).
     """
     if Signal.CRISIS in signals or classified == "emotional_distress":
         return fixed_body(Fixed.ESCALATE)
     if Signal.OVERRIDE in signals:
         return fixed_body(Fixed.REFUSE_JAILBREAK)
-    if delegation and Signal.DELEGATION in signals:
-        return fixed_body(Fixed.SCAFFOLD_ACADEMIC)
     attack = attack_fixed(classified)
     if attack is not None:
         return fixed_body(attack)
+    if delegation and _delegation_wins(signals, classified):
+        return fixed_body(Fixed.SCAFFOLD_ACADEMIC)
     action = FALLBACK_ACTION
     return {"answer": empty_answer(action), "action": action, "citations": []}
 
@@ -313,12 +340,14 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         if classify is not None:
             classify.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
     # 제출물 대행 보정은 합치기 앞에 둔다: 보정된 academic scaffold는 표 고정 문장이라
-    # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다
+    # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다.
+    # 덮기(override)는 classify가 위기·공격 범주면 걸지 않아 그 범주가 합치기에서 이긴다
     out = delegation_guard(
         draft.out,
         signals,
         state_rule=cfg.toggles.scaffold_state_rule,
         override=cfg.toggles.delegation_override,
+        classified=classified,
     )
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
     merged = merge_category(out.category, action, classified)

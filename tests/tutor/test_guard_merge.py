@@ -317,12 +317,10 @@ def test_delegation_guard_runs_before_merge(classified):
     assert guard.judge_calls == []
 
 
-@pytest.mark.parametrize(
-    "classified", ["normal", "jailbreak_injection", "harmful_content", "off_topic"]
-)
+@pytest.mark.parametrize("classified", ["normal", "answer_seeking", "pii_disclosure"])
 def test_delegation_override_also_runs_before_merge(classified):
-    # TU-06 delegation_override: 숨김에서도 대행 보정이 합치기 앞이다. classify가 공격 범주여도
-    # 보정된 academic 고정 문장을 덮지 않고(규칙 1), judge_output도 부르지 않는다(#139 설계와 같음)
+    # TU-06 delegation_override: 숨김에서도 대행 보정이 합치기 앞이다. 덮은 academic 고정 문장은
+    # judge_output을 부르지 않는다(#139 설계와 같음)
     guard = FakeGuard(classified)
     state = build(
         guard,
@@ -338,19 +336,60 @@ def test_delegation_override_also_runs_before_merge(classified):
     assert guard.judge_calls == []
 
 
-@pytest.mark.parametrize("classified", ["jailbreak_injection", "harmful_content", "off_topic"])
-def test_failure_default_puts_delegation_before_attack_classify(classified):
-    # 주 호출 실패 기본값도 성공 경로와 같은 순서다: 대행 보정(켬)이 classify 공격 범주보다 먼저
+ATTACK_BEFORE_DELEGATION = [
+    ("jailbreak_injection", Fixed.REFUSE_JAILBREAK),
+    ("harmful_content", Fixed.REFUSE_HARMFUL),
+    ("off_topic", Fixed.REDIRECT_OFF_TOPIC),
+]
+
+
+@pytest.mark.parametrize("mode", ["parallel", "serial"])
+@pytest.mark.parametrize(("classified", "kind"), ATTACK_BEFORE_DELEGATION)
+def test_classify_attack_wins_over_delegation_override(mode, classified, kind):
+    # #204 가드 리뷰: 탈옥·유해가 섞인 대행에서 classify 공격 범주가 덮기보다 앞이다.
+    # 덮은 academic 고정 문장은 합치기 규칙 1로 classify가 못 덮어 parallel만 refuse를 잃었다.
+    # serial은 주 호출 전에 고정 문장을 내므로 회귀 확인용(두 모드가 같은 문장인지)이다
+    guard = FakeGuard(classified)
+    state = build(
+        guard,
+        out(category="normal", action="answer", sentences=[GOOD]),
+        **{"toggles.delegation_override": True, "toggles.guard_classify": mode},
+    )
+    assert run(state, DELEGATION_ASK)["answer"] == TEXT[kind]
+
+
+def test_classify_emotional_distress_stops_delegation_override():
+    # classify 위기 범주도 덮기보다 앞이다. 병렬 합치기는 위기 범주를 쓰지 않으므로 주 호출 결과
+    guard = FakeGuard("emotional_distress")
+    state = build(
+        guard,
+        out(category="normal", action="answer", sentences=[GOOD]),
+        **{"toggles.delegation_override": True},
+    )
+    resp = run(state, DELEGATION_ASK)
+    assert resp["action"] == "answer"
+    assert resp["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
+
+
+@pytest.mark.parametrize(("classified", "kind"), ATTACK_BEFORE_DELEGATION)
+def test_failure_default_puts_attack_classify_before_delegation(classified, kind):
+    # 주 호출 실패 기본값도 성공 경로와 같은 순서다: classify 공격 범주가 대행 덮기(켬)보다 먼저
     guard = FakeGuard(classified)
     state = build(guard, llm=FakeLLM(error="timeout"), **{"toggles.delegation_override": True})
-    assert run(state, DELEGATION_ASK) == {
-        "answer": TEXT[Fixed.SCAFFOLD_ACADEMIC],
-        "action": "scaffold",
-        "citations": [],
-    }
-    # 끄면 예전대로 classify 공격 범주의 고정 문장
-    off = build(FakeGuard(classified), llm=FakeLLM(error="timeout"))
-    assert run(off, DELEGATION_ASK)["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
+    assert run(state, DELEGATION_ASK)["answer"] == TEXT[kind]
+
+
+def test_failure_default_classify_emotional_distress_beats_delegation():
+    # 켬 + 실패 + 대행 신호 + classify 위기 → escalate(위기가 먼저, §3)
+    guard = FakeGuard("emotional_distress")
+    state = build(guard, llm=FakeLLM(error="timeout"), **{"toggles.delegation_override": True})
+    assert run(state, DELEGATION_ASK)["answer"] == TEXT[Fixed.ESCALATE]
+
+
+def test_failure_default_non_attack_classify_keeps_delegation():
+    guard = FakeGuard("normal")
+    state = build(guard, llm=FakeLLM(error="timeout"), **{"toggles.delegation_override": True})
+    assert run(state, DELEGATION_ASK)["answer"] == TEXT[Fixed.SCAFFOLD_ACADEMIC]
 
 
 @pytest.mark.parametrize("value", ["?", "Normal", 3, None, ["jailbreak_injection"]])

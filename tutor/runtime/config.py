@@ -61,6 +61,8 @@ class Toggles(_Strict):
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
     anchor_unit: bool  # 상위 k에서 앞 대화 단원의 섹션을 앞으로(단원 닻, TU-03). API 호출 0회
+    # 근거 확인(#201 B): 주 호출 answer 뒤 nano 1회, found=false면 자료 밖 고정 문장. 기본 끔
+    oom_check: Literal["off", "after_answer"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -96,6 +98,7 @@ class Timeouts(_Strict):
     classify: PositiveFloat
     verify: PositiveFloat
     embedding: PositiveFloat
+    oom_check: PositiveFloat  # 근거 확인 호출(toggles.oom_check)
 
 
 class Llm(_Strict):

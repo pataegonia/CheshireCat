@@ -63,6 +63,8 @@ from tutor.judge.guard_merge import (
     wait_classify,
 )
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
+from tutor.judge.oom_check import OomSkips, material_absent
+from tutor.judge.oom_check import load_system as load_oom_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
@@ -111,6 +113,9 @@ def prepare_judge(app_state: Any) -> None:
         file_name=app_state.tutor_cfg.prompt.main_call,  # 기본 main_call.md(측정 비교용 전환)
     )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
+    oom_on = toggles.oom_check != "off"
+    app_state.tutor_oom_prompt = load_oom_system() if oom_on else None  # 근거 확인(#201 B)
+    app_state.oom_skips = OomSkips()  # 사유 → 횟수(본문 없음)
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -414,6 +419,23 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     if merged.fixed is not None:
         # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다
         return tutor_post(fixed_body(merged.fixed), merged.category)
+    if (
+        cfg.toggles.oom_check == "after_answer"
+        and action == "answer"
+        and template_for(merged.category, action) is None
+        and await material_absent(
+            state.tutor_llm,
+            state.tutor_oom_prompt,
+            draft.sections,
+            conv,
+            deadline=deadline,
+            timeout_s=cfg.llm.timeout_s.oom_check,
+            skip_s=JUDGE_SKIP_S,
+            skips=getattr(state, "oom_skips", None),
+        )
+    ):
+        # #201 B: 근거 확인이 "근거에 없음"이라 했다 → 자료 밖 고정 문장
+        return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
     verdict = None
     # 주 호출 문장이 그대로 나가는 경로만 검증한다(고정 문장에는 판정할 주장이 없다, TU-09)
     if cfg.toggles.verify == "guard" and template_for(merged.category, action) is None:

@@ -30,6 +30,7 @@ None으로 돌린다.
 
 import asyncio
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, get_args
 
@@ -40,6 +41,7 @@ from integration.actions import action_for
 from integration.contracts import Action, Category
 from integration.runtime import load_runtime
 from tutor.answer.templates import Fixed, template_for
+from tutor.judge.signals import Signal
 
 # 공격 범주 = 가드 설정 `block_categories`(지금은 가드 §3의 공격 4범주). classify가 이 중 하나일
 # 때만 주 호출 결과를 덮을 수 있다(TU-10). 기동 때 가드 설정을 읽어 `/guard`와 차단 기준을 같이
@@ -228,6 +230,22 @@ def serial_fixed(classified: str | None) -> Fixed | None:
     if classified not in _CATEGORIES:
         return None
     return template_for(classified, action_for(classified).action)
+
+
+def gate_classified(
+    classified: str | None, signals: Sequence[Signal], *, needs_signal: bool
+) -> str | None:
+    """합치기·직렬 판단에 쓸 classify 범주(`toggles.jailbreak_needs_signal`, TU-10).
+
+    켜져 있으면 classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05 `OVERRIDE`)가 없을 때는
+    버린다(None). 그러면 주 호출 결과를 쓴다. 수업이 공격 기법을 가르쳐서, 그 기법을 배우려는 정상
+    질문도 공격 어휘를 담는다. 신호는 분석·학습 맥락의 인용을 빼고 잡는다(`signals._override`).
+    다른 공격 범주(harmful·academic·off_topic)와 주 호출 실패 기본값(`fallback_body`)은
+    바꾸지 않는다.
+    """
+    if needs_signal and classified == "jailbreak_injection" and Signal.OVERRIDE not in signals:
+        return None
+    return classified
 
 
 def merge_category(main_category: str, action: Action, classified: str | None) -> Merged:

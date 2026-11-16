@@ -49,6 +49,7 @@ from tutor.judge.guard_merge import (
     JUDGE_SKIP_S,
     GuardSkips,
     attack_fixed,
+    gate_classified,
     judge_candidate,
     merge_category,
     serial_fixed,
@@ -254,6 +255,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     skips: GuardSkips | None = getattr(state, "guard_skips", None)
     messages = _messages(req)
     serial = cfg.toggles.guard_classify == "serial"
+    gated = cfg.toggles.jailbreak_needs_signal
     classify = start_classify(
         guard,
         messages,
@@ -269,7 +271,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             await asyncio.sleep(0)
         if classify is not None and serial:
             classified = await wait_classify(classify, skips)  # ⓐ: 주 호출 앞에서 끝까지 기다린다
-            fixed = serial_fixed(classified)
+            fixed = serial_fixed(gate_classified(classified, signals, needs_signal=gated))
             if fixed is not None and Signal.CRISIS not in signals:
                 # ⓐ: classify가 템플릿 범주면 주 호출 없이 고정 문장(통합 I13 ⓐ, #83 비교용)
                 return tutor_post(fixed_body(fixed), classified)
@@ -298,7 +300,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다
     out = delegation_guard(draft.out, signals, state_rule=cfg.toggles.scaffold_state_rule)
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
-    merged = merge_category(out.category, action, classified)
+    # 신호 없는 jailbreak classify는 합치기에서만 버린다. 주 호출 실패 기본값(위)은 그대로 쓴다
+    trusted = gate_classified(classified, signals, needs_signal=gated)
+    merged = merge_category(out.category, action, trusted)
     if merged.fixed is not None:
         # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다
         return tutor_post(fixed_body(merged.fixed), merged.category)

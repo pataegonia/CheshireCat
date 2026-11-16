@@ -9,11 +9,12 @@ toggles:
   fewshot: "off"               # "off" | fixed | knn. 공개 세트 판단 예시(TU-08). 끔 / 고정 / kNN을 3회씩 비교해 순이득이 있을 때만 켠다
   action_from_category: false  # 범주 → action 표 강제. 켜도 answer 쪽으로는 덮지 않음(TU-06). 측정 후 미채택(#82, 11/15 교차 검증 160행 판정 포함 3회, 기준 80.26): 81.14로 분산 안, 낸 범주의 오답은 못 고치고 scaffold → answer 9 → 16
   signals: true                # 결정적 신호 힌트(TU-05)
-  verify: "off"                # off | self | guard. 가드 judge_output 검증(TU-09). 11/14 리더 결정으로 #170(S2.11) 머지 뒤 런박스 켬/끔 3회 비교 전까지 끔: 모의 부하·#170 리뷰 측정에서 지연이 크게 늘고 튜터 5초 제한으로 대부분 건너뛰는데, 건너뛴 호출도 nano는 이미 나간다
+  verify: "off"                # off | guard. 가드 judge_output 검증(TU-09). self(자체 검증)는 만들지 않음(#83, 로드에서 거부). 11/14 리더 결정으로 #170(S2.11) 머지 뒤 런박스 켬/끔 3회 비교 전까지 끔: 모의 부하·#170 리뷰 측정에서 지연이 크게 늘고 튜터 5초 제한으로 대부분 건너뛰는데, 건너뛴 호출도 nano는 이미 나간다
   guard_classify: "off"        # off | serial | parallel. 가드 classify 합치기(TU-10). 11/14 리더 결정으로 verify와 같은 까닭에 같은 비교 전까지 끔(켜면 parallel)
+  jailbreak_needs_signal: false  # classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05)가 없으면 주 호출을 덮지 않는다(TU-10). 11/15 가드 비교에서 오차단이 모두 "수업의 공격 기법을 배우는 정상 질문" → refuse였다. 3회 비교 뒤 정한다
   embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
   rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
-  vote: false                  # action 투표(병렬 3회). 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
+  vote: false                  # action 투표(병렬 3회). 요청당 호출 상한(TU-13)을 넘어 만들지 않음(#83, true는 로드에서 거부)
   cite_top1: true              # 인용이 있는데 검색 1위 섹션이 빠졌으면 1위를 뒤에 더한다(TU-07). 켜면 인용이 max_citations + 1개까지. 11/15 런박스 짝 비교(같은 답의 끔·켬)로 켬: 판정 없이 인용 F1 +0.034·+0.024, 판정 포함 튜터 +0.31점·충실 하락 0
   scaffold_state_rule: false   # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다(숨김에서는 delegation_override로 켠다). 11/14 측정으로 숨김(전체 이득 없음, 과제 대행 행 0점 증가). T3에서 운영진 답(§11-1-4)과 함께 다시 본다
   delegation_override: false   # 대행 신호(TU-05 DELEGATION)가 잡히면 주 호출의 answer·scaffold를 academic 고정 scaffold로 바꾼다(숨김에서도, 주 호출 실패 기본값 포함, TU-06). abstain·더 강한 action은 그대로, 위기·지시 무력화 신호나 classify 위기·공격 범주가 있으면 덮지 않음. 기본 끔. 켜기 전 조건은 PRD TU-06(교재 인용 오탐 예외, 행 단위 짝 계산)

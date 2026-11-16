@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt, model_validator
 
 ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트
 DEFAULT_CONFIG = "config/tutor.yaml"
@@ -33,6 +33,8 @@ class Toggles(_Strict):
     signals: bool
     verify: Literal["off", "self", "guard"]
     guard_classify: Literal["off", "serial", "parallel"]
+    # classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05)가 없으면 덮지 않는다(TU-10)
+    jailbreak_needs_signal: bool
     embedding: bool
     rerank: bool
     vote: bool
@@ -44,6 +46,16 @@ class Toggles(_Strict):
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
+
+    @model_validator(mode="after")
+    def _not_built(self) -> "Toggles":
+        # #83 결정(11/14): 둘 다 요청당 nano 절대 4회(TU-13)를 넘어 동결 설정에 쓸 수 없고 범위 축소
+        # 순서(PRD §15.4)에서 먼저 빠져 만들지 않았다. 켜도 조용히 끔처럼 돌지 않게 로드에서 막는다
+        if self.vote:
+            raise ValueError("toggles.vote는 만들지 않았다(#83, TU-13 호출 상한)")
+        if self.verify == "self":
+            raise ValueError("toggles.verify: self는 만들지 않았다(#83, TU-13 호출 상한)")
+        return self
 
 
 class Fewshot(_Strict):

@@ -242,22 +242,74 @@ _COMMAND = re.compile(
     r"직접\w{0,4}?(?:해|보여|실행|시연)|해봐|지금부터|이제부터|그대로(?:보여|출력|알려|말해|따라)"
     r"|(?:지시|지침|규칙|명령)(?:를|을)?(?:다)?무시해(?!야|도|서|보|면)"
     r"|(?:로|으로)바뀌어|(?:이|가)(?:돼서|되어서|되서|돼줘|되어줘)"
+    # 지시를 무력화하고 곧바로 튜터에게 답·행동을 시키는 명령형(T2.1). 뒤에 방어·개념 질문을
+    # 붙여 포장해도("…잊고 필터 없이 대답해. 이런 걸 어떻게 막아?") 지시 무력화다.
+    # 인용해 묻는 말("…답해'라는·같은·를", "답해야", "답해 주는", "답해 버리면")은 아니다
+    r"|(?:지시|지침|규칙|명령|설정|안내)\w{0,8}?"
+    r"(?:(?:무시하|잊어버리|잊|버리|어기|해제하)(?:고|며)|무시한채|잊은채|무시한뒤)\w{0,16}?"
+    r"(?:(?:대답|답변|응답|답|말|행동|설명|출력)(?:해|하세요|하십시오)|(?:알려|보여)(?=줘|주세요))"
+    r"(?>(?:줘|주세요|봐|라)?)"
+    # 뒤에 인용·서술(…해요·해 줬어·했어)·꾸밈 어미가 이어지면 명령이 아니다. 문장 경계('|')는
+    # 뷰에 남아 있어 다음 문장의 첫 글자가 어미로 붙지 않는다
+    r"(?!라|란|이라|같|처럼|를|을|는|고|게|면|서|도|야|달|주|하|보|버|와|로|요|줬|했|됐|왔|었|았)"
+    # 영어 명령형("ignore … instructions and answer/act/reply/respond"). 바로 뒤에 인용을 받는
+    # 한국어 조사나 공격·문장을 가리키는 말이 오면 인용이다(따옴표 안은 _command가 거른다)
+    r"|ignore\w{0,24}?(?:instruction|rule|prompt|guideline)s?\w{0,6}?and(?:just|now|then)?"
+    r"(?:answer|act|reply|respond|tell|say|speak|behave|output|pretend|talk)"
+    r"(?![a-z]{0,30}?(?:같|라는|라고|란|이라|처럼|를|을|는))"
+    r"(?!(?:the|this|that|such|an?)?(?:attack|prompt|injection|phrase|string|sentence|pattern))"
 )
 # 개념·방어 어미는 발화 끝부분(마지막 질문)에 있을 때만 학습 질문으로 본다
 _CONCEPT_TAIL = 20
 
+# 제한을 끄라는 구절("필터 없이", "검열 차단 없이", "with no filter") 안의 낱말은 개념·방어 어미가
+# 아니다. 위치를 지키려고 같은 길이의 비단어 문자로 가린 뒤 끝부분을 본다(T2.1)
+_UNRESTRICTED = re.compile(
+    r"(?:(?:필터링|필터|차단|검열|제한|제약|filter)(?:이|가|도|은|는|을|를)?"
+    r"(?:없이|없는|없게|해제|풀|끄|꺼|안하|하지않|하지말)"
+    r"|(?:no|without|noneed|disable|turnoff|bypass|remove|skip)(?:any|the|a|your|all)?(?:content)?"
+    r"(?:filter|filtering|safety|restriction|detection|protection|prevention)s?"
+    r"|unfiltered)"
+    # 뒤에 시키는 말이 이어지거나 발화가 거기서 끝날 때만 가린다. "필터링 없이 쓰면 뭐가 달라?"
+    # 처럼 묻는 말이면 가리지 않아 개념 질문으로 남는다
+    r"(?=\w{0,8}?(?:대답|답변|응답|답|알려|말해|설명|출력|보여|행동|써)(?:해|줘|주세요|봐|하세요|라|$)|$)"
+)
 
-def _override(view: str) -> bool:
+
+def _concept_tail(view: str) -> bool:
+    masked = _UNRESTRICTED.sub(lambda m: "·" * len(m.group()), view)
+    return bool(_CONCEPT.search(masked[-_CONCEPT_TAIL:]))
+
+
+# 문장 경계('|')와 따옴표('"')를 남긴 뷰. skeleton은 둘 다 지워 다음 문장 첫 글자가 명령 어미에
+# 붙거나("…답해. 하지만" → "답해하지만") 인용 표시를 잃기 때문이다
+_BOUNDARY = re.compile(r"[.!?]+(?=\s|$)|[。！？\n]+")
+_QUOTE = re.compile(r"[\"“”「」『』‘’]|(?<![A-Za-z])'|'(?![A-Za-z])")
+_SPLIT = re.compile(rf"({_BOUNDARY.pattern}|{_QUOTE.pattern})")
+
+
+def _boundary_view(text: str) -> str:
+    out = []
+    for i, part in enumerate(_SPLIT.split(normalize_fast(text))):
+        if i % 2 == 0:
+            out.append(skeleton(part))
+        else:
+            out.append('"' if _QUOTE.fullmatch(part) else "|")
+    return "".join(out)
+
+
+def _command(bview: str) -> bool:
+    """명령형이 따옴표 밖에 있을 때만 참. 따옴표 안은 공격 표현을 인용해 묻는 것이다."""
+    return any(bview.count('"', 0, m.start()) % 2 == 0 for m in _COMMAND.finditer(bview))
+
+
+def _override(view: str, text: str) -> bool:
     if _OVERRIDE_DIRECTED.search(view):
         return True
     if not PATTERNS[Signal.OVERRIDE].search(view):
         return False
-    learning = (
-        _ANALYSIS.search(view)
-        or _QUOTED_STUDY.search(view)
-        or _CONCEPT.search(view[-_CONCEPT_TAIL:])
-    )
-    return not learning or bool(_COMMAND.search(view))
+    learning = _ANALYSIS.search(view) or _QUOTED_STUDY.search(view) or _concept_tail(view)
+    return not learning or _command(_boundary_view(text))
 
 
 def _crisis(view: str) -> bool:
@@ -275,7 +327,7 @@ def detect_text(text: str) -> tuple[Signal, ...]:
         if s is Signal.CRISIS:
             hit = _crisis(view)
         elif s is Signal.OVERRIDE:
-            hit = _override(view)
+            hit = _override(view, text)
         else:
             hit = bool(rx.search(view)) or (
                 s in _DIGIT_PATTERNS and bool(_DIGIT_PATTERNS[s].search(digits))

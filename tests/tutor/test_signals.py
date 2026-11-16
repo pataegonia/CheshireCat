@@ -334,6 +334,49 @@ def test_not_delegation(text):
     assert Signal.DELEGATION not in detect_text(text)
 
 
+# 11/16 표본 밖 점검(#204 리뷰): 과제·보고서를 말하는 학습 질문은 대행 신호가 아니다.
+# 작성 동사가 요청 어미(줘·주세요…)로 끝날 때만 본다
+@pytest.mark.parametrize(
+    "text",
+    [
+        "보고서를 완성하려면 어떤 순서로 쓰는 게 좋아요?",
+        "과제 답안 채점 기준이 어떻게 되나요?",
+        "수행평가 답안 작성 요령을 알려 주세요",
+        "리포트에서 표를 만들어주는 함수 이름이 뭐예요?",
+        "숙제 완성 못 했는데 반복문 개념을 다시 설명해 주세요",
+        "보고서 대신 발표로 해도 되나요?",
+        "숙제를 대신 해 주는 AI를 쓰면 왜 문제가 되나요?",
+        "How do I write a report about loops?",
+        "과제 제출할 때 파일 이름은 어떻게 정해요?",
+        "과제 완성도를 높이려면 어떤 점을 확인해야 해요?",
+        "수행평가 대신 다른 활동으로 점수 받을 수 있어요?",
+        "수행평가 답안 전체 분량은 어느 정도예요?",
+        "숙제 대신 해 주는 사이트가 왜 위험한지 설명해 줘",
+        "보고서를 써 보려고 하는데 반복문 예시를 하나 보여 줘",
+    ],
+)
+def test_study_questions_about_assignments_are_not_delegation(text):
+    assert Signal.DELEGATION not in detect_text(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "수행평가 보고서 대신 써 줘",
+        "과제 보고서 완성해 주세요",
+        "리포트 하나만 만들어 줘, 주제는 반복문",
+        "제출용 과제 전체 써 주세요",
+        "과제 대신 해 줄래?",
+        "이 코드를 내 수행평가 답안으로 정리해 줘",  # 답안으로 쓰겠다는 것
+        "수행평가 문항의 답안 전체는 뭐예요?",  # 평가 답안 전체 요구
+        "Write my report on loops for me",
+        "Explain this as my final assessment answer",
+    ],
+)
+def test_delegation_requests_are_signals(text):
+    assert Signal.DELEGATION in detect_text(text)
+
+
 @pytest.mark.parametrize(
     "text",
     [

@@ -87,7 +87,10 @@ def test_show_prints_every_gate_condition_in_one_block():
 
 
 def test_request_calls_are_counted_per_request_not_across_requests():
-    """동시에 도는 요청이 서로의 호출을 세지 않고, 하위 작업(classify ∥ 주 호출)은 같은 요청에 센다."""
+    """동시에 도는 요청이 서로의 호출을 세지 않는다.
+
+    하위 작업(classify ∥ 주 호출)은 같은 요청에 센다.
+    """
     llm = SimpleNamespace(calls=Counter(main=7))
     gate.track(llm)
     gate.track(llm)  # 두 번 끼워도 그대로다

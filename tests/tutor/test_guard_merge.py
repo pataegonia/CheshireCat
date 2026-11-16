@@ -443,7 +443,8 @@ def test_gate_classified(classified, signals, needs_signal, expected):
 
 def test_gated_jailbreak_without_signal_keeps_main_answer():
     guard = FakeGuard("jailbreak_injection")
-    resp = run(build(guard, **GATED), LEARN_INJECTION)
+    # cite_top1(main 기본 켬)은 검색 1위를 더하므로, 주 호출 인용이 남는지만 보려고 끈다
+    resp = run(build(guard, **GATED, **{"toggles.cite_top1": False}), LEARN_INJECTION)
     assert resp["action"] == "answer"
     assert resp["citations"] == ["PY-01-01"]
     # 주 호출 문장이 나가므로 judge_output을 부르고, 범주는 주 호출 것(normal)이다

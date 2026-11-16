@@ -317,6 +317,42 @@ def test_delegation_guard_runs_before_merge(classified):
     assert guard.judge_calls == []
 
 
+@pytest.mark.parametrize(
+    "classified", ["normal", "jailbreak_injection", "harmful_content", "off_topic"]
+)
+def test_delegation_override_also_runs_before_merge(classified):
+    # TU-06 delegation_override: 숨김에서도 대행 보정이 합치기 앞이다. classify가 공격 범주여도
+    # 보정된 academic 고정 문장을 덮지 않고(규칙 1), judge_output도 부르지 않는다(#139 설계와 같음)
+    guard = FakeGuard(classified)
+    state = build(
+        guard,
+        out(category="normal", action="answer", sentences=[GOOD]),
+        **{"toggles.delegation_override": True},
+    )
+    resp = run(state, DELEGATION_ASK)
+    assert resp == {
+        "answer": TEXT[Fixed.SCAFFOLD_ACADEMIC],
+        "action": "scaffold",
+        "citations": [],
+    }
+    assert guard.judge_calls == []
+
+
+@pytest.mark.parametrize("classified", ["jailbreak_injection", "harmful_content", "off_topic"])
+def test_failure_default_puts_delegation_before_attack_classify(classified):
+    # 주 호출 실패 기본값도 성공 경로와 같은 순서다: 대행 보정(켬)이 classify 공격 범주보다 먼저
+    guard = FakeGuard(classified)
+    state = build(guard, llm=FakeLLM(error="timeout"), **{"toggles.delegation_override": True})
+    assert run(state, DELEGATION_ASK) == {
+        "answer": TEXT[Fixed.SCAFFOLD_ACADEMIC],
+        "action": "scaffold",
+        "citations": [],
+    }
+    # 끄면 예전대로 classify 공격 범주의 고정 문장
+    off = build(FakeGuard(classified), llm=FakeLLM(error="timeout"))
+    assert run(off, DELEGATION_ASK)["answer"] != TEXT[Fixed.SCAFFOLD_ACADEMIC]
+
+
 @pytest.mark.parametrize("value", ["?", "Normal", 3, None, ["jailbreak_injection"]])
 def test_classify_value_outside_category_is_dropped(value):
     guard = FakeGuard(value)

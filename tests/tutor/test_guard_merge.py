@@ -509,6 +509,86 @@ def test_classify_time_limit_is_cut_to_the_request_deadline():
     assert resp["action"] == "answer"
 
 
+class SlowLLM(FakeLLM):
+    """주 호출이 `delay`초 걸리는 가짜 LLM(A-5: 주 호출이 classify 최소 창보다 길 때)."""
+
+    def __init__(self, parsed=None, delay=0.0, error=None):
+        super().__init__(parsed, error)
+        self.delay = delay
+
+    async def complete(self, role, messages, schema, **kw):
+        await asyncio.sleep(self.delay)
+        return await super().complete(role, messages, schema, **kw)
+
+
+def test_parallel_classify_past_its_window_is_used_while_main_call_runs():
+    # A-5: 최소 창(0.1초)을 넘겨도 주 호출(0.3초)보다 먼저 끝난 classify(0.2초)는 쓴다
+    guard = FakeGuard("jailbreak_injection", classify_delay=0.2)
+    llm = SlowLLM(out(sentences=[GOOD]), 0.3)
+    state = build(guard, llm=llm, **{"llm.timeout_s.classify": 0.1})
+    resp = run(state)
+    assert resp["answer"] == TEXT[Fixed.REFUSE_JAILBREAK]
+    assert not guard.cancelled
+    assert state.guard_skips == GuardSkips()
+
+
+def test_parallel_classify_stops_when_main_call_ends_without_adding_latency():
+    # 주 호출(0.3초)이 끝나면 여유(0.05초) 뒤 멈춘다: 사유 main_done, 요청 지연은 주 호출만큼
+    guard = FakeGuard("jailbreak_injection", classify_delay=5.0)
+    llm = SlowLLM(out(sentences=[GOOD]), 0.3)
+    state = build(guard, llm=llm, **{"llm.timeout_s.classify": 0.1})
+    resp, elapsed = run_timed(state, 30.0)
+    # 주 호출만큼은 걸리고(타이머가 시계 해상도만큼 일찍 깰 수 있어 0.25), classify 5초는 기다리지 않는다
+    assert 0.25 <= elapsed < 0.3 + 0.3
+    assert resp["action"] == "answer"
+    assert guard.cancelled
+    assert state.guard_skips == GuardSkips({("classify", "main_done"): 1})
+
+
+def test_parallel_classify_after_window_still_feeds_main_call_failure_default():
+    # 주 호출이 창 뒤에 실패해도 그 전에 끝난 classify의 공격 범주로 고정 문장(TU-12)
+    guard = FakeGuard("jailbreak_injection", classify_delay=0.2)
+    llm = SlowLLM(delay=0.3, error="timeout")
+    resp = run(build(guard, llm=llm, **{"llm.timeout_s.classify": 0.1}))
+    assert resp["answer"] == TEXT[Fixed.REFUSE_JAILBREAK]
+
+
+def test_parallel_classify_stops_when_main_call_fails_late():
+    guard = FakeGuard("jailbreak_injection", classify_delay=5.0)
+    llm = SlowLLM(delay=0.3, error="timeout")
+    state = build(guard, llm=llm, **{"llm.timeout_s.classify": 0.1})
+    resp, elapsed = run_timed(state, 30.0)
+    assert elapsed < 0.3 + 0.3
+    assert resp["action"] == "clarify"  # 잠정 기본값(fallback_action)
+    assert guard.cancelled
+    assert state.guard_skips == GuardSkips({("classify", "main_done"): 1})
+
+
+def test_parallel_classify_call_still_ends_at_the_request_deadline():
+    # 병렬 classify 호출 자체의 제한은 요청 마감이다: 마감(0.25초)에 끊기고 한 번만 센다
+    guard = FakeGuard("jailbreak_injection", classify_delay=30.0)
+    state = build(guard, llm=SlowLLM(out(sentences=[GOOD]), 0.4))
+    resp, elapsed = run_timed(state, 0.25)
+    assert elapsed < 0.4 + 0.2  # 가짜 주 호출은 마감을 모르고 0.4초 걸린다
+    assert guard.cancelled
+    assert resp["action"] == "answer"
+    classify_skips = {k: n for k, n in state.guard_skips.items() if k[0] == "classify"}
+    assert classify_skips == {("classify", "timeout"): 1}
+
+
+def test_serial_classify_is_still_cut_at_its_limit():
+    # 직렬(ⓐ)은 주 호출 앞에서 기다리므로 최소 창이 곧 제한이다(0.1초에서 끊고 주 호출로)
+    guard = FakeGuard("jailbreak_injection", classify_delay=0.2)
+    llm = SlowLLM(out(sentences=[GOOD]), 0.3)
+    serial = {"llm.timeout_s.classify": 0.1, "toggles.guard_classify": "serial"}
+    state = build(guard, llm=llm, **serial)
+    resp = run(state)
+    assert resp["action"] == "answer"  # 끊긴 classify 범주(jailbreak)는 쓰지 않는다
+    assert guard.cancelled
+    assert len(llm.calls) == 1
+    assert state.guard_skips == GuardSkips({("classify", "timeout"): 1})
+
+
 def test_guard_without_classify_is_skipped_silently():
     # 가드 구현이 아직 classify·judge_output을 내지 않을 때(상수 판정기 등): 주 호출 결과만 쓴다
     class OnlyJudge:

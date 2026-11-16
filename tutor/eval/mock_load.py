@@ -24,7 +24,8 @@
   단계를 끈다(11/14 리더 결정, S2.11 뒤 런박스 켬/끔 비교 전까지). 그래서 기본 실행은 두 단계 없이
   재고, 켠 경로는 켠 설정 파일을 TUTOR_CONFIG로 주어 잰다(요약의 가정 줄에 켬·끔이 나온다).
   시간 제한은 튜터 설정(timeout_s.classify·verify, 부른 때부터 게이트 대기 포함)이고, 넘으면
-  튜터가 그 단계만 건너뛴다(state.guard_skips에 timeout으로 센다)
+  튜터가 그 단계만 건너뛴다(state.guard_skips에 timeout으로 센다). 병렬 classify의 제한은 최소
+  창이라 주 호출이 더 길면 그 끝까지 기다리고, 그때 멈춘 것은 main_done으로 센다(A-5)
 - 가짜 가드는 튜터 LLM과 같은 게이트를 쥔다. 이는 가드에 LLM 판정기가 붙은 구성의 가정이다(그때
   튜터가 가드 LLM의 slot()을 같이 쓴다). 지금 루트 app.py는 LLM이 없는 가드 기본 판정기라,
   배포 서버에서는 튜터가 같은 크기(llm.gate)의 자기 게이트를 따로 쓰고 가드는 LLM을 부르지 않는다
@@ -358,7 +359,8 @@ class Report:
     judge_output_on: bool
     classify_calls: int  # 튜터가 부른 가드 classify 수
     judge_output_calls: int  # 튜터가 부른 가드 judge_output 수
-    # 튜터 가드 단계 건너뜀(state.guard_skips): ("단계 사유", 수). 사유는 timeout·no_time 등
+    # 튜터 가드 단계 건너뜀(state.guard_skips): ("단계 사유", 수).
+    # 사유는 timeout·no_time·main_done 등
     guard_skips: tuple[tuple[str, int], ...]
     schemas: tuple[tuple[str, int], ...]  # 튜터 전송의 응답 스키마별 수
     gate_entries: tuple[tuple[str, int], ...]  # 게이트에 들어간 수(역할별)
@@ -644,7 +646,8 @@ def _failures(report: Report, bar: Bar, t50: float, t95: float) -> list[str]:
         ),
         # 튜터가 가드 단계를 없음·오류·형식 밖으로 건너뛰었으면 가짜 가드가 서버와 다르게
         # 답한 것이다.
-        # 시간 초과·남은 시간 없음(timeout·no_time)은 튜터 설계대로라 실패로 보지 않는다
+        # 시간 초과·남은 시간 없음·주 호출 끝(timeout·no_time·main_done)은 튜터 설계대로라
+        # 실패로 보지 않는다
         (
             "가드 단계 건너뜀(missing·error·invalid)",
             any(name.split()[-1] in BAD_SKIPS for name, _n in report.guard_skips),

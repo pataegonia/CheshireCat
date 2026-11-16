@@ -34,6 +34,7 @@ from guardrail.schema import OutputVerdict
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
 from tutor.answer import postprocess
+from tutor.answer.quote import material_quote
 from tutor.answer.templates import (
     NOT_IN_MATERIAL_NOTE,
     TEXT,
@@ -179,8 +180,17 @@ def delegation_guard(
     return out.model_copy(update={"category": "academic_dishonesty", "action": action})
 
 
+# 자료 인용 답을 내는 classify 결과(None은 classify 끔·실패). 그 밖의 범주는 지금 기본값을 둔다:
+# answer_seeking은 정답을 밝히게 되고, out_of_material·low_signal_input은 answer가 맞지 않는다
+_QUOTE_CLASSIFIED: frozenset[str | None] = frozenset({None, "normal"})
+
+
 def fallback_body(
-    signals: Sequence[Signal] = (), classified: str | None = None, *, delegation: bool = False
+    signals: Sequence[Signal] = (),
+    classified: str | None = None,
+    *,
+    delegation: bool = False,
+    quote: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """주 호출 실패(재시도 후)·예산 초과의 기본 응답(TU-12).
 
@@ -188,7 +198,9 @@ def fallback_body(
     그다음 classify가 공격 4범주였으면 그 범주의 고정 문장(TU-10, 공격 재현율은 classify 단독 이상).
     주 호출 결과가 없으니 classify를 쓰지 않을 이유가 없다.
     `delegation`(`toggles.delegation_override`)이 켜져 있고 대행 신호가 잡히면 academic 고정
-    scaffold다(TU-06). 성공 경로의 대행 덮기와 같은 순서다(`_delegation_wins`). 그 밖에는 공유 설정
+    scaffold다(TU-06). 성공 경로의 대행 덮기와 같은 순서다(`_delegation_wins`).
+    `quote`(`toggles.fallback_quote`, 검색 1위 섹션의 자료 인용 답)가 있고 신호가 하나도 없으며
+    classify가 normal이거나 없으면 그 답을 낸다(#201 A-2). 그 밖에는 공유 설정
     `fallback_action`(잠정 clarify)의 고정 문장. 위기가 먼저다(PRD §3 우선순위).
     """
     if Signal.CRISIS in signals or classified == "emotional_distress":
@@ -200,6 +212,8 @@ def fallback_body(
         return fixed_body(attack)
     if delegation and _delegation_wins(signals, classified):
         return fixed_body(Fixed.SCAFFOLD_ACADEMIC)
+    if quote is not None and not signals and classified in _QUOTE_CLASSIFIED:
+        return quote
     action = FALLBACK_ACTION
     return {"answer": empty_answer(action), "action": action, "citations": []}
 
@@ -333,8 +347,18 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다
         if draft.out is None:
+            quote = (
+                material_quote(draft.sections, conv.search_query()[0])
+                if cfg.toggles.fallback_quote
+                else None
+            )
             return tutor_post(
-                fallback_body(signals, classified, delegation=cfg.toggles.delegation_override)
+                fallback_body(
+                    signals,
+                    classified,
+                    delegation=cfg.toggles.delegation_override,
+                    quote=quote,
+                )
             )
     finally:
         if classify is not None:

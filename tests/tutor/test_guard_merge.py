@@ -360,6 +360,18 @@ def test_classify_attack_wins_over_delegation_override(mode, classified, kind):
     assert run(state, DELEGATION_ASK)["answer"] == TEXT[kind]
 
 
+def test_delegation_override_ignores_jailbreak_classify_dropped_by_needs_signal():
+    # jailbreak_needs_signal: 신호 없는 jailbreak classify는 합치기에서 버린다. 덮기도 같은 범주를
+    # 봐야 한다(버린 classify에 양보하면 덮기도 합치기도 안 걸려 주 호출 answer가 나간다)
+    guard = FakeGuard("jailbreak_injection")
+    state = build(
+        guard,
+        out(category="normal", action="answer", sentences=[GOOD]),
+        **{"toggles.delegation_override": True, "toggles.jailbreak_needs_signal": True},
+    )
+    assert run(state, DELEGATION_ASK)["answer"] == TEXT[Fixed.SCAFFOLD_ACADEMIC]
+
+
 def test_classify_emotional_distress_stops_delegation_override():
     # classify 위기 범주도 덮기보다 앞이다. 병렬 합치기는 위기 범주를 쓰지 않으므로 주 호출 결과
     guard = FakeGuard("emotional_distress")

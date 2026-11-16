@@ -24,17 +24,17 @@
 
 <!-- /tutor lane -->
 <rect x="50" y="185" width="880" height="470" rx="8" class="lane" stroke="#3b6fd6"/>
-<text x="65" y="208" class="h" fill="#3b6fd6">POST /tutor — tutor/ (튜터 A · B) + integration/ (통합) · nano 3회(생성 경로) · 2회(고정 문장 경로)</text>
+<text x="65" y="208" class="h" fill="#3b6fd6">POST /tutor — tutor/ (튜터 A · B) + integration/ (통합) · nano 1회(기본: 주 호출만) · 가드 단계를 켜면 3회</text>
 
-<text x="80" y="232" class="sm">① 검색(ms) → 주 호출, 그와 동시에 가드 classify (v1 = 병렬안 ⓒ, 동결값은 11/18 측정)</text>
+<text x="80" y="232" class="sm">① 검색(ms) → 주 호출. 가드 classify 병렬 · ③ 출력 판정은 구현됨, 기본 끔(11/14 결정)</text>
 <rect x="70" y="240" width="250" height="78" rx="6" class="box t"/>
 <text x="195" y="262" text-anchor="middle" class="h">retrieve (튜터 B)</text>
-<text x="195" y="282" text-anchor="middle" class="sm">BM25 상위 5개 · KbIndex 공유(예정)</text>
+<text x="195" y="282" text-anchor="middle" class="sm">BM25 상위 5개 · 가드 KbIndex 사용</text>
 <text x="195" y="300" text-anchor="middle" class="sm">→ 섹션 top-k (Section)</text>
 
 <rect x="350" y="240" width="300" height="78" rx="6" class="box t"/>
 <text x="500" y="262" text-anchor="middle" class="h">주 호출 (튜터 A)</text>
-<text x="500" y="282" text-anchor="middle" class="sm">근거 묶음 + kNN few-shot → 범주 · action · 답</text>
+<text x="500" y="282" text-anchor="middle" class="sm">근거 묶음 + 신호 힌트 → 범주 · action · 답</text>
 <text x="500" y="300" text-anchor="middle" class="sm">→ list[Sentence] (문장 + sid · quote) · nano 1</text>
 
 <rect x="670" y="240" width="240" height="78" rx="6" class="box g"/>
@@ -77,14 +77,14 @@
 
 <rect x="70" y="538" width="840" height="102" rx="6" fill="#fff" stroke="#999"/>
 <text x="85" y="559" class="h">시간 · 계약</text>
-<text x="85" y="579" class="sm">예산 = request.app.state.cfg.budget_s (가드 설정 20s) · 주 호출 ≤15s · nano 1회 p50 4~4.5s(실측) · 판정 생략/실패 → 답과 action 그대로</text>
+<text x="85" y="579" class="sm">예산 = request.app.state.cfg.budget_s (가드 설정 20s) · 주 호출 ≤18s · 출력 ≤2,000토큰 · 주 호출 p50 5.2~5.9s · 판정 생략/실패 → 답과 action 그대로</text>
 <text x="85" y="599" class="sm">integration/contracts.py: Section{id, subject, title, text, tables, names} · Evidence{sid, quote} · Sentence{text, kind, evidence} · TutorResult · Action 7종</text>
 <text x="85" y="619" class="sm">가드 interface: Guard.classify · decision_of · judge_output(category=) · KbIndex · llm.slot() / probe 결과 · Category (가드 schema에서 import)</text>
 <text x="85" y="634" class="sm">생성 실패 기본 action = fallback_action (튜터 TU-12 주인, 잠정 clarify)</text>
 
 <!-- /guard lane -->
 <rect x="960" y="185" width="490" height="470" rx="8" class="lane" stroke="#2e8b57"/>
-<text x="975" y="208" class="h" fill="#2e8b57">POST /guard — guardrail/ (가드) · nano 2회 병렬</text>
+<text x="975" y="208" class="h" fill="#2e8b57">POST /guard — guardrail/ (가드) · nano 최대 3회</text>
 
 <rect x="990" y="225" width="430" height="70" rx="6" class="box g"/>
 <text x="1205" y="248" text-anchor="middle" class="h">router /guard · check_token (모든 라우트 공통)</text>
@@ -132,7 +132,7 @@
 <text x="415" y="734" text-anchor="middle" class="h">KbIndex</text>
 <text x="415" y="754" text-anchor="middle" class="sm">competition/kb 48섹션(md + CSV)</text>
 <text x="415" y="770" text-anchor="middle" class="sm">BM25 문자 2-gram</text>
-<text x="415" y="786" text-anchor="middle" class="sm">가드 #129 · 그 전엔 튜터 임시 색인</text>
+<text x="415" y="786" text-anchor="middle" class="sm">가드 #129 · 튜터도 같은 클래스 사용</text>
 <rect x="550" y="710" width="250" height="88" rx="6" class="box s"/>
 <text x="675" y="734" text-anchor="middle" class="h">LLM 게이트 (guard.llm)</text>
 <text x="675" y="754" text-anchor="middle" class="sm">세마포어 64 · 재시도 1 · 오류는 코드로</text>
@@ -152,7 +152,7 @@
 <!-- 외부 API -->
 <rect x="400" y="868" width="700" height="50" rx="6" class="box"/>
 <text x="750" y="890" text-anchor="middle" class="h">운영진 API (팀 키 1개)</text>
-<text x="750" y="908" text-anchor="middle" class="sm">gpt-5-nano · text-embedding-3-small — 채점 1회 ≈ nano 1,210회(튜터 ≈780 + 가드 ≈430), 약 90s(추정)</text>
+<text x="750" y="908" text-anchor="middle" class="sm">gpt-5-nano · text-embedding-3-small — 채점 1회 ≈ nano 750회(튜터 ≈300 + 가드 ≈450, 추정) · 실제 제출 채점 51.9s · 64.4s</text>
 <path d="M670 814 L670 868" class="ar"/><text x="560" y="846" class="sm">게이트 통해서만</text>
 <path d="M830 868 L830 814" class="ar"/>
 

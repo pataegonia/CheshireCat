@@ -106,7 +106,16 @@ def responder(category="normal", output=GROUNDED, input_step=None, output_step=N
         if kw["messages"] == PING:
             return Ok()
         if _role(kw) == "input":
-            return input_step or Ok(json.dumps({"evidence": "e", "category": category}))
+            return input_step or Ok(
+                json.dumps(
+                    {
+                        "evidence": "e",
+                        "makes_offcourse_output": False,
+                        "makes_work_to_submit": False,
+                        "category": category,
+                    }
+                )
+            )
         return output_step or Ok(json.dumps(output, ensure_ascii=False))
 
     return respond
@@ -189,7 +198,16 @@ def jb_responder(*check_steps):
             return Ok()
         role = _role(kw)
         if role == "input":
-            return Ok(json.dumps({"evidence": "e", "category": "jailbreak_injection"}))
+            return Ok(
+                json.dumps(
+                    {
+                        "evidence": "e",
+                        "makes_offcourse_output": False,
+                        "makes_work_to_submit": False,
+                        "category": "jailbreak_injection",
+                    }
+                )
+            )
         if role == "jb_check":
             return next(steps)
         return Ok(json.dumps(GROUNDED))
@@ -960,7 +978,7 @@ async def test_request_without_candidate_has_no_output_on_every_default_path(no_
     [
         (BASELINE, "output_judge_baseline.md", True),
         (DEFAULT, "output_judge_en.md", True),
-        (DEFAULT, "input_judge_en.md", True),
+        (DEFAULT, "input_judge_en_flags.md", True),
         (BASELINE, "output_judge_en.md", False),  # 그 모드가 쓰지 않는 프롬프트는 읽지 않는다
         (DEFAULT, "output_judge_baseline.md", False),
     ],

@@ -11,7 +11,7 @@ import time
 import unicodedata
 
 import pytest
-from fakes import BadRequest, FakeClock, FakeLLM, Ok, Timeout
+from fakes import BadRequest, FakeClock, FakeLLM, Ok, Timeout, input_reply
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -46,7 +46,7 @@ def _model_env(request, monkeypatch):
 
 
 def ok(category: str = "normal") -> Ok:
-    return Ok(f'{{"evidence": "e", "category": "{category}"}}')
+    return Ok(input_reply(category))
 
 
 def make(*steps, cfg=CFG):
@@ -447,7 +447,7 @@ async def test_returns_category():
 
 
 async def test_invalid_category_is_none_after_one_retry():
-    bad = Ok('{"evidence": "e", "category": "spam"}')
+    bad = Ok(input_reply("spam"))
     out, fake = await run([U("q")], "q", (), bad, bad)
     assert out is None
     assert len(fake.requests) == 2  # 호출 1 + 재시도 1

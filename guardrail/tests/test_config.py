@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.6"
+    assert cfg.version == "6.0.7"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -61,7 +61,7 @@ def test_default_loads_section_4_4_model():
         "off_topic",
     ]
     assert cfg.prompts == {  # S2.6·S2.7
-        "input_judge": "input_judge_en.md",  # R14-D9 채택
+        "input_judge": "input_judge_en_flags.md",  # R14-D9 영어판, S3.8 flags 모드
         "output_judge": "output_judge_en.md",
         "output_judge_baseline": "output_judge_baseline.md",
         "jb_check": "jb_check_en.md",  # S3.3, input.jb_check가 켜졌을 때만 쓴다

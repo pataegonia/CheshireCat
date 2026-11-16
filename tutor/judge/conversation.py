@@ -29,6 +29,7 @@ MAX_WINDOW_CHARS = 4000  # 창의 대화 부분 상한(정규화본 기준)
 MAX_HIDDEN_CHARS = 500  # 풀어 쓴 숨긴 문자 상한
 CUT_MARK = " …(중략)… "
 MIN_KEEP = 40  # 줄일 때 남기는 최소 글자 수(앞뒤 합)
+ANCHOR_TURNS = 4  # 단원 닻 질의에 쓰는 앞 대화 발화 수(학습자 + 튜터, TU-03)
 
 # --- 태그 문자(숨긴 문자) ---
 
@@ -169,6 +170,22 @@ class Conversation:
             t.text for t in self.window if t.role == "user" and not t.is_button and not t.is_target
         )
         return self.target, history
+
+    def anchor_turns(self) -> tuple[str, ...]:
+        """단원 닻 질의용 앞 대화(TU-03, `toggles.anchor_unit`): 창 안에서 판단 대상보다 앞의
+        학습자·튜터 발화 끝 4개(오래된 순). 판단 대상과 그 뒤 발화, 역할을 모르는 메시지, 버튼
+        문구는 뺀다(주 검색 `search_query`와 같이 버튼 문구가 단원을 정하지 않게).
+
+        판단 대상이 없거나 앞 대화가 없으면 빈 튜플이다."""
+        target = next((t.index for t in self.window if t.is_target), None)
+        if target is None:
+            return ()
+        earlier = [
+            t.text
+            for t in self.window
+            if t.index < target and t.role != "other" and not t.is_button
+        ]
+        return tuple(earlier[-ANCHOR_TURNS:])
 
 
 def _role(raw: Any) -> Role:

@@ -2,6 +2,7 @@
 
 ① 대화 정리(TU-02)
 ③⑤ 검색 상위 k(TU-03) → 주 호출(TU-06) → 실패면 TU-12 기본값
+   `toggles.anchor_unit`이면 상위 k를 앞 대화 단원 먼저로 다시 줄 세운 순서를 끝까지 쓴다(TU-03)
    표(`config/actions.yaml`)가 template이라고 한 (범주, action)이면 튜터 고정 문장(IN-03)
 ⑦ 그 밖은 통합 결정적 수정 `integration.actions.finalize`(IN-04)
 
@@ -282,6 +283,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
+            anchor_unit=cfg.toggles.anchor_unit,  # 단원 닻(TU-03). 끄면 검색 한 번, 순서 그대로
         )
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다

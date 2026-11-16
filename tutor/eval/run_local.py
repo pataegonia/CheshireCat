@@ -10,6 +10,7 @@
 `--responses` 파일(JSONL, 줄마다 {"id", "response"})을 주면 그 응답(통합 하네스 결과 등)으로
 파일에 있는 행만 잰다(홀드아웃 행은 아래처럼 뺀다). `--cases team`이면 공개 세트 대신 팀 작성
 점검 세트(case_set, 홀드아웃 없음)를 재고 축별 action 정확도·응함을 더 낸다(TU-19).
+`--cases <경로>`가 공개 튜터 행만 담은 파일(target_set)이면 그 행만 공개 세트처럼 잰다(결과 subset).
 
 판정(사실·충실·응함)은 `--judge`를 줄 때만 켠다. 운영진 API를 부르므로 OPENAI_BASE_URL·
 OPENAI_MODEL·OPENAI_API_KEY가 모두 있어야 한다(런박스). 없으면 action·인용만 채점한다.
@@ -46,6 +47,7 @@ evidence_check에 남기고, 정답 범주별 분포와 "칸 false인 answer를 
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -417,6 +419,7 @@ def _write(
     team: Mapping[str, Any] | None = None,
     gate_summary: Mapping[str, Any] | None = None,
     tutor: Mapping[str, Any] | None = None,
+    subset: Mapping[str, Any] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
@@ -450,6 +453,8 @@ def _write(
         }
     if team is not None:
         data["cases"], data["team"] = "team", dict(team)
+    if subset is not None:  # 공개 부분 세트: 파일 이름·잰 행 수·id 묶음 해시(전체 점수와 다른 세트)
+        data["subset"] = dict(subset)
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
     if llm is not None:
@@ -909,13 +914,48 @@ def embedding_summary(use: EmbeddingUse, out: TextIO) -> None:
         out.write(f"질의 임베딩이 예상({use.queries}회)보다 많다: 예상 호출 수 계산을 다시 본다\n")
 
 
+def public_subset(path: str) -> dict[str, Any] | None:
+    """--cases 파일이 공개 튜터 행만 담았으면 부분 세트 정보(파일 이름·id), 공개 행이 없으면 None.
+
+    None이면 점검 세트로 읽는다(case_set). 공개 행과 다른 행이 섞였거나, id가 겹치거나, 줄이
+    공개 파일의 같은 id 행과 다르면 ValueError(행 본문은 메시지에 넣지 않는다).
+    """
+    public = {row["id"]: row for row in public_tutor_rows()}
+    try:
+        rows = [json.loads(line) for _n, line in case_set.read_lines(Path(path))]
+    except ValueError:
+        return None  # 점검 세트 검사가 줄 번호로 알린다
+    ids = [row.get("id") for row in rows if isinstance(row, dict) and row.get("id") in public]
+    if not ids:
+        return None
+    if len(ids) != len(rows):
+        raise ValueError("--cases 파일에 공개 튜터 행과 다른 행이 섞였다")
+    if len(set(ids)) != len(ids):
+        raise ValueError("--cases 파일에 같은 공개 행 id가 두 번 있다")
+    changed = sum(row != public[row["id"]] for row in rows)
+    if changed:
+        raise ValueError(f"--cases 파일의 {changed}행이 공개 세트의 같은 id 행과 다르다")
+    digest = hashlib.sha256("\n".join(sorted(ids)).encode("utf-8")).hexdigest()[:16]
+    return {"file": Path(path).name, "ids": frozenset(ids), "ids_sha256": digest}
+
+
+def _subset_used(subset: Mapping[str, Any] | None, rows: Sequence[Any]) -> dict[str, Any] | None:
+    """결과 JSON의 subset: 파일 이름·id 묶음 해시·잰 행 수(행 id 목록은 남기지 않는다)."""
+    if subset is None:
+        return None
+    return {"file": subset["file"], "ids_sha256": subset["ids_sha256"], "rows": len(rows)}
+
+
 def _measured_rows(
-    ap: argparse.ArgumentParser, fixed: Mapping[str, Any] | None
+    ap: argparse.ArgumentParser,
+    fixed: Mapping[str, Any] | None,
+    subset: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """잴 공개 튜터 행과 뺀 홀드아웃 행 수. 예상 호출 수를 세기 전에 홀드아웃 행을 뺀다.
 
     홀드아웃은 설정을 고정한 뒤 통합 하네스(#61)에서 최대 3회만 본다(TU-16·#84). 로컬 측정이 돌
     때마다 그 행을 보지 않게, 그리고 운영진 API 호출을 아끼게 모든 프리셋과 --responses에서 뺀다.
+    subset(public_subset)이 있으면 그 id의 공개 행만 잰다(행은 공개 파일에서 읽는다).
     """
     public = public_tutor_rows()
     try:
@@ -923,9 +963,16 @@ def _measured_rows(
     except ValueError as exc:
         ap.error(str(exc))
     rows = public if fixed is None else [row for row in public if row["id"] in fixed]
+    if subset is not None:
+        rows = [row for row in rows if row["id"] in subset["ids"]]
     measured = [row for row in rows if row["id"] not in held]
     excluded = len(rows) - len(measured)
     sys.stdout.write(f"홀드아웃 {excluded}행은 재지 않는다(통합 하네스에서 최대 3회, TU-16·#84)\n")
+    if subset is not None:
+        shown = f"공개 부분 세트 {subset['file']}: 공개 튜터 행 {len(measured)}개를 잰다\n"
+        sys.stdout.write(shown)
+        if not measured:
+            ap.error("공개 부분 세트에 잴 행이 없다(홀드아웃 행은 재지 않는다)")
     if fixed is not None:
         unknown = len(set(fixed) - {row["id"] for row in public})
         sys.stdout.write(f"응답 파일: 공개 튜터 행 {len(measured)}개를 잰다")
@@ -956,7 +1003,8 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     """API를 부르기 전에 입력을 모두 읽고 검사한다.
 
     돌려주는 것: (행, 저장 응답, 판정기, 비교 점수, 튜터 설정, 덮은 설정, 임베딩 예상 호출,
-    뺀 홀드아웃 행 수, 가드 설정). 행에는 홀드아웃 행이 없다. 가드 설정은 프리셋 실행에만 있다.
+    뺀 홀드아웃 행 수, 가드 설정, 공개 부분 세트). 행에는 홀드아웃 행이 없다. 가드 설정은 프리셋
+    실행에만 있다. --cases 파일이 공개 튜터 행만 담았으면 공개 부분 세트(public_subset)로 잰다.
     """
     if args.runs < 1:
         ap.error("--runs는 1 이상이어야 한다")
@@ -974,7 +1022,13 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     judge = judge_from_env() if args.judge else None
     if args.judge and judge is None:
         ap.error("--judge에는 OPENAI_BASE_URL·OPENAI_MODEL·OPENAI_API_KEY가 모두 필요하다")
-    kind = "public" if args.cases == "public" else "team"
+    subset = None
+    if args.cases not in ("public", "team"):
+        try:
+            subset = public_subset(args.cases)
+        except (OSError, ValueError) as exc:
+            ap.error(str(exc))
+    kind = "public" if args.cases == "public" or subset is not None else "team"
     if kind == "team" and args.preset not in (None, "tutor"):  # reference는 정답 답변을 낸다
         ap.error("--cases는 --preset tutor나 --responses와 쓴다(점검 세트에는 정답 답변이 없다)")
     try:
@@ -986,7 +1040,7 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
     if cases is None:
-        rows, excluded = _measured_rows(ap, fixed)
+        rows, excluded = _measured_rows(ap, fixed, subset)
     else:  # 점검 세트는 공개 세트 행이 아니라 홀드아웃이 없다
         rows, excluded = _case_rows(ap, cases, fixed), 0
     if args.guard and args.preset != "tutor":
@@ -1023,14 +1077,15 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         sys.stdout.write(f"임베딩 예상 호출 {embedding}회(기동 KB 묶음 + 실행마다 영어 질의)\n")
     if calls + embedding > args.max_calls:
         ap.error(f"예상 호출 {calls + embedding}회가 상한 {args.max_calls}회를 넘는다")
-    return rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard
+    return rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard, subset
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     ap = _parser()
     args = ap.parse_args(argv)
-    rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard = _inputs(ap, args)
-    team = args.cases != "public"
+    inputs = _inputs(ap, args)
+    rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard, subset = inputs
+    team = args.cases != "public" and subset is None
     reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
     tutor_cap = args.max_calls - reserve - embedding
     guard_cap, guard_probe = 0, 0
@@ -1111,6 +1166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tainted = tainted or (guard_run is not None and not guard_run["clean"])
     invalid = stop.reason()
     name = (args.preset or args.responses.stem) + ("-team" if team else "")
+    name += "-subset" if subset is not None else ""
     check_summary = (
         evidence_check_summary(rows, all_responses, checks) if checks is not None else None
     )
@@ -1144,6 +1200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         checks=checks,
         check_summary=check_summary,
         team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
+        subset=_subset_used(subset, rows),
     )
     _show(report, sys.stdout, judged=judge is not None)
     if check_summary is not None:

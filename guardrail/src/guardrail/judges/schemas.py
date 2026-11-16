@@ -20,6 +20,13 @@ class InputOut(_Out):
     category: Category
 
 
+class JbCheckOut(_Out):
+    """S3.3 탈옥 2차 판정. apply = 튜터에게 지금 적용, study = 공격 문구를 다루는 대상으로 봄."""
+
+    evidence: str  # 한 문장
+    verdict: Literal["apply", "study"]
+
+
 # S3.2 선별용 변형(R14 B3): nano는 요청 유형을 고르고 범주는 코드가 대응시킨다.
 # v1 실측에서 nano가 요청은 맞게 읽고 범주 이름을 틀리게 고른 데서 나왔다
 # (results/2026-11-13-input-screening-1.md)

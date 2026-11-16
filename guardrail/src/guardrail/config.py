@@ -72,6 +72,7 @@ class Toggles(_Strict):
     safe_rule: bool
     oom_kb_snippet: bool
     embedding: bool
+    jb_check: bool  # S3.3 탈옥 2차 판정(1차가 jailbreak_injection일 때만)
 
 
 class Vectorizer(_Strict):
@@ -127,7 +128,7 @@ class OutputCfg(_Strict):
     call_nano_when_unused: bool
     rule_min_margin: float
     rule_emit_spans: bool
-    rule_span: Literal["pm4", "eojeol"]
+    rule_span: Literal["pm4", "eojeol", "clause"]
     rule_extra_tokens: list[Literal["value_norm", "units_extra", "bare_numeral", "backtick_latin"]]
     rule_require_same_kind: bool
     # R14-D2·D4(ADR-0014 R14 수정). nano "근거 없음" 가운데 ③에 쓰는 범위, 인용 확인의 최소 글자 수,

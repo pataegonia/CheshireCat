@@ -188,6 +188,8 @@ class Guard:
         baseline = cfg.output.mode == "baseline"
         for name in ("input_judge", "output_judge_baseline" if baseline else "output_judge"):
             load_prompt(cfg, name)
+        if cfg.toggles.jb_check:
+            load_prompt(cfg, "jb_check")
         self.cfg, self.llm, self.kb, self.knn, self.lr = cfg, llm, kb, knn, lr
         self.block = frozenset(cfg.block_categories)
 
@@ -291,6 +293,7 @@ class Guard:
 
         baseline = cfg.output.mode == "baseline"
         tasks: dict[str, asyncio.Task] = {}
+        trace: dict[str, str | None] = {}  # 탈옥 2차 판정(입력 태스크 안, 같은 마감)의 결과
         if not p.low and given is None:
             tasks["input_judge"] = asyncio.create_task(
                 judge_input(
@@ -301,6 +304,7 @@ class Guard:
                     cfg,
                     deadline=deadline,
                     retries=retries,
+                    trace=trace,
                 )
             )
         wants_nano = baseline or cfg.toggles.nano_tier3 or cfg.output.call_nano_when_unused
@@ -325,6 +329,8 @@ class Guard:
             if late:  # 취소를 삼키는 호출이 응답을 붙잡지 못하게 기다림에 상한을 둔다
                 await asyncio.wait(late, timeout=DEADLINE_GRACE_S)
 
+        if trace.get("jb_check", "") is None:  # 2차 실패: 1차(탈옥)를 지켰고 오류로 센다
+            errors.append("jb_check")
         if given is None:
             category, source = self._category(p, results.get("input_judge"))
         else:
@@ -338,7 +344,8 @@ class Guard:
             except Exception as exc:  # noqa: BLE001 - 입력 판정은 살리고 출력만 기본값으로
                 errors.append(f"output:{type(exc).__name__}")
                 out = self._fallback_output(req, category, p.signals)
-        return self._result(category, source, out, p, t0, t1, len(tasks), tuple(errors))
+        calls = len(tasks) + ("jb_check" in trace)
+        return self._result(category, source, out, p, t0, t1, calls, tuple(errors))
 
     def _prepare(self, req: GuardRequest) -> _Prepared | Signals:
         """전처리·신호·kNN·LR·KB 검색·규칙 ②. 받은 글은 모두 상한으로 자른 뒤에 쓴다."""

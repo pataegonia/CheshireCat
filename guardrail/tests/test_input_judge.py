@@ -439,8 +439,10 @@ async def test_target_is_normalized_and_hidden_tags_revealed():
 
 
 async def test_returns_category():
-    out, fake = await run([U("q")], "q", (), ok("jailbreak_injection"))
-    assert out == "jailbreak_injection"
+    out, fake = await run(
+        [U("q")], "q", (), ok("off_topic")
+    )  # 탈옥은 2차 판정이 붙는다(test_jb_check)
+    assert out == "off_topic"
     assert len(fake.requests) == 1
 
 

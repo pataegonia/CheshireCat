@@ -123,6 +123,7 @@ class InputOnlyGuard:
         ):
             return self._result(req, "low_signal_input", "low_signal", low=True, **side)
         examples = self.knn.fewshot(text) if cfg.toggles.knn_fewshot else []
+        trace: dict[str, str | None] = {}
         category = await judge_input(
             list(req.messages),
             raw,
@@ -130,10 +131,13 @@ class InputOnlyGuard:
             self.llm,
             cfg,
             deadline=time.monotonic() + cfg.budget_s,
+            trace=trace,
         )
+        calls = 1 + ("jb_check" in trace)  # 탈옥 2차 판정을 불렀으면 2
         if category is None:
             return self._result(req, "normal", "default", calls=1, errors=("input_judge",), **side)
-        return self._result(req, category, "nano", calls=1, **side)
+        errors = ("jb_check",) if trace.get("jb_check", "") is None else ()
+        return self._result(req, category, "nano", calls=calls, errors=errors, **side)
 
     @staticmethod
     def _result(
@@ -287,7 +291,7 @@ def probe_calls(cfg: Llm) -> int:
 
 def calls_per_row(cfg: GuardConfig, has_candidate: bool) -> int:
     """행당 호출 수의 상한 추정(저신호 직접 판정 등으로 덜 부를 수 있다). 재시도는 세지 않는다."""
-    n = 1  # 입력 판정
+    n = 1 + cfg.toggles.jb_check  # 입력 판정(+ 탈옥 2차 판정: 상한이라 늘 센다)
     out = cfg.output
     if has_candidate and (
         out.mode == "baseline" or cfg.toggles.nano_tier3 or out.call_nano_when_unused
@@ -309,12 +313,13 @@ def estimate_calls(
 ) -> int:
     """probe는 실행당 한 번, 나머지는 설정 행 × 반복 × 행.
 
-    input_only면 행당 입력 1회뿐이고, output_only면 후보 답변이 있는 행만 출력 1회다.
+    input_only면 행당 입력 1회(탈옥 2차 판정이 켜졌으면 상한 2회)뿐이고,
+    output_only면 후보 답변이 있는 행만 출력 1회다.
     """
     total = 0
     for cfg in configs.values():
         if input_only:
-            total += len(rows)
+            total += len(rows) * (1 + cfg.toggles.jb_check)
             continue
         if output_only:
             total += sum(bool(r.candidate_answer) for r in rows)

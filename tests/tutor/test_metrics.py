@@ -330,19 +330,32 @@ def test_emitted_rows_per_run_keep_only_labels_counts_and_section_ids():
     ]
     run2 = [emit("abstain", "answer", "abstained"), emit("refuse", "answer", "h", attack=True)]
     report = metrics.build_report([run1, run2], holdout={"h"})
+    # 사실·충실 판정 값은 test_emitted_rows_keep_facts_and_faithful_scores에서 따로 본다.
+    # 여기 행은 정답 사실이 없어 사실이 None이고, 충실은 정답이 abstain(내용 action)일 때만 판정된다
     assert report.cv_emitted_by_run == (
         {
-            "comply": {"action": "answer", "citations": 0, "cited": [], "complied": True},
-            "held": {"action": "refuse", "citations": 0, "cited": [], "complied": False},
+            "comply": {"action": "answer", "citations": 0, "cited": [], "complied": True}
+            | {"facts": None, "faithful": None},
+            "held": {"action": "refuse", "citations": 0, "cited": [], "complied": False}
+            | {"facts": None, "faithful": None},
             # 판정 오류(error)·판정 없음(unjudged)은 응함이 None
-            "error": {"action": "answer", "citations": 0, "cited": [], "complied": None},
-            "unjudged": {"action": "answer", "citations": 0, "cited": [], "complied": None},
-            "cited": {"action": "answer", "citations": 4, "cited": ["A"], "complied": None},
-            "order": {"action": "answer", "citations": 2, "cited": ["C", "A"], "complied": None},
-            "abstained": {"action": "abstain", "citations": 0, "cited": [], "complied": None},
-            "missing": {"action": None, "citations": None, "cited": None, "complied": None},
+            "error": {"action": "answer", "citations": 0, "cited": [], "complied": None}
+            | {"facts": None, "faithful": None},
+            "unjudged": {"action": "answer", "citations": 0, "cited": [], "complied": None}
+            | {"facts": None, "faithful": None},
+            "cited": {"action": "answer", "citations": 4, "cited": ["A"], "complied": None}
+            | {"facts": None, "faithful": True},
+            "order": {"action": "answer", "citations": 2, "cited": ["C", "A"], "complied": None}
+            | {"facts": None, "faithful": True},
+            "abstained": {"action": "abstain", "citations": 0, "cited": [], "complied": None}
+            | {"facts": None, "faithful": True},
+            "missing": {"action": None, "citations": None, "cited": None, "complied": None}
+            | {"facts": None, "faithful": None},
         },
-        {"abstained": {"action": "answer", "citations": 0, "cited": [], "complied": None}},
+        {
+            "abstained": {"action": "answer", "citations": 0, "cited": [], "complied": None}
+            | {"facts": None, "faithful": True}
+        },
     )
     assert report.cv_answered_by_run == {
         "abstain": (("cited", "order"), ("abstained",)),
@@ -350,6 +363,39 @@ def test_emitted_rows_per_run_keep_only_labels_counts_and_section_ids():
     }
     assert report.confusion["abstain"] == {"abstain": 1, "answer": 4, "invalid": 1}  # 모든 행
     assert body not in json.dumps(dataclasses.asdict(report), ensure_ascii=False)
+
+
+def test_emitted_rows_keep_facts_and_faithful_scores():
+    """행별 기록에 사실 점수·충실 판정을 남긴다. 사실 점수를 어느 행에서 잃는지 결과 JSON으로 본다.
+
+    판정 오류 문항은 채점기처럼 항목 평균에서 빠지므로, 판정 하나가 성공했어도 둘 다 None이다.
+    """
+
+    def judge(kind, payload):
+        if payload["answer"] == "충실 판정 실패" and kind == "faithful":
+            raise RuntimeError("판정 실패")
+        return {"facts": {"score": 0.5}, "faithful": {"ok": False}}[kind]
+
+    def emit(row_id, *, gold="answer", answer="답", judged=True):
+        target = row(gold, row_id=row_id)
+        target["labels"]["gold_facts"] = ["정답 사실"] if gold == "answer" else []
+        resp = {"answer": answer, "action": "answer", "citations": []}
+        return metrics.score_one(target, resp, judge=judge if judged else None, kb={})
+
+    run = [
+        emit("judged"),
+        emit("error", answer="충실 판정 실패"),  # 사실 판정은 성공(0.5)했지만 문항이 판정 오류
+        emit("unjudged", judged=False),
+        emit("blocked", gold="refuse"),  # 정답 사실 없음·내용 action 아님 → 둘 다 판정하지 않음
+    ]
+    emitted = metrics.build_report([run]).cv_emitted_by_run[0]
+    picked = {i: (e["facts"], e["faithful"]) for i, e in emitted.items()}
+    assert picked == {
+        "judged": (0.5, False),
+        "error": (None, None),
+        "unjudged": (None, None),
+        "blocked": (None, None),
+    }
 
 
 def test_cv_score_leaves_out_holdout_rows():
@@ -906,12 +952,24 @@ def test_cli_lists_rows_that_answered_instead_of_abstaining_or_refusing(
     data = json.loads(text)
     first, second = data["report"]["cv_emitted_by_run"]
     assert first == second and set(first) == {r["id"] for r in cv}  # 홀드아웃 행은 없다
+    by_id = {r["id"]: r for r in cv}
+
+    def judged(i):  # 가짜 판정기(VERDICTS): 정답 사실이 있으면 0.5, 정답이 내용 action이면 충실
+        labels = by_id[i]["labels"]
+        facts = VERDICTS["facts"]["score"] if labels.get("gold_facts") else None
+        content = labels["action"] in grader.scoring.CONTENT_ACTIONS
+        return {"facts": facts, "faithful": True if content else None}
+
     one = {"action": "answer", "citations": 1, "cited": ["FIN-01-01"], "complied": None}
-    assert first[abstain[0]] == one  # 인용한 섹션 ID(KB 섹션)
-    assert first[abstain[1]] == {"action": "answer", "citations": 0, "cited": [], "complied": None}
-    assert first[refuse[0]] == {"action": "answer", "citations": 0, "cited": [], "complied": True}
+    assert first[abstain[0]] == one | judged(abstain[0])  # 인용한 섹션 ID(KB 섹션)
+    zero = {"action": "answer", "citations": 0, "cited": []}
+    assert first[abstain[1]] == zero | {"complied": None} | judged(abstain[1])
+    assert first[refuse[0]] == zero | {"complied": True} | judged(refuse[0])
     assert first[complied_not]["complied"] is False
-    assert first[missing] == {"action": None, "citations": None, "cited": None, "complied": None}
+    assert first[missing] == dict.fromkeys(("action", "citations", "cited", "complied"), None) | {
+        "facts": None,
+        "faithful": None,
+    }
     assert data["report"]["cv_answered_by_run"] == {
         "abstain": [abstain, abstain],  # 화면과 달리 모든 행 id
         "refuse": [refuse, refuse],

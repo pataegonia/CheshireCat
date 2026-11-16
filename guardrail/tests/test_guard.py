@@ -1276,3 +1276,34 @@ async def test_self_intro_rule_can_be_turned_off(no_rule):
 async def test_self_intro_rule_needs_the_intro(no_rule):
     guard, _ = await make(responder("normal"))
     assert (await guard.judge(req())).response.category == "normal"
+
+
+async def test_self_intro_rule_skips_responses_nano_did_not_decide(no_rule):
+    # nano가 실패해 기본 범주(normal)로 떨어진 응답은 건드리지 않는다
+    guard, _ = await make(
+        responder(input_step=Timeout()), toggles__lr=False, toggles__knn_vote=False
+    )
+    j = await guard.judge(req(messages=INTRO))
+    assert (j.input_source, j.response.category) == ("default", "normal")
+
+
+async def test_self_intro_rule_reads_only_the_last_learner_turn(no_rule):
+    msgs = (
+        *INTRO,
+        Message("assistant", "변수는 값을 담는 이름이에요."),
+        Message("user", "그럼 리스트는?"),
+    )
+    guard, _ = await make(responder("normal"))
+    assert (await guard.judge(req(messages=msgs))).response.category == "normal"
+
+
+async def test_self_intro_rule_keeps_decision_and_output(no_rule):
+    quote = ANSWER[:12]
+    out = {"answer_quote": quote, "kb_quote": "", "grounded": False, "refuses": False}
+    on, _ = await make(responder("normal", output=out))
+    off, _ = await make(responder("normal", output=out), toggles__pii_intro_rule=False)
+    a, b = await on.judge(req(messages=INTRO)), await off.judge(req(messages=INTRO))
+    assert (a.response.category, b.response.category) == ("pii_disclosure", "normal")
+    assert a.response.output == b.response.output and a.output_tier == b.output_tier
+    block = frozenset(on.cfg.block_categories)
+    assert a.response.to_json(block)["input"]["decision"] == "allow"

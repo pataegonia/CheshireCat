@@ -149,9 +149,19 @@ def test_unreadable_estimate_refuses_to_start(tmp_path, capsys):
 def test_embedding_estimate_is_added():
     def runner(args, cwd):
         out = "운영진 API 예상 호출 100회(…)\n임베딩 예상 호출 7회(…)\n"
-        return rq.Done(2, out, "")
+        return rq.Done(2, out, "run_local.py: error: 예상 호출 107회가 상한 0회를 넘는다\n")
 
     assert rq.estimate(rq.Item(**item("a")), runner) == 107
+
+
+def test_a_check_failing_after_the_estimate_line_refuses_to_start():
+    # 예상 줄을 낸 뒤 다른 검사(임베딩 환경변수 등)에서 멈춘 항목은 실제 실행에서도 멈춘다
+    def runner(args, cwd):
+        out = "운영진 API 예상 호출 100회(…)\n"
+        return rq.Done(2, out, "run_local.py: error: 임베딩을 켜면 EMBEDDING_API_KEY이 필요하다\n")
+
+    with pytest.raises(ValueError, match="임베딩을 켜면"):
+        rq.estimate(rq.Item(**item("a")), runner)
 
 
 @pytest.mark.parametrize(
@@ -173,6 +183,17 @@ def test_bad_plans_fail_before_anything_runs(tmp_path, bad, capsys):
         rq.main([str(path), "--summary", str(tmp_path / "s.md"), "--max-calls", "10"])
     assert "계획 파일을 읽지 못했다" in capsys.readouterr().err
     assert not (tmp_path / "s.md").exists()
+
+
+def test_child_reads_the_guard_of_its_workdir(tmp_path, monkeypatch):
+    # 다른 worktree를 workdir로 주면 가드도 그 worktree 것을 먼저 읽는다(PYTHONPATH 맨 앞)
+    monkeypatch.setenv("PYTHONPATH", "keep")
+    (tmp_path / "wt" / "guardrail" / "src").mkdir(parents=True)
+    env = rq.child_env(tmp_path / "wt")
+    first, rest = env["PYTHONPATH"].split(rq.os.pathsep)
+    assert Path(first) == (tmp_path / "wt" / "guardrail" / "src").resolve() and rest == "keep"
+    assert env["PYTHONUTF8"] == "1"
+    assert rq.child_env(tmp_path)["PYTHONPATH"] == "keep"  # 가드 폴더가 없으면 그대로
 
 
 def test_example_plan_is_three_judged_baseline_runs_on_the_target_set():

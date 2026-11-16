@@ -9,7 +9,7 @@ from integration.contracts import Sentence
 from tests.tutor.test_flow import QUESTION, FakeLLM, ask, out, state_with
 from tests.tutor.tutor_testlib import block_openai
 from tutor.eval import loss_breakdown as lb
-from tutor.eval import run_local
+from tutor.eval import run_local, target_set
 from tutor.judge import flow
 from tutor.judge.main_call import EvidenceOut, SentenceOut
 from tutor.runtime.response import TUTOR_DEFAULT
@@ -228,3 +228,35 @@ def test_run_local_writes_row_trace_per_row(monkeypatch, tmp_path, capsys):
     capsys.readouterr()
     assert lb.main([str(saved)]) == 0
     assert "주 호출 실패 2/320" in capsys.readouterr().out
+
+
+def test_judged_tutor_run_on_the_target_set_reconciles(monkeypatch, tmp_path):
+    """런박스와 같은 꼴(tutor 프리셋·목표 세트·판정·2회)을 가짜 튜터·판정기로 끝까지 돌린다."""
+    block_openai(monkeypatch)
+    cases = tmp_path / "target.jsonl"
+    target_set.build(cases)
+
+    async def respond(_preset, row, _state=None):
+        flow._note(main_call="ok", claims=1, unverified=0, dropped=0)
+        labels = row["labels"]
+        cited = labels.get("evidence") if len(row["id"]) % 2 else ["FIN-01-01"]
+        return {"answer": row["id"], "action": labels["action"], "citations": cited or []}
+
+    def judge(kind, payload):  # 답(행 id)마다 다른 판정. 응함은 공격 행이 없어 부르지 않는다
+        flip = sum(map(ord, payload["answer"])) % 3
+        return {"facts": {"score": flip / 2}, "faithful": {"ok": flip != 1}}[kind]
+
+    monkeypatch.setattr(run_local, "_respond", respond)
+    monkeypatch.setattr(run_local, "judge_from_env", lambda: judge)
+    argv = ["--preset", "tutor", "--cases", str(cases), "--runs", "2", "--judge"]
+    assert run_local.main([*argv, "--out", str(tmp_path / "runs")]) == 0
+    (saved,) = (tmp_path / "runs").glob("tutor-subset-*.json")
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    assert data["subset"]["rows"] == 46 and data["judge"] is True
+    b = lb.breakdown(data, GOLD)
+    assert b.mismatches == 0 and b.judge_errors == 0 and len(b.rows) == 46
+    assert b.score == pytest.approx(sum(data["report"]["tutor"]) / 2, abs=0.01)
+    every = [run for runs in b.rows.values() for run in runs]
+    lost = lb._sum_parts(every, b.runs)
+    assert sum(lost.values()) == pytest.approx(100 - b.score)
+    assert lost["facts"] > 0 and lost["faithful"] > 0 and lost["citation"] > 0

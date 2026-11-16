@@ -29,6 +29,7 @@ RUN_LOCAL = ("-m", "tutor.eval.run_local")
 ESTIMATE = re.compile(r"운영진 API 예상 호출 (\d+)회")
 EMBEDDING = re.compile(r"임베딩 예상 호출 (\d+)회")
 SAVED = "저장: "
+CAP_REFUSAL = "상한 0회를 넘는다"  # --max-calls 0 예상 실행이 정상으로 멈출 때 run_local 오류 문구
 EXIT_REFUSED = 2
 # 요약 파일에 옮기는 run_local 출력 줄(접두어). 점수·항목별·범주별·지연·비교·튜터 실패 줄만
 SUMMARY_PREFIXES = (
@@ -88,9 +89,22 @@ class Done:
 Runner = Callable[[Sequence[str], Path], Done]
 
 
+def child_env(cwd: Path) -> dict[str, str]:
+    """자식 환경: 출력 UTF-8, 그리고 가드도 workdir 것을 먼저 읽는다(tutor는 -m이 cwd에서 읽는다).
+
+    가드는 대기열 가상환경에 저장소 사본으로 설치돼 있어, 다른 worktree를 workdir로 주면 그대로는
+    대기열 쪽 가드 코드가 섞인다.
+    """
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    guard_src = cwd.resolve() / "guardrail" / "src"
+    if guard_src.is_dir():
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(guard_src), env.get("PYTHONPATH")]))
+    return env
+
+
 def subprocess_runner(args: Sequence[str], cwd: Path) -> Done:
     """workdir에서 `python -m tutor.eval.run_local <args>`를 부르고 출력을 모은다."""
-    env = {**os.environ, "PYTHONUTF8": "1"}  # 자식 출력도 UTF-8(Windows 개발 환경)
+    env = child_env(cwd)
     proc = subprocess.run(  # noqa: S603  인자 목록, 셸 없음, 이 파이썬으로 run_local만 부른다
         [sys.executable, *RUN_LOCAL, *args],
         cwd=cwd,
@@ -129,7 +143,9 @@ def estimate(item: Item, run: Runner) -> int:
     """
     done = run([*item_args(item), "--max-calls", "0"], Path(item.workdir))
     calls = ESTIMATE.search(done.stdout)
-    if done.returncode != EXIT_REFUSED or calls is None:
+    # 예상 줄 뒤의 다른 검사(임베딩 환경변수 등)에서 멈췄으면 실제 실행도 멈춘다: 상한 거절만 받는다
+    capped = CAP_REFUSAL in _last_line(done.stderr)
+    if done.returncode != EXIT_REFUSED or calls is None or not capped:
         raise ValueError(f"{item.name}: 예상 호출을 읽지 못했다: {_last_line(done.stderr)}")
     embedding = EMBEDDING.search(done.stdout)
     return int(calls.group(1)) + (int(embedding.group(1)) if embedding else 0)

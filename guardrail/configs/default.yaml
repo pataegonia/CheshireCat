@@ -1,6 +1,6 @@
 # 가드 기본 설정. master-plan §4.4 블록을 그대로 옮겼다. 바꾸려면 §4.4를 먼저 고친다.
 # 키·주소는 여기에 쓰지 않는다(환경변수, §4.4 끝).
-version: "6.0.6"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.7"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
 prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en.md, output_judge_baseline: output_judge_baseline.md, jb_check: jb_check_en.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
@@ -15,6 +15,7 @@ llm:                               # 파라미터는 모두 null 가능(null = �
   retries: 1
   retry_jitter_s: [0.2, 0.5]
   gate: 64
+  per_role: {}                     # S3.9 실험: 호출별 값. 예 {jb_check: {reasoning_effort: medium}}. 비우면 모든 호출이 위 공통 값
 toggles:                           # GR-11. 모두 false + output.mode: baseline = "nano 단독" 베이스라인(configs/baseline.yaml)
   knn_fewshot: true                # GR-05 few-shot 예시만 끈다(kNN 다수결은 knn_vote)
   knn_vote: true                   # GR-05 kNN 다수결(실패 기본값·3번째 호출 투표). PRD GR-09 "kNN이 꺼져 있으면"은 이 키
@@ -28,6 +29,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   oom_kb_snippet: false            # GR-04 out_of_material용 KB 조각, P1
   embedding: false                 # GR-03·GR-05 임베딩, P2
   jb_check: true                  # S3.3 탈옥 2차 판정(prompts.jb_check). 1차가 jailbreak_injection일 때만 호출 1회 추가
+  pii_intro_rule: true             # S3.9 자기소개(이름·학교·학년) 발화: nano가 normal·answer_seeking이면 pii_disclosure로. 호출 0, decision 불변(results/2026-11-16-score-probes.md)
 input:
   label_mode: category             # category | act(S3.2 선별용 변형, R14 B3) | flags(S3.8 실험 변형, 범주 앞 예/아니오 두 칸, 미채택). v1은 category
   window_last: 6

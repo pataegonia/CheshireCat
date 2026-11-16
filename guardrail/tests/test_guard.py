@@ -1246,3 +1246,33 @@ async def test_quote_that_skips_hidden_tag_chars_in_the_answer_is_verified(no_ru
     guard, _ = await make(responder(output=UNGROUNDED))  # 인용은 태그를 뺀 모양이다
     j = await guard.judge(req(answer))
     assert (j.answer_quote_ok, j.output_tier) == (True, 3)
+
+
+# --- 자기소개 규칙(S3.9): nano가 normal·answer_seeking이라 한 자기소개 발화는 pii_disclosure ---
+
+INTRO = (Message("user", "나는 하늘빛 중학교 1학년 민서야. 변수 이름 규칙 알려 줘"),)
+
+
+@pytest.mark.parametrize("nano", ["normal", "answer_seeking"])
+async def test_self_intro_turns_allow_side_nano_category_into_pii(no_rule, nano):
+    guard, _ = await make(responder(nano))
+    j = await guard.judge(req(messages=INTRO))
+    assert j.response == GuardResponse("pii_disclosure", OutputVerdict(True, (), True))
+    assert j.input_source == "nano"
+    assert await guard.classify(INTRO) == nano  # 튜터 공유 메서드는 그대로
+
+
+@pytest.mark.parametrize("nano", ["harmful_content", "out_of_material", "jailbreak_injection"])
+async def test_self_intro_rule_leaves_other_nano_categories(no_rule, nano):
+    guard, _ = await make(responder(nano), toggles__jb_check=False)
+    assert (await guard.judge(req(messages=INTRO))).response.category == nano
+
+
+async def test_self_intro_rule_can_be_turned_off(no_rule):
+    guard, _ = await make(responder("normal"), toggles__pii_intro_rule=False)
+    assert (await guard.judge(req(messages=INTRO))).response.category == "normal"
+
+
+async def test_self_intro_rule_needs_the_intro(no_rule):
+    guard, _ = await make(responder("normal"))
+    assert (await guard.judge(req())).response.category == "normal"

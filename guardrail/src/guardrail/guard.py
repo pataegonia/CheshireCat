@@ -32,7 +32,13 @@ from guardrail.schema import (
     OutputVerdict,
     _messages,
 )
-from guardrail.signals import Signals, has_hidden_tags, is_low_signal, is_refusal
+from guardrail.signals import (
+    Signals,
+    has_hidden_tags,
+    is_low_signal,
+    is_refusal,
+    is_self_intro,
+)
 
 # nano 호출은 스스로 마감 안에 끝난다(llm.complete). 그 결과를 받을 여유만 둔다
 DEADLINE_GRACE_S = 0.2
@@ -204,7 +210,17 @@ class Guard:
         return cls(cfg, llm, *await asyncio.to_thread(build_indexes, cfg, rows))
 
     async def judge(self, req: GuardRequest) -> Judgement:
-        return await self._run(req)
+        j = await self._run(req)
+        # 자기소개 규칙(S3.9): `/guard` 응답에서만 건다(classify·judge_output은 그대로).
+        # 둘 다 허용 범주라 decision·출력 단·safe는 안 바뀐다. nano가 차단이라 한 행은 안 건드린다
+        fix = self.cfg.toggles.pii_intro_rule and j.input_source == "nano"
+        if fix and j.response.category in ("normal", "answer_seeking"):
+            last = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+            if is_self_intro(clip(last, self.cfg.input.max_chars)):
+                j = dataclasses.replace(
+                    j, response=GuardResponse("pii_disclosure", j.response.output)
+                )
+        return j
 
     async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
         """마지막 학습자 발화의 범주(nano·low-signal 직행은 `judge`와 같다). nano 1회, 재시도 없음.

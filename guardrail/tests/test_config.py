@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.6"
+    assert cfg.version == "6.0.7"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -130,7 +130,7 @@ def test_load_order_overrides_beat_env_beat_ablation(tmp_path, monkeypatch):
 def test_baseline_differs_only_in_toggles_and_mode():
     base = load_config(BASELINE)
     assert not any(base.toggles.model_dump().values())
-    assert len(base.toggles.model_dump()) == 12
+    assert len(base.toggles.model_dump()) == 13
     assert base.output.mode == "baseline"
     expected = {f"toggles.{t}" for t, on in load_config(DEFAULT).toggles if on} | {"output.mode"}
     assert _diff(base, load_config(DEFAULT)) == expected
@@ -354,3 +354,17 @@ def test_nearest_first_with_v2a_prompt_loads():
 
 def test_default_order_with_v1_prompt_loads():
     assert load_config(DEFAULT).input.knn.order == "nearest_last"
+
+
+# --- S3.9 실험 손잡이: llm.per_role ---
+
+
+def test_per_role_is_empty_by_default():
+    assert load_config(DEFAULT).llm.per_role == {}
+
+
+def test_per_role_rejects_unknown_roles_and_params():
+    with pytest.raises(ValidationError):
+        load_config(DEFAULT, overrides={"llm.per_role": {"tutor": {"reasoning_effort": "low"}}})
+    with pytest.raises(ValidationError):
+        load_config(DEFAULT, overrides={"llm.per_role": {"jb_check": {"temperature": 0}}})

@@ -210,7 +210,7 @@ class LLM:
         self._require_send()  # start() 전 호출은 프로그래밍 오류라 코드로 바꾸지 않는다
         max_retries = self.cfg.retries if retries is None else retries
         t0 = self._clock()
-        kwargs = self._request(messages, schema)
+        kwargs = self._request(role, messages, schema)
         attempts, last = 0, _Attempt()
         while True:
             remaining = deadline - self._clock()
@@ -262,7 +262,7 @@ class LLM:
             },
         }
 
-    def _request(self, messages: list[dict], schema: type[BaseModel]) -> dict[str, Any]:
+    def _request(self, role: Role, messages: list[dict], schema: type[BaseModel]) -> dict[str, Any]:
         msgs = [dict(m) for m in messages]  # 복사본만 바꾼다: 응답 구간은 원문의 부분 문자열이다
         for m in msgs:
             if isinstance(m.get("content"), str):
@@ -276,7 +276,11 @@ class LLM:
             else:
                 msgs.insert(0, {"role": "system", "content": note})
         kwargs: dict[str, Any] = {"model": self.model, "messages": msgs}
-        kwargs.update({k: v for k, v in self.params.items() if v is not None})
+        over = self.cfg.per_role.get(role)
+        for k, v in self.params.items():
+            if v is not None:  # null이거나 probe()가 끈 파라미터는 호출별 값도 보내지 않는다
+                o = getattr(over, k, None)
+                kwargs[k] = v if o is None else o
         kwargs["response_format"] = self._response_format(schema)
         return kwargs
 

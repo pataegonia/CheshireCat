@@ -56,7 +56,7 @@ PRD §4의 단계가 모듈 하나씩에 대응한다.
 |---|---|---|---|---|
 | 인증·요청 읽기·200 보장·로그 | `server.py`, `schema.py` | `create_app`, `router`, `setup_guard`, `guard_lifespan`, `parse_request` | 01·09·12 | 0009 |
 | ① 전처리 | `preprocess.py` | `normalize`, `reveal_hidden`, `decode_tags`, `strip_tags` | 02 | 0001 |
-| ② 결정적 신호 | `signals.py` | `is_low_signal`, `is_refusal`, `has_hidden_tags` | 06 | 0014 |
+| ② 결정적 신호 | `signals.py` | `is_low_signal`, `is_refusal`, `has_hidden_tags`, `is_self_intro`(S3.9) | 06 | 0014 |
 | ② 숫자·리터럴 | `rules.py` | `extract_literals`, `literal_rule` | 06·07 | 0014 |
 | ③ 보조 판정기 | `knn.py`, `classifier.py`, `clusters.py` | `KnnIndex`, `LrClassifier`, `build_clusters`(짝 묶음. `KnnIndex`가 기동 때 직접 계산하고 `eval.cv`도 import. 서버는 eval 패키지에 의존하지 않는다) | 05 | 0013 |
 | ④ KB 검색(R13-A가 잰 BM25 변형) | `kb.py` | `KbIndex.load`, `KbIndex.rank`(→ `Ranking`), `KbIndex.search` | 03 | 0010 |

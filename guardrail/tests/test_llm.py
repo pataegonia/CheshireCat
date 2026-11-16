@@ -29,7 +29,7 @@ from fakes import (
     Timeout,
 )
 
-from guardrail.config import load_config
+from guardrail.config import RoleParams, load_config
 from guardrail.judges.schemas import InputOut, strict_schema
 from guardrail.llm import LLM
 
@@ -537,3 +537,25 @@ def test_openai_env_error_never_contains_values(monkeypatch, name, blank):
     for k, v in values.items():
         if k != name:
             assert v not in str(err) and v not in repr(err) and v not in err.args
+
+
+# --- 호출별 파라미터(llm.per_role) ---
+
+
+async def test_per_role_params_override_only_that_role():
+    over = {"input_judge": RoleParams(reasoning_effort="medium", max_completion_tokens=3000)}
+    llm, fake, clock = make(Ok(OK_IN), Ok(OK_IN), per_role=over)
+    await call(llm, clock)
+    await llm.complete("jb_check", MSGS, InputOut, deadline=clock() + 20.0)
+    first, second = fake.requests
+    assert (first["reasoning_effort"], first["max_completion_tokens"]) == ("medium", 3000)
+    assert first["verbosity"] == "low"  # 적지 않은 값은 공통 값을 따른다
+    assert (second["reasoning_effort"], second["max_completion_tokens"]) == ("low", 1600)
+
+
+async def test_per_role_does_not_revive_a_param_the_probe_turned_off():
+    over = {"input_judge": RoleParams(reasoning_effort="medium")}
+    llm, fake, clock = make(Ok(OK_IN), per_role=over)
+    llm.params["reasoning_effort"] = None  # probe()가 거절로 끈 상태
+    await call(llm, clock)
+    assert "reasoning_effort" not in fake.requests[0]

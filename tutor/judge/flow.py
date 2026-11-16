@@ -49,6 +49,7 @@ from tutor.judge.draft import draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
     ATTACK_CATEGORIES,
+    CLASSIFY_WAIT_GRACE_S,
     JUDGE_SKIP_S,
     GuardSkips,
     attack_fixed,
@@ -349,7 +350,10 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             anchor_unit=cfg.toggles.anchor_unit,  # 단원 닻(TU-03). 끄면 검색 한 번, 순서 그대로
         )
         if classify is not None and not serial:
-            classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다
+            # A-5: 최소 창(timeout_s.classify)과 주 호출이 끝난 때(+여유) 중 늦은 쪽까지 기다린다.
+            # 주 호출이 끝난 뒤에는 기다리지 않으므로 요청 지연은 늘지 않는다
+            main_done = asyncio.get_running_loop().time() + CLASSIFY_WAIT_GRACE_S
+            classified = await wait_classify(classify, skips, not_before=main_done)
         if draft.out is None:
             quote = (
                 material_quote(draft.sections, conv.search_query()[0])

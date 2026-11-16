@@ -2,7 +2,9 @@
 
 흐름(PRD §4 ⑤-2·⑥)
 - `start_classify`: 가드 `Guard.classify(messages)`를 주 호출과 **동시에** 시작한다
-  (`toggles.guard_classify: parallel`, 시간 제한 `llm.timeout_s.classify`, 재시도 없음).
+  (`toggles.guard_classify: parallel`, 재시도 없음). 병렬에서는 classify를 부른 때부터
+  `llm.timeout_s.classify`(최소 창)와 주 호출이 끝날 때(+여유) 중 늦은 쪽까지 기다린다(A-5).
+  주 호출이 끝나서 멈춘 것은 `main_done`으로 따로 센다.
   `serial`(ⓐ, 11/18 비교 기준선, #83)이면 부르는 쪽이 주 호출 앞에서 끝까지 기다리고,
   classify 범주가 템플릿이면 주 호출 없이 그 고정 문장을 낸다(`serial_fixed`).
 - `merge_category`: classify가 공격 4범주일 때만 주 호출 결과를 그 범주의 고정 문장으로 바꾼다.
@@ -71,8 +73,9 @@ CLASSIFY_WAIT_GRACE_S = 0.05
 
 Stage = Literal["classify", "judge"]
 # missing: 가드에 함수가 없음 · no_time: 남은 시간 부족(judge는 judge_skip_s) · timeout: 시간 초과
+# main_done: 병렬 classify가 최소 창을 넘겼고 주 호출도 끝나 기다리기를 멈춤(A-5)
 # error: 예외(가드 안의 취소 포함) · invalid: 돌려준 값이 범주·OutputVerdict가 아님
-Reason = Literal["missing", "no_time", "timeout", "error", "invalid"]
+Reason = Literal["missing", "no_time", "timeout", "main_done", "error", "invalid"]
 GuardSkips = Counter[tuple[str, str]]
 
 
@@ -161,8 +164,11 @@ def start_classify(
 ) -> ClassifyJob | None:
     """classify를 시작한다. 꺼져 있거나 가드에 classify가 없거나 시간이 없으면 None.
 
-    시간 제한은 `min(timeout_s, 요청 마감까지 남은 시간)`이다. 결과는 `wait_classify`로 받고,
-    끝나기 전에 빠져나가면 `cancel()`한다.
+    기다리는 최소 창은 `min(timeout_s, 요청 마감까지 남은 시간)`이다(`ClassifyJob.until`).
+    직렬(ⓐ)은 classify 호출 자체에도 이 제한을 건다. 병렬은 호출 자체의 제한을 요청 마감까지
+    두고, 언제 기다리기를 멈출지는 `wait_classify(not_before=주 호출이 끝난 시각 + 여유)`가 정한다
+    (A-5: 주 호출 p50이 5초를 넘어 5초 제한이 끝날 수 있던 classify를 버리고 있었다).
+    결과는 `wait_classify`로 받고, 끝나기 전에 빠져나가면 `cancel()`한다.
     """
     if mode == "off":
         return None
@@ -174,20 +180,26 @@ def start_classify(
         _skip(skips, "classify", "no_time")
         return None
     until = asyncio.get_running_loop().time() + limit + CLASSIFY_WAIT_GRACE_S
-    return ClassifyJob(asyncio.ensure_future(_classify(guard, messages, limit, skips)), until)
+    call_limit = _remaining(deadline) if mode == "parallel" else limit
+    return ClassifyJob(asyncio.ensure_future(_classify(guard, messages, call_limit, skips)), until)
 
 
-async def wait_classify(job: ClassifyJob, skips: GuardSkips | None = None) -> str | None:
-    """classify 결과. 시간 제한(+여유)이 지나도 안 끝나면 취소하고 None.
+async def wait_classify(
+    job: ClassifyJob, skips: GuardSkips | None = None, *, not_before: float | None = None
+) -> str | None:
+    """classify 결과. `max(최소 창, not_before)`가 지나도 안 끝나면 취소하고 None.
 
+    `not_before`(루프 시각)는 병렬에서 주 호출이 끝난 시각 + 여유다. 최소 창보다 늦어서 그때
+    멈췄으면 `main_done`, 최소 창에서 멈췄으면 `timeout`으로 센다.
     `asyncio.wait`로 기다려 가드가 취소를 삼켜도 흐름이 묶이지 않고, 요청 자체가 취소되면
     곧바로 `CancelledError`가 올라간다(남은 태스크는 부르는 쪽의 `finally`가 취소한다).
     """
-    timeout = max(0.0, job.until - asyncio.get_running_loop().time())
+    until = job.until if not_before is None else max(job.until, not_before)
+    timeout = max(0.0, until - asyncio.get_running_loop().time())
     done, _ = await asyncio.wait({job.task}, timeout=timeout)
     if job.task not in done:
         job.cancel()
-        _skip(skips, "classify", "timeout")
+        _skip(skips, "classify", "timeout" if until <= job.until else "main_done")
         return None
     if job.task.cancelled():
         return None

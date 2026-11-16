@@ -9,15 +9,27 @@
 
 import copy
 import os
+import re
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveFloat,
+    PositiveInt,
+    field_validator,
+    model_validator,
+)
 
 ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트
 DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
+PROMPT_DIR = ROOT / "tutor" / "prompts"  # main_call.PROMPT_DIR와 같은 폴더(테스트가 맞춰 본다)
+# 프롬프트 파일 이름: 폴더 구분자·상위 경로 없이 tutor/prompts/ 바로 아래 .md 파일 하나
+PROMPT_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.md")
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
 
@@ -97,9 +109,31 @@ class EvalCfg(_Strict):
     max_calls: PositiveInt
 
 
+def prompt_file_problem(name: str) -> str | None:
+    """프롬프트 파일 이름이 틀린 까닭(맞으면 None). 대소문자까지 같은 파일이 PROMPT_DIR에 있다."""
+    if not PROMPT_NAME.fullmatch(name) or ".." in name:
+        return "tutor/prompts/ 안 .md 파일 이름만 쓴다(경로 없이)"
+    if name not in {p.name for p in PROMPT_DIR.iterdir() if p.is_file()}:
+        return f"tutor/prompts/{name}이 없다"
+    return None
+
+
+class Prompt(_Strict):
+    main_call: str  # 주 호출 프롬프트 파일 이름(tutor/prompts/ 안, 측정 비교용)
+
+    @field_validator("main_call")
+    @classmethod
+    def _known_file(cls, name: str) -> str:
+        problem = prompt_file_problem(name)
+        if problem is not None:
+            raise ValueError(problem)
+        return name
+
+
 class TutorConfig(_Strict):
     version: str
     mode: Literal["v2", "baseline"]
+    prompt: Prompt
     toggles: Toggles
     fewshot: Fewshot
     retrieval: Retrieval

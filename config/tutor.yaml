@@ -4,6 +4,8 @@
 # 키·주소는 여기에 쓰지 않는다(.env 환경변수). 값은 엄격히 본다: off는 따옴표로("off", YAML에서 off는 false).
 version: "tutor-1"
 mode: v2                       # v2 | baseline(검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리, 토글은 모두 끔)
+prompt:
+  main_call: main_call.md      # 주 호출 프롬프트 파일(tutor/prompts/ 안 이름만, 측정 비교용)
 toggles:
   name_dict: false             # 이름 사전(TU-04). 순위 올리기 방식은 채택 안 함(#81: recall@1 하락). 힌트 방식은 이름 사전 코드가 없어 #82에서 재지 못함(이어서 할지는 #81)
   fewshot: "off"               # "off" | fixed | knn. 공개 세트 판단 예시(TU-08). 끔 / 고정 / kNN을 3회씩 비교해 순이득이 있을 때만 켠다

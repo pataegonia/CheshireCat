@@ -31,6 +31,7 @@ from tutor.judge.conversation import Conversation
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PROMPT_ID = "main_call"
+PROMPT_FILE = f"{PROMPT_ID}.md"  # 기본 파일. 설정 prompt.main_call로 같은 폴더의 다른 파일을 고른다
 
 
 # --- 출력 스키마(json_schema strict, 필드 순서 = 생성 순서) ---
@@ -190,9 +191,12 @@ class MainCallPrompt:
         *,
         scaffold_state_rule: bool = False,
         evidence_check: bool = False,
+        file_name: str = PROMPT_FILE,
     ) -> "MainCallPrompt":
+        if Path(file_name).name != file_name or "\\" in file_name:
+            raise ValueError("main_call 프롬프트는 폴더 안 파일 이름만 받는다")
         # Windows 체크아웃(autocrlf)의 CRLF도 같은 프롬프트로 읽는다(런박스는 LF)
-        raw = (prompt_dir / f"{PROMPT_ID}.md").read_text(encoding="utf-8")
+        raw = (prompt_dir / file_name).read_text(encoding="utf-8")
         text = raw.replace("\r\n", "\n")
         m = _FRONT.match(text)
         if not m:
@@ -219,6 +223,7 @@ class MainCallPrompt:
         *,
         scaffold_state_rule: bool = False,
         evidence_check: bool = False,
+        file_name: str = PROMPT_FILE,
     ) -> "MainCallPrompt":
         """통합 표(`integration.actions.load_actions()`, 기본은 `config/actions.yaml`)로 만든다.
 
@@ -231,6 +236,7 @@ class MainCallPrompt:
             prompt_dir,
             scaffold_state_rule=scaffold_state_rule,
             evidence_check=evidence_check,
+            file_name=file_name,
         )
 
 

@@ -741,6 +741,7 @@ def _tutor_config_used(cfg: TutorConfig, overrides: Mapping[str, Any]) -> dict[s
     """결과 JSON의 tutor_config: 적용된 mode·토글 전부와 --tutor-set으로 덮은 값(본문 없음)."""
     return {
         "mode": cfg.mode,
+        "prompt": cfg.prompt.model_dump(),  # 주 호출 프롬프트 파일 이름
         "toggles": cfg.toggles.model_dump(),
         "overrides": dict(sorted(overrides.items())),
     }

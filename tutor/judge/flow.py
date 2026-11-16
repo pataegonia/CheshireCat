@@ -80,7 +80,9 @@ def prepare_judge(app_state: Any) -> None:
     (KB와 같다). 예시를 끈 설정에서는 파일을 읽지 않는다."""
     toggles = app_state.tutor_cfg.toggles
     app_state.tutor_prompt = MainCallPrompt.from_rules(
-        scaffold_state_rule=toggles.scaffold_state_rule, evidence_check=toggles.evidence_check
+        scaffold_state_rule=toggles.scaffold_state_rule,
+        evidence_check=toggles.evidence_check,
+        file_name=app_state.tutor_cfg.prompt.main_call,  # 기본 main_call.md(측정 비교용 전환)
     )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
     cfg = getattr(app_state, "tutor_cfg", None)

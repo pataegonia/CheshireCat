@@ -957,7 +957,8 @@ def public_subset(path: str) -> dict[str, Any] | None:
     return {"file": Path(path).name, "ids": frozenset(ids), "ids_sha256": digest}
 
 
-TRACE_KEYS = ("main_call", "claims", "unverified", "dropped")  # flow.ROW_PROBE가 담는 값
+# flow.ROW_PROBE가 담는 값. intent는 T 이름표(intent_override를 켰을 때만, 실패는 "none")
+TRACE_KEYS = ("main_call", "claims", "unverified", "dropped", "intent")
 
 
 def row_trace(

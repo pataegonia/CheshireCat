@@ -19,6 +19,7 @@ toggles:
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한(TU-13)을 넘어 만들지 않음(#83, true는 로드에서 거부)
   cite_top1: true              # 인용이 있는데 검색 1위 섹션이 빠졌으면 1위를 뒤에 더한다(TU-07). 켜면 인용이 max_citations + 1개까지. 11/15 런박스 짝 비교(같은 답의 끔·켬)로 켬: 판정 없이 인용 F1 +0.034·+0.024, 판정 포함 튜터 +0.31점·충실 하락 0
   anchor_unit: false           # 단원 닻(TU-03, #201 A-6 U). 마지막 학습자 발화를 뺀 앞 대화 끝 4개 발화로 BM25 검색한 1위 섹션의 단원을 상위 k 앞으로 옮긴다(순서만, API 호출 0회). 인용 F1 끔·켬 짝 비교(판정 없이)와 사실·충실 판정 포함 3회로 켤지 정한다
+  intent_override: false       # T 의도 판정(#209 프롬프트): 주 호출과 동시에 nano 1회, 이름표로 주 호출 action을 덮는다(tutor.judge.intent.decide). 11/16 런박스 모의(교차 검증 160행, 기준 5회): 실행당 맞게 8.0 · 틀리게 0.6. 기본 끔(측정용), 켜기 전 조건은 G-6 혼합 부하와 판정 포함 비교
   oom_check: "off"            # "off" | after_answer. 근거 확인(#201 B): 주 호출이 answer면 nano 1회(#162 프롬프트), found=false면 자료 밖 고정 문장. 11/16 런박스 모의 순이득 +5행. 기본 끔(측정용)
   scaffold_state_rule: false   # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다(숨김에서는 delegation_override로 켠다). 11/14 측정으로 숨김(전체 이득 없음, 과제 대행 행 0점 증가). T3에서 운영진 답(§11-1-4)과 함께 다시 본다
   delegation_override: false   # 대행 신호(TU-05 DELEGATION)가 잡히면 주 호출의 answer·scaffold를 academic 고정 scaffold로 바꾼다(숨김에서도, 주 호출 실패 기본값 포함, TU-06). abstain·더 강한 action은 그대로, 위기·지시 무력화 신호나 classify 위기·공격 범주가 있으면 덮지 않음. 기본 끔. 켜기 전 조건은 PRD TU-06(교재 인용 오탐 예외, 행 단위 짝 계산)
@@ -43,6 +44,7 @@ llm:
     classify: 5                # 가드 classify의 최소 창. 부른 때부터 센다, 게이트 대기 포함. 병렬은 이 창과 주 호출이 끝날 때 중 늦은 쪽까지 기다린다(A-5), 직렬은 이 창이 제한
     verify: 5                  # 검증·judge_output
     embedding: 2
+    intent: 8                  # T 의도 판정 호출(toggles.intent_override). 11/16 모의(동시 8) p50 2.4·p95 4.2초. 주 호출이 먼저 끝나도 이 제한까지는 기다린다
     oom_check: 10              # 근거 확인 호출. 11/16 모의 p95 7.4·최대 10.1초. 남은 시간이 judge_skip_s보다 적으면 부르지 않는다
 eval:
   max_calls: 5000              # 개발 실행 운영진 API 호출 상한(TU-14, 가드 GR-11과 같음)

@@ -63,6 +63,8 @@ class Toggles(_Strict):
     anchor_unit: bool  # 상위 k에서 앞 대화 단원의 섹션을 앞으로(단원 닻, TU-03). API 호출 0회
     # 근거 확인(#201 B): 주 호출 answer 뒤 nano 1회, found=false면 자료 밖 고정 문장. 기본 끔
     oom_check: Literal["off", "after_answer"]
+    # T 의도 판정(#209): 주 호출과 동시에 nano 1회, 이름표로 action을 덮는다. 기본 끔
+    intent_override: bool
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -99,6 +101,7 @@ class Timeouts(_Strict):
     verify: PositiveFloat
     embedding: PositiveFloat
     oom_check: PositiveFloat  # 근거 확인 호출(toggles.oom_check)
+    intent: PositiveFloat  # T 의도 판정 호출(toggles.intent_override)
 
 
 class Llm(_Strict):

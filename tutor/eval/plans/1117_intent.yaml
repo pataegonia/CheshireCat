@@ -1,0 +1,26 @@
+# 11/17 T 의도 판정 판정 포함 비교(리더가 지연 G-6을 정한 뒤에만). 교차 검증 160행, 판정 포함.
+# A = 채택 후보 묶음(대행 덮기 + 실패 시 자료 인용 답), B = A + T 덮기(intent_override).
+# A·B를 번갈아 2회씩(시간대 흔들림을 양쪽에 고르게). 행 단위 비교는 pair_compare로:
+#   python -m tutor.eval.pair_compare --base <A 결과 2개> --variant <B 결과 2개>
+# B 결과의 row_trace에 행별 T 이름표(intent)가 남는다(본문 없음).
+items:
+  - name: judged-a-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true"]
+  - name: judged-b-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true", "toggles.intent_override=true"]
+  - name: judged-a-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true"]
+  - name: judged-b-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true", "toggles.intent_override=true"]

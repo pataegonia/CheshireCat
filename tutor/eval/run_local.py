@@ -41,6 +41,8 @@ ngram·k1·b, retrieval.max_query_chars, config_hash)을 남기고, 설정 파�
 --compare할 수 있다.
 tutor 프리셋은 튜터 LLM 수(보낸 시도·최종 실패·실패한 시도 갈래·성공한 시도의 토큰 구간)도
 결과 JSON의 tutor_llm에 남긴다.
+결과 JSON의 row_trace에는 실행마다 행 → 기본값 응답인가와, tutor 프리셋이면 주 호출 결과·claim
+수(낸 것·인용 문구 미확인·결정적 수정이 지운 것)를 남긴다(수만, loss_breakdown이 읽는다).
 근거 대조 칸(`toggles.evidence_check`, #162)을 켜면 행마다 주 호출이 쓴 칸 값을 결과 JSON의
 evidence_check에 남기고, 정답 범주별 분포와 "칸 false인 answer를 abstain으로 바꾸면" 모의 수를 낸다.
 """
@@ -85,6 +87,7 @@ from tutor.eval.recall import (
     query_parts,
 )
 from tutor.judge.examples import build_index, load_examples
+from tutor.judge.flow import ROW_PROBE
 from tutor.judge.main_call import EVIDENCE_CHECK_PROBE
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
@@ -162,6 +165,7 @@ async def _collect(
     state: Any,
     checks: dict[str, bool | None] | None = None,
     calls_log: list[int] | None = None,
+    traces: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[float]]:
     """한 실행의 (행 id → 응답, 요청마다 걸린 시간(초)). 실패한 요청도 시간을 잰다.
 
@@ -169,6 +173,7 @@ async def _collect(
 
     checks가 있으면 행마다 주 호출이 쓴 근거 대조 칸 값(#162)을 담는다. 주 호출이 칸을 내지
     않았으면(주 호출 실패, 주 호출 전에 끝난 요청, 칸 끔) None이다.
+    traces가 있으면 행마다 flow.ROW_PROBE 기록(주 호출 결과·claim 수, 수·라벨만)을 담는다.
     """
     slots = asyncio.Semaphore(metrics.WORKERS)
 
@@ -178,6 +183,8 @@ async def _collect(
             own = state.for_row(row["id"]) if isinstance(state, FoldStates) else state
             seen: list[bool] = []  # 이 행(요청) 하나의 컨텍스트에만 있다
             token = EVIDENCE_CHECK_PROBE.set(seen if checks is not None else None)
+            noted: dict[str, Any] = {}  # 이 행(요청) 하나의 컨텍스트에만 있다
+            trace_token = ROW_PROBE.set(noted if traces is not None else None)
             sent: Counter[str] = Counter()  # 이 요청이 보낸 호출(재시도 포함)
             sent_token = gate.REQUEST_CALLS.set(sent)
             try:
@@ -187,11 +194,14 @@ async def _collect(
                 response = None
             finally:
                 EVIDENCE_CHECK_PROBE.reset(token)
+                ROW_PROBE.reset(trace_token)
                 gate.REQUEST_CALLS.reset(sent_token)
             if calls_log is not None:
                 calls_log.append(sum(sent.values()))
             if checks is not None:
                 checks[row["id"]] = seen[-1] if seen else None
+            if traces is not None:
+                traces[row["id"]] = dict(noted)
             return row["id"], response, time.perf_counter() - started
 
     done = await asyncio.gather(*(one(row) for row in rows))
@@ -207,6 +217,7 @@ def collect_timed(
     *,
     setup: Callable[[], Awaitable[Any]] | None = None,
     calls_log: list[int] | None = None,
+    traces: list[dict[str, dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[float]]:
     """실행마다 응답을, 그리고 요청마다 걸린 시간(초, 모든 실행)을 모은다(TU-16 지연).
 
@@ -215,6 +226,7 @@ def collect_timed(
     setup이 있으면 같은 루프에서 먼저 불러 그 결과를 state로 쓴다(가드 LLM 클라이언트도 루프에
     묶인다, --guard).
     checks(목록)를 주면 실행마다 행 → 근거 대조 칸 값(#162)을 하나씩 덧붙인다.
+    traces(목록)를 주면 실행마다 행 → ROW_PROBE 기록을 하나씩 덧붙인다.
     """
     if preset not in PRESETS:
         raise ValueError(f"모르는 프리셋: {preset}")
@@ -224,9 +236,12 @@ def collect_timed(
         out = []
         for _ in range(runs):
             seen: dict[str, bool | None] | None = None if checks is None else {}
-            out.append(await _collect(preset, rows, own, seen, calls_log))
+            noted: dict[str, dict[str, Any]] | None = None if traces is None else {}
+            out.append(await _collect(preset, rows, own, seen, calls_log, noted))
             if checks is not None and seen is not None:
                 checks.append(seen)
+            if traces is not None and noted is not None:
+                traces.append(noted)
         return out
 
     results = asyncio.run(every_run())
@@ -420,6 +435,7 @@ def _write(
     gate_summary: Mapping[str, Any] | None = None,
     tutor: Mapping[str, Any] | None = None,
     subset: Mapping[str, Any] | None = None,
+    trace: Sequence[Mapping[str, Mapping[str, Any]]] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
@@ -455,6 +471,8 @@ def _write(
         data["cases"], data["team"] = "team", dict(team)
     if subset is not None:  # 공개 부분 세트: 파일 이름·잰 행 수·id 묶음 해시(전체 점수와 다른 세트)
         data["subset"] = dict(subset)
+    if trace is not None:  # 실행마다 행 → 기본값 응답·주 호출 결과·claim 수(row_trace, 본문 없음)
+        data["row_trace"] = {"by_run": [dict(sorted(run.items())) for run in trace]}
     if embedding is not None:
         data["embedding"] = {**asdict(embedding), "ok": embedding.ok}
     if llm is not None:
@@ -939,6 +957,30 @@ def public_subset(path: str) -> dict[str, Any] | None:
     return {"file": Path(path).name, "ids": frozenset(ids), "ids_sha256": digest}
 
 
+TRACE_KEYS = ("main_call", "claims", "unverified", "dropped")  # flow.ROW_PROBE가 담는 값
+
+
+def row_trace(
+    scored: Sequence[Sequence[metrics.Scored]],
+    traces: Sequence[Mapping[str, Mapping[str, Any]]] | None,
+) -> list[dict[str, dict[str, Any]]]:
+    """결과 JSON row_trace.by_run: 실행마다 행 → 기본값(TUTOR_DEFAULT) 응답인가, 그리고
+    tutor 프리셋이면 ROW_PROBE 기록(TRACE_KEYS). main_call은 ok·failed(TU-12 실패 기본값 경로)·
+    None(주 호출 전에 끝남), claims·unverified·dropped는 결정적 수정을 지난 행만 있다."""
+    out = []
+    for number, run in enumerate(scored):
+        noted = traces[number] if traces is not None else None
+        by_row = {}
+        for s in run:
+            entry: dict[str, Any] = {"default": s.is_default}
+            if noted is not None:
+                seen = noted.get(s.row_id, {})
+                entry.update({key: seen.get(key) for key in TRACE_KEYS})
+            by_row[s.row_id] = entry
+        out.append(by_row)
+    return out
+
+
 def _subset_used(subset: Mapping[str, Any] | None, rows: Sequence[Any]) -> dict[str, Any] | None:
     """결과 JSON의 subset: 파일 이름·id 묶음 해시·잰 행 수(행 id 목록은 남기지 않는다)."""
     if subset is None:
@@ -1108,6 +1150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     latency: list[float] = []
     calls_log: list[int] = []  # 요청마다 보낸 nano 시도 수(튜터·가드)
     checks: list[dict[str, bool | None]] | None = None
+    traces: list[dict[str, dict[str, Any]]] | None = [] if args.preset == "tutor" else None
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides, guard=args.guard) else None
         setup = None
@@ -1140,11 +1183,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             checks = []  # 실행마다 행 → 근거 대조 칸 값(#162)
         if setup is None:
             all_responses, latency = collect_timed(
-                args.preset, rows, args.runs, own, checks, calls_log=calls_log
+                args.preset, rows, args.runs, own, checks, calls_log=calls_log, traces=traces
             )
         else:  # 가드 LLM·폴드별 가드는 응답을 모으는 루프에서 만든다
             all_responses, latency = collect_timed(
-                args.preset, rows, args.runs, checks=checks, setup=setup, calls_log=calls_log
+                args.preset,
+                rows,
+                args.runs,
+                checks=checks,
+                setup=setup,
+                calls_log=calls_log,
+                traces=traces,
             )
     else:
         all_responses = [fixed] * args.runs
@@ -1201,6 +1250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         check_summary=check_summary,
         team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
         subset=_subset_used(subset, rows),
+        trace=row_trace(scored, traces),
     )
     _show(report, sys.stdout, judged=judge is not None)
     if check_summary is not None:

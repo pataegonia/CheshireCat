@@ -28,11 +28,13 @@
 
 import asyncio
 from collections.abc import Sequence
+from contextvars import ContextVar
 from typing import Any
 
 from guardrail.schema import OutputVerdict
 
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
+from integration.actions import _verified_sids as verified_sids  # finalize와 같은 인용 문구 검사
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
 from tutor.answer import postprocess
 from tutor.answer.quote import material_quote
@@ -69,6 +71,30 @@ MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 �
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
 # safe=false일 때 답 전체를 대신하는 거절 문장(IN-04). 범주를 모르므로 일반 거절
 REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
+
+# 측정 전용 행 기록(run_local). 요청(행)마다 새 dict를 넣으면 주 호출 결과(ok·failed)와 claim 수를
+# 담는다. 서버는 넣지 않는다(기본 None → 아무것도 하지 않음). 수·라벨만 담는다(TU-15·TU-18)
+ROW_PROBE: ContextVar[dict[str, Any] | None] = ContextVar("row_probe", default=None)
+
+
+def _note(**values: Any) -> None:
+    probe = ROW_PROBE.get()
+    if probe is not None:
+        probe.update(values)
+
+
+def claim_counts(
+    sentences: Sequence[Sentence], sections: Sequence[Section], cfg: FinalizeConfig, answer: str
+) -> dict[str, int]:
+    """측정 전용: 주 호출 claim 수, 인용 문구가 근거 섹션에서 확인되지 않은 claim 수(인용이 되지
+    못한다), 결정적 수정 답에 문장이 남지 않은 claim 수(judge_output unsupported·길이 자르기)."""
+    claims = [s for s in sentences if s.kind == "claim"]
+    unverified = sum(not verified_sids(s, sections, cfg.min_quote_chars) for s in claims)
+    return {
+        "claims": len(claims),
+        "unverified": unverified,
+        "dropped": sum(s.text not in answer for s in claims),
+    }
 
 
 def prepare_judge(app_state: Any) -> None:
@@ -260,14 +286,10 @@ def assemble(
         refuse_text=REFUSE_TEXT,
         max_citations=max_citations,
     )
-    result = finalize(
-        sentences,
-        verdict,
-        [_contract_section(s) for s in sections],
-        action_for(out.category),
-        cfg,
-        action=action,
-    )
+    retrieved = [_contract_section(s) for s in sections]
+    result = finalize(sentences, verdict, retrieved, action_for(out.category), cfg, action=action)
+    if ROW_PROBE.get() is not None:
+        _note(**claim_counts(sentences, retrieved, cfg, result.answer))
     body = result.model_dump()
     return add_top_citation(body, sections) if cite_top1 else body
 
@@ -351,6 +373,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
             anchor_unit=cfg.toggles.anchor_unit,  # 단원 닻(TU-03). 끄면 검색 한 번, 순서 그대로
         )
+        _note(main_call="failed" if draft.out is None else "ok")  # 측정 전용(ROW_PROBE)
         if classify is not None and not serial:
             # A-5: 최소 창(timeout_s.classify)과 주 호출이 끝난 때(+여유) 중 늦은 쪽까지 기다린다.
             # 주 호출이 끝난 뒤에는 기다리지 않으므로 요청 지연은 늘지 않는다

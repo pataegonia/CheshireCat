@@ -343,17 +343,18 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             classify.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
     # 제출물 대행 보정은 합치기 앞에 둔다: 보정된 academic scaffold는 표 고정 문장이라
     # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다.
-    # 덮기(override)는 classify가 위기·공격 범주면 걸지 않아 그 범주가 합치기에서 이긴다
+    # 덮기(override)는 classify가 위기·공격 범주면 걸지 않아 그 범주가 합치기에서 이긴다.
+    # 신호 없는 jailbreak classify는 합치기에서만 버린다. 주 호출 실패 기본값(위)은 그대로 쓴다.
+    # 덮기도 합치기와 같은 범주(trusted)를 본다: 버린 classify에 양보하면 덮기도 합치기도 안 걸린다
+    trusted = gate_classified(classified, signals, needs_signal=gated)
     out = delegation_guard(
         draft.out,
         signals,
         state_rule=cfg.toggles.scaffold_state_rule,
         override=cfg.toggles.delegation_override,
-        classified=classified,
+        classified=trusted,
     )
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
-    # 신호 없는 jailbreak classify는 합치기에서만 버린다. 주 호출 실패 기본값(위)은 그대로 쓴다
-    trusted = gate_classified(classified, signals, needs_signal=gated)
     merged = merge_category(out.category, action, trusted)
     if merged.fixed is not None:
         # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다

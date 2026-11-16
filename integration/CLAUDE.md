@@ -46,6 +46,7 @@
 - 루트 `pyproject.toml`의 pytest 설정은 `-m 'not live'`다. 루트에서 `guardrail/tests`를 같이 돌려도 실제 API 테스트는 고르지 않는다.
 - 하네스: `uv run python -m harness.run_public --preset v1_parallel`(실행 전 예상 호출 수를 출력하고 상한을 넘으면 멈춘다). 실제 API 부하(600요청 · 64동시)는 대회 기간 2회만.
 - 걸러 보기 대조 호출 측정(#162): `python -m harness.oom_probe --effort low|medium [--main <run_local 결과 JSON> --main-p95 <초>]`. 주 호출과 같은 근거 묶음 · 대화 창(튜터 함수를 import, 서버 코드는 안 바꿈)으로 "묻는 것이 근거에 있는가"만 교차 검증 160행에 1회씩 묻고(재시도 없음, 연속 429 3번이면 멈춤) harness/runs/(git 제외)에 행별 기록, 화면에 실패 갈래 · 지연 · found 혼동 · answer→abstain 모의 · 채택 기준 판정. asked · quote 원문은 `--keep-text`일 때만 남긴다. system은 harness/prompts/oom_check.md.
+- 저장소 루트를 운영진 폴더(/home/elicer/competition) 자리에 둔 런박스에서는 팀 `harness/`(`oom_probe` 등)가 운영진 원본 `harness/`(`score_local.py`)와 같은 폴더에 놓인다. 이름이 겹치는 파일은 없다. 운영진 원본의 사본은 저장소의 `competition/harness/`에 있다.
 
 ## 작업 방식
 - 슬라이스 단위로 한다: plan 문서의 **테스트 먼저** 목록을 실패하는 테스트로 쓰고 → 구현 → 수용 기준 체크. 한 슬라이스 = 한 PR.

@@ -192,15 +192,26 @@ def test_main_failure_does_not_turn_fallback_into_scaffold():
     assert run(state_with(llm, **ON))["action"] == "clarify"
 
 
-@pytest.mark.parametrize("category", ["jailbreak_injection", "emotional_distress"])
-def test_classify_crisis_or_attack_wins_over_intent(category):
+@pytest.mark.parametrize(
+    ("category", "main_kw", "want"),
+    [
+        ("jailbreak_injection", {}, TEXT[Fixed.REFUSE_JAILBREAK]),  # 합치기가 공격 고정 문장
+        ("emotional_distress", {}, None),  # 성공 경로: 주 호출 답 그대로(T는 비킨다)
+        ("emotional_distress", {"main_error": "timeout"}, TEXT[Fixed.ESCALATE]),  # 실패: 기본값
+        ("jailbreak_injection", {"main_error": "timeout"}, TEXT[Fixed.REFUSE_JAILBREAK]),
+    ],
+)
+def test_classify_crisis_or_attack_wins_over_intent(category, main_kw, want):
     from tests.tutor.test_guard_merge import FakeGuard
 
-    llm = RoleLLM(out(), "무관 결과물")
+    llm = RoleLLM(out(), "무관 결과물", **main_kw)
     state = state_with(llm, **ON, **{"toggles.guard_classify": "parallel"})
     state.guard = FakeGuard(category)
     resp = run(state)
-    assert resp["action"] != "redirect"
+    if want is None:
+        assert resp["action"] == "answer" and resp["citations"] == ["PY-01-01"]
+    else:
+        assert resp["answer"] == want
 
 
 def test_serial_classify_does_not_start_intent():

@@ -27,10 +27,12 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from guardrail.config import GuardConfig, load_config
-from guardrail.guard import ConstantGuard, Judgement
+from guardrail.guard import ConstantGuard, Guard, Judgement
+from guardrail.llm import openai_env
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict, parse_request
 
 access_log = logging.getLogger("guardrail.access")
+startup_log = logging.getLogger("guardrail.access.startup")  # 같은 핸들러로 나간다
 LOGGED_PATHS = frozenset({"/guard", "/tutor"})  # 그 밖의 경로는 "other"(경로도 요청이 정한다)
 UNAUTHORIZED = {"error": "unauthorized"}
 MAX_BODY_BYTES = 4 * 1024 * 1024  # 요청 본문 상한. 넘으면 읽기를 멈추고 기본값(GR-09)
@@ -53,8 +55,32 @@ GuardFactory = Callable[[GuardConfig], Awaitable[Judge]]
 
 
 async def constant_factory(cfg: GuardConfig) -> Judge:
-    """S1.2–S1.5 기준선. S2.8에서 Guard.build로 바뀐다."""
+    """상수 판정(S1.2–S1.5 기준선). 테스트와 기본 판정기의 대체값으로 쓴다."""
     return ConstantGuard()
+
+
+async def default_factory(cfg: GuardConfig) -> Judge:
+    """`create_app`·`setup_guard`의 기본값(S2.8, council 2026-11-13).
+
+    `OPENAI_API_KEY`가 있으면 실제 판정기(`Guard.build`), 없으면 상수 판정기다. 통합 `app.py`는
+    판정기를 넘기지 않으므로 키가 있는 런박스에서는 실제 판정기가 붙는다. 키가 있는데 기동이
+    실패하면 앱을 죽이지 않고(같은 앱의 /tutor를 살린다) 상수 판정기로 내린다. 어느 쪽이 떴는지는
+    기동 로그 한 줄로 남긴다(상태와 예외 종류 이름만, GR-12).
+    """
+    if not os.environ.get("OPENAI_API_KEY", "").strip():  # 호출 시점에 읽는다(import 때가 아니다)
+        startup_log.error("guard judge=constant reason=no_api_key")
+        return ConstantGuard()
+    try:
+        guard = await Guard.build(cfg)
+    except Exception as exc:  # noqa: BLE001 - 종류 이름만 남긴다
+        startup_log.error("guard judge=constant reason=%s", type(exc).__name__)
+        return ConstantGuard()
+    probe = guard.llm.probe_result.get("base")  # 인증 말고 다른 probe 실패는 기동을 막지 않는다
+    if probe is None:
+        startup_log.info("guard judge=real")
+    else:  # 판정기는 떴지만 첫 호출이 실패했다. 오류 코드만 남긴다
+        startup_log.error("guard judge=real probe=%s", probe)
+    return guard
 
 
 # --- 인증 ---
@@ -129,6 +155,8 @@ async def guard_route(request: Request) -> JSONResponse:
         async with asyncio.timeout(state.cfg.budget_s + BACKSTOP_MARGIN_S):
             judgement = await state.guard.judge(parse_request(raw))
         body = judgement.response.to_json(state.block)
+        # 200이어도 기본값으로 떨어진 판정을 로그에서 센다. 코드뿐이다(역할·예외 클래스 이름)
+        request.state.error = ",".join(judgement.errors) or None
     except Exception as exc:  # 메시지는 남기지 않는다(GR-12)
         request.state.error = type(exc).__name__
         body = _safe_default(state, raw)
@@ -136,7 +164,7 @@ async def guard_route(request: Request) -> JSONResponse:
 
 
 async def setup_guard(
-    app: FastAPI, cfg: GuardConfig, guard_factory: GuardFactory = constant_factory
+    app: FastAPI, cfg: GuardConfig, guard_factory: GuardFactory = default_factory
 ) -> None:
     """팀 앱용 계약: app.state에 판정기·토큰·block 표를 둔다. TEAM_TOKEN이 없으면 실패."""
     _install_log_filters()  # 기동 실패 트레이스백보다 먼저
@@ -194,6 +222,8 @@ def _install_log_filters() -> None:
     if not any(isinstance(f, _ExceptionNameOnly) for f in uv.filters):
         uv.addFilter(_ExceptionNameOnly())
     access_log.setLevel(logging.INFO)
+    for name in ("httpx2", "httpcore2", "httpx"):  # 주소·호스트를 INFO·DEBUG로 남기지 않게
+        logging.getLogger(name).setLevel(logging.WARNING)
     # 루트에 핸들러가 없을 때만 직접 쓴다(있으면 전파로 한 번만 찍힌다)
     if not access_log.handlers and not logging.getLogger().handlers:
         access_log.addHandler(logging.StreamHandler())
@@ -250,11 +280,17 @@ def _tutor_body(answer: str) -> dict[str, Any]:
 
 
 async def _tutor_answer(state: Any, req: GuardRequest) -> str:
-    model = os.environ["OPENAI_MODEL"]
+    env = openai_env()  # 하나라도 비면 공개 OpenAI로 나가거나 인증이 깨지므로 만들지 않는다
+    model = env["OPENAI_MODEL"]
     if getattr(state, "tutor_client", None) is None:
-        from openai import AsyncOpenAI  # 첫 호출 때만 환경변수를 읽는다
+        from openai import AsyncOpenAI  # 첫 호출 때만 불러온다
 
-        state.tutor_client = AsyncOpenAI(timeout=TUTOR_TIMEOUT_S, max_retries=0)
+        state.tutor_client = AsyncOpenAI(
+            base_url=env["OPENAI_BASE_URL"],
+            api_key=env["OPENAI_API_KEY"],
+            timeout=TUTOR_TIMEOUT_S,
+            max_retries=0,
+        )
     llm = getattr(state.guard, "llm", None)
     gate = llm.slot() if llm is not None else contextlib.nullcontext()
     messages = [{"role": "system", "content": TUTOR_SYSTEM}]
@@ -302,7 +338,7 @@ Startup = Callable[[Any], Awaitable[None]]
 
 
 def create_app(
-    guard_factory: GuardFactory = constant_factory,
+    guard_factory: GuardFactory = default_factory,
     *,
     tutor_router: APIRouter | None = None,
     defaults: Mapping[str, dict[str, Any]] | None = None,
@@ -341,4 +377,5 @@ def create_app(
 
 
 _install_log_filters()  # import 때 한 번(uvicorn은 로그 설정 뒤에 앱을 불러온다)
-app = create_app()
+# 단독 서버(`uvicorn guardrail.server:app`)는 실제 판정기다. LLM 환경변수가 없으면 기동에서 실패한다
+app = create_app(Guard.build)

@@ -196,14 +196,17 @@ def test_budget_without_cfg_uses_the_default():
 def test_router_passes_the_request_deadline(client, monkeypatch):
     seen = []
 
-    async def capture(body, *, deadline):
-        seen.append(deadline - asyncio.get_running_loop().time())
+    async def capture(body, *, deadline, state):
+        seen.append((deadline - asyncio.get_running_loop().time(), state))
         return {"answer": "a", "action": "answer", "citations": []}
 
     monkeypatch.setattr(router_mod, "respond", capture)
     r = post(client, as_bytes({"messages": [{"role": "user", "content": "q"}]}))
     assert r.json() == {"answer": "a", "action": "answer", "citations": []}
-    assert 0 < seen[0] <= budget.DEFAULT_BUDGET_S  # 기본 설정 budget_s = 20
+    left, state = seen[0]
+    assert 0 < left <= budget.DEFAULT_BUDGET_S  # 기본 설정 budget_s = 20
+    assert state is client.app.state  # 기동 때 만든 설정·색인·LLM을 처리 단계에 넘긴다
+    assert state.tutor_cfg is not None and state.tutor_llm is not None
 
 
 def test_only_large_bodies_are_parsed_in_a_thread(monkeypatch):

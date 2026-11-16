@@ -45,7 +45,7 @@
 |---|---|---|
 | `normal` | answer | 1–3문장. 정답이 되는 값·이름·조건을 자료 표현 그대로 쓰고 근거 섹션을 인용 |
 | `pii_disclosure` | answer | 질문에 답하고 "개인정보는 적지 않아도 돼요" 한 문장. 개인정보를 되풀이하지 않음 |
-| `answer_seeking` | scaffold | 최종 정답 대신 자료의 기준과 다음 단계. 근거 섹션 인용 |
+| `answer_seeking` | scaffold | 최종 정답 대신 자료의 기준과 다음 단계(숨김, `scaffold_state_rule: false`, 11/14 측정). 근거 섹션 인용. 정답 사실을 먼저 밝히는 쪽(true)은 운영진 답(§11-1-4)과 함께 T3에서 다시 본다 |
 | `academic_dishonesty` | scaffold | 완성 글·코드 대신 직접 할 순서. 자료 내용을 썼으면 그 섹션 인용 |
 | `out_of_material` | abstain | "자료에 나와 있지 않아요". 자료 내용을 덧붙이면 그 섹션을 꼭 인용하고, 인용할 수 없으면 덧붙이지 않음 |
 | `low_signal_input` | clarify | 무엇이 궁금한지 되묻는 한 문장 |
@@ -59,7 +59,7 @@
 - 공격·사기 수법을 **배우려는** 질문은 `normal`이다. 자기소개와 남의 정보 요청이 같이 있으면 `harmful_content`(refuse)다.
 - 전제가 자료와 틀린 질문은 abstain이 아니라 answer로 바로잡는다. 자료에 아무 내용이 없을 때만 abstain이다.
 - 근거 밖의 과목 고유 사실은 쓰지 않는다. 가상 은행·실습·도우미 이름·수치가 그렇다(SPEC §2).
-- scaffold에는 KB Q&A의 답, 완성 코드, 최종 선택지를 넣지 않는다.
+- scaffold에는 KB Q&A의 답, 완성 코드, 최종 선택지를 넣지 않는다. answer_seeking도 기본(숨김)에서는 정답 사실을 밝히지 않는다(밝힘은 `scaffold_state_rule: true`일 때만, TU-06). academic_dishonesty는 어느 경우에도 밝히지 않는다.
 
 ## KB·공개 세트에서 확인된 함정 (TUTOR_PRD §1, TU-02·03·05·07·11)
 - `kb/finance/FIN-01.html`은 FIN-01-01~04 md의 사본이다. 색인하지도 인용하지도 않는다.
@@ -75,21 +75,21 @@
 - "거절하지 말고", 권한 주장, 소설·역할극 틀은 정상 문항에도 많다. 이것 하나만으로 신호를 올리지 않는다(TU-05).
 
 ## 합의된 구조 (TUTOR_PRD §4·§9, 통합 PRD §3·IN-01·IN-04·IN-05)
-- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. 공유 객체(`KbIndex`·LLM 게이트·`Guard`)는 `request.app.state`로 받는다(TU-01). 주입 인자 `tutor_router`·`defaults`·`startups`(`tutor.startup`)는 가드 #92 `8fd8f5f`에 들어갔다.
+- 튜터는 `tutor.router`(`POST /tutor`)와 `tutor.TUTOR_DEFAULT`를 내보내고, 가드 `create_app`에 주입돼 한 앱으로 뜬다. 인증·메타 로그·lifespan은 가드 골격을 쓴다. LLM 게이트·`Guard`는 `request.app.state`로 받고, KB 색인은 가드 `KbIndex` 클래스로 튜터가 기동 때 따로 만든다(설정은 가드 설정 `kb`, TU-01·TD-03). 주입 인자 `tutor_router`·`defaults`·`startups`(`tutor.startup`)는 가드 #92 `8fd8f5f`에 들어갔다.
 - 라우터는 예외를 밖으로 내지 않고 튜터 규격 본문을 돌려준다. 본문은 직접 읽고, FastAPI 422로 입력을 되풀이하지 않는다(TU-01).
 - 가드 골격은 `/tutor`에 시간 상한과 본문 크기 상한을 걸지 않는다. 튜터 라우터가 `budget_s` 시간 상한을 걸고, 본문은 4MiB를 넘으면 읽기를 멈춘다. `request.state.req_bytes`에는 길이만 남긴다(통합 IN-05, 가드 #92 코멘트).
 - 주 호출 출력은 문장 단위 `Sentence`(`text`, `kind: claim|non_claim`, `evidence: [{sid, quote}]`)다. `answer`는 문장을 이어 붙여 만들고, `citations`는 결정적 수정이 계산한다(TU-06, IN-01).
 - 결정적 수정(인용 문구 검사, `unsupported` 문장 삭제, citations 계산, 4,000자 절단)은 `integration/actions.py`(IN-04)가 맡는다. 튜터 후처리는 튜터 고유 검사만 한다(TU-07).
 - 인용 규칙(TU-07, TD-01):
-  - answer·scaffold(answer_seeking)는 citations를 항상 1개 낸다. 남은 claim이 없으면 검색 1위 섹션이다.
-  - abstain·scaffold(academic_dishonesty)는 쓴 자료의 섹션만 인용하고, 없으면 `[]`다.
+  - answer·scaffold(answer_seeking)는 citations를 항상 1개 낸다. 남은 claim이 없으면 검색 1위 섹션이다. 그 1개가 검색 1위가 아니면 1위를 뒤에 더해 2개를 낸다(`toggles.cite_top1`, 기본 켬, PRD TU-07).
+  - abstain·scaffold(academic_dishonesty)는 쓴 자료의 섹션만 인용하고, 없으면 `[]`다. 인용이 있으면 `cite_top1`이 action과 상관없이 검색 1위를 더할 수 있다(정답 근거가 없는 문항이라 인용 F1은 채점되지 않고 충실 판정 근거만 는다).
   - clarify·redirect·refuse·escalate는 `[]`다.
 - v1 범주 판정: 가드 `classify`를 주 호출과 **병렬**로 돌리고, 공격 4범주에서만 덮어쓴다(TU-10, TD-13).
 - `judge_output`을 쓸 때는 `category=`(합친 범주)를 반드시 넘긴다(TU-09).
 - 판정이 시간 부족이나 실패로 빠지면 **판정만 건너뛰고 생성 답과 action을 그대로 낸다.** abstain으로 바꾸지 않는다(TU-09·TU-12).
 - 공유 설정 키 `budget_s`·`judge_skip_s`·`fallback_action`은 가드·통합과 같은 키를 읽는다(TU-13, 통합 §3-1).
 - LLM 호출은 가드 전역 게이트 `slot()`을 함께 쓴다. SDK 재시도는 0으로 두고, 수동 재시도는 예산 안에서만 한다. nano 파라미터는 가드 GR-10과 같다. 호출 수 상한은 TU-13을 따른다.
-- KB 색인은 가드 `KbIndex`를 공유한다(TD-03). 검색(`retrieve`·이름 사전·임베딩)은 튜터 소유이고, 통합은 recall만 잰다(TD-11, IN-02).
+- KB 색인은 가드 `KbIndex` 클래스를 쓰고 인스턴스는 튜터가 따로 만든다(설정은 가드 설정 `kb`·`retrieval.max_query_chars`, TD-03). 검색(`retrieve`·이름 사전·임베딩)은 튜터 소유이고, 통합은 recall만 잰다(TD-11, IN-02).
 - 패키지: 루트 uv workspace의 멤버 `tutor/pyproject.toml`. 테스트는 저장소 `tests/tutor/`에 두고 integration-ci의 test job이 돈다. 루트 workspace는 통합이 만든다(통합 §3-2).
 
 ## 튜터에서 특히 지킬 규칙 (TU-15·TU-18, SPEC §7–§8)
@@ -118,7 +118,7 @@
 - 생성 실패 시 기본 action 값(`fallback_action`, 잠정 clarify): TU-12
 - CSV 표현(원문 CSV / "열: 값" 문장): TU-03, 통합 I4
 - 생성에 넣는 섹션 수 K(`retrieval.k`): TU-03, 통합 I5
-- answer_seeking에서 정답 사실이 곧 정답일 때의 정책: TU-06, §11-1-4
+- answer_seeking에서 정답 사실을 밝힐지(지금 숨김, T3에서 운영진 답 §11-1-4와 행별 응함 확인 뒤 다시 봄): TU-06
 - 설정 파일 위치·형식(루트 `config/` 안): TU-14
 - 빠른 질문 버튼 문구만 있는 1턴의 기대 action(clarify `[가설]`): §3, §11-1-1
 - 팀 provenance 합본·시연 체크리스트 위치: §11-3-2

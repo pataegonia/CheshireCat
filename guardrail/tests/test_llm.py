@@ -4,11 +4,15 @@ FakeLLM + FakeClock으로 0ms에 돈다. 실제 API는 `-m live`에서만.
 """
 
 import asyncio
+import copy
 import email.utils
+import json
 import os
 import time
 from collections import Counter
 
+import httpx2 as httpx
+import openai
 import pytest
 from fakes import (
     BadRequest,
@@ -132,7 +136,7 @@ async def test_probe_turns_off_only_the_rejected_param():
         "response_format": None,
     }
     assert llm.params["verbosity"] is None
-    assert llm.params["reasoning_effort"] == "low" and llm.params["max_completion_tokens"] == 800
+    assert llm.params["reasoning_effort"] == "low" and llm.params["max_completion_tokens"] == 1600
     assert llm.structured == "json_schema"
     # 파라미터마다 따로 시험한다
     extras = [set(kw) - {"model", "messages"} for kw in fake.requests]
@@ -177,6 +181,51 @@ async def test_start_without_env_is_a_config_error(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         await LLM(BASE).start()
+
+
+ENV = {
+    "OPENAI_API_KEY": "k",
+    "OPENAI_MODEL": "gpt-5-nano",
+    "OPENAI_BASE_URL": "http://proxy.test/v1",
+}
+
+
+class _Built(Exception):
+    """AsyncOpenAI를 만들려 하면 던진다(만든 인자를 담는다)."""
+
+
+def _record_client(monkeypatch):
+    import openai
+
+    def fake(**kwargs):
+        raise _Built(kwargs)
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", fake)
+
+
+@pytest.mark.parametrize("name", list(ENV))
+@pytest.mark.parametrize("value", [None, "", "  "])
+async def test_start_blank_env_builds_no_client(monkeypatch, name, value):
+    # 주소가 비면 SDK가 공개 OpenAI 주소로 팀 키를 보낸다. 셋 중 하나라도 비면 만들지 않는다
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    if value is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, value)
+    _record_client(monkeypatch)
+    with pytest.raises(ValueError, match=name):
+        await LLM(BASE).start()
+
+
+async def test_start_passes_the_configured_base_url(monkeypatch):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, f" {v} ")
+    _record_client(monkeypatch)
+    with pytest.raises(_Built) as built:
+        await LLM(BASE).start()
+    assert built.value.args[0]["base_url"] == ENV["OPENAI_BASE_URL"]
+    assert built.value.args[0]["api_key"] == ENV["OPENAI_API_KEY"]
 
 
 async def test_complete_before_start_is_a_programming_error():
@@ -357,13 +406,53 @@ async def test_errors_carry_codes_not_messages():
     assert llm.unexpected == Counter({"RuntimeError": 1})  # 클래스 이름만
 
 
+async def test_lone_surrogate_is_sent_as_replacement_in_a_copy():
+    """실제 SDK + 가짜 전송: 짝 없는 surrogate가 있어도 요청이 나가고, 넘긴 메시지는 그대로."""
+    bodies: list[bytes] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(req.content)
+        message = {"role": "assistant", "content": OK_IN}
+        choice = {"index": 0, "finish_reason": "stop", "message": message}
+        return httpx.Response(200, json={"choices": [choice], "usage": {"completion_tokens": 5}})
+
+    client = openai.AsyncOpenAI(
+        api_key="x",
+        base_url="http://fake.invalid/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        max_retries=0,
+    )
+
+    async def send(kwargs):
+        return await client.chat.completions.create(**kwargs)
+
+    llm = LLM(BASE, send=send)
+    msgs = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "a\ud800b"}]
+    before = copy.deepcopy(msgs)
+    r = await llm.complete("input_judge", msgs, InputOut, deadline=time.monotonic() + 20)
+    assert r.error is None and r.parsed is not None
+    assert len(bodies) == 1
+    sent = json.loads(bodies[0].decode("utf-8"))["messages"]
+    assert sent[1]["content"] == "a\ufffdb"
+    assert llm.unexpected == Counter()
+    assert msgs == before
+
+
+@pytest.mark.parametrize("lone", ["\ud800", "\udbff", "\udc00", "\udfff"])
+async def test_both_halves_of_surrogate_range_are_replaced(lone):
+    llm, fake, clock = make(Ok(OK_IN))
+    msgs = [{"role": "user", "content": f"a{lone}b"}]
+    assert (await llm.complete("input_judge", msgs, InputOut, deadline=clock() + 20)).parsed
+    assert fake.requests[0]["messages"][-1]["content"] == "a\ufffdb"
+
+
 # --- live ---
 
 
 @pytest.mark.live
 async def test_live_probe_and_input_call():
-    if not (os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_MODEL")):
-        pytest.skip("OPENAI_API_KEY·OPENAI_MODEL 없음")
+    if not all(os.environ.get(k, "").strip() for k in ENV):
+        pytest.skip("OPENAI_API_KEY·OPENAI_MODEL·OPENAI_BASE_URL 없음")
     llm = LLM(BASE)
     await llm.start()
     msgs = [
@@ -423,3 +512,28 @@ async def test_retry_dropped_when_wait_overran_the_margin():
 async def test_result_repr_hides_parsed_text():
     llm, _, clock = make(Ok('{"evidence": "SECRET-TEXT", "category": "normal"}'))
     assert "SECRET-TEXT" not in repr(await call(llm, clock))
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+@pytest.mark.parametrize("name", ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"])
+def test_openai_env_error_never_contains_values(monkeypatch, name, blank):
+    from guardrail.llm import openai_env
+
+    values = {
+        "OPENAI_API_KEY": "SENTINEL-KEY-7f3",
+        "OPENAI_MODEL": "SENTINEL-MODEL-7f3",
+        "OPENAI_BASE_URL": "http://SENTINEL-URL-7f3/v1",
+    }
+    for k, v in values.items():
+        monkeypatch.setenv(k, v)
+    if blank is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, blank)
+    with pytest.raises(ValueError) as ei:
+        openai_env()
+    err = ei.value
+    assert name in str(err)
+    for k, v in values.items():
+        if k != name:
+            assert v not in str(err) and v not in repr(err) and v not in err.args

@@ -1250,7 +1250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         check_summary=check_summary,
         team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
         subset=_subset_used(subset, rows),
-        trace=row_trace(scored, traces),
+        trace=row_trace(scored, traces or None),  # 채우지 않은 목록(가짜 수집기)은 기록 없음
     )
     _show(report, sys.stdout, judged=judge is not None)
     if check_summary is not None:

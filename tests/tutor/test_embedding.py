@@ -491,7 +491,7 @@ def _run_local(
     monkeypatch.setattr(run_local, "openai_embed", lambda: fake)
     seen = {}
 
-    def fake_timed(preset, rows, runs, state=None, checks=None, calls_log=None):
+    def fake_timed(preset, rows, runs, state=None, checks=None, calls_log=None, traces=None):
         seen["state"] = state
         for _ in range(runs):
             if query is not None and state is not None and state.tutor_emb is not None:

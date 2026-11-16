@@ -20,7 +20,7 @@ from tutor.judge.main_call import (
     SentenceOut,
 )
 from tutor.request import parse_request
-from tutor.retrieval import default_index, retrieve
+from tutor.retrieval import KbIndex, default_index, find_anchor, retrieve
 from tutor.runtime.config import load_config
 from tutor.runtime.llm import Result
 
@@ -316,6 +316,60 @@ def test_add_top_citation_appends_without_changing_the_input():
 def test_add_top_citation_leaves_body_as_is(cites, ranked):
     body = {"answer": "가", "action": "answer", "citations": cites}
     assert flow.add_top_citation(body, _sections(*ranked)) == body
+
+
+# --- 단원 닻(toggles.anchor_unit, TU-03) ---
+
+# 앞 대화가 PY-03 단원(리스트)을 다룬 뒤 QUESTION을 묻는 대화
+ANCHOR_TALK = ("리스트가 뭐야", "리스트는 여러 값을 순서대로 담는 자료형이에요.", QUESTION)
+
+
+def test_anchor_unit_premise_ranks():
+    # 아래 흐름 테스트의 전제: 본 검색 1·2위는 PY-01-01, PY-03-04이고 앞 대화의 닻은 PY-03이다
+    ranked = asyncio.run(retrieve(QUESTION, ANCHOR_TALK[:1], k=5, index=default_index()))
+    assert [s.id for s in ranked][:2] == ["PY-01-01", "PY-03-04"]
+    assert asyncio.run(find_anchor(ANCHOR_TALK[:2], index=default_index())) == "PY-03"
+
+
+@pytest.mark.parametrize(
+    "sentences, off, on",
+    [
+        (None, ["PY-01-01"], ["PY-01-01", "PY-03-04"]),  # 검증된 인용 뒤에 닻 순서의 1위를 더한다
+        ([RANK2_CLAIM], ["PY-03-04", "PY-01-01"], ["PY-03-04"]),  # 닻 순서의 1위를 이미 인용
+        ([], ["PY-01-01"], ["PY-03-04"]),  # 남은 claim 0이면 IN-04가 1위를 인용한다
+    ],
+    ids=["top_added", "top_already_cited", "no_claims"],
+)
+def test_anchor_unit_reorders_the_top_section_for_citations(sentences, off, on):
+    for anchor, expected in ((False, off), (True, on)):
+        llm = FakeLLM(out(sentences=sentences))
+        state = state_with(llm, **{"toggles.cite_top1": True, "toggles.anchor_unit": anchor})
+        assert ask(state, *ANCHOR_TALK)["citations"] == expected
+
+
+@pytest.mark.parametrize(
+    "overrides, n_searches, first",
+    [
+        ({}, 1, "PY-01-01"),
+        ({"toggles.anchor_unit": False}, 1, "PY-01-01"),
+        ({"toggles.anchor_unit": True}, 2, "PY-03-04"),
+    ],
+    ids=["default", "off", "on"],
+)
+def test_anchor_unit_toggle_reaches_the_evidence_bundle(monkeypatch, overrides, n_searches, first):
+    seen = []
+    real = KbIndex.search
+
+    def spy(self, query, *, subject=None):
+        seen.append(query)
+        return real(self, query, subject=subject)
+
+    monkeypatch.setattr(KbIndex, "search", spy)
+    llm = FakeLLM(out())
+    ask(state_with(llm, **overrides), *ANCHOR_TALK)
+    assert len(seen) == n_searches  # 끄면(기본) 검색은 한 번뿐이다
+    body = llm.calls[0]["messages"][1]["content"]
+    assert body.index("<섹션 id=") == body.index(f'<섹션 id="{first}">')
 
 
 def test_action_from_category_toggle_reaches_flow():

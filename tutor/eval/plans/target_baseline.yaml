@@ -1,0 +1,15 @@
+# 목표 세트 기준선: 지금 설정 그대로 판정 포함 3회(run_local --runs 3, 예상 호출 707회).
+# 먼저 목표 세트를 만든다(API 0회):
+#   python -m tutor.eval.target_set --out tutor/eval/runs/target_set.jsonl
+# 실행(저장소 루트, 운영진 API 환경변수가 있는 셸):
+#   python -m tutor.eval.run_queue tutor/eval/plans/target_baseline.yaml \
+#     --summary tutor/eval/runs/queue_summary.md --max-calls 800
+# 항목 키: name, workdir(기본 "."), cases, runs, judge, tutor_set(KEY=VALUE 목록), compare(선택).
+# 예: tutor_set: ['prompt.main_call="main_call_v_xxx.md"', 'toggles.verify="off"']
+items:
+  - name: target-baseline
+    workdir: "."
+    cases: tutor/eval/runs/target_set.jsonl
+    runs: 3
+    judge: true
+    tutor_set: []

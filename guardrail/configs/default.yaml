@@ -1,6 +1,6 @@
 # 가드 기본 설정. master-plan §4.4 블록을 그대로 옮겼다. 바꾸려면 §4.4를 먼저 고친다.
 # 키·주소는 여기에 쓰지 않는다(환경변수, §4.4 끝).
-version: "6.0.5"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.6"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
 prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en.md, output_judge_baseline: output_judge_baseline.md, jb_check: jb_check_en.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
@@ -29,7 +29,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   embedding: false                 # GR-03·GR-05 임베딩, P2
   jb_check: true                  # S3.3 탈옥 2차 판정(prompts.jb_check). 1차가 jailbreak_injection일 때만 호출 1회 추가
 input:
-  label_mode: category             # category | act(S3.2 선별용 변형, R14 B3). v1은 category
+  label_mode: category             # category | act(S3.2 선별용 변형, R14 B3) | flags(S3.8 실험 변형, 범주 앞 예/아니오 두 칸, 미채택). v1은 category
   window_last: 6
   max_chars: 2000                  # 메시지 하나의 길이 상한(보이지 않는 문자만 지우고 넘으면 공백·반복을 줄인 뒤 앞 + 뒤, 무거운 정규화는 그 뒤. 판정 대상 <target>에도 적용, 긴 이력 대비)
   max_answer_chars: 8000           # 후보 답변의 원문 길이 상한(전처리 전에 자름. SPEC §4 답변 최대 4000자). 출력 nano·규칙 ②·거절 정규식이 자른 답변을 본다. has_hidden_tags는 자르기 전 전체
@@ -47,7 +47,7 @@ output:
   call_nano_when_unused: true      # nano_tier3가 꺼졌을 때 출력 nano를 그래도 부를지. 측정 때는 true(S3.1 정밀도 기록). nano_tier3: false로 동결하면 false로 낮춰 호출을 아낄 수 있다
   rule_min_margin: 3.5             # Ranking.margin(KbIndex.rank 한 번, 전체 순위, 섹션별 최고 점수) 기준. S3.1이 G∪T(가드 근거 있음 + 튜터 참조 답변) 오탐으로 정한다. 기본 3.5는 공개 세트에서 정한 잠정값(R13-A §6.2)
   rule_emit_spans: true            # true = 규칙 ② → false + 규칙 구간 | false = false/[]. S3.1이 규칙 정밀도 P로 정한다(P ≥ 1/(1+s) → true, 0.5 ≤ P < 1/(1+s) → false, P < 0.5 → literal_rule 끔)
-  rule_span: pm4                   # pm4(서로 다른 토큰 문자열마다 첫 토큰 ±4자, 겹치는 창 병합·중복 제거, `merged_pm4_spans`, F1 0.651 측정값) | eojeol(어절 경계). S3.1이 비교
+  rule_span: clause                # clause(첫 토큰의 한 어절 앞 → 절 끝, S3.1 재생 4회 모두 pm4 대비 +0.004 출력 평균) | pm4(첫 토큰 ±4자, `merged_pm4_spans`, F1 0.638) | eojeol(어절 경계, 0.503)
   rule_extra_tokens: []            # ablation: value_norm(콤마·만·천·억) | units_extra(주·일·년·글자) | bare_numeral(단위 없는 한글 수사, 미구현: 설정하면 기동 실패) | backtick_latin(백틱 안 영문만). 기본 [] = V2(NUM_RX + 인용 제거 + 수사 클래스 수정)
   rule_require_same_kind: false    # ablation(미구현: true면 기동 실패): 같은 종류(단위 숫자/한글 수사/백틱 코드/함수 호출/리스트 리터럴)의 다른 값이 섹션에 있을 때만 걸림
   tier3_trust: answer_quote        # all | answer_quote | both_quotes. nano "근거 없음" 가운데 ③에 쓰는 것(R14-D2). 잠정값, S3.1이 저장된 응답으로 정한다

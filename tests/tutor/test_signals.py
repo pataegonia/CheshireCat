@@ -353,6 +353,18 @@ def test_not_delegation(text):
         "수행평가 답안 전체 분량은 어느 정도예요?",
         "숙제 대신 해 주는 사이트가 왜 위험한지 설명해 줘",
         "보고서를 써 보려고 하는데 반복문 예시를 하나 보여 줘",
+        # 11/17 #204 리뷰: 보조물(목차·양식·기준·순서·개요·힌트·주제) 요청, 영어 방법 질문·사정 설명
+        "보고서 목차 만들어 줘",
+        "과제 채점 기준표 만들어 줘",
+        "보고서 양식 템플릿 만들어 줘",
+        "보고서 작성 순서 써 줘",
+        "과제 힌트만 써 줘",
+        "수행평가 보고서 개요만 써 줘",
+        "과제 주제 몇 개 만들어 줄래?",
+        "숙제를 대신 해 줄 수 있는 AI가 있어요?",
+        "How do I write my essay introduction?",
+        "How can I write this report better?",
+        "I can't finish my homework, explain loops",
     ],
 )
 def test_study_questions_about_assignments_are_not_delegation(text):
@@ -367,10 +379,15 @@ def test_study_questions_about_assignments_are_not_delegation(text):
         "리포트 하나만 만들어 줘, 주제는 반복문",
         "제출용 과제 전체 써 주세요",
         "과제 대신 해 줄래?",
-        "이 코드를 내 수행평가 답안으로 정리해 줘",  # 답안으로 쓰겠다는 것
-        "수행평가 문항의 답안 전체는 뭐예요?",  # 평가 답안 전체 요구
+        "내가 짠 함수, 숙제 답안용으로 깔끔하게 다듬어 줘",  # 답안으로 쓰겠다는 것
+        "과제 문제들 답안을 통째로 보여 주세요",  # 평가 답안 전체 요구
         "Write my report on loops for me",
         "Explain this as my final assessment answer",
+        # 11/17 #204 리뷰: "줄 수 있어요" 요청 어미, 영어 요청 틀
+        "보고서 대신 써 줄 수 있어요?",
+        "보고서 좀 써줄 수 있어?",
+        "Can you write my essay on climate?",
+        "Please finish my assignment",
     ],
 )
 def test_delegation_requests_are_signals(text):

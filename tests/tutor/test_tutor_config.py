@@ -39,6 +39,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.delegation_override is False  # TU-06 기본 끔, 동결 후보 측정에서 켠다
     assert toggles.quote_append is False  # TU-07 자료 문장 덧붙이기 기본 끔
     assert toggles.fallback_quote is False  # TU-12 자료 인용 답 기본 끔(#201 A-2)
+    assert toggles.oom_gate == "off"  # 자료 밖 확인 E 기본 끔(#213 B2)
     assert toggles.intent_override == "off"  # T 의도 판정 기본 끔(#209)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)

@@ -222,6 +222,19 @@ def test_classify_crisis_or_attack_wins_over_intent(category, main_kw, want):
         assert resp["answer"] == want
 
 
+@pytest.mark.parametrize("category", ["harmful_content", "jailbreak_injection"])
+def test_main_failure_keeps_the_classify_refuse_over_a_lowering_intent_label(category):
+    # 주 호출 실패 + classify 공격 범주의 기본값(refuse)은 T가 덮지 않는다. 유해-비하 이름표는
+    # refuse를 redirect로 낮추는 규칙이 있어, 실패 경로의 classify 양보 줄이 없으면 낮아진다
+    # (#220 가드 리뷰 2번)
+    from tests.tutor.test_guard_merge import FakeGuard
+
+    llm = RoleLLM(out(), "유해-비하", main_error="timeout")
+    state = state_with(llm, **ON, **{"toggles.guard_classify": "parallel"})
+    state.guard = FakeGuard(category)
+    assert run(state)["action"] == "refuse"
+
+
 def test_serial_classify_does_not_start_intent():
     from tests.tutor.test_guard_merge import FakeGuard
 

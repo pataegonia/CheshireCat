@@ -384,12 +384,19 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     """v2 흐름 하나. 자료 밖 확인 E(`toggles.oom_gate`)를 켰으면 요청 시작 때 E를 함께 띄우고,
     흐름이 끝나 최종 action이 answer이고 E가 "근거에 없음"이면 자료 밖 고정 문장(abstain)으로
     바꾼다. E가 마감(E 시작부터 `llm.timeout_s.oom_gate`) 안에 끝나지 않거나 실패하면 흐름
-    결과 그대로다. abstain으로 바꾸지 않은 결과에만 자료 문장 덧붙이기(`toggles.quote_append`)를
-    한다. 빠져나갈 때 아직 도는 E는 취소한다(TU-18). 예외는 올린다(라우터가 클래스 이름만
-    기록하고 기본값을 낸다).
+    결과 그대로다. E 준비(검색·메시지 만들기)가 예외를 내도 E 없이 흐름을 그대로 탄다
+    (`start_error`로 센다). abstain으로 바꾸지 않은 결과에만 자료 문장 덧붙이기
+    (`toggles.quote_append`)를 한다. 빠져나갈 때 아직 도는 E는 취소한다(TU-18). 흐름 본체의
+    예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
     """
-    gate_on = state.tutor_cfg.toggles.oom_gate != "off"
-    gate = await _start_gate(req, state, deadline) if gate_on else None
+    gate = None
+    if state.tutor_cfg.toggles.oom_gate != "off":
+        try:
+            gate = await _start_gate(req, state, deadline)
+        except Exception:  # 메시지는 남기지 않는다
+            counts = getattr(state, "oom_gate_counts", None)
+            if counts is not None:
+                counts["start_error"] += 1
     try:
         if gate is not None:
             await asyncio.sleep(0)  # E 요청이 주 호출·T보다 먼저 나가도록 한 번 양보한다

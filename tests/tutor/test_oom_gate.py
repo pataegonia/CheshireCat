@@ -351,6 +351,19 @@ def test_named_term_scope_counts_english_before_names():
     assert state.oom_gate_counts == {"english": 1}
 
 
+def test_gate_start_failure_keeps_the_flow_answer(monkeypatch):
+    # E 준비(검색·메시지 만들기)에서 예외가 나도 흐름 답을 낸다(라우터 기본값으로 떨어지지 않는다)
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(flow, "build_gate_messages", boom)
+    llm = RoleLLM(out(), found=False)
+    state = state_with(llm, **ON)
+    resp = run(state)
+    assert resp["action"] == "answer" and oom_gate.ROLE not in llm.roles
+    assert state.oom_gate_counts == {"start_error": 1}
+
+
 # E와 자료 문장 덧붙이기(TU-07)를 함께 켠 경우: 덧붙이기는 E가 abstain으로 바꾸지 않은 결과에만 한다
 QUOTED_NAMED = {**NAMED, "toggles.quote_append": True}
 

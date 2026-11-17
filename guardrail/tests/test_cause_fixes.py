@@ -33,9 +33,9 @@ def no_rule(monkeypatch):
 @pytest.mark.parametrize(
     ("span", "want"),
     [
-        ("① 하루 사용 한도는 5만 원이에요.", "하루 사용 한도는 5만 원"),
-        ("단의 수는 0 이상의 정수로 입력해요. [PY-02-04]", "단의 수는 0 이상의 정수로 입력해요."),
-        ("범위는 1점부터 100점까지예요.", "범위는 1점부터 100점까지"),
+        ("① 연필 한 자루 값은 300원이에요.", "연필 한 자루 값은 300원"),
+        ("줄 수는 4 이하의 짝수로 적어요. [PY-02-04]", "줄 수는 4 이하의 짝수로 적어요."),
+        ("높이는 2층부터 9층까지예요.", "높이는 2층부터 9층까지"),
         ("이자율은 2%이므로", "이자율은 2%"),
         ("2. 기간은 24개월입니다", "기간은 24개월"),
         ("(FIN-01-02) 한도는 3만 원", "한도는 3만 원"),
@@ -48,10 +48,10 @@ def test_tidy_span_strips_cites_list_marks_and_copula_after_numbers(span, want):
 @pytest.mark.parametrize(
     "span",
     [
-        "답변을 읽을 대상은 학교 급식 담당자들이에요.",  # 숫자가 없으면 끝을 건드리지 않는다
-        "3개월과 6개월 중에서 선택해요",  # 서술격 조사가 아닌 동사
+        "이 글을 읽을 사람은 동네 빵집 주인이에요.",  # 숫자가 없으면 끝을 건드리지 않는다
+        "2권과 5권 중에서 골라요",  # 서술격 조사가 아닌 동사
         "1씩 빼고",
-        "random.seed(42)",
+        "math.floor(7.5)",
         "x = 'PY-01-01' + 1",  # 코드 문자열 안의 식별자
         "코드 FIN-01-02-03",  # 더 긴 식별자의 일부
     ],
@@ -66,17 +66,31 @@ def test_tidy_span_keeps_the_span_when_nothing_would_remain():
 
 
 async def test_span_tidy_applies_to_the_quote_span_only_when_on(no_rule):
-    answer = "① 하루 사용 한도는 5만 원이에요. 더 쓰면 결제가 안 돼요."
-    quote = "① 하루 사용 한도는 5만 원이에요."
+    answer = "① 연필 한 자루 값은 300원이에요. 더 사면 깎아 줘요."
+    quote = "① 연필 한 자루 값은 300원이에요."
     out = {"answer_quote": quote, "kb_quote": "", "grounded": False, "refuses": False}
     off, _ = await make(_responder(output=out), output__span_tidy=False)
     on, _ = await make(_responder(output=out))
     a, b = await off.judge(req(answer)), await on.judge(req(answer))
     assert a.response.output == OutputVerdict(False, (quote,), True)
-    assert b.response.output == OutputVerdict(False, ("하루 사용 한도는 5만 원",), True)
+    assert b.response.output == OutputVerdict(False, ("연필 한 자루 값은 300원",), True)
 
 
 # --- 자료 밖 확인 ---
+
+
+class _CountingKb:
+    """`rank` 호출만 세고 나머지는 원래 색인에 넘긴다."""
+
+    def __init__(self, kb, calls):
+        self._kb, self._calls = kb, calls
+
+    def rank(self, query):
+        self._calls.append(query)
+        return self._kb.rank(query)
+
+    def __getattr__(self, name):
+        return getattr(self._kb, name)
 
 
 def _role(kw) -> str:
@@ -130,7 +144,10 @@ async def test_not_stated_turns_normal_into_out_of_material_and_keeps_output(no_
     assert [len(_calls(fake, r)) for r in ("input", "oom_check", "output")] == [1, 1, 1]
     block = frozenset(on.cfg.block_categories)
     assert a.response.to_json(block)["input"]["decision"] == "allow"
+    ranked = []
+    on.kb = _CountingKb(on.kb, ranked)
     assert await on.classify(MSGS) == "normal"  # 튜터 공유 메서드는 부르지 않는다
+    assert ranked == []  # 자료 밖 확인용 KB 검색도 하지 않는다
     assert len(_calls(fake, "oom_check")) == 1
 
 

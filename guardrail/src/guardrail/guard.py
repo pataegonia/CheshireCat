@@ -217,7 +217,9 @@ class Guard:
         return await self._run(req, intro_rule=t.pii_intro_rule, oom_check=t.oom_check)
 
     async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
-        """마지막 학습자 발화의 범주(nano·low-signal 직행은 `judge`와 같다). nano 1회, 재시도 없음.
+        """마지막 학습자 발화의 범주(nano·low-signal 직행은 `judge`와 같다).
+
+        nano 1회(1차가 탈옥이면 2차 판정까지 2회), 재시도 없음.
 
         nano 실패·판정 오류면 `GuardUnavailable`(kNN·LR 추측값을 성공처럼 주지 않는다. 튜터는
         그때 주 호출 범주만 쓴다). 학습자 발화가 없으면 실패가 아니라 "normal"이다.
@@ -299,6 +301,8 @@ class Guard:
         deadline = t0 + cfg.budget_s
         # CPU 단계는 길이 상한으로 자른 뒤 한 번에 스레드로 보낸다(이벤트 루프를 막지 않는다)
         p = await asyncio.to_thread(self._prepare, req)
+        if oom_check and isinstance(p, _Prepared) and not p.low and given is None:
+            p = await asyncio.to_thread(self._with_oom_hits, p)  # classify()는 검색하지 않는다
         t1 = time.monotonic()
         if isinstance(p, Signals) and given is not None:  # 발화는 없지만 범주는 받았다
             j = self._result(
@@ -393,11 +397,8 @@ class Guard:
                 trace["oom_check"] = None
         return category
 
-    def _prepare(self, req: GuardRequest) -> _Prepared | Signals:
-        """`_prepare_core` + (oom_check가 켜졌으면) 학습자 발화로 찾은 KB 문맥."""
-        p = self._prepare_core(req)
-        if isinstance(p, Signals) or p.low or not self.cfg.toggles.oom_check:
-            return p
+    def _with_oom_hits(self, p: _Prepared) -> _Prepared:
+        """자료 밖 확인에 줄 KB 문맥(학습자 발화로 검색). `judge`가 확인을 켰을 때만 부른다."""
         try:
             users = normalize("\n".join(m.content for m in p.window if m.role == "user"))
             ranking = self.kb.rank(users[-self.cfg.retrieval.max_query_chars :])
@@ -407,7 +408,7 @@ class Guard:
         except Exception:  # noqa: BLE001 - 문맥이 없으면 `_input`이 자료 밖 확인을 건너뛴다
             return p
 
-    def _prepare_core(self, req: GuardRequest) -> _Prepared | Signals:
+    def _prepare(self, req: GuardRequest) -> _Prepared | Signals:
         """전처리·신호·kNN·LR·KB 검색·규칙 ②. 받은 글은 모두 상한으로 자른 뒤에 쓴다."""
         cfg, t = self.cfg, self.cfg.toggles
         target = next((m.content for m in reversed(req.messages) if m.role == "user"), None)

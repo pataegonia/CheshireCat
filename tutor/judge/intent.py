@@ -1,29 +1,30 @@
-"""T 의도 판정(#209 프롬프트, `toggles.intent_override`). nano 1회.
+"""T 의도 판정(#209 프롬프트 `tutor/prompts/intent.md`, `toggles.intent_override`). nano 1회.
+
+T는 학습자의 마지막 발화에 이름표 하나(위기·탈옥·유해-실행·유해-비하·무관 결과물·제출물 대행·
+정답만 요구·저신호·학습 질문)를 붙이고, `decide`가 그 이름표로 주 호출 action을 덮을지 정한다.
 
 - parallel: 주 호출과 **동시에** 부르고 주 호출이 끝난 뒤 덮을지 정한다.
 - serial: T를 먼저 끝까지 기다려, 주 호출 action 없이(None) 정한 덮기가 고정 문장 조합이면 주 호출
   없이 낸다. 아니면 주 호출을 부르고 parallel과 같이 정한다(가드 classify를 끈 설정에서만).
   주 호출을 보지 않으므로 parallel의 "주 호출 escalate면 위기만"·"약한 쪽은 안 덮음" 보호가 없다.
   예: 위기 신호에 안 걸린 우회 표현을 T가 무관 결과물로 보면 주 호출이 냈을 escalate 대신
-  redirect가 나간다. 지연(G-6) 때문에 고를 때 이 점을 함께 본다.
+  redirect가 나간다.
 
-T는 학습자의 마지막 발화에 이름표 하나(위기·탈옥·유해-실행·유해-비하·무관 결과물·제출물 대행·
-정답만 요구·저신호·학습 질문)를 붙인다. 부르는 쪽은 주 호출이 끝난 뒤 `decide`로 주 호출 action을
-덮을지 정한다. 측정 도구(`harness.intent_probe`)와 재생(`tutor.eval.replay`)도 같은 `decide`를 쓴다.
-
-덮기 규칙(출발점: 11/16 런박스 모의의 비교 정책 "항상 · 탈옥은 신호 있을 때만" 실행당 맞게 8.0 ·
-틀리게 0.6. 아래 규칙은 그보다 좁아 모의 도구의 "서버 규칙"으로 다시 잰다)
-- 학습 질문·실패·저신호(모의에서 맞게 바꾼 행 0)는 덮지 않는다.
-- 탈옥은 지시 무력화 신호가 있을 때만 덮는다(정상 질문 4행을 탈옥으로 본 오탐 때문).
+덮기 규칙
+- 학습 질문·실패·저신호는 덮지 않는다.
+- 탈옥은 지시 무력화 신호가 있을 때만 덮는다(공격 기법을 배우는 정상 질문을 탈옥으로 본 오탐 때문).
 - 위기 신호가 있거나 주 호출이 escalate면 위기만 따른다(위기를 약하게 바꾸지 않는다).
 - T action이 §3 우선순위에서 주 호출보다 약하면 덮지 않는다. 단 유해-비하 redirect가 주 호출
-  refuse를 바꾸는 것만 허용한다(표의 harmful 두 갈래).
-- 같은 action이면 덮지 않는다.
+  refuse를 바꾸는 것만 허용한다(표의 harmful 두 갈래). 지시 무력화 신호가 있으면 이 예외도 없고,
+  serial에서는 refuse보다 약한 이름표면 주 호출을 본 뒤 정한다(#220 리뷰).
+- 같은 action이면 덮지 않는다. 제출물 대행만 주 호출이 scaffold여도 고정 문장으로 바꾼다.
 - 고정 문장이 없는 조합(정답만 요구 → answer_seeking scaffold)은 주 호출이 answer일 때만 덮는다.
   주 호출 문장·인용은 그대로 두고 범주·action만 바꾼다. 주 호출이 실패했으면 부르는 쪽이 기본값의
   action을 넘기고 고정 문장 조합만 쓴다.
-- 부르는 쪽(flow)은 가드 classify가 위기·공격 범주면 T를 쓰지 않는다(합치기가 정한다). 측정
-  도구는 classify를 끈 설정만 재므로 이 조건이 없다.
+- 부르는 쪽(flow)은 가드 classify가 위기·공격 범주면 T를 쓰지 않는다(합치기가 정한다).
+
+측정(11/17 런박스, 교차 검증 160행, 판정 포함): 대행 덮기 + 자료 인용 답 위에 serial을 켜면 82.76
+(3회) → 85.79(2회). T가 덮을 수 있던 행 55개에서 고침 17 · 망침 3, 정상 질문을 막은 행 0.
 
 입력 블록은 프롬프트가 정한 넷(과목 목차, 신호, 대화, 끝 요청)이다. 대화·신호는 주 호출과 같은
 블록을 쓴다. 재시도 없음. 실패·잘림·시간 초과면 None(주 호출 결과 유지)이고 사유는 횟수만 센다.
@@ -44,7 +45,6 @@ from integration.contracts import Action
 from tutor.answer.templates import template_for
 from tutor.judge.conversation import Conversation
 from tutor.judge.main_call import _turn_block, defuse
-from tutor.judge.oom_check import load_system as _load_commented
 from tutor.judge.signals import Signal, labels
 
 ROLE = "intent"  # TutorLLM.calls에 세는 역할 이름
@@ -69,7 +69,8 @@ TARGET: Mapping[str, tuple[str, Action] | None] = {
     "저신호": ("low_signal_input", "clarify"),
     "학습 질문": None,
 }
-NEVER = frozenset({"저신호", "학습 질문"})  # 덮지 않는 이름표
+STUDY = "학습 질문"  # 대행 덮기·자료 인용 답의 T 관문(flow)
+NEVER = frozenset({"저신호", STUDY})  # 덮지 않는 이름표
 # §3 우선순위(앞이 강함, PRD·주 호출 프롬프트와 같다)
 ORDER = ("escalate", "refuse", "redirect", "clarify", "scaffold", "abstain", "answer")
 _SENT_END = re.compile(r"(?<=[.!?。？！])\s+")
@@ -91,8 +92,12 @@ class Override:
 
 
 def load_system(path: Path = PROMPT_PATH) -> str:
-    """system 문구(첫 줄 출처 주석은 보내지 않는다)."""
-    return _load_commented(path)
+    """system 문구. 첫 줄 출처 주석(<!-- … -->)은 빼고 나머지를 글자 그대로(앞뒤 빈 줄만 뺀다)."""
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    first, _, rest = text.partition("\n")
+    if not (first.startswith("<!--") and first.endswith("-->")):
+        raise ValueError(f"{path.name} 첫 줄에 출처 주석이 없다")
+    return rest.strip("\n")
 
 
 def table_of_contents(sections: Mapping[str, Any]) -> str:
@@ -136,7 +141,14 @@ def decide(
     if target is None:
         return None
     category, action = target
-    if action == main_action:
+    if action == main_action and label != "제출물 대행":
+        # 제출물 대행은 주 호출이 scaffold여도 고정 문장으로 바꾼다
+        # (모델 scaffold 문장에 답이 샐 수 있다)
+        return None
+    if Signal.OVERRIDE in signals and main_action is None and _rank(action) > _rank("refuse"):
+        # serial: 지시 무력화 신호가 있으면 refuse보다 약한 이름표(유해-비하·무관 결과물·
+        # 제출물 대행)는 주 호출(refuse일 수 있다)을 보고 정한다. 실패 기본값·대행 덮기도
+        # 무력화 신호를 앞에 둔다
         return None
     if template_for(category, action) is None and main_action != "answer":
         # 고정 문장이 없는 조합(answer_seeking scaffold)은 주 호출의 answer 문장을 그대로 쓰므로
@@ -147,7 +159,8 @@ def decide(
     if (Signal.CRISIS in signals or main_action == "escalate") and label != "위기":
         return None
     weaker = _rank(action) > _rank(main_action)
-    if weaker and not (label == "유해-비하" and main_action == "refuse"):
+    lowered = label == "유해-비하" and main_action == "refuse" and Signal.OVERRIDE not in signals
+    if weaker and not lowered:
         return None
     return Override(category, action)
 

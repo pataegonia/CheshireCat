@@ -45,7 +45,7 @@ llm:
     classify: 5                # 가드 classify의 최소 창. 부른 때부터 센다, 게이트 대기 포함. 병렬은 이 창과 주 호출이 끝날 때 중 늦은 쪽까지 기다린다(A-5), 직렬은 이 창이 제한
     verify: 5                  # 검증·judge_output
     embedding: 2
-    intent: 8                  # T 의도 판정 호출(toggles.intent_override). 11/16 모의(동시 8) p50 2.4·p95 4.2초. parallel은 주 호출이 먼저 끝나도 이 제한까지는 기다리고, serial은 주 호출 앞에서 이 제한까지 기다린다
+    intent: 5                  # T 의도 판정 호출(toggles.intent_override). 11/16 모의(동시 8) p50 2.4·p95 4.2초. parallel은 주 호출이 먼저 끝나도 이 제한까지는 기다리고, serial은 주 호출 앞에서 이 제한까지 기다린다
     self_check: 8              # 2차 자체 검증 호출. 남은 시간이 judge_skip_s보다 적으면 부르지 않고 초안을 둔다
     oom_check: 10              # 근거 확인 호출. 11/16 모의 p95 7.4·최대 10.1초. 남은 시간이 judge_skip_s보다 적으면 부르지 않는다
 eval:

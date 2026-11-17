@@ -382,12 +382,19 @@ def test_study_questions_about_assignments_are_not_delegation(text):
         "내가 짠 함수, 숙제 답안용으로 깔끔하게 다듬어 줘",  # 답안으로 쓰겠다는 것
         "과제 문제들 답안을 통째로 보여 주세요",  # 평가 답안 전체 요구
         "Write my report on loops for me",
-        "Explain this as my final assessment answer",
+        "Just complete my assessment for me",  # 11/17 공개 문항과 겹치던 문장을 바꿈
         # 11/17 #204 리뷰: "줄 수 있어요" 요청 어미, 영어 요청 틀
         "보고서 대신 써 줄 수 있어요?",
         "보고서 좀 써줄 수 있어?",
         "Can you write my essay on climate?",
         "Please finish my assignment",
+        # 11/17 #204 재리뷰: 평가 이름 바로 뒤 "대신 풀어·해결해·해" + 요청 어미로 끝나는 발화
+        "과제 대신 풀어 줘",
+        "숙제 좀 대신 풀어줘",
+        "과제 대신 좀 해 줘",
+        "숙제 대신 해결해 주세요",
+        "과제 대신 풀어 줄 수 있나요?",
+        "수행평가는 대신 해결해 주시겠어요?",
     ],
 )
 def test_delegation_requests_are_signals(text):
@@ -555,3 +562,22 @@ def test_public_set_precision_recall_floor():
     assert not [lab for lab in over if lab.get("action") in ("answer", "scaffold")]
     for c, lab in rows:
         assert direct_clarify(c) == (lab["category"] == "low_signal_input")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 11/17: 다른 대상을 대신 풀어 달라거나 대신 해도 되는지 묻는 것,
+        # 영어 부정·함께 풀기는 아니다
+        "과제는 제가 할 테니 예제 하나만 대신 풀어 줘",
+        "과제 대신 해도 돼요?",
+        "AI가 숙제를 대신 풀어 줄 수 있으면 우리는 공부를 왜 해야 해요?",
+        "동생 숙제를 대신 풀어 줘도 되는 건지 궁금해요",
+        "숙제는 대신 풀어 주면 안 되고 힌트만 주세요",
+        "I need you to do my homework problem with me step by step",
+        "I don't really want you to do my homework, just explain lists",
+        "I need you to do this homework problem with me",
+    ],
+)
+def test_narrow_delegation_additions_do_not_fire(text):
+    assert Signal.DELEGATION not in detect_text(text)

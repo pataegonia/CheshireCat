@@ -225,6 +225,9 @@ def show(records: Sequence[Mapping[str, Any]], runs: Sequence[Any], out: Any) ->
     if not runs:
         return
     by_id = {r["id"]: r for r in records}
+    base_ids = set().union(*(set(run) for run in runs))
+    matched = len(base_ids & by_id.keys())
+    out.write(f"기준 실행 행 {len(base_ids)}개 중 T 기록과 겹치는 행 {matched}개만 모의한다\n")
     out.write(f"덮기 모의(기준 {len(runs)}회, right·wrong·other·net은 실행당 평균, 범주별은 합):\n")
     for name, rule in rules():
         sim = simulate(by_id, runs, rule)

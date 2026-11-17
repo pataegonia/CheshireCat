@@ -109,6 +109,7 @@ def test_main_with_records_prints_simulation_without_api(tmp_path, capsys, monke
     assert ip.main(["--main", str(mpath), "--records", str(a), str(b)]) == 0
     out = capsys.readouterr().out
     assert "== a.json" in out and "== b.json" in out
+    assert "기준 실행 행 1개 중 T 기록과 겹치는 행 1개만 모의한다" in out
     assert "off_topic: 무관 결과물 1" in out
     assert '- 서버 규칙(intent.decide): {"right": 1.0, "wrong": 0.0' in out
     assert "기록 2개에서 이름표가 모두 같은 행 1/1" in out

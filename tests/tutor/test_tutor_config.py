@@ -119,6 +119,20 @@ def test_serial_intent_needs_classify_off(classify):
     assert config.load_config(overrides=ok).toggles.intent_override == "parallel"
 
 
+def test_intent_with_classify_and_verify_exceeds_the_call_limit():
+    # 주 호출 2(재시도) + classify + T + judge_output = 5회 > TU-13 절대 4회
+    over = {
+        "toggles.intent_override": "parallel",
+        "toggles.guard_classify": "parallel",
+        "toggles.verify": "guard",
+    }
+    with pytest.raises(ValidationError, match="TU-13"):
+        config.load_config(overrides=over)
+    for drop in ("toggles.guard_classify", "toggles.verify"):
+        ok = {**over, drop: "off"}
+        assert config.load_config(overrides=ok).toggles.intent_override == "parallel"
+
+
 @pytest.mark.parametrize(("dotted", "value"), [("toggles.vote", True), ("toggles.verify", "self")])
 def test_toggles_that_were_not_built_fail_at_load(dotted, value):
     # #83 결정(11/14): 요청당 nano 절대 4회(TU-13)를 넘어 만들지 않았다. 켜도 끔처럼 돌지 않는다

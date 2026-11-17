@@ -63,6 +63,16 @@ class Toggles(_Strict):
         if self.intent_override == "serial" and self.guard_classify != "off":
             # 직렬 T는 classify를 기다리지 않고 고정 문장을 내 classify 우선 규칙을 못 지킨다
             raise ValueError("toggles.intent_override: serial은 guard_classify off에서만 쓴다")
+        if (
+            self.intent_override != "off"
+            and self.guard_classify != "off"
+            and self.verify == "guard"
+        ):
+            # 주 호출 2(재시도) + classify + T + judge_output = 5회로 TU-13 절대 4회를 넘는다
+            raise ValueError(
+                "toggles.intent_override는 guard_classify와 verify: guard를 함께 켜면"
+                " 요청당 nano 5회라 쓸 수 없다(TU-13 절대 4회)"
+            )
         return self
 
 

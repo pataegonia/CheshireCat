@@ -54,3 +54,20 @@ def test_rejects_results_without_row_trace(tmp_path):
     path.write_text(json.dumps({"report": {"cv_emitted_by_run": [{}]}}), encoding="utf-8")
     with pytest.raises(SystemExit):
         freeze_rows.main([str(path)])
+
+
+def test_prints_self_check_reasons_when_present(tmp_path, capsys):
+    normal = _first("normal")
+    n = normal["id"]
+    run = {n: {"action": "answer", "facts": 1.0, "faithful": True, "cited": []}}
+    a = _write(
+        tmp_path,
+        "a.json",
+        [run, run],
+        [{n: {"self_check": "rewrote"}}, {n: {"self_check": "kept"}}],
+    )
+    b = _write(tmp_path, "b.json", [run], [{n: {"intent": None}}])
+    freeze_rows.main([str(a)])
+    assert "2차 자체 검증(행×실행): " in capsys.readouterr().out
+    freeze_rows.main([str(b)])
+    assert "2차 자체 검증" not in capsys.readouterr().out

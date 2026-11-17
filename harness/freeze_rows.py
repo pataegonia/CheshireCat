@@ -88,6 +88,17 @@ def facts_rows(runs, gold: Mapping[str, Mapping[str, Any]], out: TextIO) -> None
     out.write(f"answer 실행의 절반 넘게 잃은 행 {len(most)}개: {' '.join(most)}\n")
 
 
+def self_check_counts(runs, out: TextIO) -> None:
+    """2차 자체 검증 사유(row_trace self_check) 수. 켠 실행이 없으면 아무것도 쓰지 않는다."""
+    seen = Counter(
+        trace.get(rid, {}).get("self_check") for emitted, trace in runs for rid in emitted
+    )
+    seen.pop(None, None)
+    if seen:
+        out.write("2차 자체 검증(행×실행): " + ", ".join(f"{k} {v}" for k, v in seen.most_common()))
+        out.write("\n")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="동결 후보 실행의 T·normal 사실 행 점검(API 0회)")
     ap.add_argument("runs", nargs="+", type=Path, help="run_local 결과 JSON(row_trace 포함)")
@@ -99,6 +110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     gold = {row["id"]: row["labels"] for row in public_tutor_rows()}
     intent_table(runs, gold, sys.stdout)
     facts_rows(runs, gold, sys.stdout)
+    self_check_counts(runs, sys.stdout)
     return 0
 
 

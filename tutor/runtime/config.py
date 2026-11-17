@@ -42,6 +42,8 @@ class Toggles(_Strict):
     # 대행 신호가 잡히면 answer·scaffold를 academic 고정 문장으로(숨김에서도, 주 호출 실패
     # 기본값 포함, TU-06). 기본 끔, 켜기 전 조건은 PRD TU-06
     delegation_override: bool
+    # 주 호출 실패이고 신호가 없으면 clarify 대신 검색 1위 섹션의 자료 인용 답(TU-12). 기본 끔
+    fallback_quote: bool
     inline_cite: bool
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다

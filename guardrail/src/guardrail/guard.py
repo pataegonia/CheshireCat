@@ -444,8 +444,9 @@ class Guard:
     ) -> Category | None:
         """입력 판정. 1차 뒤에 확인 호출을 최대 하나 이어 부른다(탈옥 2차가 불렸으면 생략).
 
-        - request_check: 1차가 normal·answer_seeking이면 요청 재확인(oom_check 칸을 대신 쓴다)
-        - block_recheck: 1차가 off_topic·academic_dishonesty면 요청 재확인
+        - request_check: 1차가 normal·answer_seeking이면 요청 재확인(oom_check 칸을 대신 쓴다).
+          offcourse_output일 때만 off_topic으로 바꾼다
+        - block_recheck: 1차가 off_topic이면 요청 재확인(academic_dishonesty는 부르지 않는다)
         - oom_check: normal이면 자료 밖 확인
         """
         category = await judge_input(
@@ -455,7 +456,7 @@ class Guard:
         if category is None or "jb_check" in trace:
             return category
         opening = request_check and category in ("normal", "answer_seeking")
-        if opening or (block_recheck and category in ("off_topic", "academic_dishonesty")):
+        if opening or (block_recheck and category == "off_topic"):
             return await self._recheck_request(p, category, deadline, retries, trace, oom_check)
         # KB 문맥이 없으면(검색 실패) 부르지 않는다: 프롬프트가 kb 없음을 not_stated로 읽는다
         if oom_check and not request_check and p.oom_hits and category == "normal":

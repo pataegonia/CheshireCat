@@ -115,8 +115,8 @@ def _sent_out(checks, quote="", grounded=True):
 @pytest.mark.parametrize(
     ("kinds", "want"),
     [
-        (["learn", "finished_work_to_submit"], "academic_dishonesty"),
-        (["offcourse_output", "finished_work_to_submit"], "academic_dishonesty"),
+        (["learn", "finished_work_to_submit"], None),  # 1단: 범주를 바꾸지 않는다
+        (["offcourse_output", "finished_work_to_submit"], "off_topic"),
         (["learn", "offcourse_output"], "off_topic"),
         (["learn", "other"], None),
         ([], None),
@@ -131,7 +131,6 @@ def test_request_category_leaves_other_first_categories(first):
     assert request_category(first, ["finished_work_to_submit"]) is None
 
 
-@pytest.mark.parametrize("first", ["off_topic", "academic_dishonesty"])
 @pytest.mark.parametrize(
     ("kinds", "stays"),
     [
@@ -141,15 +140,16 @@ def test_request_category_leaves_other_first_categories(first):
         ([], True),
         (["learn", "offcourse_output"], True),
         (["learn", "finished_work_to_submit"], True),
+        (["finished_work_to_submit"], True),
     ],
 )
-def test_recheck_block(first, kinds, stays):
-    assert recheck_block(first, kinds) == (first if stays else "normal")
+def test_recheck_block(kinds, stays):
+    assert recheck_block("off_topic", kinds) == ("off_topic" if stays else "normal")
 
 
-def test_recheck_block_keeps_first_when_another_block_kind_appears():
-    assert recheck_block("off_topic", ["finished_work_to_submit"]) == "off_topic"
-    assert recheck_block("academic_dishonesty", ["offcourse_output"]) == "academic_dishonesty"
+@pytest.mark.parametrize("kinds", [["learn"], [], ["offcourse_output"], ["learn", "other"]])
+def test_recheck_block_never_unblocks_academic_dishonesty(kinds):
+    assert recheck_block("academic_dishonesty", kinds) == "academic_dishonesty"
 
 
 def test_recheck_block_never_unblocks_other_categories():
@@ -311,7 +311,7 @@ async def test_request_check_off_by_default_makes_no_call(no_rule):
 @pytest.mark.parametrize(
     ("first", "kinds", "want"),
     [
-        ("normal", ("learn", "finished_work_to_submit"), "academic_dishonesty"),
+        ("normal", ("learn", "finished_work_to_submit"), "normal"),
         ("answer_seeking", ("offcourse_output",), "off_topic"),
         ("normal", ("learn",), "normal"),
         ("answer_seeking", ("learn", "other"), "answer_seeking"),
@@ -376,11 +376,20 @@ async def test_request_check_verdict_is_ignored_without_oom_hits(no_rule):
 
 async def test_blocking_ask_beats_not_stated(no_rule):
     guard, _ = await make(
-        _responder(asks=("finished_work_to_submit",), verdict="not_stated"),
+        _responder(asks=("offcourse_output",), verdict="not_stated"),
         toggles__request_check=True,
         toggles__oom_check=True,
     )
-    assert (await guard.judge(req())).response.category == "academic_dishonesty"
+    assert (await guard.judge(req())).response.category == "off_topic"
+
+
+async def test_finished_work_ask_does_not_move_normal_but_is_recorded(no_rule):
+    guard, fake = await make(
+        _responder("normal", ("finished_work_to_submit",)), toggles__request_check=True
+    )
+    j = await guard.judge(req())
+    assert (j.response.category, j.calls, j.errors) == ("normal", 3, ())
+    assert len(_calls(fake, "request_check")) == 1  # trace는 노출되지 않아 호출·무오류만 본다
 
 
 @pytest.mark.parametrize("category", ["harmful_content", "pii_disclosure", "off_topic"])
@@ -439,13 +448,21 @@ async def test_classify_does_not_run_request_check_or_search_the_kb(no_rule):
 # --- N2 block_recheck ---
 
 
-@pytest.mark.parametrize("first", ["off_topic", "academic_dishonesty"])
-async def test_block_recheck_turns_a_learn_only_block_back_to_normal(no_rule, first):
-    guard, fake = await make(_responder(first, ("learn",)), toggles__block_recheck=True)
+async def test_block_recheck_turns_a_learn_only_block_back_to_normal(no_rule):
+    guard, fake = await make(_responder("off_topic", ("learn",)), toggles__block_recheck=True)
     j = await guard.judge(req())
     assert (j.response.category, j.calls, j.errors) == ("normal", 3, ())
     assert j.response.to_json(guard.block)["input"]["decision"] == "allow"
     assert j.output_tier == 4 and len(_calls(fake, "request_check")) == 1
+
+
+async def test_block_recheck_does_not_call_for_academic_dishonesty(no_rule):
+    guard, fake = await make(
+        _responder("academic_dishonesty", ("learn",)), toggles__block_recheck=True
+    )
+    j = await guard.judge(req())
+    assert (j.response.category, j.calls) == ("academic_dishonesty", 2)
+    assert not _calls(fake, "request_check")
 
 
 @pytest.mark.parametrize(

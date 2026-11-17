@@ -91,7 +91,8 @@ class Toggles(_Strict):
     # `/guard` 응답의 범주만 out_of_material로 바꾼다. 탈옥 2차 뒤에는 안 부른다(호출 3회 상한)
     oom_check: bool
     # S3.13 실험(기본 끔). request_check: 1차가 normal·answer_seeking일 때 요청을 나열해 다시 확인
-    # (oom_check 칸을 대신 쓴다). block_recheck: 1차가 off_topic·academic_dishonesty일 때 다시 확인.
+    # (oom_check 칸을 대신 쓴다. offcourse_output만 off_topic으로 바꾼다). block_recheck: 1차가
+    # off_topic일 때 다시 확인(learn만 있으면 normal).
     # 둘 다 `/guard` 응답만 바꾸고 입력 쪽 추가 호출은 jb_check·oom_check와 합쳐 최대 1회다
     request_check: bool
     block_recheck: bool

@@ -1,7 +1,9 @@
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from tests.tutor.tutor_testlib import TOKEN, make_app
+from tutor.runtime import config as tutor_config
 
 GUARD_ENV = ("GUARD_CONFIG", "GUARD_KB_DIR", "GUARD_PUBLIC_DIR", "GUARD_PROMPTS_DIR")
 
@@ -29,8 +31,26 @@ def _no_guard_env():
         yield
 
 
+# 동결 설정(11/18)이 켠 토글. 튜터 단위 테스트는 이 토글들을 끈 기준 설정에서 돌고, 켠 동작은 각
+# 테스트가 overrides로 켜서 본다(저장소 기본값을 바꿀 때마다 테스트 기준이 흔들리지 않게).
+# 저장소 설정 파일 그대로의 값은 test_tutor_config가 파일을 직접 읽어 본다
+FREEZE_TOGGLES = {"delegation_override": False, "fallback_quote": False, "intent_override": "off"}
+
+
+@pytest.fixture(scope="session")
+def _baseline_config(tmp_path_factory):
+    """저장소 config/tutor.yaml에서 동결 토글만 끈 사본(세션에 한 번)."""
+    repo = tutor_config.ROOT / tutor_config.DEFAULT_CONFIG
+    raw = yaml.safe_load(repo.read_text(encoding="utf-8"))
+    raw["toggles"].update(FREEZE_TOGGLES)
+    path = tmp_path_factory.mktemp("tutor_config") / "tutor_baseline.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    return path
+
+
 @pytest.fixture(autouse=True)
-def _env(monkeypatch):
+def _env(monkeypatch, _baseline_config):
+    monkeypatch.setenv(tutor_config.CONFIG_ENV, str(_baseline_config))
     for name in GUARD_ENV:
         monkeypatch.delenv(name, raising=False)
     for name in API_KEYS:  # 런박스 셸에 진짜 키가 있어도 테스트가 운영진 API를 부르지 않게

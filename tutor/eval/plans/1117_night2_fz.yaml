@@ -1,0 +1,22 @@
+# 11/17 밤 2차(판정 포함, 교차 검증 160행). 동결 조합 fz 3회(T 8초). 조건부 E 1117_night2.yaml(fzc 3회)과
+# 동시에 다른 큐로 돌려 같은 시간대에 비교한다(두 큐가 같은 부하를 나눠 받는다), 약 1,700회.
+items:
+  - name: fz-4
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fz
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: fz-5
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz
+  - name: fz-6
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz

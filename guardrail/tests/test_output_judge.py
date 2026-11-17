@@ -272,7 +272,7 @@ def test_prompts_are_registered_and_state_the_contract():
     for cfg in (CFG, load_config("configs/baseline.yaml")):
         assert {"output_judge", "output_judge_baseline"} <= set(cfg.prompts)
     version, body = load_prompt(CFG, "output_judge")
-    assert version == "1.1"
+    assert version == "1.4"
     for field in ("answer_quote", "kb_quote", "grounded", "refuses"):
         assert f"`{field}`" in body
     # 점검표(ADR-0014 R14 수정)

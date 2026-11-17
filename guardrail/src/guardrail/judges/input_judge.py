@@ -22,7 +22,9 @@ from guardrail.judges.schemas import (
     InputFlagOut,
     InputOut,
     JbCheckOut,
+    OomCheckOut,
 )
+from guardrail.kb import Hit
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
@@ -154,6 +156,35 @@ async def judge_input(
         if verdict == "study":
             return "normal"
     return category
+
+
+async def check_oom(
+    window: list[Message],
+    target: str,
+    hits: Sequence[Hit],
+    llm: LLM,
+    cfg: GuardConfig,
+    *,
+    deadline: float,
+    retries: int | None = None,
+) -> str | None:
+    """S3.10 자료 밖 확인: "not_asked" | "stated" | "not_stated", 실패면 None.
+
+    1차가 normal이라 한 발화에만 부른다. 대화·대상 발화와 KB 문맥(hits)을 주고 few-shot은 없다.
+    """
+    parts = [_conversation(window, cfg), f"<target>{_data(target, cfg)}</target>"]
+    parts += [
+        f'<kb id="{html.escape(h.section_id)}">{html.escape(h.text, quote=False)}</kb>'
+        for h in hits
+    ]
+    messages = [
+        {"role": "system", "content": _system_prompt(cfg, "oom_check")},
+        {"role": "user", "content": "\n\n".join(parts)},
+    ]
+    result = await llm.complete(
+        "oom_check", messages, OomCheckOut, deadline=deadline, retries=retries
+    )
+    return result.parsed.verdict if isinstance(result.parsed, OomCheckOut) else None
 
 
 async def check_jailbreak(

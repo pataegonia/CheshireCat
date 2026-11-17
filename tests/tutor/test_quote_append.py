@@ -9,7 +9,7 @@ import pytest
 
 from tests.tutor.test_flow import QUESTION, FakeLLM, out, state_with
 from tutor.answer.quote import quote_sentences
-from tutor.answer.templates import QUOTE_APPEND_LEAD
+from tutor.answer.templates import NOT_IN_MATERIAL_NOTE, QUOTE_APPEND_LEAD
 from tutor.judge import flow
 from tutor.request import parse_request
 
@@ -62,10 +62,39 @@ def test_sentences_already_in_the_answer_are_not_repeated():
     assert flow.append_quote(request(), state, body) is body
 
 
-def test_over_the_answer_limit_is_untouched():
+def _picked(state, sid="PY-01-01"):
+    return quote_sentences(state.tutor_kb.sections[sid].text, QUESTION)
+
+
+@pytest.mark.parametrize("room", [0, 1], ids=["over-by-one", "exactly-4000"])
+def test_answer_limit_boundary(room):
     state = state_with(FakeLLM(out()), **ON)
-    body = {"answer": "가" * 3990, "action": "answer", "citations": ["PY-01-01"]}
-    assert flow.append_quote(request(), state, body) is body
+    tail = f" {QUOTE_APPEND_LEAD} {' '.join(_picked(state))}"
+    answer = "가" * (4000 - len(tail) + 1 - room)  # room 0: 붙이면 4,001자, room 1: 정확히 4,000자
+    body = {"answer": answer, "action": "answer", "citations": ["PY-01-01"]}
+    out_body = flow.append_quote(request(), state, body)
+    if room == 0:
+        assert out_body is body
+    else:
+        assert len(out_body["answer"]) == 4000
+
+
+def test_only_the_first_citation_is_quoted():
+    # cite_top1이 검색 1위를 뒤에 더해도 모델이 쓴 첫 인용 섹션에서만 고른다
+    state = state_with(FakeLLM(out()), **ON)
+    other = next(s for s in state.tutor_kb.sections if s != "PY-01-01" and _picked(state, s))
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01", other]}
+    joined = flow.append_quote(request(), state, body)["answer"]
+    assert all(s in joined for s in _picked(state))
+    assert not any(s in joined for s in _picked(state, other) if s not in _picked(state))
+
+
+def test_empty_answer_note_is_untouched():
+    # 모델 문장이 모두 걸러져 "자료에서 확인하지 못했어요"만 남은 답(IN-04-3)에는 붙이지 않는다
+    state = state_with(FakeLLM(out(sentences=[])), **ON)
+    resp = ask(state)
+    assert resp["action"] == "answer" and NOT_IN_MATERIAL_NOTE in resp["answer"]
+    assert QUOTE_APPEND_LEAD not in resp["answer"]
 
 
 def test_input_body_is_not_mutated():

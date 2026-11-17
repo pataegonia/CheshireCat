@@ -382,17 +382,21 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     문장 고르기는 자료 인용 답(TU-12)과 같다(`quote_sentences`: 질문과 2-gram이 가장 겹치는 설명
     문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 답에 이미 있는 문장은 빼고,
     붙이면 4,000자를 넘거나 붙일 문장이 없으면 그대로 둔다. answer가 아닌 응답·인용 없는 응답·KB에
-    없는 인용은 그대로다. action·인용은 바꾸지 않는다. 입력을 바꾸지 않는다. 요청 내용은 지역
-    변수로만 쓴다(TU-18).
+    없는 인용, 그리고 모델 문장이 모두 걸러져 "자료에서 확인하지 못했어요" 안내가 든 답(빈 답변,
+    IN-04-3)은 그대로다(안내와 자료 문장이 한 답에서 부딪히지 않게). action·인용은 바꾸지 않는다.
+    붙이는 글은 KB 원문과 고정 문구뿐이라 출력 후처리(`tutor_post`) 뒤에 붙인다. 입력을 바꾸지
+    않는다. 요청 내용은 지역 변수로만 쓴다(TU-18).
     """
     if not state.tutor_cfg.toggles.quote_append or body.get("action") != "answer":
+        return body
+    answer = body.get("answer") or ""
+    if NOT_IN_MATERIAL_NOTE in answer:
         return body
     cites = body.get("citations") or []
     section = state.tutor_kb.sections.get(cites[0]) if cites else None
     if section is None:
         return body
     query, _ = tidy(_messages(req)).search_query()
-    answer = body.get("answer") or ""
     picked = [s for s in quote_sentences(section.text, query) if s not in answer]
     if not picked:
         return body

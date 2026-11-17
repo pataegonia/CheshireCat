@@ -16,6 +16,9 @@
    공격 4범주이면 주 호출이 이미 표 고정 문장을 냈거나 더 강한 action을 낸 경우를 빼고 그 범주의
    고정 문장으로 바꾼다(`toggles.guard_classify`). serial(ⓐ)은 classify를 먼저 기다려 템플릿 범주면
    주 호출 없이 고정 문장을 낸다
+⑤-3 T 의도 판정 덮기(TU-06, `tutor.judge.intent`, `toggles.intent_override`): #209 프롬프트로 nano를
+   1회 불러 이름표로 주 호출 action을 덮는다. parallel은 주 호출과 동시에, serial은 T 먼저(고정 문장
+   이름표면 주 호출 없이). 가드 classify가 위기·공격 범주면 T는 비킨다
 ⑥ 가드 judge_output 검증(TU-09 ②): 주 호출 문장이 그대로 나가는 경로에만, 합친 범주를 넘겨 부른다
    (`toggles.verify: guard`). 시간 부족·실패면 판정만 건너뛴다
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
@@ -58,6 +61,17 @@ from tutor.judge.guard_merge import (
     start_classify,
     wait_classify,
 )
+from tutor.judge.intent import (
+    WAIT_GRACE_S,
+    IntentJob,
+    IntentSkips,
+    start_intent,
+    table_of_contents,
+    wait_intent,
+)
+from tutor.judge.intent import build_messages as build_intent_messages
+from tutor.judge.intent import decide as decide_intent
+from tutor.judge.intent import load_system as load_intent_system
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.request import TutorRequest
@@ -81,6 +95,11 @@ def prepare_judge(app_state: Any) -> None:
         scaffold_state_rule=toggles.scaffold_state_rule, evidence_check=toggles.evidence_check
     )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
+    intent_on = toggles.intent_override != "off"  # T 의도 판정(#209): 프롬프트·목차는 기동 때 한 번
+    app_state.tutor_intent_prompt = load_intent_system() if intent_on else None
+    sections = app_state.tutor_kb.sections if intent_on else {}
+    app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
+    app_state.intent_skips = IntentSkips()  # 사유 → 횟수(본문 없음)
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -297,6 +316,35 @@ def _complete(state: Any):
     return complete
 
 
+def _start_intent(
+    state: Any, conv: Conversation, signals: Sequence[Signal], deadline: float
+) -> IntentJob | None:
+    """T 의도 판정을 주 호출 앞에서 시작한다(`toggles.intent_override`). 끔이면 None."""
+    system = getattr(state, "tutor_intent_prompt", None)
+    if state.tutor_cfg.toggles.intent_override == "off" or system is None:
+        return None
+    messages = build_intent_messages(system, state.tutor_intent_toc, conv, signals)
+    return start_intent(
+        state.tutor_llm,
+        messages,
+        timeout_s=state.tutor_cfg.llm.timeout_s.intent,
+        deadline=deadline,
+        skips=getattr(state, "intent_skips", None),
+    )
+
+
+def _classify_wins(trusted: str | None) -> bool:
+    """classify(신호 조건을 거친 값)가 위기·공격 범주면 T는 덮지 않는다(합치기·기본값이 정한다)."""
+    return trusted in ATTACK_CATEGORIES or trusted == "emotional_distress"
+
+
+def _intent_fixed(label: str | None, signals: Sequence[Signal], action: Action | None):
+    """T가 덮어 고정 문장이 되면 (고정 문장, 범주). 아니면 None."""
+    decided = decide_intent(label, signals, action)
+    kind = template_for(decided.category, decided.action) if decided is not None else None
+    return (kind, decided.category) if kind is not None and decided is not None else None
+
+
 def _candidate(out: MainCallOut) -> str:
     """`judge_output`에 넘기는 후보 답변: 주 호출 문장을 공백 하나로 이어 붙인 것."""
     return " ".join(s.text for s in out.sentences if s.text)
@@ -326,10 +374,14 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         deadline=deadline,
         skips=skips,
     )
+    intent: IntentJob | None = None
     try:
+        # T는 직렬 classify(ⓐ 비교 기준)에서는 부르지 않는다(주 호출 없이 끝나는 경로가 있다)
+        intent = None if serial else _start_intent(state, conv, signals, deadline)
         classified: str | None = None
-        if classify is not None:
-            # classify 요청이 주 호출보다 먼저 나가도록 한 번 양보한다(TU-10)
+        intent_label: str | None = None
+        if classify is not None or intent is not None:
+            # classify·T 요청이 주 호출보다 먼저 나가도록 한 번 양보한다(TU-10)
             await asyncio.sleep(0)
         if classify is not None and serial:
             classified = await wait_classify(classify, skips)  # ⓐ: 주 호출 앞에서 끝까지 기다린다
@@ -337,6 +389,14 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             if fixed is not None and Signal.CRISIS not in signals:
                 # ⓐ: classify가 템플릿 범주면 주 호출 없이 고정 문장(통합 I13 ⓐ, #83 비교용)
                 return tutor_post(fixed_body(fixed), classified)
+        iskips = getattr(state, "intent_skips", None)
+        if intent is not None and cfg.toggles.intent_override == "serial":
+            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, 고정 문장 이름표면 주 호출 없이 낸다
+            intent_label = await wait_intent(intent, iskips)
+            intent = None  # 받았다(아래 병렬 기다림을 건너뛴다)
+            hit = _intent_fixed(intent_label, signals, None)
+            if hit is not None:
+                return tutor_post(fixed_body(hit[0]), hit[1])
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,
@@ -350,23 +410,33 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         )
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다
+        if intent is not None:
+            # T 호출 제한과 주 호출이 끝난 때(+여유) 중 늦은 쪽까지 기다린다
+            main_done = asyncio.get_running_loop().time() + WAIT_GRACE_S
+            intent_label = await wait_intent(intent, iskips, not_before=main_done)
         if draft.out is None:
             quote = (
                 material_quote(draft.sections, conv.search_query()[0])
                 if cfg.toggles.fallback_quote
                 else None
             )
-            return tutor_post(
-                fallback_body(
-                    signals,
-                    classified,
-                    delegation=cfg.toggles.delegation_override,
-                    quote=quote,
-                )
+            body = fallback_body(
+                signals,
+                classified,
+                delegation=cfg.toggles.delegation_override,
+                quote=quote,
             )
+            # T는 기본값의 action을 주 호출 action처럼 보고 고정 문장 조합으로만 덮는다
+            blocked = _classify_wins(gate_classified(classified, signals, needs_signal=gated))
+            hit = None if blocked else _intent_fixed(intent_label, signals, body["action"])
+            if hit is not None:
+                return tutor_post(fixed_body(hit[0]), hit[1])
+            return tutor_post(body)
     finally:
         if classify is not None:
             classify.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
+        if intent is not None:
+            intent.cancel()
     # 제출물 대행 보정은 합치기 앞에 둔다: 보정된 academic scaffold는 표 고정 문장이라
     # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다.
     # 덮기(override)는 classify가 위기·공격 범주면 걸지 않아 그 범주가 합치기에서 이긴다.
@@ -381,6 +451,16 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         classified=trusted,
     )
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
+    # T 덮기(대행 보정 뒤, 합치기 앞). classify가 위기·공격이면 T는 비키고 합치기가 정한다
+    decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    if decided is not None:
+        kind = template_for(decided.category, decided.action)
+        if kind is not None:
+            return tutor_post(fixed_body(kind), decided.category)
+        # 고정 문장이 없는 조합(answer_seeking scaffold, 주 호출이 answer일 때만):
+        # 주 호출 문장·인용은 그대로, 범주·action만(두 범주 모두 인용 always라 인용이 같다)
+        out = out.model_copy(update={"category": decided.category})
+        action = decided.action
     merged = merge_category(out.category, action, trusted)
     if merged.fixed is not None:
         # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다

@@ -4,7 +4,7 @@ import pytest
 
 from tests.tutor.test_flow import DELEGATION_ASK, QUESTION, FakeLLM, ask, state_with
 from tests.tutor.test_guard_merge import FakeGuard, build, run
-from tutor.answer.quote import MAX_QUOTED, material_quote, quote_sentences
+from tutor.answer.quote import material_quote, quote_sentences
 from tutor.answer.templates import MATERIAL_QUOTE_LEAD, TEXT, Fixed
 from tutor.retrieval import Section
 
@@ -29,11 +29,31 @@ def section(sid="XX-01-01", text=TEXT_MD):
 # --- 문장 고르기 ---
 
 
+ASKED = "야구 점수판은 몇 회까지 기록해?"
+EXACT = "야구 점수판은 3회까지 기록해요."
+
+
 def test_quote_picks_sentences_that_overlap_the_question_in_text_order():
-    got = quote_sentences(TEXT_MD, "야구 점수판은 몇 회까지 기록해?")
+    got = quote_sentences(TEXT_MD, ASKED)
     assert got[0] == "야구 점수판 예제는 3회까지의 점수를 기록해요."
-    assert len(got) <= MAX_QUOTED
-    assert got == sorted(got, key=TEXT_MD.replace("**", "").index)  # 본문 순서
+    # 점수가 더 높은 문장(EXACT)이 뒤에 있어도 본문 순서로 낸다
+    earlier = "점수판은 회마다 몇 점인지 기록해요."
+    assert quote_sentences(f"{earlier} {EXACT}", ASKED) == [earlier, EXACT]
+
+
+def test_quote_keeps_at_most_two_sentences():
+    # 세 문장의 점수가 같아도 두 문장까지(첫 문장까지 3문장 이내, TU-06). 같으면 앞 문장
+    text = "점수판은 1회를 적어요. 점수판은 2회를 적어요. 점수판은 3회를 적어요."
+    assert quote_sentences(text, "점수판은 회를 적어요") == [
+        "점수판은 1회를 적어요.",
+        "점수판은 2회를 적어요.",
+    ]
+
+
+def test_quote_drops_second_sentence_under_half_of_top():
+    # 둘째 문장은 2-gram 둘("점수"·"수판")이 겹쳐도 1위 점수의 절반이 안 되면 덧붙이지 않는다
+    loose = "점수판 그림은 교실 뒤쪽 게시판 옆에 걸어 두고 다 같이 보면서 이야기를 나눠요."
+    assert quote_sentences(f"{loose} {EXACT}", ASKED) == [EXACT]
 
 
 def test_quote_skips_headings_questions_answers_and_tables():
@@ -41,6 +61,25 @@ def test_quote_skips_headings_questions_answers_and_tables():
     joined = " ".join(got)
     assert "Q." not in joined and "A." not in joined  # 퀴즈 질문·정답 줄은 옮기지 않는다
     assert "#" not in joined and "|" not in joined
+
+
+def test_quote_skips_bare_quiz_question_lines():
+    # 지금 KB의 퀴즈 질문은 모두 `### Q.` 제목 줄이지만, 제목 표시 없이 `Q.`로 시작하는 줄도 뺀다
+    text = "Q. 점수판은 몇 회까지 기록하나요?\n점수판은 회마다 점수를 적어요.\n"
+    assert quote_sentences(text, "점수판은 몇 회까지 기록하나요?") == [
+        "점수판은 회마다 점수를 적어요."
+    ]
+
+
+def test_quote_never_copies_quiz_answer_line_on_real_finance_section():
+    # FIN-04-01 정답 줄 "A. 아니요. 답장하지 말고 멈춘 뒤, 앱을 직접 열어 확인해요."와 겹치는
+    # 질문. `A.` 줄을 건너뛰지 않으면 "A."가 문장 분리에서 떨어져 정답 본문이 나간다(#219 리뷰)
+    from tutor.retrieval import default_index
+
+    sec = default_index().section("FIN-04-01")
+    got = quote_sentences(sec.text, "답장하지 말고 멈춘 뒤 앱을 직접 열어 확인해야 해?")
+    assert got  # 설명 문단 문장을 옮긴다
+    assert not any("답장하지 말고 멈춘 뒤" in s for s in got)
 
 
 def test_quote_strips_list_marks_and_bold():
@@ -80,14 +119,14 @@ def test_quote_skips_code_blocks_tables_pointers_and_labels():
 
 
 def test_quote_prefers_short_exact_sentence_over_long_loose_one():
+    # 긴 문장이 겹친 2-gram 종류는 더 많다(√ 없이 세면 긴 문장이 1위). √문장 2-gram 수로 나누면
+    # 짧은 문장의 절반이 안 돼 빠진다
     long_loose = (
-        "꿈틀 중학교 동아리는 야구와 과일과 성적표와 점수판과 여러 예제를 다루며 "
-        "회마다 기록하고 정리하고 다시 확인하는 활동을 오래 해 왔어요."
+        "꿈틀 중학교 야구 동아리는 해마다 야구 점수판은 몇 회까지 기록해 둘지 회의에서 함께 정하며 "
+        "과일 바구니와 성적표와 용돈 기입장 같은 여러 예제를 다루고 활동이 끝나면 "
+        "모두 모여 사진과 메모로 정리하고 다시 확인하는 일을 오래 해 왔어요."
     )
-    exact = "야구 점수판은 3회까지 기록해요."
-    got = quote_sentences(f"{long_loose} {exact}", "야구 점수판은 몇 회까지 기록해?")
-    assert got[0] == exact or got == [long_loose, exact]
-    assert exact in got
+    assert quote_sentences(f"{long_loose} {EXACT}", ASKED) == [EXACT]
 
 
 def test_quote_drops_overlong_sentences_and_strips_backticks():
@@ -178,6 +217,9 @@ def test_failure_delegation_override_still_wins_over_quote():
     [
         ("normal", "quote"),
         ("jailbreak_injection", TEXT[Fixed.REFUSE_JAILBREAK]),  # 공격 범주가 먼저
+        ("harmful_content", TEXT[Fixed.REFUSE_HARMFUL]),
+        ("off_topic", TEXT[Fixed.REDIRECT_OFF_TOPIC]),
+        ("academic_dishonesty", TEXT[Fixed.SCAFFOLD_ACADEMIC]),
         ("emotional_distress", TEXT[Fixed.ESCALATE]),
         ("answer_seeking", "clarify"),  # 정답을 밝히지 않는다
         ("out_of_material", "clarify"),

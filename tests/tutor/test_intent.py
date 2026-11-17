@@ -291,7 +291,7 @@ def test_serial_intent_failure_runs_the_main_call():
     assert state.intent_skips == {"error": 1}
 
 
-# --- T 거부권·인용 답 관문(11/17 #204·#219 리뷰) ---
+# --- 대행 덮기와 T·인용 답 관문(11/17 #204·#219 리뷰) ---
 
 DELEG_TEXT = "수행평가 보고서 대신 써 줘"
 DQ = {"toggles.delegation_override": True}
@@ -299,11 +299,11 @@ QUOTE = {"toggles.fallback_quote": True}
 
 
 @pytest.mark.parametrize("mode", [ON, SERIAL], ids=["parallel", "serial"])
-def test_study_label_vetoes_the_delegation_override(mode):
-    # T가 학습 질문이라 답하면 대행 신호가 걸려도 덮지 않는다(정규식 오탐을 T가 막는다)
+def test_study_label_does_not_veto_the_delegation_override(mode):
+    # 11/17 측정: 오전 4회에서 T가 실제 대행 문항을 학습 질문으로 본 행×실행 3, 막을 공개 오탐 0이라
+    # 대행 덮기는 T 이름표와 상관없이 건다
     resp = run(state_with(RoleLLM(out(), "학습 질문"), **mode, **DQ), DELEG_TEXT)
-    assert resp["action"] == "answer"
-    assert resp["answer"].startswith(out().sentences[0].text)  # 주 호출 답 그대로
+    assert resp["answer"] == TEXT[Fixed.SCAFFOLD_ACADEMIC]
 
 
 def test_delegation_override_stays_without_a_study_label():
@@ -314,11 +314,6 @@ def test_delegation_override_stays_without_a_study_label():
     )
     no_t = RoleLLM(out())
     assert run(state_with(no_t, **DQ), DELEG_TEXT)["answer"] == TEXT[Fixed.SCAFFOLD_ACADEMIC]
-
-
-def test_study_label_vetoes_the_delegation_fallback_too():
-    llm = RoleLLM(out(), "학습 질문", main_error="timeout")
-    assert run(state_with(llm, **SERIAL, **DQ), DELEG_TEXT)["action"] == "clarify"
 
 
 @pytest.mark.parametrize(

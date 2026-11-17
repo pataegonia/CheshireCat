@@ -485,9 +485,15 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     return {**body, "answer": joined}
 
 
+# 이 신호가 있으면 E를 부르지 않는다. 맞는 답이 escalate·refuse라 E(answer → abstain)가 고칠 것이
+# 없고 nano 1회만 든다(#232 가드 리뷰). 공개 세트에서 named_term이 걸리는 14행에는 이 신호가 없다
+GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
+
+
 async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
-    """E 호출 시작. 프롬프트가 없거나(기동 때 읽지 않음) 저신호 직접 판정·영어 발화면 부르지 않는다.
-    `oom_gate: named_term`이면 판단 대상에 KB에 없는 이름 붙은 말이 없을 때도 부르지 않는다.
+    """E 호출 시작. 프롬프트가 없거나(기동 때 읽지 않음) 저신호 직접 판정·위기·지시 무력화 신호·영어
+    발화면 부르지 않는다. `oom_gate: named_term`이면 판단 대상에 KB에 없는 이름 붙은 말이 없을
+    때도 부르지 않는다.
 
     근거 묶음은 주 호출과 같은 질의·k의 BM25 검색이다. 영어 판정은 창 본문이 아니라 판단 대상
     원문을 정규화해서 본다(창 본문의 "[숨긴 문자: …]" 표기에 한글이 있다)."""
@@ -498,6 +504,10 @@ async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob
     if direct_clarify(conv):
         return None
     counts = getattr(state, "oom_gate_counts", None)
+    if GATE_SKIP_SIGNALS.intersection(detect(conv)):
+        if counts is not None:
+            counts["signal"] += 1
+        return None
     if english_only(normalize_fast(conv.target_raw)):
         if counts is not None:
             counts["english"] += 1

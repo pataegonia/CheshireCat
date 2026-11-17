@@ -380,11 +380,6 @@ def _t_on(cfg: Any) -> bool:
     return cfg.toggles.intent_override != "off" and cfg.toggles.guard_classify != "serial"
 
 
-def _study(cfg: Any, label: str | None) -> bool:
-    """T를 켰고 T가 학습 질문이라 답했는가. 그러면 대행 덮기를 하지 않는다(#220과 같다)."""
-    return _t_on(cfg) and label == STUDY
-
-
 def _quote_allowed(cfg: Any, label: str | None) -> bool:
     """자료 인용 답을 낼 수 있는가. T를 켰으면 T가 학습 질문이라 답한 때만(#220과 같다)."""
     return not _t_on(cfg) or label == STUDY
@@ -483,7 +478,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             body = fallback_body(
                 signals,
                 classified,
-                delegation=cfg.toggles.delegation_override and not _study(cfg, intent_label),
+                delegation=cfg.toggles.delegation_override,
                 quote=quote,
             )
             # T는 기본값의 action을 주 호출 action처럼 보고 고정 문장 조합으로만 덮는다
@@ -507,7 +502,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         draft.out,
         signals,
         state_rule=cfg.toggles.scaffold_state_rule,
-        override=cfg.toggles.delegation_override and not _study(cfg, intent_label),
+        override=cfg.toggles.delegation_override,
         classified=trusted,
     )
     action = choose_action(out, from_category=cfg.toggles.action_from_category)

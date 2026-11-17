@@ -368,6 +368,15 @@ def _quote_allowed(cfg: Any, label: str | None) -> bool:
     return not _t_on(cfg) or label == STUDY
 
 
+# 직렬 T에서 주 호출도 불러 보는 고정 문장(redirect·scaffold). 주 호출이 escalate면 escalate를
+# 따르고, 아니면 이 고정 문장을 그대로 낸다. 위기 신호 정규식에 안 걸린 위기 발화를 T가 제출물
+# 대행·무관 결과물 등으로 보면 escalate가 빠지던 것(#220 가드 리뷰 1번, 11/18 T 탐침 12문장 중
+# 4문장). refuse 고정 문장과 위기(escalate)는 주 호출 없이 낸다
+SERIAL_YIELDS_TO_ESCALATE = frozenset(
+    {Fixed.REDIRECT_OFF_TOPIC, Fixed.REDIRECT_HARMFUL, Fixed.SCAFFOLD_ACADEMIC}
+)
+
+
 def _intent_fixed(label: str | None, signals: Sequence[Signal], action: Action | None):
     """T가 덮어 고정 문장이 되면 (고정 문장, 범주). 아니면 None."""
     decided = decide_intent(label, signals, action)
@@ -561,12 +570,16 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
                 # ⓐ: classify가 템플릿 범주면 주 호출 없이 고정 문장(통합 I13 ⓐ, #83 비교용)
                 return tutor_post(fixed_body(fixed), classified)
         iskips = getattr(state, "intent_skips", None)
+        deferred = None  # 직렬 T의 redirect·scaffold 고정 문장(주 호출이 escalate인지 본 뒤 낸다)
         if intent is not None and cfg.toggles.intent_override == "serial":
-            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, 고정 문장 이름표면 주 호출 없이 낸다
+            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, 고정 문장 이름표면 주 호출 없이 낸다.
+            # redirect·scaffold 고정 문장은 주 호출도 불러 주 호출이 escalate면 그쪽을 따른다
             intent_label = await wait_intent(intent, iskips)
             intent = None  # 받았다(아래 병렬 기다림을 건너뛴다)
             hit = _intent_fixed(intent_label, signals, None)
-            if hit is not None:
+            if hit is not None and hit[0] in SERIAL_YIELDS_TO_ESCALATE:
+                deferred = hit
+            elif hit is not None:
                 return tutor_post(fixed_body(hit[0]), hit[1])
         draft = await draft_answer(
             conv,
@@ -579,6 +592,8 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
+        if deferred is not None and (draft.out is None or draft.out.action != "escalate"):
+            return tutor_post(fixed_body(deferred[0]), deferred[1])
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다
         if intent is not None:

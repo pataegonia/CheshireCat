@@ -259,11 +259,43 @@ def test_delegation_then_intent_on_the_server():
 # --- 직렬(serial) ---
 
 
-def test_serial_fixed_label_skips_the_main_call():
-    llm = RoleLLM(out(), "무관 결과물")
+def test_serial_refuse_label_skips_the_main_call():
+    llm = RoleLLM(out(), "유해-실행")
     resp = run(state_with(llm, **SERIAL))
     assert llm.roles == [intent.ROLE]
-    assert resp == {"answer": TEXT[Fixed.REDIRECT_OFF_TOPIC], "action": "redirect", "citations": []}
+    assert resp == {"answer": TEXT[Fixed.REFUSE_HARMFUL], "action": "refuse", "citations": []}
+
+
+SERIAL_WEAK = [
+    ("무관 결과물", Fixed.REDIRECT_OFF_TOPIC, "redirect"),
+    ("유해-비하", Fixed.REDIRECT_HARMFUL, "redirect"),
+    ("제출물 대행", Fixed.SCAFFOLD_ACADEMIC, "scaffold"),
+]
+
+
+@pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
+def test_serial_weak_fixed_label_still_sends_its_fixed_sentence(label, fixed, action):
+    # redirect·scaffold 고정 문장 이름표도 주 호출을 부르지만, 주 호출이 escalate가 아니면
+    # T 고정 문장을 그대로 낸다(#220 가드 리뷰 1번)
+    llm = RoleLLM(out(), label)
+    resp = run(state_with(llm, **SERIAL))
+    assert llm.roles == [intent.ROLE, "main"]
+    assert resp == {"answer": TEXT[fixed], "action": action, "citations": []}
+
+
+@pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
+def test_serial_weak_fixed_label_yields_to_a_main_escalate(label, fixed, action):
+    # 위기 신호 정규식에 안 걸린 위기 발화를 T가 약한 이름표로 보아도 주 호출이 escalate면 escalate
+    llm = RoleLLM(out("emotional_distress", "escalate", sentences=[]), label)
+    resp = run(state_with(llm, **SERIAL))
+    assert resp["action"] == "escalate" and resp["answer"] == TEXT[Fixed.ESCALATE]
+
+
+@pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
+def test_serial_weak_fixed_label_keeps_its_sentence_when_the_main_call_fails(label, fixed, action):
+    llm = RoleLLM(out(), label, main_error="timeout")
+    resp = run(state_with(llm, **SERIAL))
+    assert resp == {"answer": TEXT[fixed], "action": action, "citations": []}
 
 
 def test_serial_waits_for_intent_before_the_main_call():

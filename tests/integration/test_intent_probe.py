@@ -137,3 +137,16 @@ def test_simulate_does_not_count_same_action_as_a_change():
     runs = [{"r1": {"action": "refuse"}}]
     got = ip.simulate(records, runs, ip.server_serial_override)
     assert (got["right"], got["wrong"], got["other"]) == (0.0, 0.0, 0.0)
+
+
+def test_prompt_option_rejects_paths_and_missing_files():
+    for bad in ("../intent.md", "없는파일.md", "prompts/intent.md"):
+        with pytest.raises(SystemExit):
+            ip.main(["--records", "x.json", "--prompt", bad])
+
+
+def test_variant_prompt_loads_without_the_source_comment():
+    path = ip.intent.PROMPT_PATH.with_name("intent_v2_direct.md")
+    system = ip.intent.load_system(path)
+    assert not system.startswith("<!--")
+    assert "직접 시키는 요청" in system and "더 강한(위험한) 쪽" not in system

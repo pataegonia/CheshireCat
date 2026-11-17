@@ -1,0 +1,37 @@
+# 11/17 2차 자체 검증(cited) 교차 검증 160행 판정 포함, 동결 후보 대 + 자체 검증, 번갈아 2+2.
+# 거르기(1117_selfcheck_facts.yaml)에서 이긴 쪽만 돌린다.
+items:
+  - name: cv-base-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: cv-cited-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.self_check="cited"'
+  - name: cv-base-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: cv-cited-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.self_check="cited"'

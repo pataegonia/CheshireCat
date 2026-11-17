@@ -1,0 +1,56 @@
+# 11/17 오후 2차 자체 검증 거르기(판정 포함). 사실 손실 세트 50행(손실 26 + 대조 normal 24).
+# 세트는 먼저 만든다(API 0회): python -m tutor.eval.facts_set --ids tutor/eval/plans/facts_loss_ids.txt --out tutor/eval/runs/facts_set.jsonl
+# 동결 후보(대행 덮기 + 자료 인용 답 + T serial) 대 + 자체 검증 bundle · cited, 번갈아 2회씩.
+items:
+  - name: facts-base-1
+    cases: tutor/eval/runs/facts_set.jsonl
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: facts-bundle-1
+    cases: tutor/eval/runs/facts_set.jsonl
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.self_check="bundle"'
+  - name: facts-cited-1
+    cases: tutor/eval/runs/facts_set.jsonl
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.self_check="cited"'
+  - name: facts-cited-2
+    cases: tutor/eval/runs/facts_set.jsonl
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.self_check="cited"'
+  - name: facts-bundle-2
+    cases: tutor/eval/runs/facts_set.jsonl
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.self_check="bundle"'
+  - name: facts-base-2
+    cases: tutor/eval/runs/facts_set.jsonl
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'

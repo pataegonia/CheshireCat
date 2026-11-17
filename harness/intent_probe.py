@@ -261,10 +261,12 @@ def _call(args: argparse.Namespace, ap: argparse.ArgumentParser) -> list[dict[st
     llm: TutorLLM = state.tutor_llm
     llm.max_calls = len(rows)  # 행마다 1회를 넘지 않는다
     toc = intent.table_of_contents(state.tutor_kb.sections)
-    items = make_items(rows, intent.load_system(), toc)
-    sys.stdout.write(f"T 호출 {len(items)}회(재시도 없음, 동시 {metrics.WORKERS})\n")
+    items = make_items(rows, intent.load_system(intent.PROMPT_PATH.with_name(args.prompt)), toc)
+    sys.stdout.write(f"T 호출 {len(items)}회(재시도 없음, 동시 {metrics.WORKERS}, {args.prompt})\n")
     records = asyncio.run(call_all(llm, items, args.timeout_s))
     name = args.effort if args.cases == "public" else f"{args.effort}-team"
+    if args.prompt != intent.PROMPT_PATH.name:
+        name += "-" + Path(args.prompt).stem  # 변형 프롬프트 기록은 이름으로 가른다
     path = write_records(records, args.out, name)
     sys.stdout.write(f"결과: {path.as_posix()}\n")
     return records
@@ -278,9 +280,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--timeout-s", type=float, default=30.0)
     ap.add_argument("--records", type=Path, nargs="+", help="이미 부른 기록 JSON들(API 0회)")
     ap.add_argument("--out", type=Path, default=RUNS_DIR)
+    ap.add_argument(
+        "--prompt",
+        default=intent.PROMPT_PATH.name,
+        help="tutor/prompts/ 안 T 프롬프트 파일(측정 비교용)",
+    )
     args = ap.parse_args(argv)
     if args.timeout_s <= 0:
         ap.error("--timeout-s는 0보다 커야 한다")
+    if (
+        Path(args.prompt).name != args.prompt
+        or not intent.PROMPT_PATH.with_name(args.prompt).is_file()
+    ):
+        ap.error("--prompt는 tutor/prompts/ 안 파일 이름이어야 한다")
     runs = load_runs(args.main)
     out = sys.stdout
     if args.records is None:

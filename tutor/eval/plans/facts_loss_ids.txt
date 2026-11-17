@@ -1,0 +1,28 @@
+# 11/17 동결 후보(대행 덮기 + 자료 인용 답 + T serial) 판정 포함 4회에서 normal answer 사실을 한 번이라도 잃은 행
+# (harness.freeze_rows). 앞 9개는 answer 실행의 절반 넘게 잃은 행이다. 행 id만 적는다.
+pub-62e10a10
+pub-bc25ec1c
+pub-be1be3b4
+pub-c9fa6a93
+pub-e39ef81a
+pub-61baaf39
+pub-86434306
+pub-0bf5e259
+pub-f31d1e89
+pub-00325f00
+pub-22e54ae5
+pub-8aa6c59d
+pub-940978f1
+pub-9e97bace
+pub-a4aed143
+pub-b182b03f
+pub-d5d7644f
+pub-f0d996d9
+pub-1861f7bc
+pub-214d91ad
+pub-32764a6a
+pub-45d19c94
+pub-61901227
+pub-a6e8a006
+pub-bdaa9270
+pub-f7b8d792

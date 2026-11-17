@@ -113,7 +113,12 @@ def responder(category="normal", output=GROUNDED, input_step=None, output_step=N
 
 
 async def make(respond=None, config=DEFAULT, indexes=None, **overrides):
-    """(Guard, FakeLLM). overrides 키는 점 대신 `__`를 쓴다(toggles__nano_tier3=False)."""
+    """(Guard, FakeLLM). overrides 키는 점 대신 `__`를 쓴다(toggles__nano_tier3=False).
+
+    자료 밖 확인(S3.10)은 따로 켜지 않으면 끈다. 호출 수·흐름을 보는 기존 테스트의 전제(입력 1회 +
+    출력 1회)를 지키려는 것이고, 켠 동작은 test_cause_fixes가 본다.
+    """
+    overrides.setdefault("toggles__oom_check", False)
     cfg = load_config(config, overrides={k.replace("__", "."): v for k, v in overrides.items()})
     fake = FakeLLM(respond=respond or responder())
     llm = LLM(cfg.llm, send=fake.send, sleep=_nosleep)
@@ -508,7 +513,7 @@ async def test_build_with_injected_llm_does_not_probe_again():
     before = len(fake.requests)
     guard = await Guard.build(cfg, llm=llm, rows=labeled_rows(_public()))
     assert len(fake.requests) == before == probe_calls(cfg.llm)
-    assert (await guard.judge(req())).calls == 2
+    assert (await guard.judge(req())).calls == 2 + cfg.toggles.oom_check  # + 자료 밖 확인
 
 
 async def test_build_without_llm_creates_one_and_probes_once(monkeypatch):
@@ -959,9 +964,9 @@ async def test_request_without_candidate_has_no_output_on_every_default_path(no_
     ("config", "missing", "fails"),
     [
         (BASELINE, "output_judge_baseline.md", True),
-        (DEFAULT, "output_judge_en.md", True),
+        (DEFAULT, "output_judge_en_v2.md", True),
         (DEFAULT, "input_judge_en.md", True),
-        (BASELINE, "output_judge_en.md", False),  # 그 모드가 쓰지 않는 프롬프트는 읽지 않는다
+        (BASELINE, "output_judge_en_v2.md", False),  # 그 모드가 쓰지 않는 프롬프트는 읽지 않는다
         (DEFAULT, "output_judge_baseline.md", False),
     ],
 )
@@ -1246,3 +1251,64 @@ async def test_quote_that_skips_hidden_tag_chars_in_the_answer_is_verified(no_ru
     guard, _ = await make(responder(output=UNGROUNDED))  # 인용은 태그를 뺀 모양이다
     j = await guard.judge(req(answer))
     assert (j.answer_quote_ok, j.output_tier) == (True, 3)
+
+
+# --- 자기소개 규칙(S3.9): nano가 normal·answer_seeking이라 한 자기소개 발화는 pii_disclosure ---
+
+INTRO = (Message("user", "나는 하늘빛 중학교 1학년 민서야. 변수 이름 규칙 알려 줘"),)
+
+
+@pytest.mark.parametrize("nano", ["normal", "answer_seeking"])
+async def test_self_intro_turns_allow_side_nano_category_into_pii(no_rule, nano):
+    guard, _ = await make(responder(nano))
+    j = await guard.judge(req(messages=INTRO))
+    assert j.response == GuardResponse("pii_disclosure", OutputVerdict(True, (), True))
+    assert j.input_source == "nano"
+    assert await guard.classify(INTRO) == nano  # 튜터 공유 메서드는 그대로
+
+
+@pytest.mark.parametrize("nano", ["harmful_content", "out_of_material", "jailbreak_injection"])
+async def test_self_intro_rule_leaves_other_nano_categories(no_rule, nano):
+    guard, _ = await make(responder(nano), toggles__jb_check=False)
+    assert (await guard.judge(req(messages=INTRO))).response.category == nano
+
+
+async def test_self_intro_rule_can_be_turned_off(no_rule):
+    guard, _ = await make(responder("normal"), toggles__pii_intro_rule=False)
+    assert (await guard.judge(req(messages=INTRO))).response.category == "normal"
+
+
+async def test_self_intro_rule_needs_the_intro(no_rule):
+    guard, _ = await make(responder("normal"))
+    assert (await guard.judge(req())).response.category == "normal"
+
+
+async def test_self_intro_rule_skips_responses_nano_did_not_decide(no_rule):
+    # nano가 실패해 기본 범주(normal)로 떨어진 응답은 건드리지 않는다
+    guard, _ = await make(
+        responder(input_step=Timeout()), toggles__lr=False, toggles__knn_vote=False
+    )
+    j = await guard.judge(req(messages=INTRO))
+    assert (j.input_source, j.response.category) == ("default", "normal")
+
+
+async def test_self_intro_rule_reads_only_the_last_learner_turn(no_rule):
+    msgs = (
+        *INTRO,
+        Message("assistant", "변수는 값을 담는 이름이에요."),
+        Message("user", "그럼 리스트는?"),
+    )
+    guard, _ = await make(responder("normal"))
+    assert (await guard.judge(req(messages=msgs))).response.category == "normal"
+
+
+async def test_self_intro_rule_keeps_decision_and_output(no_rule):
+    quote = ANSWER[:12]
+    out = {"answer_quote": quote, "kb_quote": "", "grounded": False, "refuses": False}
+    on, _ = await make(responder("normal", output=out))
+    off, _ = await make(responder("normal", output=out), toggles__pii_intro_rule=False)
+    a, b = await on.judge(req(messages=INTRO)), await off.judge(req(messages=INTRO))
+    assert (a.response.category, b.response.category) == ("pii_disclosure", "normal")
+    assert a.response.output == b.response.output and a.output_tier == b.output_tier
+    block = frozenset(on.cfg.block_categories)
+    assert a.response.to_json(block)["input"]["decision"] == "allow"

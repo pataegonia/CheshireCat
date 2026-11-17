@@ -291,7 +291,8 @@ def probe_calls(cfg: Llm) -> int:
 
 def calls_per_row(cfg: GuardConfig, has_candidate: bool) -> int:
     """행당 호출 수의 상한 추정(저신호 직접 판정 등으로 덜 부를 수 있다). 재시도는 세지 않는다."""
-    n = 1 + cfg.toggles.jb_check  # 입력 판정(+ 탈옥 2차 판정: 상한이라 늘 센다)
+    # 입력 판정(+ 탈옥 2차 또는 자료 밖 확인: 한 요청에 둘 중 하나만 부른다. 상한이라 늘 센다)
+    n = 1 + (cfg.toggles.jb_check or cfg.toggles.oom_check)
     out = cfg.output
     if has_candidate and (
         out.mode == "baseline" or cfg.toggles.nano_tier3 or out.call_nano_when_unused

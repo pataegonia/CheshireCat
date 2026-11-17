@@ -56,7 +56,7 @@ PRD §4의 단계가 모듈 하나씩에 대응한다.
 |---|---|---|---|---|
 | 인증·요청 읽기·200 보장·로그 | `server.py`, `schema.py` | `create_app`, `router`, `setup_guard`, `guard_lifespan`, `parse_request` | 01·09·12 | 0009 |
 | ① 전처리 | `preprocess.py` | `normalize`, `reveal_hidden`, `decode_tags`, `strip_tags` | 02 | 0001 |
-| ② 결정적 신호 | `signals.py` | `is_low_signal`, `is_refusal`, `has_hidden_tags` | 06 | 0014 |
+| ② 결정적 신호 | `signals.py` | `is_low_signal`, `is_refusal`, `has_hidden_tags`, `is_self_intro`(S3.9) | 06 | 0014 |
 | ② 숫자·리터럴 | `rules.py` | `extract_literals`, `literal_rule` | 06·07 | 0014 |
 | ③ 보조 판정기 | `knn.py`, `classifier.py`, `clusters.py` | `KnnIndex`, `LrClassifier`, `build_clusters`(짝 묶음. `KnnIndex`가 기동 때 직접 계산하고 `eval.cv`도 import. 서버는 eval 패키지에 의존하지 않는다) | 05 | 0013 |
 | ④ KB 검색(R13-A가 잰 BM25 변형) | `kb.py` | `KbIndex.load`, `KbIndex.rank`(→ `Ranking`), `KbIndex.search` | 03 | 0010 |
@@ -275,6 +275,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   nano_span: true                  # GR-07 ③에서 확인된 answer_quote를 구간으로 낸다(ADR-0014 S2.9 수정). 자른 원문에 글자 그대로 있는 인용만 낸다. 끄면 ③은 false/[]. ③의 "근거 없음" 정밀도가 0.8 아래로 떨어지면 끈다
   safe_rule: true                  # GR-08 safe 규칙만. GR-07 ①(block 범주 → true/[])은 output.mode: v6에서 토글 없이 늘 적용
   oom_kb_snippet: false            # GR-04 out_of_material용 KB 조각, P1
+  oom_check: true                  # S3.10 자료 밖 확인: nano가 normal이면 KB를 붙여 호출 1회 추가.(results/2026-11-17-cause-fixes.md). `output.span_tidy: true`도 같은 문서
   embedding: false                 # GR-03·GR-05 임베딩, P2
 input:
   window_last: 6

@@ -323,3 +323,29 @@ def test_named_term_scope_fits_the_call_limit_like_all():
     assert config.load_config(overrides={**NAMED, **serial}).toggles.oom_gate == "named_term"
     with pytest.raises(ValidationError, match="TU-13"):
         config.load_config(overrides={**NAMED, "toggles.guard_classify": "parallel"})
+
+
+def test_named_term_scope_looks_only_at_the_last_learner_turn():
+    # 앞 턴에 KB에 없는 이름이 있어도 마지막 발화에 없으면 E를 부르지 않는다
+    llm = RoleLLM(out(), found=False)
+    state = state_with(llm, **NAMED)
+    messages = [
+        {"role": "user", "content": TERM_Q},
+        {"role": "assistant", "content": "자료에서 찾아볼게요."},
+        {"role": "user", "content": QUESTION},
+    ]
+
+    async def go():
+        return await flow.answer_v2(parse_request({"messages": messages}), state, deadline=1e12)
+
+    assert asyncio.run(go())["action"] == "answer"
+    assert oom_gate.ROLE not in llm.roles
+    assert state.oom_gate_counts == {"no_term": 1}
+
+
+def test_named_term_scope_counts_english_before_names():
+    llm = RoleLLM(out(), found=False)
+    state = state_with(llm, **NAMED)
+    assert run(state, "what is the scoring rule in this course")["action"] == "answer"
+    assert oom_gate.ROLE not in llm.roles
+    assert state.oom_gate_counts == {"english": 1}

@@ -32,7 +32,13 @@ from guardrail.schema import (
     OutputVerdict,
     _messages,
 )
-from guardrail.signals import Signals, has_hidden_tags, is_low_signal, is_refusal
+from guardrail.signals import (
+    Signals,
+    has_hidden_tags,
+    is_low_signal,
+    is_refusal,
+    is_self_intro,
+)
 
 # nano 호출은 스스로 마감 안에 끝난다(llm.complete). 그 결과를 받을 여유만 둔다
 DEADLINE_GRACE_S = 0.2
@@ -204,7 +210,7 @@ class Guard:
         return cls(cfg, llm, *await asyncio.to_thread(build_indexes, cfg, rows))
 
     async def judge(self, req: GuardRequest) -> Judgement:
-        return await self._run(req)
+        return await self._run(req, intro_rule=self.cfg.toggles.pii_intro_rule)
 
     async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
         """마지막 학습자 발화의 범주(nano·low-signal 직행은 `judge`와 같다). nano 1회, 재시도 없음.
@@ -249,11 +255,15 @@ class Guard:
     # --- 내부 ---
 
     async def _run(
-        self, req: GuardRequest, category: Category | None = None, retries: int | None = None
+        self,
+        req: GuardRequest,
+        category: Category | None = None,
+        retries: int | None = None,
+        intro_rule: bool = False,
     ) -> Judgement:
         t0 = time.monotonic()
         try:
-            return await self._judge(req, t0, category, retries)
+            return await self._judge(req, t0, category, retries, intro_rule)
         except Exception as exc:  # noqa: BLE001 - GR-09: 어떤 실패에도 규격 응답. 종류 이름만 남긴다
             out = (
                 _Output(self._default_output(req)) if category is None
@@ -269,8 +279,13 @@ class Guard:
         t0: float,
         given: Category | None = None,
         retries: int | None = None,
+        intro_rule: bool = False,
     ) -> Judgement:
-        """given이 있으면 입력 nano 없이 그 범주를 쓴다. retries는 nano마다(None=설정값)."""
+        """given이 있으면 입력 nano 없이 그 범주를 쓴다. retries는 nano마다(None=설정값).
+
+        intro_rule은 `judge`(`/guard` 응답)만 켠다: nano가 normal·answer_seeking이라 한 자기소개
+        발화의 범주를 pii_disclosure로 낸다(S3.9). 출력은 nano 범주로 이미 계산한 값 그대로다.
+        """
         cfg = self.cfg
         deadline = t0 + cfg.budget_s
         # CPU 단계는 길이 상한으로 자른 뒤 한 번에 스레드로 보낸다(이벤트 루프를 막지 않는다)
@@ -345,6 +360,9 @@ class Guard:
                 errors.append(f"output:{type(exc).__name__}")
                 out = self._fallback_output(req, category, p.signals)
         calls = len(tasks) + ("jb_check" in trace)
+        if intro_rule and source == "nano" and category in ("normal", "answer_seeking"):
+            if is_self_intro(p.target):  # 둘 다 허용 범주라 decision·출력 단·safe는 그대로다
+                category = "pii_disclosure"
         return self._result(category, source, out, p, t0, t1, calls, tuple(errors))
 
     def _prepare(self, req: GuardRequest) -> _Prepared | Signals:

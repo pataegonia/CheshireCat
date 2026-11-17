@@ -48,6 +48,14 @@ class Timeouts(_Strict):
     pool: float
 
 
+class RoleParams(_Strict):
+    # S3.9 실험: 호출 하나(입력·출력·탈옥 2차)만 다른 값으로. None = 공통 값(llm.*)을 따른다
+    # 기본 설정은 비워 둔다(`per_role: {}`). 쓰는 곳이 없는 실험 손잡이다
+    reasoning_effort: str | None = None
+    verbosity: str | None = None
+    max_completion_tokens: int | None = None
+
+
 class Llm(_Strict):
     # None = 파라미터를 보내지 않음(probe()가 거절된 것만 끈다, S1.3)
     reasoning_effort: str | None
@@ -58,6 +66,8 @@ class Llm(_Strict):
     retries: int
     retry_jitter_s: tuple[float, float]
     gate: PositiveInt  # 0이면 세마포어가 영영 안 열린다
+    # 공통 값이 null이거나 probe()가 끈 파라미터는 여기 적어도 보내지 않는다
+    per_role: dict[Literal["input_judge", "output_judge", "jb_check"], RoleParams]
 
 
 class Toggles(_Strict):
@@ -73,6 +83,8 @@ class Toggles(_Strict):
     oom_kb_snippet: bool
     embedding: bool
     jb_check: bool  # S3.3 탈옥 2차 판정(1차가 jailbreak_injection일 때만)
+    # S3.9: `/guard` 응답에서 nano가 normal·answer_seeking이라 한 자기소개 발화를 pii_disclosure로
+    pii_intro_rule: bool
 
 
 class Vectorizer(_Strict):

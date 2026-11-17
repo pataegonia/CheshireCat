@@ -1,0 +1,63 @@
+# 11/17 저녁 2차: 최종 조합 1회 더(final-1은 코드 갱신 전 거부권 포함 판으로 돌아 뺀다) +
+# KB에 없는 이름 힌트 거르기(판정 없음 3+3). 세트는 먼저 만든다(API 0회):
+#   python -m tutor.eval.facts_set --ids tutor/eval/plans/oom_term_ids.txt --controls 30 --out tutor/eval/runs/oom_set.jsonl
+items:
+  - name: final-4
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: oom-base-1
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: oom-hint-1
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.unknown_term_hint=true'
+  - name: oom-base-2
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: oom-hint-2
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.unknown_term_hint=true'
+  - name: oom-base-3
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: oom-hint-3
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.unknown_term_hint=true'

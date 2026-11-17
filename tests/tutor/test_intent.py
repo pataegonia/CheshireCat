@@ -313,6 +313,21 @@ def test_serial_weak_fixed_label_yields_to_a_main_escalate(label, fixed, action)
     assert resp["action"] == "escalate" and resp["answer"] == TEXT[Fixed.ESCALATE]
 
 
+@pytest.mark.parametrize(
+    ("label", "main", "want"),
+    [
+        ("무관 결과물", ("harmful_content", "refuse"), "refuse"),  # 주 호출의 refuse를 지킨다
+        ("제출물 대행", ("jailbreak_injection", "refuse"), "refuse"),
+        ("유해-비하", ("harmful_content", "refuse"), "redirect"),  # parallel 유해-비하 예외
+        ("제출물 대행", ("low_signal_input", "clarify"), "clarify"),  # 더 강한 clarify도 지킨다
+    ],
+)
+def test_serial_weak_fixed_label_follows_the_parallel_rule_on_the_main_action(label, main, want):
+    # 주 호출 결과가 있으면 parallel과 같은 T 덮기 규칙으로 정한다(#233 가드 리뷰 1번)
+    llm = RoleLLM(out(*main, sentences=[]), label)
+    assert run(state_with(llm, **SERIAL))["action"] == want
+
+
 @pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
 def test_serial_weak_fixed_label_keeps_its_sentence_when_the_main_call_fails(label, fixed, action):
     llm = RoleLLM(out(), label, main_error="timeout")

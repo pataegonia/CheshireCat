@@ -602,7 +602,9 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
-        if deferred is not None and (draft.out is None or draft.out.action != "escalate"):
+        if deferred is not None and draft.out is None:
+            # 주 호출이 실패했으면 T 고정 문장. 성공했으면 아래 T 덮기(decide)가 parallel과 같은
+            # 규칙으로 정한다(주 호출의 escalate·refuse 등 더 강한 action을 지킨다, #233 리뷰)
             return tutor_post(fixed_body(deferred[0]), deferred[1])
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다

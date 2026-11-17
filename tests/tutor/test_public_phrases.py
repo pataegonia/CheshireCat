@@ -29,6 +29,7 @@ _MUST_SCAN = {
     "tutor/prompts/intent.md",
     "tutor/prompts/oom_check.md",
     "tutor/judge/intent.py",
+    "tutor/judge/unknown_terms.py",
     "tutor/answer/templates.py",
     "tutor/contract/tutor.schema.json",
     "config/actions.yaml",

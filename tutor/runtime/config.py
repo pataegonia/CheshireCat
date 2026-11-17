@@ -52,8 +52,9 @@ class Toggles(_Strict):
     # serial은 T 먼저(고정 문장 이름표면 주 호출 없이). 기본 끔(TU-06)
     intent_override: Literal["off", "parallel", "serial"]
     # 자료 밖 확인 E(#213 B2): 주 호출과 동시에 nano 1회, 최종 answer인데 E가 "근거에 없음"이면
-    # 자료 밖 고정 문장. 기본 끔
-    oom_gate: bool
+    # 자료 밖 고정 문장. all은 모든 요청(영어 발화 빼고), named_term은 판단 대상에 KB에 없는 이름
+    # 붙은 말(tutor.judge.unknown_terms)이 있을 때만. 기본 끔
+    oom_gate: Literal["off", "all", "named_term"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -77,7 +78,7 @@ class Toggles(_Strict):
                 "toggles.intent_override는 guard_classify와 verify: guard를 함께 켜면"
                 " 요청당 nano 5회라 쓸 수 없다(TU-13 절대 4회)"
             )
-        if self.oom_gate:
+        if self.oom_gate != "off":
             # 주 호출 2(재시도) + T 1 + classify 최대 2 + judge_output 1 + E 1 ≤ TU-13 절대 4회
             calls = 2 + (self.intent_override != "off") + 2 * (self.guard_classify != "off")
             calls += (self.verify == "guard") + 1

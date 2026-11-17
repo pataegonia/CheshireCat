@@ -181,6 +181,7 @@ def assemble(
     max_citations: int,
     verdict: OutputVerdict | None = None,
     cite_top1: bool = False,
+    top_sections: Sequence[RetrievedSection] | None = None,
 ) -> dict[str, Any]:
     """주 호출 결과 → 규격 본문. 템플릿 조합이면 고정 문장, 아니면 결정적 수정(IN-04).
 
@@ -204,7 +205,8 @@ def assemble(
         action=action,
     )
     body = result.model_dump()
-    return add_top_citation(body, sections) if cite_top1 else body
+    top = sections if top_sections is None else top_sections  # 실험 b2: 규칙 A 질의 1위
+    return add_top_citation(body, top) if cite_top1 else body
 
 
 def tutor_post(body: dict[str, Any], category: str | None = None) -> dict[str, Any]:
@@ -239,7 +241,13 @@ def _candidate(out: MainCallOut) -> str:
     return " ".join(s.text for s in out.sentences if s.text)
 
 
-async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+async def answer_v2(
+    req: TutorRequest,
+    state: Any,
+    *,
+    deadline: float,
+    top_sections: Sequence[RetrievedSection] | None = None,
+) -> dict[str, Any]:
     """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
     가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
@@ -326,5 +334,6 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         max_citations=cfg.toggles.max_citations,
         verdict=verdict,
         cite_top1=cfg.toggles.cite_top1,
+        top_sections=top_sections,
     )
     return tutor_post(body, merged.category)

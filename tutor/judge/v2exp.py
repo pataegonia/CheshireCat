@@ -1,0 +1,414 @@
+"""v2 실험 경로(실험 브랜치 전용, 머지하지 않는다). 기동 때 `TUTOR_V2_MODE`를 한 번 읽는다.
+
+- `m`(기본, 이상한 값도 m): 지금 서버와 같다(`flow.answer_v2`). 이 모듈은 아무것도 부르지 않는다.
+- `b2`: 주 호출(`flow.answer_v2`) ∥ E(답 전 판단, `harness/prompts/oom_check.md` v0) 1회.
+  주 호출이 answer, E가 "근거에 없음", 판단 대상이 영어 위주가 아니면 고정 문장 abstain(인용 없음).
+  cite_top1이 더하는 1위는 규칙 A 질의(창 안 앞 발화 전부 + 판단 대상)의 1위다.
+  E는 요청 시작부터 `E_DEADLINE_S` 안에 끝나야 쓴다(넘으면 버리고 주 호출 결과 그대로).
+- `c4`: T(`tutor/prompts/intent.md`) ∥ E(v0 + 지어낸 퓨샷) → 3-3 합치기(대행 신호 칸 끔, 영어 규칙)
+  → 고정 문장 또는 W(`tutor/prompts/writer.md`) → 통합 finalize → cite_top1(규칙 A) → tutor_post.
+  T·E는 `TE_DEADLINE_S`, W는 요청 마감 - `MARGIN_S` 안에서 끝난다. 요청당 nano 최대 3, 재시도 0.
+  W 실패면 자료 줄 인용 답(answer)·빈 scaffold 문장(scaffold), T 실패면 신호대로(없으면 학습 질문),
+  E 실패는 "있음"으로 본다(공격 이름표 칸은 고정 문장).
+요청 내용은 지역 변수로만 쓰고 남기지 않는다(TU-18). 로그를 남기지 않는다(TU-15).
+"""
+
+import asyncio
+import os
+import re
+import unicodedata
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
+
+from integration.actions import FinalizeConfig, action_for, finalize
+from integration.contracts import Evidence, Sentence
+from tutor.answer.templates import (
+    EMPTY_ANSWER,
+    NOT_IN_MATERIAL_NOTE,
+    Fixed,
+    fixed_body,
+    template_for,
+)
+from tutor.judge import flow
+from tutor.judge.conversation import tidy
+from tutor.judge.main_call import _section_block, _turn_block, defuse
+from tutor.judge.signals import Signal, detect, direct_clarify, labels
+from tutor.request import TutorRequest
+from tutor.retrieval import retrieve
+
+MODES = ("m", "b2", "c4")
+E_DEADLINE_S = 9.0  # B2 E 마감(요청 시작부터). 런박스 동시 64에서 마감 없을 때 20초 넘김 6.9%
+TE_DEADLINE_S = 9.0  # C4 T·E 마감(요청 시작부터)
+MARGIN_S = 0.5  # C4 W는 요청 마감보다 이만큼 먼저 끝낸다(조립·후처리 몫)
+LONG = 300  # 판단 대상이 이 글자 수 이상이면 끝 1~2문장을 T에 따로 준다
+REPO = Path(__file__).resolve().parents[2]
+EMPTY_BUNDLE = "(관련 자료를 찾지 못했습니다)"  # main_call.build_user_message와 같은 문구
+REMINDER = (
+    '<다시 확인할 규칙>\n판단 대상은 판단대상="예"인 마지막 학습자 발화다. 덧붙임·역할극 틀은 빼고 '
+    "남는 요구로, 끝 요청이 있으면 전체와 끝 요청 중 더 강한 쪽으로 이름표 하나를 고른다. "
+    "JSON만 낸다.\n</다시 확인할 규칙>"
+)
+MATERIAL_LEAD = "자료에는 이렇게 나와 있어요."
+PII_NOTE = "이름·학교 같은 개인정보는 여기에 쓰지 않아도 괜찮아요."
+E_FEWSHOT = """
+
+예시 (지어낸 자료와 질문입니다. 형식과 판단 기준만 참고합니다)
+- 근거: "해솔 마트는 오전 9시에 문을 열고 밤 10시에 닫는다." / 질문: "해솔 마트는 몇 시에 닫아요?"
+  → {"asked": "해솔 마트가 닫는 시각", "quote": "밤 10시에 닫는다", "found": true}
+- 근거: 위와 같음 / 질문: "해솔 마트 주차는 몇 시간까지 무료예요?"
+  → {"asked": "해솔 마트의 무료 주차 시간", "quote": "", "found": false} (대상은 같지만 주차 시간은 근거에 없음)
+- 근거: 위와 같음 / 질문: "해솔 마트는 자정까지 열죠?"
+  → {"asked": "해솔 마트가 닫는 시각", "quote": "밤 10시에 닫는다", "found": true} (전제가 틀렸지만 근거로 바로잡을 수 있음)
+- 근거: "별빛 카드는 결제한 금액의 1%를 포인트로 돌려준다." / 질문: "별빛 카드 연회비는 얼마예요?"
+  → {"asked": "별빛 카드의 연회비", "quote": "", "found": false}
+- 근거: "저축 계획을 세울 때는 목표 금액, 기간, 매달 넣을 금액을 정한다." / 질문: "'세 칸 저축 법칙'이 정확히 뭐예요?"
+  → {"asked": "세 칸 저축 법칙의 내용", "quote": "", "found": false} (그 이름의 규칙이 근거에 없음)
+- 근거: "공책 한 권은 1,200원이다." / 질문: "공책 세 권 사면 얼마예요?"
+  → {"asked": "공책 세 권의 값", "quote": "공책 한 권은 1,200원이다", "found": true} (계산에 쓸 값이 있음)
+- 근거: "for 반복문은 정해진 횟수만큼 같은 코드를 되풀이해 실행한다." / 질문: "같은 일을 컴퓨터한테 여러 번 시키는 문법이 뭐였죠?"
+  → {"asked": "같은 코드를 여러 번 실행하는 문법", "quote": "for 반복문은 정해진 횟수만큼 같은 코드를 되풀이해 실행한다", "found": true} (다른 말로 물어도 뜻이 같음)"""  # noqa: E501 - 지어낸 예시(공개 세트 문구 아님)
+Label = Literal[
+    "위기", "탈옥", "유해-실행", "유해-비하", "무관 결과물", "제출물 대행", "정답만 요구", "저신호",
+    "학습 질문",
+]  # fmt: skip
+_SENT = re.compile(r"(?<=[.!?。？！])\s+|\n+")
+_QUIZ_A = re.compile(r"^\s*(?:\*\*)?A\s*[.:]")
+_MD = re.compile(r"^\s{0,3}#{1,6}\s+|^\s*[-*•>]\s+|\*\*|`")
+
+
+class EOut(BaseModel):
+    """E 출력(harness `OomCheckOut`과 같은 스키마)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    asked: str
+    quote: str
+    found: bool
+
+
+class TOut(BaseModel):
+    label: Label
+    self_info: bool
+
+
+class WOut(BaseModel):
+    text: str
+
+
+def read_mode() -> str:
+    """기동 설정. 이상한 값은 m(지금 서버)."""
+    mode = (os.environ.get("TUTOR_V2_MODE") or "m").strip().lower()
+    return mode if mode in MODES else "m"
+
+
+def _system(path: Path) -> str:
+    """프롬프트 파일: 첫 줄 출처 주석을 빼고 나머지를 그대로."""
+    first, _, rest = path.read_text(encoding="utf-8").replace("\r\n", "\n").partition("\n")
+    if not (first.startswith("<!--") and first.endswith("-->")):
+        raise ValueError(f"{path.name} 첫 줄에 출처 주석이 없다")
+    return rest.strip("\n")
+
+
+def prepare_v2(app_state: Any) -> None:
+    """기동 때 한 번: 모드와(실험 모드면) 프롬프트·과목 목차. 요청 중 바뀌지 않는다."""
+    app_state.tutor_v2_mode = read_mode()
+    if app_state.tutor_v2_mode == "m":
+        return
+    e0 = _system(REPO / "harness" / "prompts" / "oom_check.md")
+    app_state.tutor_v2_sys = {
+        "T": _system(REPO / "tutor" / "prompts" / "intent.md"),
+        "E": e0,
+        "Efs": e0 + E_FEWSHOT,
+        "W": _system(REPO / "tutor" / "prompts" / "writer.md"),
+    }
+    secs = app_state.tutor_kb.sections
+    app_state.tutor_v2_toc = "\n".join(f"- {sid} {s.title}" for sid, s in sorted(secs.items()))
+
+
+async def answer(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+    mode = getattr(state, "tutor_v2_mode", "m")
+    if mode == "b2":
+        return await answer_b2(req, state, deadline=deadline)
+    if mode == "c4":
+        return await answer_c4(req, state, deadline=deadline)
+    return await flow.answer_v2(req, state, deadline=deadline)
+
+
+# ---------------------------------------------------------------- 공통
+def _english(text: str) -> bool:
+    lat = sum(1 for c in text if ("a" <= c <= "z") or ("A" <= c <= "Z"))
+    return lat > sum(1 for c in text if "가" <= c <= "힣" or "ㄱ" <= c <= "ㆎ")
+
+
+def _norm(s: str) -> str:
+    return "".join(unicodedata.normalize("NFKC", s).split()).lower()
+
+
+def _bigrams(s: str) -> set[str]:
+    s = _norm(s)
+    return {s[i : i + 2] for i in range(len(s) - 1)}
+
+
+def _end_request(text: str) -> str | None:
+    if len(text) < LONG:
+        return None
+    parts = [s.strip() for s in _SENT.split(text) if s.strip()]
+    if len(parts) < 2:
+        return None
+    tail = " ".join(parts[-2:])
+    return tail if len(tail) < len(text) * 0.6 else parts[-1]
+
+
+async def _call(state: Any, role: str, system: str, user: str, schema, deadline: float):
+    """튜터 LLM 1회(전역 게이트 slot·재시도 0). 실패·잘림·마감이면 None."""
+    left = deadline - asyncio.get_running_loop().time()
+    if left <= 0:
+        return None
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    res = await state.tutor_llm.complete(
+        role, msgs, schema, deadline=deadline, timeout_s=left, retries=0
+    )
+    return res.parsed if res.error is None and res.finish_reason != "length" else None
+
+
+class _Prep:
+    """요청 하나의 준비물(지역 변수 묶음, 요청이 끝나면 버린다)."""
+
+
+async def _prep(conv, state: Any, *, with_t: bool) -> _Prep:
+    p = _Prep()
+    sig = detect(conv)
+    p.crisis, p.override = Signal.CRISIS in sig, Signal.OVERRIDE in sig
+    q, h = conv.search_query()
+    p.target, p.eng = q, _latin_major(q)
+    p.eng_raw = _english(conv.target_raw)
+    k, extra = state.tutor_cfg.retrieval.k, {"index": state.tutor_kb}
+    p.sections = list(await retrieve(q, h, k=k, **extra))
+    prior = [t.text for t in conv.window if not t.is_target and not t.is_button]
+    p.sections_a = list(await retrieve(q, prior, k=k, **extra))  # 규칙 A
+    turns = _turn_block(conv)
+    bundle = "\n".join(_section_block(s) for s in p.sections) or EMPTY_BUNDLE
+    p.e_user = f"<근거 묶음>\n{bundle}\n</근거 묶음>\n\n{turns}"
+    if with_t:
+        target = next((t.text for t in reversed(conv.window) if t.is_target), "")
+        tail = _end_request(target)
+        parts = [
+            f"<과목 목차>\n{state.tutor_v2_toc}\n</과목 목차>",
+            f"<신호>{', '.join(labels(sig)) or '없음'}</신호>",
+            turns,
+        ]
+        if tail:
+            parts.append(f"<끝 요청>{defuse(tail)}</끝 요청>")
+        p.t_user = "\n\n".join([*parts, REMINDER])
+        win = list(conv.window)
+        ti = max(i for i, t in enumerate(win) if t.is_target)
+        p.question = "\n".join(
+            f"{'' if t.is_target else '(앞 발화) '}{'학습자' if t.role == 'user' else '튜터'}: "
+            f"{defuse(t.text)}"
+            for t in win[max(0, ti - 2) : ti + 1]
+        )
+    return p
+
+
+def _latin_major(s: str) -> bool:
+    """C 단계 영어 규칙(검색 질의 기준): 라틴 글자 > 한글 음절."""
+    return sum(c.isascii() and c.isalpha() for c in s) > sum("가" <= c <= "힣" for c in s)
+
+
+# ---------------------------------------------------------------- B2
+async def answer_b2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    e_deadline = min(deadline, loop.time() + E_DEADLINE_S)
+    conv = tidy(flow._messages(req))
+    if direct_clarify(conv):  # 주 경로도 LLM 없이 고정 clarify
+        return await flow.answer_v2(req, state, deadline=deadline)
+    p = await _prep(conv, state, with_t=False)
+    e_task = asyncio.create_task(
+        _call(state, "e_check", state.tutor_v2_sys["E"], p.e_user, EOut, e_deadline)
+    )
+    try:
+        body = await flow.answer_v2(req, state, deadline=deadline, top_sections=p.sections_a)
+        if body.get("action") == "answer" and not p.eng_raw:
+            e = await e_task  # 스스로 e_deadline 안에 끝난다(넘으면 None)
+            if e is not None and e.found is False:
+                return flow.tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
+        return body
+    finally:
+        e_task.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
+
+
+# ---------------------------------------------------------------- C4
+def _found(o: EOut | None) -> bool | None:
+    return None if o is None else bool(o.found)
+
+
+def decide(p: _Prep, t: TOut | None, e: EOut | None) -> dict[str, Any]:
+    """3-3 합치기(대행 신호 칸 끔). route: fixed·w_answer·w_scaffold·mat_answer·mat_scaffold."""
+    if p.crisis:
+        return {"action": "escalate", "category": "emotional_distress", "route": "fixed"}
+    label = t.label if t is not None else ("탈옥" if p.override else "학습 질문")
+    ans_cat = "pii_disclosure" if (t is not None and t.self_info) else "normal"
+    has = _found(e)
+
+    def fixed(action: str, category: str) -> dict[str, Any]:
+        return {"action": action, "category": category, "route": "fixed"}
+
+    w_ans = {"action": "answer", "category": ans_cat, "route": "w_answer", "e": e}
+    if label == "위기":
+        return fixed("escalate", "emotional_distress")
+    if label == "탈옥":
+        return fixed("refuse", "jailbreak_injection") if (p.override or not has) else w_ans
+    if label == "유해-실행":
+        return w_ans if has else fixed("refuse", "harmful_content")
+    if label == "유해-비하":
+        return fixed("redirect", "harmful_content")
+    if label == "무관 결과물":
+        return w_ans if has else fixed("redirect", "off_topic")
+    if label == "제출물 대행":
+        return fixed("scaffold", "academic_dishonesty")
+    if label == "저신호":
+        return fixed("clarify", "low_signal_input")
+    if label == "정답만 요구":
+        route = "mat_scaffold" if has is None else "w_scaffold"
+        return {"action": "scaffold", "category": "answer_seeking", "route": route, "e": e}
+    if has is None:  # E 실패: 검색 1위 자료 인용 답
+        return {"action": "answer", "category": ans_cat, "route": "mat_answer", "e": None}
+    if has is False and not p.eng:  # 영어 규칙은 이 칸만
+        return fixed("abstain", "out_of_material")
+    return w_ans
+
+
+def _section_lines(sec) -> list[tuple[str, str | None]]:
+    out: list[tuple[str, str | None]] = [
+        (x.rstrip(), None) for x in sec.text.split("\n") if x.strip()
+    ]
+    for table in sec.tables:
+        tl = [x.rstrip() for x in table.split("\n") if x.strip()]
+        out += [(x, tl[0] if i > 0 else None) for i, x in enumerate(tl)]
+    return out
+
+
+def _locate(p: _Prep, quote: str):
+    """E quote → (섹션, 줄 번호). 그대로 든 줄 → 2-gram 겹침 줄 → 검색 1위에서 질의와 겹치는 줄."""
+    secs = p.sections
+    if not secs:
+        return None, []
+    qn = _norm(quote)
+    if len(qn) >= 2:
+        best = None
+        for sec in secs:
+            hits = [
+                i
+                for i, (x, _) in enumerate(_section_lines(sec))
+                if qn in _norm(x) or (len(_norm(x)) >= 10 and _norm(x) in qn)
+            ]
+            if hits and (best is None or len(hits) > len(best[1])):
+                best = (sec, hits)
+        if best:
+            return best[0], best[1][:3]
+        qb, cand = _bigrams(quote), None
+        for sec in secs:
+            for i, (x, _) in enumerate(_section_lines(sec)):
+                lb = _bigrams(x)
+                v = len(qb & lb) / max(1, len(qb))
+                if lb and (cand is None or v > cand[0]):
+                    cand = (v, sec, i)
+        if cand and cand[0] >= 0.5:
+            return cand[1], [cand[2]]
+    qb, best_i = _bigrams(p.target), None
+    for i, (x, _) in enumerate(_section_lines(secs[0])):
+        lb = _bigrams(x)
+        if x.lstrip().startswith("#") or not lb:
+            continue
+        v = len(qb & lb) / (len(lb) ** 0.5)
+        if best_i is None or v > best_i[0]:
+            best_i = (v, i)
+    return secs[0], ([best_i[1]] if best_i else [])
+
+
+def _w_input(p: _Prep, d: dict[str, Any]):
+    """W 입력과 인용 근거: (user, 섹션, 인용 줄, 자료 줄) 또는 None."""
+    e = d.get("e")
+    sec, hits = _locate(p, e.quote if e is not None else "")
+    if sec is None:
+        return None
+    lines, keep = _section_lines(sec), set()
+    for i in hits:
+        keep.update(j for j in (i - 1, i, i + 1) if 0 <= j < len(lines))
+    out: list[str] = []
+    quote_line = None
+    for j in sorted(keep):
+        x, head = lines[j]
+        if d["category"] == "answer_seeking" and _QUIZ_A.match(x):
+            continue  # 정답만 요구: 퀴즈 답 줄은 주지 않는다
+        if head and head not in out:
+            out.append(head)
+        out.append(x)
+        if quote_line is None and j in hits and len(_norm(x)) >= 2:
+            quote_line = x
+    if quote_line is None:
+        quote_line = next(
+            (x for x in out if len(_norm(x)) >= 2 and not x.lstrip().startswith("#")), None
+        )
+    out = [defuse(x) for x in out]
+    if not out or quote_line is None:
+        return None
+    mode = "단계 안내" if d["route"] in ("w_scaffold", "mat_scaffold") else "답"
+    user = (
+        "<자료 줄>\n" + "\n".join(out) + f"\n</자료 줄>\n\n<질문>\n{p.question}\n</질문>\n\n"
+        f"<방식>{mode}</방식>"
+    )
+    return user, sec, quote_line, out
+
+
+def _assemble(p: _Prep, d: dict[str, Any], w_text: str | None, info) -> dict[str, Any]:
+    if d["route"] == "fixed":
+        kind = template_for(d["category"], d["action"])
+        if kind is None:  # 표에 없는 조합은 없어야 한다
+            return flow.tutor_post(fixed_body(Fixed.CLARIFY), "low_signal_input")
+        return flow.tutor_post(fixed_body(kind), d["category"])
+    if info is None:  # 자료 줄을 못 만들었다(검색 결과 없음 등)
+        return flow.tutor_post(fixed_body(Fixed.CLARIFY), "low_signal_input")
+    _, sec, quote_line, lines = info
+    if w_text is not None:
+        text = w_text
+    elif d["action"] == "scaffold":
+        text = EMPTY_ANSWER["scaffold"]
+    else:  # W 실패·E 실패: 자료 줄 인용 답
+        body_lines = [_MD.sub("", y).strip() for y in lines if not y.lstrip().startswith("#")][:3]
+        text = MATERIAL_LEAD + " " + " ".join(x for x in body_lines if x)
+    if d["category"] == "pii_disclosure":
+        text = text.rstrip() + " " + PII_NOTE
+    sent = [Sentence(text=text, kind="claim", evidence=[Evidence(sid=sec.id, quote=quote_line)])]
+    cfg = FinalizeConfig(
+        unverified_notice=NOT_IN_MATERIAL_NOTE, refuse_text=flow.REFUSE_TEXT, max_citations=1
+    )
+    sections = [flow._contract_section(s) for s in p.sections]
+    res = finalize(sent, None, sections, action_for(d["category"]), cfg, action=d["action"])
+    body = flow.add_top_citation(res.model_dump(), p.sections_a)  # 1위 = 규칙 A
+    return flow.tutor_post(body, d["category"])
+
+
+async def answer_c4(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    te_deadline = min(deadline - MARGIN_S, loop.time() + TE_DEADLINE_S)
+    conv = tidy(flow._messages(req))
+    if direct_clarify(conv):
+        return flow.tutor_post(fixed_body(Fixed.CLARIFY))  # 주 경로와 같다(LLM 없음)
+    p = await _prep(conv, state, with_t=True)
+    if p.crisis:
+        return _assemble(p, decide(p, None, None), None, None)
+    sysm = state.tutor_v2_sys
+    t, e = await asyncio.gather(
+        _call(state, "intent", sysm["T"], p.t_user, TOut, te_deadline),
+        _call(state, "e_check", sysm["Efs"], p.e_user, EOut, te_deadline),
+    )
+    d = decide(p, t, e)
+    info = w_text = None
+    if d["route"] != "fixed":
+        info = _w_input(p, d)
+        if info is not None and d["route"] in ("w_answer", "w_scaffold"):
+            w = await _call(state, "writer", sysm["W"], info[0], WOut, deadline - MARGIN_S)
+            w_text = None if w is None else w.text
+    return _assemble(p, d, w_text, info)

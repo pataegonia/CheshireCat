@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from tutor.judge.flow import prepare_judge
+from tutor.judge.v2exp import prepare_v2
 from tutor.retrieval import build_index, default_index
 from tutor.retrieval.embedding import BUILD_TIMEOUT_S, Embed, EmbeddingSearch, openai_embed
 from tutor.runtime.config import TutorConfig, load_config
@@ -31,6 +32,7 @@ def prepare(app_state: Any, cfg: TutorConfig | None = None) -> None:
     app_state.tutor_llm = build_llm(app_state, app_state.tutor_cfg)
     app_state.tutor_emb = None
     prepare_judge(app_state)  # 주 호출 프롬프트(범주 → action 표 포함, #72)
+    prepare_v2(app_state)  # 실험 모드(TUTOR_V2_MODE, 기본 m = 지금 서버)
 
 
 async def build_embedding(app_state: Any, embed: Embed | None = None) -> None:

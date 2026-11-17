@@ -30,6 +30,7 @@
 """
 
 import asyncio
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -38,16 +39,17 @@ from guardrail.schema import OutputVerdict
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
 from tutor.answer import postprocess
-from tutor.answer.quote import material_quote
+from tutor.answer.quote import material_quote, quote_sentences
 from tutor.answer.templates import (
     NOT_IN_MATERIAL_NOTE,
+    QUOTE_APPEND_LEAD,
     TEXT,
     Fixed,
     empty_answer,
     fixed_body,
     template_for,
 )
-from tutor.judge.conversation import Conversation, tidy
+from tutor.judge.conversation import Conversation, normalize_fast, tidy
 from tutor.judge.draft import draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
@@ -369,7 +371,76 @@ def _candidate(out: MainCallOut) -> str:
 
 
 async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
-    """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+    """v2 흐름 하나. 흐름 본체(`_answer_v2`) 뒤에 자료 문장 덧붙이기(`toggles.quote_append`)를
+    한다. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다)."""
+    body = await _answer_v2(req, state, deadline=deadline)
+    return append_quote(req, state, body)
+
+
+QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
+CLOSERS = "\"'”’)」』]"  # 물음표 뒤에 붙는 닫는 따옴표·괄호(벗기고 본다)
+# 이 신호가 있으면 answer여도 덧붙이지 않는다: 위기·지시 무력화 발화에 자료 설명을 더하지 않고,
+# 정답만 요구하면 정답 문장("정답은 …")이 붙지 않게(#225 가드 리뷰). 공개·점검 세트에서 이 신호가
+# 켜지는 행은 모두 정답 action이 answer가 아니다(탈옥 17·위기 9·정답 요구 8, normal 0)
+NO_QUOTE_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE, Signal.ANSWER_ONLY})
+_HANGUL = re.compile(r"[가-힣ㄱ-ㆎ]")
+_LATIN = re.compile(r"[A-Za-z]")
+_NOT_WORD = re.compile(r"[^0-9A-Za-z가-힣]")
+
+
+def _english_only(text: str) -> bool:
+    """한글(완성 음절·호환 자모)이 한 글자도 없고 라틴 글자가 있다(#213 E의 영어 규칙과 같다)."""
+    return _HANGUL.search(text) is None and _LATIN.search(text) is not None
+
+
+def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
+    """`toggles.quote_append`(TU-07): 최종 answer에 첫 인용 섹션의 자료 문장을 덧붙인다.
+
+    문장 고르기는 자료 인용 답(TU-12)과 같다(`quote_sentences`: 질문과 2-gram이 가장 겹치는 설명
+    문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 그중 물음표로 끝나는
+    문장(자료가 학습자에게 던지는 질문)과 답에 이미 있는 문장은 빼고, 붙이면 4,000자를 넘거나
+    붙일 문장이 없으면 그대로 둔다. 판단 대상에 한글이 없고 라틴 글자만 있는 영어 질문에도 붙이지
+    않는다(문자 2-gram이 코드 낱말로만 겹친다). 위기·지시 무력화·정답만 요구 신호
+    (`NO_QUOTE_SIGNALS`)가 있는 발화에도 붙이지 않는다. 답에 이미 있는지는 글자·숫자만 남겨
+    본다(백틱·마침표 차이 무시).
+    answer가 아닌 응답·인용 없는 응답·KB에 없는 인용, 그리고 모델 문장이 모두 걸러져 "자료에서
+    확인하지 못했어요" 안내가 든 답(빈 답변, IN-04-3)은 그대로다(안내와 자료 문장이 한 답에서
+    부딪히지 않게). action·인용은 바꾸지 않는다.
+    붙이는 글은 KB 원문과 고정 문구뿐이라 출력 후처리(`tutor_post`) 뒤에 붙인다. 입력을 바꾸지
+    않는다. 요청 내용은 지역 변수로만 쓴다(TU-18).
+    """
+    if not state.tutor_cfg.toggles.quote_append or body.get("action") != "answer":
+        return body
+    answer = body.get("answer") or ""
+    if NOT_IN_MATERIAL_NOTE in answer:
+        return body
+    cites = body.get("citations") or []
+    section = state.tutor_kb.sections.get(cites[0]) if cites else None
+    if section is None:
+        return body
+    conv = tidy(_messages(req))
+    if _english_only(normalize_fast(conv.target_raw)):
+        return body  # 영어 질문은 코드 낱말로만 겹쳐 엉뚱한 문장이 골라지기 쉽다(#225 리뷰)
+    if NO_QUOTE_SIGNALS.intersection(detect(conv)):
+        return body
+    query, _ = conv.search_query()
+    bare_answer = _NOT_WORD.sub("", answer)
+    picked = [
+        s
+        for s in quote_sentences(section.text, query)
+        if _NOT_WORD.sub("", s) not in bare_answer
+        and not s.rstrip().rstrip(CLOSERS).endswith(QUESTION_ENDS)
+    ]
+    if not picked:
+        return body
+    joined = f"{answer} {QUOTE_APPEND_LEAD} {' '.join(picked)}"
+    if len(joined) > postprocess.MAX_ANSWER_CHARS:
+        return body
+    return {**body, "answer": joined}
+
+
+async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+    """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
     가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
     함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).

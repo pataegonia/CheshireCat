@@ -74,6 +74,9 @@ NOT_IN_MATERIAL_NOTE = "이 부분은 자료에서 확인하지 못했어요."
 # 뒤에 자료 문장을 정리해 붙인다(tutor.answer.quote)
 MATERIAL_QUOTE_LEAD = "자료에는 이렇게 나와 있어요."
 
+# 자료 문장 덧붙이기(TU-07, `toggles.quote_append`): 최종 answer 뒤에 이 말과 자료 문장을 붙인다
+QUOTE_APPEND_LEAD = "자료에는 이렇게 나와 있어요:"
+
 # 답변 문장이 하나도 남지 않았을 때 action별 고정 문장(TU-07 "빈 답변"). action은 바꾸지 않는다
 # (IN-04-3). answer는 자료에서 확인하지 못했다는 안내, scaffold는 과목 사실 없는 다음 단계 안내다.
 _EMPTY: dict[Action, str] = {

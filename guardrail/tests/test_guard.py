@@ -113,7 +113,12 @@ def responder(category="normal", output=GROUNDED, input_step=None, output_step=N
 
 
 async def make(respond=None, config=DEFAULT, indexes=None, **overrides):
-    """(Guard, FakeLLM). overrides 키는 점 대신 `__`를 쓴다(toggles__nano_tier3=False)."""
+    """(Guard, FakeLLM). overrides 키는 점 대신 `__`를 쓴다(toggles__nano_tier3=False).
+
+    자료 밖 확인(S3.10)은 따로 켜지 않으면 끈다. 호출 수·흐름을 보는 기존 테스트의 전제(입력 1회 +
+    출력 1회)를 지키려는 것이고, 켠 동작은 test_cause_fixes가 본다.
+    """
+    overrides.setdefault("toggles__oom_check", False)
     cfg = load_config(config, overrides={k.replace("__", "."): v for k, v in overrides.items()})
     fake = FakeLLM(respond=respond or responder())
     llm = LLM(cfg.llm, send=fake.send, sleep=_nosleep)
@@ -508,7 +513,7 @@ async def test_build_with_injected_llm_does_not_probe_again():
     before = len(fake.requests)
     guard = await Guard.build(cfg, llm=llm, rows=labeled_rows(_public()))
     assert len(fake.requests) == before == probe_calls(cfg.llm)
-    assert (await guard.judge(req())).calls == 2
+    assert (await guard.judge(req())).calls == 2 + cfg.toggles.oom_check  # + 자료 밖 확인
 
 
 async def test_build_without_llm_creates_one_and_probes_once(monkeypatch):
@@ -959,9 +964,9 @@ async def test_request_without_candidate_has_no_output_on_every_default_path(no_
     ("config", "missing", "fails"),
     [
         (BASELINE, "output_judge_baseline.md", True),
-        (DEFAULT, "output_judge_en.md", True),
+        (DEFAULT, "output_judge_en_v2.md", True),
         (DEFAULT, "input_judge_en.md", True),
-        (BASELINE, "output_judge_en.md", False),  # 그 모드가 쓰지 않는 프롬프트는 읽지 않는다
+        (BASELINE, "output_judge_en_v2.md", False),  # 그 모드가 쓰지 않는 프롬프트는 읽지 않는다
         (DEFAULT, "output_judge_baseline.md", False),
     ],
 )

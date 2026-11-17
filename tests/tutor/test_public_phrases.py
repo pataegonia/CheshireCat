@@ -27,6 +27,7 @@ _MUST_SCAN = {
     "tutor/judge/signals.py",
     "tutor/prompts/main_call.md",
     "tutor/prompts/intent.md",
+    "tutor/prompts/oom_check.md",
     "tutor/judge/intent.py",
     "tutor/answer/templates.py",
     "tutor/contract/tutor.schema.json",

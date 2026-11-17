@@ -75,9 +75,13 @@ from tutor.judge.intent import build_messages as build_intent_messages
 from tutor.judge.intent import decide as decide_intent
 from tutor.judge.intent import load_system as load_intent_system
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
+from tutor.judge.oom_gate import GateCounts, GateJob, has_hangul, material_absent, start_gate
+from tutor.judge.oom_gate import build_messages as build_gate_messages
+from tutor.judge.oom_gate import load_system as load_gate_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
+from tutor.retrieval import retrieve
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
@@ -102,6 +106,9 @@ def prepare_judge(app_state: Any) -> None:
     sections = app_state.tutor_kb.sections if intent_on else {}
     app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
     app_state.intent_skips = IntentSkips()  # 사유 → 횟수(본문 없음)
+    gate_on = toggles.oom_gate  # 자료 밖 확인 E(#213 B2): 프롬프트는 기동 때 한 번
+    app_state.tutor_oom_gate_prompt = load_gate_system() if gate_on else None
+    app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -369,7 +376,57 @@ def _candidate(out: MainCallOut) -> str:
 
 
 async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
-    """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+    """v2 흐름 하나. 자료 밖 확인 E(`toggles.oom_gate`)를 켰으면 요청 시작 때 E를 함께 띄우고,
+    흐름이 끝나 최종 action이 answer이고 E가 "근거에 없음"이면 자료 밖 고정 문장(abstain)으로
+    바꾼다. E가 마감(요청 시작부터 `llm.timeout_s.oom_gate`) 안에 끝나지 않거나 실패하면 흐름
+    결과 그대로다. 빠져나갈 때 아직 도는 E는 취소한다(TU-18).
+    """
+    gate = await _start_gate(req, state, deadline) if state.tutor_cfg.toggles.oom_gate else None
+    if gate is not None:
+        await asyncio.sleep(0)  # E 요청이 주 호출·T보다 먼저 나가도록 한 번 양보한다
+    try:
+        body = await _answer_v2(req, state, deadline=deadline)
+        counts = getattr(state, "oom_gate_counts", None)
+        if (
+            gate is not None
+            and body.get("action") == "answer"
+            and await material_absent(gate, counts)
+        ):
+            return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
+        return body
+    finally:
+        if gate is not None:
+            gate.cancel()
+
+
+async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
+    """E 호출 시작. 저신호 직접 판정·한글 없는 발화는 부르지 않는다.
+
+    근거 묶음은 주 호출과 같은 검색이다."""
+    conv: Conversation = tidy(_messages(req))
+    if direct_clarify(conv):
+        return None
+    counts = getattr(state, "oom_gate_counts", None)
+    target = next((t.text for t in conv.window if t.is_target), "")
+    if not has_hangul(target):
+        if counts is not None:
+            counts["english"] += 1
+        return None
+    cfg = state.tutor_cfg
+    query, history = conv.search_query()
+    sections = await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb)
+    messages = build_gate_messages(state.tutor_oom_gate_prompt, sections, conv)
+    return start_gate(
+        state.tutor_llm,
+        messages,
+        timeout_s=cfg.llm.timeout_s.oom_gate,
+        deadline=deadline,
+        counts=counts,
+    )
+
+
+async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+    """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
     가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
     함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).

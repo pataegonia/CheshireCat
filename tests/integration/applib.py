@@ -80,14 +80,15 @@ def user(content: str) -> dict[str, Any]:
 TUTOR_GUARD_STAGES_ON = {"guard_classify": "parallel", "verify": "guard"}
 
 
-# 튜터 동결 설정(11/18, 튜터 #220)이 켜는 토글을 끈 값. 통합 테스트는 이 토글들을 끈 기준 설정에서
-# 돈다(튜터 테스트 tests/tutor/conftest.py와 같은 방식). 저장소 설정 그대로의 앱은
-# test_freeze_config.py가 본다. 저장소 설정에 아직 없는 키는 건드리지 않는다(동결 설정 전
+# 튜터 동결 설정(11/18, 튜터 #220 · #225)이 켜는 토글 네 개를 끈 값. 통합 테스트는 이 토글들을
+# 끈 기준 설정에서 돈다(튜터 테스트 tests/tutor/conftest.py와 같은 방식). 저장소 설정 그대로의
+# 앱은 test_freeze_config.py가 본다. 저장소 설정에 아직 없는 키는 건드리지 않는다(동결 설정 전
 # main)
 FREEZE_TOGGLES_OFF = {
     "delegation_override": False,
     "fallback_quote": False,
     "intent_override": "off",
+    "quote_append": False,  # 튜터 #225: 최종 answer에 자료 문장 덧붙이기
 }
 
 

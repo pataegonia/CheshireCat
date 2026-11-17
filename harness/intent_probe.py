@@ -112,7 +112,7 @@ def simulate(
                 continue
             main = em.get("action")
             new = rule(rec, em)
-            if new is None:
+            if new is None or new == main:  # 같은 action은 바꾼 것이 아니다(serial 고정 문장 등)
                 continue
             gold = rec["gold_action"]
             kind = "right" if new == gold else "wrong" if main == gold else "other"

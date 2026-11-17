@@ -129,3 +129,11 @@ def test_server_serial_rule_overrides_a_stronger_main_with_fixed_sentences():
     assert ip.server_serial_override(off_topic, REFUSE) == "redirect"  # serial: 주 호출 전에 정함
     assert ip.server_serial_override(rec("b", "정답만 요구", "scaffold"), ANSWER) == "scaffold"
     assert ip.server_serial_override(rec("c", "탈옥", "refuse"), ANSWER) is None
+
+
+def test_simulate_does_not_count_same_action_as_a_change():
+    # serial은 주 호출 없이 정하므로 주 호출이 이미 낸 것과 같은 action을 돌려줄 수 있다
+    records = {"r1": rec("r1", "탈옥", "refuse", cat="jailbreak_injection", signals=["override"])}
+    runs = [{"r1": {"action": "refuse"}}]
+    got = ip.simulate(records, runs, ip.server_serial_override)
+    assert (got["right"], got["wrong"], got["other"]) == (0.0, 0.0, 0.0)

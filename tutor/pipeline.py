@@ -10,7 +10,7 @@ from typing import Any
 
 from tutor import baseline
 from tutor.answer import postprocess
-from tutor.judge import flow
+from tutor.judge import precheck
 from tutor.request import TutorRequest, parse_request
 from tutor.runtime.budget import backstop_s, budget_s
 from tutor.runtime.response import default_response, ensure_contract
@@ -38,7 +38,8 @@ async def _answer(req: TutorRequest, *, deadline: float, state: Any) -> dict[str
     """
     if state.tutor_cfg.mode == "baseline":  # TU-14 베이스라인(#73)
         return await baseline.answer(req, state, deadline=deadline)
-    body = await flow.answer_v2(req, state, deadline=deadline)  # v2(#72): 검색 → 주 호출 → IN-04
+    # v2(#72): 검색 → 주 호출 → IN-04. 자료 확인(toggles.oom_check)을 켜면 E가 함께 돈다(#201)
+    body = await precheck.answer(req, state, deadline=deadline)
     if state.tutor_cfg.toggles.inline_cite:  # 답변 끝 (섹션 ID) 표기 ablation(TU-07, #82)
         body = postprocess.inline_cite(body)
     return body

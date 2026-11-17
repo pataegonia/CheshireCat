@@ -181,11 +181,13 @@ def assemble(
     max_citations: int,
     verdict: OutputVerdict | None = None,
     cite_top1: bool = False,
+    top_sections: Sequence[RetrievedSection] | None = None,
 ) -> dict[str, Any]:
     """주 호출 결과 → 규격 본문. 템플릿 조합이면 고정 문장, 아니면 결정적 수정(IN-04).
 
     `verdict`는 가드 `judge_output` 결과다. None(판정 생략·실패)이면 판정 단계만 건너뛴다.
-    `cite_top1`이면 결정적 수정이 정한 인용에 검색 1위 섹션을 더한다(`add_top_citation`)."""
+    `cite_top1`이면 결정적 수정이 정한 인용에 검색 1위 섹션을 더한다(`add_top_citation`).
+    `top_sections`를 주면 그 목록의 1위를 더한다(자료 확인을 켠 경로의 규칙 A 질의, `precheck`)."""
     kind = template_for(out.category, action)
     if kind is not None:
         return fixed_body(kind)
@@ -204,7 +206,8 @@ def assemble(
         action=action,
     )
     body = result.model_dump()
-    return add_top_citation(body, sections) if cite_top1 else body
+    top = sections if top_sections is None else top_sections
+    return add_top_citation(body, top) if cite_top1 else body
 
 
 def tutor_post(body: dict[str, Any], category: str | None = None) -> dict[str, Any]:
@@ -239,8 +242,16 @@ def _candidate(out: MainCallOut) -> str:
     return " ".join(s.text for s in out.sentences if s.text)
 
 
-async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+async def answer_v2(
+    req: TutorRequest,
+    state: Any,
+    *,
+    deadline: float,
+    top_sections: Sequence[RetrievedSection] | None = None,
+) -> dict[str, Any]:
     """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+
+    `top_sections`는 `cite_top1`이 더할 1위의 검색 결과다(None이면 주 호출 근거 묶음, `precheck`).
 
     가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
     함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).
@@ -326,5 +337,6 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         max_citations=cfg.toggles.max_citations,
         verdict=verdict,
         cite_top1=cfg.toggles.cite_top1,
+        top_sections=top_sections,
     )
     return tutor_post(body, merged.category)

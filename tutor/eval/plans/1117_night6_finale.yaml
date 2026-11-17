@@ -1,0 +1,24 @@
+# 11/17 밤 6차(선택). 최종 후보 + 조건부 E(oom_gate named_term) 3회.
+items:
+  - name: fine-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fine
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'toggles.quote_append=true'
+      - 'prompt.intent="intent_222.md"'
+      - 'toggles.oom_gate="named_term"'
+  - name: fine-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fine
+  - name: fine-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fine

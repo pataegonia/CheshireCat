@@ -1,0 +1,32 @@
+# 11/17 밤 6차. 점검 세트(공개 밖, team) 판정 포함: 동결 조합 대 최종 후보 번갈아 2회씩.
+items:
+  - name: fzt-1
+    cases: team
+    runs: 1
+    judge: true
+    tutor_set: &fz
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: fint-1
+    cases: team
+    runs: 1
+    judge: true
+    tutor_set: &fin
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'toggles.quote_append=true'
+      - 'prompt.intent="intent_222.md"'
+  - name: fzt-2
+    cases: team
+    runs: 1
+    judge: true
+    tutor_set: *fz
+  - name: fint-2
+    cases: team
+    runs: 1
+    judge: true
+    tutor_set: *fin

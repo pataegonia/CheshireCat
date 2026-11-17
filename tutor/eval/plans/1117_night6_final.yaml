@@ -1,0 +1,23 @@
+# 11/17 밤 6차. 최종 후보 = 동결 조합 + 자료 문장 덧붙이기(#225) + T 프롬프트 #222(intent_222.md) 3회.
+items:
+  - name: fin-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fin
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'toggles.quote_append=true'
+      - 'prompt.intent="intent_222.md"'
+  - name: fin-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fin
+  - name: fin-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fin

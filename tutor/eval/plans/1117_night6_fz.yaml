@@ -1,0 +1,21 @@
+# 11/17 밤 6차(판정 포함, 교차 검증 160행). 동결 조합 fz 3회. 1117_night6_final.yaml(·finale)과 동시에.
+items:
+  - name: fz-13
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fz
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: fz-14
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz
+  - name: fz-15
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz

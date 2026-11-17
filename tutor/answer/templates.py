@@ -71,7 +71,7 @@ ACTION = MappingProxyType(_ACTION)
 NOT_IN_MATERIAL_NOTE = "이 부분은 자료에서 확인하지 못했어요."
 
 # 주 호출 실패 때 자료 인용 답의 첫 문장(TU-12, `toggles.fallback_quote`).
-# 뒤에 자료 문장을 그대로 붙인다(tutor.answer.quote)
+# 뒤에 자료 문장을 정리해 붙인다(tutor.answer.quote)
 MATERIAL_QUOTE_LEAD = "자료에는 이렇게 나와 있어요."
 
 # 답변 문장이 하나도 남지 않았을 때 action별 고정 문장(TU-07 "빈 답변"). action은 바꾸지 않는다

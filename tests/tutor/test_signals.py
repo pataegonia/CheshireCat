@@ -382,7 +382,7 @@ def test_study_questions_about_assignments_are_not_delegation(text):
         "내가 짠 함수, 숙제 답안용으로 깔끔하게 다듬어 줘",  # 답안으로 쓰겠다는 것
         "과제 문제들 답안을 통째로 보여 주세요",  # 평가 답안 전체 요구
         "Write my report on loops for me",
-        "Explain this as my final assessment answer",
+        "Just complete my assessment for me",  # 11/17 공개 문항과 겹치던 문장을 바꿈
         # 11/17 #204 리뷰: "줄 수 있어요" 요청 어미, 영어 요청 틀
         "보고서 대신 써 줄 수 있어요?",
         "보고서 좀 써줄 수 있어?",

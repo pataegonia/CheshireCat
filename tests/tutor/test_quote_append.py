@@ -179,6 +179,8 @@ def test_crisis_override_and_answer_only_utterances_are_untouched(monkeypatch, t
 def test_sentences_in_the_answer_with_other_marks_are_not_repeated(monkeypatch):
     # 모델이 자료 문장을 백틱째로 옮기거나 마침표를 빼고 옮겨도 같은 문장으로 본다(#225 가드 리뷰)
     state = state_with(FakeLLM(out()), **ON)
-    monkeypatch.setattr(flow, "quote_sentences", lambda text, query: ["`print()`는 값을 보여 줘요."])
+    monkeypatch.setattr(
+        flow, "quote_sentences", lambda text, query: ["`print()`는 값을 보여 줘요."]
+    )
     body = {"answer": "print() 는 값을 보여 줘요", "action": "answer", "citations": ["PY-01-01"]}
     assert flow.append_quote(request(), state, body) is body

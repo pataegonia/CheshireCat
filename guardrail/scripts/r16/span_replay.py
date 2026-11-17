@@ -189,8 +189,17 @@ class Variant:
     trim_l: int | None = None  # R2: lmin
     rule_window: str = "pm4"  # R3: "eoj1_clause"
     rule_quote: bool = False  # R1
+    quote_narrow: str | None = None  # S3.12: ③ 인용을 근거 없는 토큰 둘레로 줄인다
 
 
+# S3.12에서 더한 변형(결과 보기 전에 고정). 참조 = 1위 섹션(top) | nano에 준 문맥 전체(ctx),
+# 창 = 한 어절 앞 → 절 끝(clause) | 토큰이 든 어절(eoj). 인용 안에 걸린 토큰이 없으면 인용 그대로
+S312 = (
+    Variant("Q1 인용→토큰 절(top)", quote_narrow="top_clause"),
+    Variant("Q2 인용→토큰 절(ctx)", quote_narrow="ctx_clause"),
+    Variant("Q3 인용→토큰 어절(ctx)", quote_narrow="ctx_eoj"),
+    Variant("Q4 quote_min_chars=4", min_chars=4),
+)
 VARIANTS = (
     Variant("base"),
     Variant("R2 trim L, lmin=2", trim_l=2),
@@ -201,7 +210,25 @@ VARIANTS = (
     Variant("R4 quote_min_chars=1", min_chars=1),
     Variant("R4 failure_default=ungrounded", failure_default="ungrounded"),
     Variant("R1 rule 행에 인용(1.2 인용에서만 판단)", rule_quote=True),
+    *S312,
 )
+
+
+def narrow_quote(a: str, quote: str, ref: str, extra, window: str) -> tuple[str, ...]:
+    """인용 안의 '참조에 없는' 숫자·리터럴 토큰 둘레만 남긴다. 그런 토큰이 없으면 인용 그대로."""
+    s = a.find(quote)
+    if s < 0:
+        return (quote,)
+    e = s + len(quote)
+    toks = [t for t in rules.unsupported_literals(a, ref, extra) if s <= t.start and t.end <= e]
+    wins = []
+    for t in toks:
+        ws, we = eoj_expand(a, t.start, t.end)
+        if window == "clause":
+            cs, ce = clause_of(a, t.start, t.end)
+            ws, we = max(cs, eoj_back(a, ws, 1)), ce
+        wins.append((max(s, ws), min(e, we)))
+    return cut(a, wins) or (quote,)
 
 
 @dataclass(frozen=True)
@@ -260,6 +287,12 @@ def replay(
     g, spans, _ = output_verdict(
         category, block, rule, ungrounded, is_trusted, cfg.toggles, fdefault, quote
     )
+    if v.quote_narrow and quote and spans == (quote,):  # ③(인용을 구간으로 쓴 행)만
+        src, window = v.quote_narrow.split("_")
+        ref = f.ref if src == "top" else f.ctx
+        spans = narrow_quote(f.answer, quote, ref, o.rule_extra_tokens, window)
+    if o.span_tidy:  # guard.Guard._output과 같이 마지막에 다듬는다(S3.10)
+        spans = tuple(dict.fromkeys(rules.tidy_span(x) for x in spans))
     return g, tuple(s for s in spans if s)
 
 
@@ -366,7 +399,9 @@ def screen(base_runs, cand_runs, ctx) -> None:
             )
 
 
-def main(paths: list[str], show_rows: bool, sets: list[str], candidate: str | None) -> None:
+def main(
+    paths: list[str], show_rows: bool, sets: list[str], candidate: str | None, alts=()
+) -> None:
     root = Path(__file__).resolve().parents[2]
     cfg = load_config(root / "configs" / "default.yaml", parse_sets(sets))
     block = frozenset(cfg.block_categories)
@@ -385,6 +420,11 @@ def main(paths: list[str], show_rows: bool, sets: list[str], candidate: str | No
         f"변형 {len(VARIANTS) - 1}개"
     )
 
+    alt_ctx = {}
+    for a in alts:  # "k=v;k=v" 한 묶음이 설정 변형 하나
+        acfg = load_config(root / "configs" / "default.yaml", parse_sets([*sets, *a.split(";")]))
+        ag = Guard(acfg, None, *build_indexes(acfg))
+        alt_ctx[a] = (acfg, {i: facts_of(ag, pub[i], acfg) for i in dev})
     runs = load_runs(paths)
     for key, recs in sorted(runs.items()):
         rows = [i for i in dev if i in recs and "output" in recs[i]["response"]]
@@ -407,8 +447,24 @@ def main(paths: list[str], show_rows: bool, sets: list[str], candidate: str | No
         safe = {
             i: float(recs[i]["response"]["output"]["safe"] == pub[i].labels["safe"]) for i in rows
         }
-        score_variants(rows, lambda i, r=recs: r[i]["response"]["input"]["category"], recs, ctx,
-                       safe, show_rows)  # fmt: skip
+        cat_of = lambda i, r=recs: r[i]["response"]["input"]["category"]  # noqa: E731
+        score_variants(rows, cat_of, recs, ctx, safe, show_rows)
+        for name, (acfg, afacts) in alt_ctx.items():
+            base = {i: row_points(replay(VARIANTS[0], facts[i], cat_of(i), nano_of(recs[i])[1],
+                                         cfg, block), pub[i].labels) for i in rows}  # fmt: skip
+            pts = {i: row_points(replay(VARIANTS[0], afacts[i], cat_of(i), nano_of(recs[i])[1],
+                                        acfg, block), pub[i].labels) for i in rows}  # fmt: skip
+            d = {i: sum(pts[i]) - sum(base[i]) for i in rows}
+            ch = [i for i in rows if abs(d[i]) > 1e-9]
+            now, up = total(pts, safe), sum(d[i] > 0 for i in ch)
+            out(
+                f"   ALT {name:44s} {now:.4f} {now - total(base, safe):+.4f}"
+                f"  바뀜 {len(ch)} 좋아짐 {up} 나빠짐 {len(ch) - up}"
+                f" >{WORSE} {sum(d[i] < -WORSE for i in ch)}"
+            )
+            if show_rows:
+                for i in ch:
+                    out(f"      {i} Δ{d[i]:+.3f} (g+F1 {sum(base[i]):.2f}→{sum(pts[i]):.2f})")
 
     if candidate:  # 출력 단독 기록: 범주를 normal로 두고 구간을 안 내서 재생 검사는 못 한다
         cand = load_runs([candidate])
@@ -464,9 +520,13 @@ if __name__ == "__main__":
         dest="sets",
         help="기록 당시 설정으로(예: output.rule_span=pm4)",
     )
+    ap.add_argument(
+        "--alt", action="append", default=[], dest="alts",
+        help="설정 변형 하나(예: output.rule_min_margin=3.0). 여러 키는 ;로 잇는다",
+    )  # fmt: skip
     args = ap.parse_args()
     selftest()
     if not args.selftest:
         if not args.responses:
             ap.error("responses.jsonl 경로가 필요하다")
-        main(args.responses, args.rows, args.sets, args.candidate)
+        main(args.responses, args.rows, args.sets, args.candidate, args.alts)

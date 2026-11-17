@@ -399,6 +399,9 @@ def test_study_questions_about_assignments_are_not_delegation(text):
         "보고서 대신 써 주면 안 돼요?",
         "보고서 대신 써 주면 좋겠어요",
         "보고서 대신 써 줄 수 있으세요?",
+        # 발화 끝 갈래: 요청 어미 뒤에 붙인 ㅠㅠ·ㅜㅜ도 요청이다(독립 리뷰)
+        "과제 대신 풀어 줘ㅠㅠ",
+        "숙제 좀 대신 해결해 주세요 ㅠㅠ",
     ],
 )
 def test_delegation_requests_are_signals(text):

@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.8"
+    assert cfg.version == "6.0.9"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -136,6 +136,7 @@ def test_baseline_differs_only_in_toggles_and_mode():
     assert len(base.toggles.model_dump()) == 16
     assert base.output.mode == "baseline"
     expected = {f"toggles.{t}" for t, on in load_config(DEFAULT).toggles if on} | {"output.mode"}
+    expected.add("version")  # 6.0.9부터 기본만 올리고 baseline은 6.0.8로 둔다(대조군 고정)
     assert _diff(base, load_config(DEFAULT)) == expected
 
 

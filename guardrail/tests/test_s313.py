@@ -279,10 +279,11 @@ def test_repair_quote_unescapes_entities_first():
 # --- 설정 ---
 
 
-def test_new_toggles_default_off_in_both_configs():
-    for path in ("configs/default.yaml", "configs/baseline.yaml"):
-        cfg = load_config(path)
-        assert not (cfg.toggles.request_check or cfg.toggles.block_recheck)
+def test_request_toggles_on_in_default_off_in_baseline():
+    d, b = load_config("configs/default.yaml"), load_config("configs/baseline.yaml")
+    assert d.version == "6.0.9" and d.toggles.request_check and d.toggles.block_recheck
+    assert not (b.toggles.request_check or b.toggles.block_recheck)
+    for cfg in (d, b):
         assert cfg.output.judge_mode == "quote" and cfg.output.quote_repair is False
         assert cfg.prompts["request_check"] == "request_check_en.md"
     assert config_hash(load_config())  # 프롬프트 머리말이 모두 맞다
@@ -679,7 +680,8 @@ async def test_repair_runs_before_the_sentence_fallback(no_rule, sent):
 
 
 def test_calls_per_row_counts_at_most_one_extra_input_call():
-    base = {"toggles.jb_check": False, "toggles.oom_check": False}
+    off = {"toggles.request_check": False, "toggles.block_recheck": False}
+    base = {"toggles.jb_check": False, "toggles.oom_check": False, **off}
     assert run.calls_per_row(load_config(overrides=base), True) == 2
     for key in ("toggles.request_check", "toggles.block_recheck"):
         cfg = load_config(overrides={**base, key: True})
@@ -688,6 +690,31 @@ def test_calls_per_row_counts_at_most_one_extra_input_call():
         overrides={**base, "toggles.request_check": True, "toggles.block_recheck": True}
     )
     assert run.calls_per_row(both, True) == 3
+    assert run.calls_per_row(load_config(), True) <= 3  # 기본 설정은 요청당 nano 최대 3회
+
+
+async def test_default_config_keeps_oom_rule_with_request_check_on(no_rule):
+    # 기본(request_check 켬)에서도 1차 normal + not_stated → out_of_material
+    assert load_config().toggles.request_check
+    guard, fake = await make(
+        _responder(verdict="not_stated"), toggles__request_check=True, toggles__oom_check=True
+    )
+    j = await guard.judge(req())
+    assert j.response.category == "out_of_material" and len(_calls(fake, "request_check")) == 1
+
+
+@pytest.mark.parametrize(
+    "category", ["normal", "answer_seeking", "off_topic", "jailbreak_injection"]
+)
+async def test_default_config_judge_uses_at_most_three_nano_calls(no_rule, category):
+    guard, _ = await make(
+        _responder(category, ("learn",)),
+        toggles__request_check=True,
+        toggles__block_recheck=True,
+        toggles__oom_check=True,
+        toggles__jb_check=True,
+    )
+    assert (await guard.judge(req())).calls <= 3
 
 
 async def test_fake_llm_answers_the_new_schemas():

@@ -40,6 +40,6 @@ llm:
     classify: 5                # 가드 classify(주 호출과 병렬). 부른 때부터 센다, 게이트 대기 포함
     verify: 5                  # 검증·judge_output
     embedding: 2
-    intent: 5                  # T 의도 판정 호출(toggles.intent_override). 11/16·17 런박스 동시 8에서 p50 2.0~2.4·p95 3.3~4.4초. serial은 주 호출 앞에서 이 제한까지 기다리고 그만큼 주 호출 창이 줄어 8 → 5초(#220 리뷰). 시간 초과면 덮지 않는다. parallel은 주 호출이 먼저 끝나도 이 제한까지는 기다린다
+    intent: 8                  # T 의도 판정 호출(toggles.intent_override). 11/16·17 런박스 동시 8에서 p50 2.0~2.4·p95 3.3~4.4초. 11/17 저녁 5초로 줄인 판정 포함 측정에서 T 시간 초과가 0 → 1~5회/160행으로 늘어 8초로 둔다(리더 결정). serial은 주 호출 앞에서 이 제한까지 기다리고, parallel은 주 호출이 먼저 끝나도 이 제한까지는 기다린다
 eval:
   max_calls: 5000              # 개발 실행 운영진 API 호출 상한(TU-14, 가드 GR-11과 같음)

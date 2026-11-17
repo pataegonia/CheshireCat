@@ -127,6 +127,14 @@ def test_question_sentences_from_the_material_are_not_appended(monkeypatch):
     assert joined == f"답 {QUOTE_APPEND_LEAD} 목표 금액을 정해요."
 
 
+@pytest.mark.parametrize("tail", ['?"', "?)", "?”", "?」"])
+def test_question_marks_before_closing_quotes_count_too(monkeypatch, tail):
+    state = state_with(FakeLLM(out()), **ON)
+    monkeypatch.setattr(flow, "quote_sentences", lambda text, query: [f"얼마를 모을까요{tail}"])
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01"]}
+    assert flow.append_quote(request(), state, body) is body
+
+
 def test_only_question_sentences_leaves_the_answer(monkeypatch):
     state = state_with(FakeLLM(out()), **ON)
     monkeypatch.setattr(flow, "quote_sentences", lambda text, query: ["얼마를 모을까요？"])

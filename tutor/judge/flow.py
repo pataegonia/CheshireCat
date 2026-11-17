@@ -377,6 +377,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
 
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
+CLOSERS = "\"'”’)」』]"  # 물음표 뒤에 붙는 닫는 따옴표·괄호(벗기고 본다)
 
 
 def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
@@ -404,7 +405,7 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     picked = [
         s
         for s in quote_sentences(section.text, query)
-        if s not in answer and not s.rstrip().endswith(QUESTION_ENDS)
+        if s not in answer and not s.rstrip().rstrip(CLOSERS).endswith(QUESTION_ENDS)
     ]
     if not picked:
         return body

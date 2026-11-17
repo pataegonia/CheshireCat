@@ -25,6 +25,10 @@ def prompt_dir(tmp_path, monkeypatch):
     lines = head.split("\n")
     head = "\n".join("version: alt-1" if ln.startswith("version:") else ln for ln in lines)
     (tmp_path / ALT).write_text(head + sep + "다른 판 표시 줄\n" + body, encoding="utf-8")
+    # T 프롬프트(prompt.intent 기본 intent.md)도 같은 폴더에서 찾는다
+    (tmp_path / "intent.md").write_text(
+        (SOURCE.parent / "intent.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     monkeypatch.setattr(config, "PROMPT_DIR", tmp_path)
     return tmp_path
 
@@ -108,7 +112,7 @@ def test_tutor_set_picks_a_prompt_file(prompt_dir, monkeypatch):
     cfg, overrides = run_local._tutor_config(*_args(f'prompt.main_call="{ALT}"'))
     assert cfg.prompt.main_call == ALT and overrides == {"prompt.main_call": ALT}
     used = run_local._tutor_config_used(cfg, overrides)
-    assert used["prompt"] == {"main_call": ALT}
+    assert used["prompt"] == {"main_call": ALT, "intent": "intent.md"}
 
 
 def test_tutor_set_with_an_unknown_prompt_stops_before_any_call(capsys):

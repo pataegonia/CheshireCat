@@ -150,8 +150,9 @@ def prompt_file_problem(name: str) -> str | None:
 
 class Prompt(_Strict):
     main_call: str  # 주 호출 프롬프트 파일 이름(tutor/prompts/ 안, 측정 비교용)
+    intent: str  # T 의도 판정 프롬프트 파일 이름(tutor/prompts/ 안, 측정 비교용)
 
-    @field_validator("main_call")
+    @field_validator("main_call", "intent")
     @classmethod
     def _known_file(cls, name: str) -> str:
         problem = prompt_file_problem(name)

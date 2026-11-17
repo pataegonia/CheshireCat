@@ -62,6 +62,7 @@ from tutor.judge.guard_merge import (
     start_classify,
     wait_classify,
 )
+from tutor.judge.intent import PROMPT_PATH as INTENT_PROMPT_PATH
 from tutor.judge.intent import (
     STUDY,
     IntentJob,
@@ -137,7 +138,10 @@ def prepare_judge(app_state: Any) -> None:
     app_state.tutor_self_check_prompt = load_self_check_system() if check_on else None
     app_state.self_check_counts = SelfCheckCounts()  # 사유 → 횟수(본문 없음)
     intent_on = toggles.intent_override != "off"  # T 의도 판정(#209): 프롬프트·목차는 기동 때 한 번
-    app_state.tutor_intent_prompt = load_intent_system() if intent_on else None
+    intent_file = INTENT_PROMPT_PATH.with_name(
+        app_state.tutor_cfg.prompt.intent
+    )  # 측정 비교용 전환
+    app_state.tutor_intent_prompt = load_intent_system(intent_file) if intent_on else None
     sections = app_state.tutor_kb.sections if intent_on else {}
     app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
     app_state.intent_skips = IntentSkips()  # 사유 → 횟수(본문 없음)

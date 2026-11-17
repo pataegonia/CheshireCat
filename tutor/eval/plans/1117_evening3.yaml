@@ -1,0 +1,39 @@
+# 11/17 저녁 3차(판정 포함, 교차 검증 160행, 약 3,200회): 최종 조합(final-2·3·4, T 5초·intent.md)과 비교할
+# T 제한 8초(t8, 오전 측정과 같은 값) 2회와 T 프롬프트 변형(tvar, intent_v2_direct.md·5초, #209 리뷰 1번) 2회, 번갈아.
+items:
+  - name: t8-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: tvar-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'prompt.intent="intent_v2_direct.md"'
+  - name: t8-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: tvar-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'prompt.intent="intent_v2_direct.md"'

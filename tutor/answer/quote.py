@@ -1,14 +1,21 @@
 """자료 인용 답(TU-12, #201 A-2, `toggles.fallback_quote`). LLM을 부르지 않는다.
 
-주 호출이 실패했을 때 검색 1위 섹션에서 질문과 가장 많이 겹치는 문장을 그대로 옮기고 그 섹션을
+주 호출이 실패했을 때 검색 1위 섹션에서 질문과 가장 많이 겹치는 문장을 정리해 옮기고 그 섹션을
 인용한다. 지금 기본값(clarify)은 정답이 answer인 normal 문항에서 action·인용·사실을 모두 잃는다.
+원문 그대로는 아니다: 줄을 문장 끝(`.`·`!`·`?` 뒤 공백)에서 자르고 목록 기호·`**`·백틱을 지운
+뒤, 떨어진 두 문장을 이어 붙인다. 그래서 앞 문맥 없이 시작하거나 따옴표가 한쪽만 남은 조각이 나갈
+수 있다.
 
 - 문장은 섹션 md 본문의 설명 문단에서 고른다. 제목(`#`)·질문(`Q.`)·답(`A.`)·표·인용·구분선 줄,
   코드 블록 안, 표 파일 안내 줄, 굵게만 쓴 이름표 줄은 쓰지 않는다. `A.` 줄은 퀴즈 정답이라
   정답만 요구하는 질문에 새지 않게 뺀다(#201 제안서 3-2 E의 정답 줄).
 - 점수는 정규화한 문자 2-gram 겹침을 문장 길이로 나눈 값이다(겹친 종류 수 / √문장 2-gram 수,
   코사인과 같은 순서). 긴 문장이 겹침 수만으로 이기지 않게 한다. 같으면 앞 문장.
-- 겹치는 문장이 하나도 없으면 None이다. 부르는 쪽이 지금 기본값을 낸다.
+- 질문과 겹치는 2-gram 종류가 `MIN_SHARED`개보다 적은 문장은 옮기지 않는다. 한 글자 짝이 우연히
+  겹친 무관한 섹션 문장으로 answer를 내지 않게 한다(11/17 리뷰. 공개·점검 세트에서 모든 주 호출이
+  실패했다고 두면 normal 101행 중 1행만 겹침 1개였다). 문자 2-gram 종류 수라 세 글자 낱말
+  하나("시스템" → "시스"·"스템")로도 채워진다.
+- 옮길 문장이 없으면 None이다. 부르는 쪽이 지금 기본값을 낸다.
 - 요청 내용은 지역 변수로만 쓴다(TU-18).
 """
 
@@ -23,6 +30,7 @@ from tutor.retrieval.kb import bigrams
 
 MAX_QUOTED = 2  # 옮기는 자료 문장 수. 첫 문장까지 3문장 이내(TU-06 1–3문장)
 MAX_SENTENCE_CHARS = 400  # 이보다 긴 문장은 옮기지 않는다(답변 4,000자 안, 한 줄 문단 대비)
+MIN_SHARED = 2  # 질문과 겹치는 2-gram 종류가 이보다 적은 문장은 옮기지 않는다
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SKIP_LINE = re.compile(r"^\s*(#|Q\.|A\.|\||>|-{3,}\s*$|\(표:)")
 _LABEL_ONLY = re.compile(r"^\s*\*\*[^*]+\*\*\s*:?\s*$|^[^.!?]{0,30}:\s*$")
@@ -58,10 +66,12 @@ def _sentences(text: str) -> list[str]:
 
 
 def _score(asked: set[str], sentence: str) -> float:
+    """겹친 종류 수 / √문장 2-gram 수. 겹친 종류가 `MIN_SHARED`개보다 적으면 0."""
     grams = set(bigrams(sentence))
-    if not grams:
+    shared = len(asked & grams)
+    if not grams or shared < MIN_SHARED:
         return 0.0
-    return len(asked & grams) / math.sqrt(len(grams))
+    return shared / math.sqrt(len(grams))
 
 
 def quote_sentences(text: str, query: str) -> list[str]:

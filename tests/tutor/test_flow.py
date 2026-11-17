@@ -403,6 +403,21 @@ def test_top1_dialog_skips_the_extra_search_on_fixed_paths(monkeypatch, llm):
     assert len(calls) == 1  # 주 호출 검색 하나뿐
 
 
+@pytest.mark.parametrize("failure", ["raises", "empty"])
+def test_top1_dialog_falls_back_to_the_main_bundle_top(monkeypatch, failure):
+    """추가 검색이 예외를 내거나 비어도 답은 그대로 나가고, 끔일 때의 1위를 더한다."""
+
+    async def broken(query, history=(), **kw):
+        if failure == "raises":
+            raise RuntimeError("boom")
+        return []
+
+    monkeypatch.setattr(flow, "retrieve", broken)  # 흐름의 추가 검색만. 주 호출 검색은 그대로
+    resp = ask(state_with(FakeLLM(out()), **TOP1_DIALOG), *DIALOG, roles=ROLES)
+    assert resp["action"] == "answer"
+    assert resp["citations"] == ["PY-01-01", "PY-03-04"]
+
+
 def test_top1_dialog_skips_search_for_empty_target(monkeypatch):
     calls = count_retrieves(monkeypatch)
     resp = ask(state_with(FakeLLM(out()), **TOP1_DIALOG), "")

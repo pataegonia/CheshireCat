@@ -688,7 +688,12 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
         and template_for(merged.category, action) is None  # 고정 문장은 인용이 없다
     ):  # 규칙 A: 튜터 발화까지 넣은 질의로 한 번 더 찾아 1위만 쓴다(LLM 0회, BM25만)
         query, history = conv.search_query(all_roles=True)
-        top_sections = await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb)
+        try:  # 더할 인용 하나를 고르는 일이라, 실패하거나 비면 끔일 때의 1위로 돌아간다
+            top_sections = (
+                await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb) or None
+            )
+        except Exception:  # 메시지는 남기지 않는다
+            top_sections = None
     body = assemble(
         out,
         draft.sections,

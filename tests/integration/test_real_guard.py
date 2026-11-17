@@ -9,6 +9,10 @@
 - `/guard`: 후보 답변이 없으면 nano 1회(입력 판정), 있으면 2회(+ 출력 판정). 1차 입력 판정이
   탈옥이고 가드 설정에 탈옥 2차 판정(`toggles.jb_check`, 가드 #183)이 켜져 있으면 1회 더.
   2차가 study면 응답 input이 allow · normal, 꺼져 있거나 apply면 block · jailbreak_injection.
+- `/guard`: 1차 입력 판정이 normal이고 탈옥 2차를 부르지 않았으며 가드 설정에 자료 밖 확인
+  (`toggles.oom_check`, 가드 #215)이 켜져 있으면 1회 더(OomCheckOut). verdict가 not_stated면
+  응답 input이 allow · out_of_material, not_asked · stated면 allow · normal. 탈옥 2차와 한 요청에서
+  같이 부르지 않는다. 토글이 없는 main에서는 0회다. 스키마 이름은 문자열로만 쓴다.
 - `/tutor`에서 classify가 탈옥이면: 2차 꺼짐 1회, 켜짐 + study 3회, 켜짐 + apply 2회.
 - `/tutor` → 가드: 가드에 classify · judge_output이 있으면 튜터가 각각 정확히 1회 부르고 건너뛴
   단계가 없다(`assert_tutor_uses_guard`). 없으면 건너뛴 수만 센다. 연결을 보는 것이라
@@ -119,16 +123,34 @@ def test_root_app_starts_with_the_real_judge(real_guard_client, fake_guard_send,
     assert not any("probe=" in line for line in started), started
 
 
-def test_guard_calls_nano_once_per_judge(real_guard_client, fake_send, fake_guard_send):
+def oom_check_on(client) -> bool:
+    """가드 설정에 자료 밖 확인이 켜져 있는가. 가드 #215 전의 main에는 이 토글이 없다(False)."""
+    return bool(getattr(client.app.state.cfg.toggles, "oom_check", False))
+
+
+def toggles_seen(client, fake_guard_send, before: collections.Counter) -> str:
+    """실패 메시지: 토글 상태와 이번 요청의 스키마별 호출 수(가드 PR에서 무엇이 달라졌는지)."""
+    delta = dict(collections.Counter(fake_guard_send.by_schema) - before)
+    state = f"oom_check={oom_check_on(client)}, jb_check={jb_check_on(client)}"
+    return f"{state}, 이번 요청 by_schema={delta}"
+
+
+def test_guard_calls_nano_once_per_judge_plus_the_oom_check_when_it_is_on(
+    real_guard_client, fake_send, fake_guard_send
+):
+    """일반 질문의 `/guard`: 입력 판정 1회(+ 후보 답변이 있으면 출력 판정 1회). 자료 밖 확인이 켜져
+    있으면 요청마다 OomCheckOut 1회가 더해진다(가드 #215, main은 토글이 없어 0회)."""
     client = real_guard_client
-    # 입력 판정 1회
-    g1, calls = sent(client, fake_guard_send, "/guard", guard_body(QUESTION))
-    assert calls == 1
-    assert_guard_contract(g1.json(), has_candidate=False)
-    # 후보 답변이 있으면 출력 판정 1회 더
-    g2, calls = sent(client, fake_guard_send, "/guard", guard_body(QUESTION, candidate=CANDIDATE))
-    assert calls == 2
-    assert_guard_contract(g2.json(), has_candidate=True)
+    oom = int(oom_check_on(client))
+    for candidate, judges in ((None, 1), (CANDIDATE, 2)):
+        before = collections.Counter(fake_guard_send.by_schema)
+        r, calls = sent(
+            client, fake_guard_send, "/guard", guard_body(QUESTION, candidate=candidate)
+        )
+        seen = f"{toggles_seen(client, fake_guard_send, before)}, 이번 요청 {calls}회"
+        assert calls == judges + oom, seen
+        assert fake_guard_send.by_schema["OomCheckOut"] - before["OomCheckOut"] == oom, seen
+        assert_guard_contract(r.json(), has_candidate=candidate is not None)
     assert fake_send.count == 0  # 가드는 튜터 전송을 쓰지 않는다
 
 
@@ -167,14 +189,17 @@ def test_first_judge_jailbreak_calls_the_second_check_when_it_is_on(
         fake_guard_send.force = force
         for candidate, judges in ((None, 1), (CANDIDATE, 2)):
             jb_before = fake_guard_send.by_schema["JbCheckOut"]
+            before = collections.Counter(fake_guard_send.by_schema)
             body = guard_body(QUESTION, candidate=candidate)
             r, calls = sent(client, fake_guard_send, "/guard", body)
             got = r.json().get("input")
             seen = (
-                f"jb_check={jb}, verdict={used}(force {force}), 후보 답변 {candidate is not None}, "
-                f"input={got}, by_schema={dict(fake_guard_send.by_schema)}, 이번 요청 {calls}회"
+                f"{toggles_seen(client, fake_guard_send, before)}, verdict={used}(force {force}),"
+                f" 후보 답변 {candidate is not None}, input={got}, 이번 요청 {calls}회"
             )
             assert calls == judges + jb, seen
+            # 1차가 탈옥이면 자료 밖 확인은 부르지 않는다(탈옥 2차와 한 요청에서 같이 부르지 않음)
+            assert fake_guard_send.by_schema["OomCheckOut"] == before["OomCheckOut"], seen
             assert_guard_contract(r.json(), has_candidate=candidate is not None)
             assert got == expected_input(jb, used), seen
             if jb:
@@ -183,6 +208,35 @@ def test_first_judge_jailbreak_calls_the_second_check_when_it_is_on(
     if jb:  # 2차 판정이 apply · study 어느 쪽이어도 호출 수가 같다(study는 기본값 + 명시 두 번)
         assert counts[("apply", False)] == 2 and counts[("apply", True)] == 3, counts
         assert counts[("study", False)] == 4 and counts[("study", True)] == 6, counts
+
+
+OOM_VERDICTS = ("not_asked", "stated", "not_stated")  # 가드 #215 OomCheckOut.verdict
+OUT_OF_MATERIAL = {"decision": "allow", "category": "out_of_material"}
+
+
+def test_normal_question_calls_the_oom_check_when_it_is_on(real_guard_client, fake_guard_send):
+    """1차 입력 판정이 normal인 일반 질문. 자료 밖 확인이 켜져 있으면 요청마다 nano 1회
+    (OomCheckOut)가 더해지고, verdict가 not_stated면 input이 allow · out_of_material, 그 밖에는
+    allow · normal이다. 꺼져 있거나 토글이 없으면(main) 0회이고 input은 force와 상관없이 normal.
+    #215 전의 main, #215 그대로(끔), #215에서 켠 상태 모두에서 통과한다."""
+    client = real_guard_client
+    oom = oom_check_on(client)
+    for verdict in OOM_VERDICTS:
+        force = {"category": "normal", "verdict": verdict}
+        fake_guard_send.force = force
+        before = collections.Counter(fake_guard_send.by_schema)
+        r, calls = sent(client, fake_guard_send, "/guard", guard_body(QUESTION))
+        got = r.json().get("input")
+        seen = (
+            f"{toggles_seen(client, fake_guard_send, before)}, force {force}, input={got},"
+            f" 이번 요청 {calls}회"
+        )
+        assert fake_guard_send.by_schema["OomCheckOut"] - before["OomCheckOut"] == int(oom), seen
+        assert calls == 1 + int(oom), seen
+        assert_guard_contract(r.json(), has_candidate=False)
+        want = OUT_OF_MATERIAL if oom and verdict == "not_stated" else ALLOWED_NORMAL
+        assert got == want, seen
+    fake_guard_send.force = {}  # 뒤 요청에 남기지 않는다(픽스처도 테스트마다 새로 만든다)
 
 
 def test_tutor_first_judge_jailbreak_calls(real_guard_client, fake_guard_send):

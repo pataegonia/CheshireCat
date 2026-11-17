@@ -68,7 +68,8 @@ class Toggles(_Strict):
             and self.guard_classify != "off"
             and self.verify == "guard"
         ):
-            # 주 호출 2(재시도) + classify + T + judge_output = 5회로 TU-13 절대 4회를 넘는다
+            # T와 classify를 함께 켜면 주 호출 재시도를 꺼도 주 호출 1 + classify 최대 2 + T 1
+            # + judge_output 1 = 5회로 TU-13 절대 4회를 넘는다
             raise ValueError(
                 "toggles.intent_override는 guard_classify와 verify: guard를 함께 켜면"
                 " 요청당 nano 5회라 쓸 수 없다(TU-13 절대 4회)"

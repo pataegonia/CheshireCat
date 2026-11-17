@@ -120,7 +120,7 @@ def test_serial_intent_needs_classify_off(classify):
 
 
 def test_intent_with_classify_and_verify_exceeds_the_call_limit():
-    # 주 호출 2(재시도) + classify + T + judge_output = 5회 > TU-13 절대 4회
+    # 주 호출 1(재시도 끔) + classify 최대 2 + T + judge_output = 5회 > TU-13 절대 4회
     over = {
         "toggles.intent_override": "parallel",
         "toggles.guard_classify": "parallel",

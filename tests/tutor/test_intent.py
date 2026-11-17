@@ -80,6 +80,9 @@ def run(state, text=QUESTION):
         ("유해-비하", JAIL, "refuse", None),  # 지시 무력화 신호가 있으면 refuse를 낮추지 않는다
         ("유해-비하", JAIL, None, None),  # serial(주 호출 전)도 신호가 있으면 주 호출에 맡긴다
         ("유해-비하", JAIL, "answer", Override("harmful_content", "redirect")),  # 강한 쪽은 그대로
+        ("무관 결과물", JAIL, None, None),  # serial + 무력화 신호: refuse보다 약하면 주 호출에
+        ("제출물 대행", JAIL, None, None),
+        ("유해-실행", JAIL, None, Override("harmful_content", "refuse")),  # refuse는 그대로
         ("제출물 대행", (), "scaffold", Override("academic_dishonesty", "scaffold")),  # 고정 문장
         ("무관 결과물", (), "refuse", None),  # 그 밖의 약한 쪽은 덮지 않는다
         ("정답만 요구", (), "abstain", None),  # 고정 문장 없는 덮기는 answer일 때만
@@ -348,3 +351,21 @@ def test_main_call_has_no_retry_when_intent_and_classify_are_both_on():
     alone = RoleLLM(out(), "학습 질문")
     run(state_with(alone, **ON))
     assert alone.kwargs["main"]["retries"] == flow.MAIN_RETRIES == 1
+
+
+@pytest.mark.parametrize(
+    ("overrides", "want"),
+    [
+        ({"toggles.guard_classify": "parallel"}, 1),  # T 끔 + classify: 재시도 그대로
+        ({**ON, "toggles.guard_classify": "serial"}, 1),  # 직렬 classify는 T를 부르지 않는다
+    ],
+    ids=["classify-only", "intent-with-serial-classify"],
+)
+def test_main_call_keeps_its_retry_when_t_does_not_run(overrides, want):
+    from tests.tutor.test_guard_merge import FakeGuard
+
+    llm = RoleLLM(out(), "학습 질문")
+    state = state_with(llm, **overrides)
+    state.guard = FakeGuard("normal")
+    run(state)
+    assert llm.kwargs["main"]["retries"] == want

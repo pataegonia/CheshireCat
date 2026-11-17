@@ -18,7 +18,8 @@
    주 호출 없이 고정 문장을 낸다
 ⑤-3 T 의도 판정 덮기(TU-06, `tutor.judge.intent`, `toggles.intent_override`): #209 프롬프트로 nano를
    1회 불러 이름표로 주 호출 action을 덮는다. parallel은 주 호출과 동시에, serial은 T 먼저(고정 문장
-   이름표면 주 호출 없이). 가드 classify가 위기·공격 범주면 T는 비킨다
+   이름표면 주 호출 없이). 가드 classify가 위기·공격 범주면 T는 비킨다. T가 학습 질문이라 답하면
+   대행 덮기를 하지 않고, 자료 인용 답은 T가 학습 질문일 때만 낸다(T 관문)
 ⑥ 가드 judge_output 검증(TU-09 ②): 주 호출 문장이 그대로 나가는 경로에만, 합친 범주를 넘겨 부른다
    (`toggles.verify: guard`). 시간 부족·실패면 판정만 건너뛴다
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
@@ -306,7 +307,7 @@ def _complete(state: Any):
     T와 가드 classify를 함께 켜면 주 호출 재시도를 끈다. classify는 1차가 탈옥이면 2차 판정까지
     nano 2회라, 주 호출 1 + classify 2 + T 1 = 4회로 TU-13 절대 4회 안에 둔다(#220 리뷰)."""
     cfg = state.tutor_cfg
-    both = cfg.toggles.intent_override != "off" and cfg.toggles.guard_classify != "off"
+    both = _t_on(cfg) and cfg.toggles.guard_classify != "off"
     retries = 0 if both else MAIN_RETRIES
 
     async def complete(messages, schema, *, deadline: float) -> CompleteResult:
@@ -344,16 +345,21 @@ def _classify_wins(trusted: str | None) -> bool:
     return trusted in ATTACK_CATEGORIES or trusted == "emotional_distress"
 
 
+def _t_on(cfg: Any) -> bool:
+    """T를 부르는 설정인가. 직렬 classify(ⓐ)에서는 intent_override를 켜도 T를 부르지 않는다."""
+    return cfg.toggles.intent_override != "off" and cfg.toggles.guard_classify != "serial"
+
+
 def _study(cfg: Any, label: str | None) -> bool:
     """T를 켰고 T가 학습 질문이라 답했는가. 그러면 대행 덮기를 하지 않는다(신호 오탐을 T가
     막는다)."""
-    return cfg.toggles.intent_override != "off" and label == STUDY
+    return _t_on(cfg) and label == STUDY
 
 
 def _quote_allowed(cfg: Any, label: str | None) -> bool:
     """자료 인용 답을 낼 수 있는가. T를 켰으면 T가 학습 질문이라 답한 때만(실패·다른 이름표는
     clarify). classify 실패·끔도 "없음"이라 신호 없는 공격·위기가 인용 답을 받던 길을 T로 막는다."""
-    return cfg.toggles.intent_override == "off" or label == STUDY
+    return not _t_on(cfg) or label == STUDY
 
 
 def _intent_fixed(label: str | None, signals: Sequence[Signal], action: Action | None):

@@ -1,13 +1,15 @@
 """자료 밖 확인 E(`toggles.oom_gate`, #213 B2의 E). nano 1회, 주 호출과 동시에.
 
-요청이 시작될 때 주 호출과 같은 검색 상위 k 근거 묶음과 대화를 E 프롬프트
-(`tutor/prompts/oom_check.md`, #162 v0과 같은 글)에 보내 "마지막 질문이 묻는 것이 근거 묶음에
-있는가"(found)를 받는다. 흐름이 끝나 최종 action이 answer이고 E가 found=false면 자료 밖 고정
-문장(abstain)으로 바꾼다.
+요청이 시작될 때 검색 상위 k 근거 묶음(BM25, 주 호출과 같은 질의·k. `toggles.embedding`을 켜도
+E는 BM25만 쓴다, B2와 같다)과 대화를 E 프롬프트(`tutor/prompts/oom_check.md`, #162 v0과 같은
+글)에 보내 "마지막 질문이 묻는 것이 근거 묶음에 있는가"(found)를 받는다. 흐름이 끝나 최종
+action이 answer이고 E가 found=false면 자료 밖 고정 문장(abstain)으로 바꾼다.
 
-- 판단 대상에 한글이 한 글자도 없으면(영어 발화) E를 부르지 않는다(#213 영어 규칙, 한글 0자).
-- E는 요청 시작부터 `llm.timeout_s.oom_gate`초 안에 끝나야 쓴다. 넘거나 실패·잘림이면 흐름 결과
-  그대로다(E는 abstain으로만 바꾸므로 실패가 답을 막지 않는다).
+- 판단 대상 원문(정규화)에 한글이 한 글자도 없고 라틴 글자가 있으면(영어 발화) E를 부르지
+  않는다(#213 결론 문서 2장의 좁힌 영어 규칙. B2 실험 서버는 "라틴 > 한글"로 쟀고, 문서는 공개
+  교차 검증에서 두 규칙이 막는 E '없음' 행이 같다고 적었다).
+- E는 E 검색이 끝난 때부터 `llm.timeout_s.oom_gate`초 안에 끝나야 쓴다(검색은 ms 단위). 넘거나
+  실패·잘림이면 흐름 결과 그대로다(E는 abstain으로만 바꾸므로 실패가 답을 막지 않는다).
 - 측정(#213, yang-co1 11/17): B2(주 호출 ∥ E v0, 마감 9초, 고정 문장 abstain, 영어 규칙 + 인용 1위
   규칙 A)는 공개 교차 검증 판정 포함 M 대비 +2.6(자료 밖 질문 63.5 → 84.4), 대회 실제 제출 튜터
   +3.7. 규칙 A는 이 토글에 넣지 않았다(점검 세트 18 → 18).
@@ -32,6 +34,7 @@ PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "oom_check.md"
 EMPTY_BUNDLE = "(관련 자료를 찾지 못했습니다)"  # main_call.build_user_message와 같은 문구
 WAIT_GRACE_S = 0.05
 _HANGUL = re.compile(r"[가-힣ㄱ-ㆎ]")
+_LATIN = re.compile(r"[A-Za-z]")
 # no_time · error · truncated · invalid · timeout · found · absent · english → 횟수
 GateCounts = Counter[str]
 
@@ -55,8 +58,10 @@ def load_system(path: Path = PROMPT_PATH) -> str:
     return rest.strip("\n")
 
 
-def has_hangul(text: str) -> bool:
-    return _HANGUL.search(text) is not None
+def english_only(text: str) -> bool:
+    """한글(완성 음절·호환 자모)이 한 글자도 없고 라틴 글자가 있다. `text`는 정규화한 원문이어야
+    한다(풀어 쓴 자모는 정규화 뒤에 완성 음절이 된다)."""
+    return _HANGUL.search(text) is None and _LATIN.search(text) is not None
 
 
 def build_messages(

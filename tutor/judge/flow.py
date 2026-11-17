@@ -493,6 +493,8 @@ def _append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[s
     붙일 문장이 없으면 그대로 둔다. action·인용은 바꾸지 않는다. 입력을 바꾸지 않는다."""
     if not state.tutor_cfg.toggles.quote_append or body.get("action") != "answer":
         return body
+    if NOT_IN_MATERIAL_NOTE in (body.get("answer") or ""):  # 빈 답변 안내에는 붙이지 않는다(#225)
+        return body
     cites = body.get("citations") or []
     section = state.tutor_kb.sections.get(cites[0]) if cites else None
     if section is None:

@@ -1,65 +1,45 @@
-# 11/17 밤(판정 포함, 교차 검증 160행, 셋을 번갈아 2회씩, 예상 약 5,000회).
+# 11/17 밤(판정 포함, 교차 검증 160행, 둘을 번갈아 3회씩, 예상 약 5,300회). 11/18 14:00 "동결 묶음에
+# E를 켤까" 판단용(yang-co1 B2 + #220 측정과 같은 기준: 3회씩, 행 단위 고침 − 망침 ≥ 2, 범주 붕괴 없음).
 # - fz: 동결 조합(대행 덮기·자료 인용 답·T serial, T 제한 8초, T 프롬프트 intent.md = main)
-# - t222: fz + T 프롬프트를 #222(yang-co1, #209 리뷰 반영, cabb493) 사본 intent_222.md로
-# - t222e: t222 + 자료 밖 확인 E(oom_gate, #213 B2의 E, 마감 9초, 한글 없고 라틴 있는 발화 제외)
+# - fze: fz + 자료 밖 확인 E(oom_gate, #213 B2의 E를 서버 토글로 옮긴 것, 마감 9초, 한글 없고 라틴 있는 발화 제외)
+# E 시간 초과는 tutor_llm 실패로 세어 "오염" 표시가 되지만 답은 흐름 결과 그대로다(기본값 아님).
 items:
   - name: fz-1
     cases: public
     runs: 1
     judge: true
-    tutor_set:
+    tutor_set: &fz
       - 'toggles.delegation_override=true'
       - 'toggles.fallback_quote=true'
       - 'toggles.intent_override="serial"'
       - 'llm.timeout_s.intent=8'
-  - name: t222-1
+  - name: fze-1
     cases: public
     runs: 1
     judge: true
-    tutor_set:
+    tutor_set: &fze
       - 'toggles.delegation_override=true'
       - 'toggles.fallback_quote=true'
       - 'toggles.intent_override="serial"'
       - 'llm.timeout_s.intent=8'
-      - 'prompt.intent="intent_222.md"'
-  - name: t222e-1
-    cases: public
-    runs: 1
-    judge: true
-    tutor_set:
-      - 'toggles.delegation_override=true'
-      - 'toggles.fallback_quote=true'
-      - 'toggles.intent_override="serial"'
-      - 'llm.timeout_s.intent=8'
-      - 'prompt.intent="intent_222.md"'
       - 'toggles.oom_gate=true'
   - name: fz-2
     cases: public
     runs: 1
     judge: true
-    tutor_set:
-      - 'toggles.delegation_override=true'
-      - 'toggles.fallback_quote=true'
-      - 'toggles.intent_override="serial"'
-      - 'llm.timeout_s.intent=8'
-  - name: t222-2
+    tutor_set: *fz
+  - name: fze-2
     cases: public
     runs: 1
     judge: true
-    tutor_set:
-      - 'toggles.delegation_override=true'
-      - 'toggles.fallback_quote=true'
-      - 'toggles.intent_override="serial"'
-      - 'llm.timeout_s.intent=8'
-      - 'prompt.intent="intent_222.md"'
-  - name: t222e-2
+    tutor_set: *fze
+  - name: fz-3
     cases: public
     runs: 1
     judge: true
-    tutor_set:
-      - 'toggles.delegation_override=true'
-      - 'toggles.fallback_quote=true'
-      - 'toggles.intent_override="serial"'
-      - 'llm.timeout_s.intent=8'
-      - 'prompt.intent="intent_222.md"'
-      - 'toggles.oom_gate=true'
+    tutor_set: *fz
+  - name: fze-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fze

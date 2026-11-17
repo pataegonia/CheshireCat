@@ -437,6 +437,7 @@ def _write(
     tutor: Mapping[str, Any] | None = None,
     subset: Mapping[str, Any] | None = None,
     trace: Sequence[Mapping[str, Mapping[str, Any]]] | None = None,
+    oom_gate: Mapping[str, int] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
@@ -483,6 +484,8 @@ def _write(
             "attempt_errors": _by_role(llm.attempt_errors),  # 시도 단위 갈래(재시도 포함)
             "completion_buckets": _by_role(llm.completion_buckets),  # 성공한 시도의 토큰 구간
         }
+    if oom_gate:  # 자료 밖 확인 E 사유 → 횟수(실험 브랜치, 본문 없음)
+        data["oom_gate"] = dict(sorted(oom_gate.items()))
     data["report"] = asdict(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return path
@@ -1259,6 +1262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
         subset=_subset_used(subset, rows),
         trace=row_trace(scored, traces or None),  # 채우지 않은 목록(가짜 수집기)은 기록 없음
+        oom_gate=getattr(state, "oom_gate_counts", None) if state is not None else None,
     )
     _show(report, sys.stdout, judged=judge is not None)
     if check_summary is not None:
@@ -1390,6 +1394,9 @@ def _show_tutor_calls(
     calls = state.tutor_llm.calls
     shown = ", ".join(f"{role} {n}회" for role, n in sorted(calls.items())) or "0회"
     sys.stdout.write(f"튜터 LLM 호출: {shown}\n")
+    gate = getattr(state, "oom_gate_counts", None)
+    if gate:  # 자료 밖 확인 E 사유 → 횟수(실험 브랜치, 본문 없음)
+        sys.stdout.write(f"튜터 LLM 호출 E 사유: {dict(sorted(gate.items()))}\n")
     sys.stdout.write(_latency_line(latency))
     failures = state.tutor_llm.failures
     if failures:  # 최종 실패한 호출의 답은 기본값이다(연결 안 됨·키 거절·시간 초과 등)

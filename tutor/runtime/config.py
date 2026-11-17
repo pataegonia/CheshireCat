@@ -116,7 +116,7 @@ class Timeouts(_Strict):
     verify: PositiveFloat
     embedding: PositiveFloat
     intent: PositiveFloat  # T 의도 판정 호출(toggles.intent_override)
-    oom_gate: PositiveFloat  # 자료 밖 확인 E(toggles.oom_gate). 요청 시작부터 센다
+    oom_gate: PositiveFloat  # 자료 밖 확인 E(toggles.oom_gate). E 시작(검색 직후)부터 센다
 
 
 class Llm(_Strict):

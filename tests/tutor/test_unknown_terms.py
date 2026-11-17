@@ -3,6 +3,8 @@
 입력 문장은 지어낸 것이다(공개 세트 문구를 옮기지 않는다).
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from tests.tutor.test_flow import FakeLLM, out, state_with
@@ -26,6 +28,18 @@ BLOB = unknown_terms.squash("적금의 기본 이자율과 납입 한도, 반복
 )
 def test_missing_terms(text, want):
     assert unknown_terms.missing_terms(text, BLOB) == want
+
+
+def test_kb_blob_includes_table_text():
+    # 표에만 있는 이름도 "KB에 있음"으로 친다(#232 가드 리뷰 2번: 표를 빼면 오탐)
+    def section(tables):
+        return SimpleNamespace(text="본문에는 다른 말만 있다", tables=tables)
+
+    question = "별빛 등급은 몇 단계예요?"
+    with_table = unknown_terms.kb_blob({"X": section(["| 별빛 등급 | 3단계 |"])})
+    without_table = unknown_terms.kb_blob({"X": section([])})
+    assert unknown_terms.missing_terms(question, with_table) == []
+    assert unknown_terms.missing_terms(question, without_table) == ["별빛등급"]
 
 
 def test_squash_keeps_only_letters_and_digits():

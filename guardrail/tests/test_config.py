@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.9"
+    assert cfg.version == "6.0.10"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -69,7 +69,7 @@ def test_default_loads_section_4_4_model():
         "request_check": "request_check_en.md",  # S3.13, request_check·block_recheck가 켜졌을 때만
         "output_judge_sent": "output_judge_en_sent.md",  # S3.13, judge_mode: sentences
     }
-    assert cfg.output.tier3_trust == "answer_quote" and cfg.output.quote_min_chars == 8
+    assert cfg.output.tier3_trust == "answer_quote" and cfg.output.quote_min_chars == 4
     assert cfg.toggles.knn_vote and not cfg.toggles.third_call
     assert cfg.output.mode == "v6" and cfg.output.rule_min_margin == 3.5
 

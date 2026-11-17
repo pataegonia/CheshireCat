@@ -281,7 +281,7 @@ def test_repair_quote_unescapes_entities_first():
 
 def test_request_toggles_on_in_default_off_in_baseline():
     d, b = load_config("configs/default.yaml"), load_config("configs/baseline.yaml")
-    assert d.version == "6.0.9" and d.toggles.request_check and d.toggles.block_recheck
+    assert d.toggles.request_check and d.toggles.block_recheck
     assert not (b.toggles.request_check or b.toggles.block_recheck)
     for cfg in (d, b):
         assert cfg.output.judge_mode == "quote" and cfg.output.quote_repair is False
@@ -745,3 +745,15 @@ async def test_fake_run_drives_all_new_toggles_end_to_end(tmp_path, monkeypatch,
     score = summary["configs"]["t"]["scores"][0]
     assert score["errors"] == {} and "request_check" in score["llm_by_role"]
     assert all("quote_repaired" in r for r in recs) and max(r["calls"] for r in recs) <= 3
+
+
+def test_default_min_quote_length_accepts_a_short_literal_quote():
+    """S3.13: 틀린 코드 문자열만 짚은 짧은 인용(정규화 5–7자)이 기본 설정에서 버려지지 않는다."""
+    from guardrail.judges.output_judge import quote_ok
+
+    cfg = load_config()
+    answer = '화면에는 print("반가워요친구") 결과가 나와요.'
+    assert cfg.output.quote_min_chars == 4
+    assert quote_ok('"반가워요친구"', answer, cfg.output.quote_min_chars)  # 정규화 6자
+    assert not quote_ok('"반가워요친구"', answer, 8)  # 예전 문턱에서는 버려졌다
+    assert not quote_ok("나와요", answer, cfg.output.quote_min_chars)  # 3자는 여전히 짧다

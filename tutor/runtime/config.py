@@ -48,6 +48,9 @@ class Toggles(_Strict):
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
+    # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,
+    # serial은 T 먼저(고정 문장 이름표면 주 호출 없이). 기본 끔(TU-06)
+    intent_override: Literal["off", "parallel", "serial"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -57,6 +60,20 @@ class Toggles(_Strict):
             raise ValueError("toggles.vote는 만들지 않았다(#83, TU-13 호출 상한)")
         if self.verify == "self":
             raise ValueError("toggles.verify: self는 만들지 않았다(#83, TU-13 호출 상한)")
+        if self.intent_override == "serial" and self.guard_classify != "off":
+            # 직렬 T는 classify를 기다리지 않고 고정 문장을 내 classify 우선 규칙을 못 지킨다
+            raise ValueError("toggles.intent_override: serial은 guard_classify off에서만 쓴다")
+        if (
+            self.intent_override != "off"
+            and self.guard_classify != "off"
+            and self.verify == "guard"
+        ):
+            # T와 classify를 함께 켜면 주 호출 재시도를 꺼도 주 호출 1 + classify 최대 2 + T 1
+            # + judge_output 1 = 5회로 TU-13 절대 4회를 넘는다
+            raise ValueError(
+                "toggles.intent_override는 guard_classify와 verify: guard를 함께 켜면"
+                " 요청당 nano 5회라 쓸 수 없다(TU-13 절대 4회)"
+            )
         return self
 
 
@@ -83,6 +100,7 @@ class Timeouts(_Strict):
     classify: PositiveFloat
     verify: PositiveFloat
     embedding: PositiveFloat
+    intent: PositiveFloat  # T 의도 판정 호출(toggles.intent_override)
 
 
 class Llm(_Strict):

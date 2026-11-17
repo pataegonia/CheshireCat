@@ -15,8 +15,9 @@ T는 학습자의 마지막 발화에 이름표 하나(위기·탈옥·유해-�
 - 탈옥은 지시 무력화 신호가 있을 때만 덮는다(공격 기법을 배우는 정상 질문을 탈옥으로 본 오탐 때문).
 - 위기 신호가 있거나 주 호출이 escalate면 위기만 따른다(위기를 약하게 바꾸지 않는다).
 - T action이 §3 우선순위에서 주 호출보다 약하면 덮지 않는다. 단 유해-비하 redirect가 주 호출
-  refuse를 바꾸는 것만 허용한다(표의 harmful 두 갈래).
-- 같은 action이면 덮지 않는다.
+  refuse를 바꾸는 것만 허용한다(표의 harmful 두 갈래). 지시 무력화 신호가 있으면 이 예외도 없고,
+  serial에서는 주 호출을 본 뒤 정한다(#220 리뷰).
+- 같은 action이면 덮지 않는다. 제출물 대행만 주 호출이 scaffold여도 고정 문장으로 바꾼다.
 - 고정 문장이 없는 조합(정답만 요구 → answer_seeking scaffold)은 주 호출이 answer일 때만 덮는다.
   주 호출 문장·인용은 그대로 두고 범주·action만 바꾼다. 주 호출이 실패했으면 부르는 쪽이 기본값의
   action을 넘기고 고정 문장 조합만 쓴다.
@@ -139,8 +140,12 @@ def decide(
     if target is None:
         return None
     category, action = target
-    if action == main_action:
+    if action == main_action and label != "제출물 대행":
+        # 제출물 대행은 주 호출이 scaffold여도 고정 문장으로 바꾼다
+        # (모델 scaffold 문장에 답이 샐 수 있다)
         return None
+    if label == "유해-비하" and Signal.OVERRIDE in signals and main_action is None:
+        return None  # serial: 지시 무력화 신호가 있으면 주 호출(refuse일 수 있다)을 보고 정한다
     if template_for(category, action) is None and main_action != "answer":
         # 고정 문장이 없는 조합(answer_seeking scaffold)은 주 호출의 answer 문장을 그대로 쓰므로
         # answer일 때만 덮는다(주 호출 실패·abstain·clarify 문장을 scaffold로 내지 않는다)
@@ -150,7 +155,8 @@ def decide(
     if (Signal.CRISIS in signals or main_action == "escalate") and label != "위기":
         return None
     weaker = _rank(action) > _rank(main_action)
-    if weaker and not (label == "유해-비하" and main_action == "refuse"):
+    lowered = label == "유해-비하" and main_action == "refuse" and Signal.OVERRIDE not in signals
+    if weaker and not lowered:
         return None
     return Override(category, action)
 

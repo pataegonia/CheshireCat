@@ -77,6 +77,10 @@ def run(state, text=QUESTION):
         ("제출물 대행", (), "answer", Override("academic_dishonesty", "scaffold")),
         ("유해-실행", (), "scaffold", Override("harmful_content", "refuse")),
         ("유해-비하", (), "refuse", Override("harmful_content", "redirect")),  # 허용한 약한 쪽
+        ("유해-비하", JAIL, "refuse", None),  # 지시 무력화 신호가 있으면 refuse를 낮추지 않는다
+        ("유해-비하", JAIL, None, None),  # serial(주 호출 전)도 신호가 있으면 주 호출에 맡긴다
+        ("유해-비하", JAIL, "answer", Override("harmful_content", "redirect")),  # 강한 쪽은 그대로
+        ("제출물 대행", (), "scaffold", Override("academic_dishonesty", "scaffold")),  # 고정 문장
         ("무관 결과물", (), "refuse", None),  # 그 밖의 약한 쪽은 덮지 않는다
         ("정답만 요구", (), "abstain", None),  # 고정 문장 없는 덮기는 answer일 때만
         ("정답만 요구", (), "clarify", None),

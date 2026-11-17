@@ -30,7 +30,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   embedding: false                 # GR-03·GR-05 임베딩, P2
   jb_check: true                  # S3.3 탈옥 2차 판정(prompts.jb_check). 1차가 jailbreak_injection일 때만 호출 1회 추가
   pii_intro_rule: true             # S3.9 자기소개(이름·학교·학년) 발화: nano가 normal·answer_seeking이면 pii_disclosure로. 호출 0, decision 불변(results/2026-11-16-score-probes.md)
-  oom_check: false                 # S3.10 자료 밖 확인(prompts.oom_check): nano가 normal이면 KB를 붙여 호출 1회 추가, not_stated면 out_of_material(results/2026-11-17-cause-fixes.md) 기본 끔: 통합 테스트가 일반 질문에 nano 1회를 기대한다
+  oom_check: true                  # S3.10 자료 밖 확인(prompts.oom_check): nano가 normal이면 KB를 붙여 호출 1회 추가, not_stated면 out_of_material(results/2026-11-17-cause-fixes.md)
 input:
   label_mode: category             # category | act(S3.2 선별용 변형, R14 B3) | flags(S3.8 실험 변형, 범주 앞 예/아니오 두 칸, 미채택). v1은 category
   window_last: 6

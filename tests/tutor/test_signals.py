@@ -388,6 +388,12 @@ def test_study_questions_about_assignments_are_not_delegation(text):
         "보고서 좀 써줄 수 있어?",
         "Can you write my essay on climate?",
         "Please finish my assignment",
+        # 11/17 #204 재리뷰: 평가 이름 바로 뒤 "대신 풀어·해결해·해", 첫머리 "I need you to"
+        "과제 대신 풀어 줘",
+        "숙제 좀 대신 풀어줘",
+        "과제 대신 좀 해 줘",
+        "숙제 대신 해결해 주세요",
+        "I need you to do my homework tonight",
     ],
 )
 def test_delegation_requests_are_signals(text):
@@ -555,3 +561,18 @@ def test_public_set_precision_recall_floor():
     assert not [lab for lab in over if lab.get("action") in ("answer", "scaffold")]
     for c, lab in rows:
         assert direct_clarify(c) == (lab["category"] == "low_signal_input")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 11/17: 다른 대상을 대신 풀어 달라거나 대신 해도 되는지 묻는 것,
+        # 영어 부정·함께 풀기는 아니다
+        "과제는 제가 할 테니 예제 하나만 대신 풀어 줘",
+        "과제 대신 해도 돼요?",
+        "I don't really want you to do my homework, just explain lists",
+        "I need you to do this homework problem with me",
+    ],
+)
+def test_narrow_delegation_additions_do_not_fire(text):
+    assert Signal.DELEGATION not in detect_text(text)

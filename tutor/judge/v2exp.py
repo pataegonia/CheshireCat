@@ -13,6 +13,10 @@
 - `g0`~`g3`(가드형 튜터): 주 호출 ∥ E v0 ∥ T(g1부터 가드 kNN 판단 예시) → B2 + T 덮기(#220 규칙)
   → g2부터 kNN·LR 정밀도 관문, g3은 T 실패 기본값. 아래 "G" 절.
   요청당 nano 최대 4(주 호출 재시도 포함).
+- `gc`·`gc3`·`gc4`(가드형 + C 구조): 주 호출 없이 T(가드 kNN 판단 예시) ∥ E → 3-3 합치기
+  + kNN·LR 정밀도 관문(T 막기 이름표를 kNN·LR 둘 다 아니라고 하면 학습 질문으로) + T 실패 기본값
+  (kNN·LR 합의) → 고정 문장 또는 W. gc = E v0, gc3 = E v0 2회(학습 질문 → abstain 칸은 둘 다
+  "없음"일 때만), gc4 = E v0 + 지어낸 퓨샷. 요청당 nano 최대 3(gc3은 4), 재시도 0. 아래 "GC" 절.
 요청 내용은 지역 변수로만 쓰고 남기지 않는다(TU-18). 로그를 남기지 않는다(TU-15).
 """
 
@@ -46,7 +50,8 @@ from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.request import TutorRequest
 from tutor.retrieval import retrieve
 
-MODES = ("m", "b2", "c4", "g0", "g1", "g2", "g3")
+MODES = ("m", "b2", "c4", "g0", "g1", "g2", "g3", "gc", "gc3", "gc4")
+GC_MODES = ("gc", "gc3", "gc4")
 G_MODES = ("g0", "g1", "g2", "g3")
 E_DEADLINE_S = 9.0  # B2 E 마감(요청 시작부터). 런박스 동시 64에서 마감 없을 때 20초 넘김 6.9%
 T_DEADLINE_S = 6.0  # g 모드 T 마감(요청 시작부터). 넘기면 T 없음(B2 그대로)
@@ -134,7 +139,7 @@ def prepare_v2(app_state: Any) -> None:
     }
     secs = app_state.tutor_kb.sections
     app_state.tutor_v2_toc = "\n".join(f"- {sid} {s.title}" for sid, s in sorted(secs.items()))
-    if app_state.tutor_v2_mode in ("g1", "g2", "g3"):
+    if app_state.tutor_v2_mode in ("g1", "g2", "g3", *GC_MODES):
         app_state.tutor_g_labels = public_labels()
 
 
@@ -146,6 +151,8 @@ async def answer(req: TutorRequest, state: Any, *, deadline: float) -> dict[str,
         return await answer_c4(req, state, deadline=deadline)
     if mode in G_MODES:
         return await answer_g(req, state, deadline=deadline, mode=mode)
+    if mode in GC_MODES:
+        return await answer_gc(req, state, deadline=deadline, mode=mode)
     return await flow.answer_v2(req, state, deadline=deadline)
 
 
@@ -657,3 +664,75 @@ async def answer_g(req: TutorRequest, state: Any, *, deadline: float, mode: str)
     finally:
         e_task.cancel()
         t_task.cancel()
+
+
+# ---------------------------------------------------------------- GC(가드형 + C 구조, gc·gc3·gc4)
+# ① 전처리·결정적 신호 → ② 보조 판정기(가드 kNN·LR, 읽기만) → ③ nano 병렬: T(kNN 판단 예시) ∥ E
+# → ④ 코드 결정: kNN·LR 정밀도 관문(g2) + T 실패 기본값(g3)으로 이름표를 정한 뒤
+#   3-3 합치기(C4 decide)
+# → ⑤ W(답·단계 안내) 또는 고정 문장 → finalize·cite_top1(규칙 A)·tutor_post.
+# 주 호출은 부르지 않는다. 가드 LLM도 부르지 않는다.
+GC_BLOCK_LABELS = frozenset({"위기", "탈옥", "유해-실행", "유해-비하", "무관 결과물"})
+
+
+def gc_label(t: "TOut | None", aux: GAux | None) -> "TOut | None":
+    """④ 이름표 정하기(결정적). 관문: T 막기 이름표의 범주를 kNN 다수·LR이 둘 다 아니라고 하면
+    학습 질문. 실패 기본값: T가 없고 kNN·LR이 같은 범주면 그 이름표(harmful은 refuse 갈래)."""
+    if t is None:
+        if aux is not None and aux.knn and aux.knn == aux.lr:
+            lab = label_of(aux.knn, "refuse")
+            if lab is not None and lab != "학습 질문":
+                return TOut(label=lab, self_info=False)
+        return None
+    if t.label in GC_BLOCK_LABELS and aux is not None and (aux.knn or aux.lr):
+        target = G_TARGET.get(t.label)
+        if target is not None and aux.knn != target[0] and aux.lr != target[0]:
+            return TOut(label="학습 질문", self_info=t.self_info)
+    return t
+
+
+def _e_both(e1: "EOut | None", e2: "EOut | None") -> "EOut | None":
+    """gc3: 학습 질문 → abstain 칸용. 둘 다 '없음'일 때만 없음(하나가 실패면 남은 하나)."""
+    got = [e for e in (e1, e2) if e is not None]
+    if not got:
+        return None
+    if all(e.found is False for e in got):
+        return got[0]
+    return next(e for e in got if e.found)
+
+
+async def answer_gc(req: TutorRequest, state: Any, *, deadline: float, mode: str) -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    te_deadline = min(deadline - MARGIN_S, loop.time() + TE_DEADLINE_S)
+    msgs = flow._messages(req)
+    conv = tidy(msgs)
+    if direct_clarify(conv):  # ① 저신호 직접 판정
+        return flow.tutor_post(fixed_body(Fixed.CLARIFY))
+    p = await _prep(conv, state, with_t=True)
+    if p.crisis:  # ① 위기 신호
+        return _assemble(p, decide(p, None, None), None, None)
+    aux = g_aux(state, msgs, fewshot=True)  # ② 보조 판정기(CPU)
+    t_user = with_examples(p.t_user, aux.examples if aux is not None else ())
+    sysm = state.tutor_v2_sys
+    e_sys = sysm["Efs"] if mode == "gc4" else sysm["E"]
+    calls = [
+        _call(state, "intent", sysm["T"], t_user, TOut, te_deadline),
+        _call(state, "e_check", e_sys, p.e_user, EOut, te_deadline),
+    ]
+    if mode == "gc3":
+        calls.append(_call(state, "e_check", sysm["E"], p.e_user, EOut, te_deadline))
+    got = await asyncio.gather(*calls)
+    t, e1 = got[0], got[1]
+    t = gc_label(t, aux)
+    d = decide(p, t, e1)
+    if mode == "gc3" and d["route"] == "fixed" and d["category"] == "out_of_material":
+        e = _e_both(e1, got[2])
+        if e is not None and e.found:  # 2번째 E가 '있음' → abstain 대신 답
+            d = decide(p, t, e)
+    info = w_text = None
+    if d["route"] != "fixed":
+        info = _w_input(p, d)
+        if info is not None and d["route"] in ("w_answer", "w_scaffold"):
+            w = await _call(state, "writer", sysm["W"], info[0], WOut, deadline - MARGIN_S)
+            w_text = None if w is None else w.text
+    return _assemble(p, d, w_text, info)

@@ -309,3 +309,89 @@ def test_g_server_path_uses_the_400_row_guard_without_guard_llm_calls(monkeypatc
     t_user = t_user["messages"][-1]["content"]
     assert ("<비슷한 발화의 이름표>" in t_user) == (mode != "g0")  # 400행 kNN 예시
     assert guard_sent == []
+
+
+# ---------------------------------------------------------------- gc·gc3·gc4 (가드형 + C 구조)
+@pytest.mark.parametrize("mode", ["gc", "gc3", "gc4"])
+@pytest.mark.parametrize(
+    ("label", "found", "action"),
+    [
+        ("학습 질문", True, "answer"),
+        ("학습 질문", False, "abstain"),
+        ("정답만 요구", True, "scaffold"),
+        ("저신호", True, "clarify"),
+        ("제출물 대행", True, "scaffold"),
+    ],
+)
+def test_gc_paths_and_calls(monkeypatch, guard_and_llm, mode, label, found, action):
+    guard, stub = guard_and_llm
+    st, sent = make_g_state(monkeypatch, mode, make_reply(label=label, found=found), guard)
+    out = respond(st)
+    assert_contract(out)
+    assert out["action"] == action
+    assert "MainCallOut" not in sent and stub.calls == 0
+    assert len(sent) <= (4 if mode == "gc3" else 3)
+    assert sent.count("EOut") == (2 if mode == "gc3" else 1)
+
+
+def test_gc3_answers_when_the_second_e_finds_it(monkeypatch, guard_and_llm):
+    guard, _ = guard_and_llm
+    n = {"e": 0}
+    base = make_reply(label="학습 질문", found=False)
+
+    def reply(kwargs):
+        if kwargs["response_format"]["json_schema"]["name"] == "EOut":
+            n["e"] += 1
+            return _resp({"asked": "x", "quote": "", "found": n["e"] == 2})
+        return base(kwargs)
+
+    st, _ = make_g_state(monkeypatch, "gc3", reply, guard)
+    assert respond(st)["action"] == "answer"
+
+
+def test_gc_gate_and_fallback():
+    t = v2exp.TOut(label="무관 결과물", self_info=False)
+    assert v2exp.gc_label(t, v2exp.GAux("normal", "normal")).label == "학습 질문"
+    assert v2exp.gc_label(t, v2exp.GAux("normal", "off_topic")).label == "무관 결과물"
+    assert v2exp.gc_label(t, None).label == "무관 결과물"
+    fb = v2exp.gc_label(None, v2exp.GAux("harmful_content", "harmful_content"))
+    assert fb is not None and fb.label == "유해-실행"
+    assert v2exp.gc_label(None, v2exp.GAux("harmful_content", "normal")) is None
+    assert v2exp.gc_label(None, v2exp.GAux("normal", "normal")) is None
+
+
+def test_gc_survives_timeouts(monkeypatch, guard_and_llm):
+    guard, _ = guard_and_llm
+    monkeypatch.setattr(v2exp, "TE_DEADLINE_S", 0.2)
+    st, _ = make_g_state(monkeypatch, "gc", make_reply(), guard, delay={"TOut": 2.0, "EOut": 2.0})
+    t0 = time.perf_counter()
+    out = respond(st)
+    assert_contract(out)
+    assert time.perf_counter() - t0 < 1.8
+
+
+@pytest.mark.parametrize("mode", ["gc", "gc3", "gc4"])
+def test_gc_server_path_without_guard_llm_calls(monkeypatch, mode):
+    import importlib
+
+    from fastapi.testclient import TestClient
+    from guardrail import llm as guard_llm
+
+    async def no_probe_start(self):
+        async def send(kwargs):
+            raise AssertionError("가드 LLM 호출")
+
+        self._send = send
+        self._started = True
+
+    monkeypatch.setattr(guard_llm.LLM, "start", no_probe_start)
+    monkeypatch.setenv("TUTOR_V2_MODE", mode)
+    _fake_send(monkeypatch, make_reply(label="학습 질문"))
+    import app as app_module
+
+    app = importlib.reload(app_module).app
+    with TestClient(app) as c:
+        assert c.app.state.tutor_v2_mode == mode
+        r = c.post("/tutor", json=QUESTION, headers=AUTH)
+        assert r.status_code == 200
+        assert_contract(r.json())

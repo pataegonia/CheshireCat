@@ -3,7 +3,6 @@
 import contextlib
 import importlib
 import logging
-import re
 from pathlib import Path
 
 import pytest
@@ -29,7 +28,6 @@ GUARD_LLM_ENV = {
     "OPENAI_MODEL": "fake-model",
     "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
 }
-_MODE_LINE = re.compile(r"^mode:[ \t]*v2(?P<rest>[ \t]*(?:#.*)?)$", re.M)
 
 
 @pytest.fixture
@@ -51,9 +49,21 @@ def fake_guard_send(monkeypatch):
     yield from patched_guard_llm(monkeypatch, GUARD_LLM_ENV)
 
 
+@pytest.fixture(scope="session")
+def baseline_tutor_config(tmp_path_factory):
+    """기준 설정 사본: 저장소 config/tutor.yaml에서 동결 토글(`applib.FREEZE_TOGGLES_OFF`)만 끈 것.
+
+    세션에 한 번 만든다. 저장소 설정에 아직 없는 키는 건드리지 않는다.
+    """
+    from tests.integration.applib import write_tutor_config
+
+    return write_tutor_config(tmp_path_factory.mktemp("tutor_config") / "tutor_baseline.yaml")
+
+
 @pytest.fixture
-def app_env(monkeypatch, fake_guard_send):
-    """가짜 토큰 · 모델 이름만 넣고, 실제 키와 설정 경로 환경변수는 지운다.
+def app_env(monkeypatch, fake_guard_send, baseline_tutor_config):
+    """가짜 토큰 · 모델 이름만 넣고, 실제 키와 설정 경로 환경변수는 지운다. 튜터 설정은 기준 설정
+    사본(`baseline_tutor_config`, 동결 토글 끔)이다.
 
     앱을 띄우는 테스트는 모두 이 픽스처를 지난다. 가드 LLM의 가짜 전송(`fake_guard_send`)을 여기에
     묶어, 어떤 방법으로 앱을 띄우든 가드 nano 호출이 실제 API로 나가지 않게 한다.
@@ -64,6 +74,7 @@ def app_env(monkeypatch, fake_guard_send):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TEAM_TOKEN", TOKEN)
     monkeypatch.setenv("OPENAI_MODEL", "fake-model")
+    monkeypatch.setenv("TUTOR_CONFIG", str(baseline_tutor_config))
 
 
 @pytest.fixture
@@ -97,16 +108,14 @@ def fake_send(monkeypatch):
 def llm_mode(request, tmp_path, monkeypatch, app_env):
     """LLM을 부르는 두 경로를 차례로 돈다. 값은 모드 이름이다.
 
-    v2는 저장소 설정 그대로(`config/tutor.yaml` 기본값, 검색 → 주 호출 → 결정적 수정)이고,
-    baseline은 mode만 바꾼 복사본을 쓴다(검색 → 일반 프롬프트 1회).
+    v2는 기준 설정(동결 토글 끔, `app_env`의 사본. 검색 → 주 호출 → 결정적 수정)이고, baseline은
+    그 위에 mode만 바꾼 사본을 쓴다(검색 → 일반 프롬프트 1회). 저장소 기본 mode가 v2가 아니게 되면
+    `llm_client`의 mode 단언이 걸린다.
     """
-    text = (ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8")
-    # 줄 시작의 최상위 키만 바꾼다(주석 안의 같은 글자는 건드리지 않는다). 정확히 한 줄이어야 한다.
-    changed, count = _MODE_LINE.subn(r"mode: baseline\g<rest>", text)
-    assert count == 1  # 기본값이 v2가 아니게 되거나 키가 둘이면 여기서 걸린다
+    from tests.integration.applib import write_tutor_config
+
     if request.param == "baseline":
-        path = tmp_path / "tutor.yaml"
-        path.write_text(changed, encoding="utf-8")
+        path = write_tutor_config(tmp_path / "tutor.yaml", mode="baseline")
         monkeypatch.setenv("TUTOR_CONFIG", str(path))
     return request.param
 
@@ -205,8 +214,20 @@ def real_guard_client(open_real_guard_app, tutor_guard_stages_on, caplog):
 
 @pytest.fixture
 def client(open_app):
-    """저장소 설정 그대로(config/tutor.yaml) 띄운 앱."""
+    """기준 설정(동결 토글 끔, `baseline_tutor_config`)으로 띄운 앱."""
     with open_app() as c:
+        yield c
+
+
+@pytest.fixture
+def repo_config_client(app_env, fake_send, monkeypatch):
+    """저장소 설정 그대로(config/tutor.yaml, 동결 토글 포함) 띄운 앱. TUTOR_CONFIG를 지우고 루트
+    app.py를 다시 import해 연다. test_freeze_config.py만 쓴다."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.delenv("TUTOR_CONFIG", raising=False)
+    module = importlib.reload(importlib.import_module("app"))
+    with TestClient(module.app) as c:
         yield c
 
 

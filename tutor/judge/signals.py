@@ -190,10 +190,12 @@ _PATTERNS: dict[Signal, re.Pattern[str]] = {
         + r"{0,40}?(?:대신(?:해|써|작성해|만들어|완성해)?|완성해|써|작성해|만들어|답안\w{0,4}?)"
         + _REQUEST_END,
         # 11/17 리뷰: "과제 대신 풀어 줘"·"숙제 좀 대신 해결해 주세요". 평가 이름 바로 뒤
-        # (조사·"좀"만 사이)에 대신 + 풀어·해결해·해 + 요청 어미일 때만 본다. "예제 하나만 대신
-        # 풀어 줘"처럼 다른 대상이 끼거나 "대신 해도 돼요?"처럼 묻는 것은 아니다
+        # (조사·"좀"만 사이)에 대신 + 풀어·해결해·해 + 요청 어미로 발화가 끝날 때만 본다(어미 뒤
+        # 4글자까지: "줄 수 있나요"·"주시겠어요"). "대신 풀어 줄 수 있으면 공부는 왜 해요?"처럼
+        # 뒤에 말이 이어지는 질문, "예제 하나만 대신 풀어 줘"처럼 다른 대상이 낀 것은 아니다
         r"(?:수행평가|숙제|과제)(?:를|을|는|은|도)?(?:좀)?대신(?:좀)?(?:풀어|해결해|해)"
-        + _REQUEST_END,
+        + _REQUEST_END
+        + r"\w{0,4}$",
         # 평가에 낼 것(제출 의도). 주제·방법을 묻는 것은 아니다("숙제로 낼 보고서 주제 추천해줘")
         r"(?:수행평가|숙제|과제)(?:에|로|으로|용)?(?:낼|내야할|제출할|넣을)"
         r"(?!\w{0,12}?(?:주제|추천|아이디어|방법|팁|조언|어떻게|때|형식|양식|분량|기준))",
@@ -220,10 +222,6 @@ _PATTERNS: dict[Signal, re.Pattern[str]] = {
         r"(?:do|write|finish|complete|solve)(?:this|my)\w{0,12}?"
         r"(?:homework|assignment|essay|report|assessment)",
         r"(?:homework|assignment|essay|report|assessment)\w{0,24}?(?:forme|onmybehalf|tosubmit)",
-        # 11/17 리뷰: 첫머리 "I need/want you to do my homework". 부정("I don't want you to")은
-        # 첫머리가 달라 걸리지 않는다
-        r"^i(?:really)?(?:need|want)youto(?:do|write|finish|complete)my\w{0,12}?"
-        r"(?:homework|assignment|essay|report)",
         r"(?:answer|solution|essay|report|submission)\w{0,12}?for(?:my|a|the)(?:graded)?"
         r"(?:assessment|homework|assignment|exam|test|class)",
     ),

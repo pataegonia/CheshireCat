@@ -45,6 +45,8 @@ class Toggles(_Strict):
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
     # 주 호출과 함께 자료 확인(E) 1회: answer인데 근거에 없다고 하면 abstain(#201 B2, `precheck`)
     oom_check: bool
+    # 주 호출과 함께 의도 판정(T) 1회: 이름표를 #220 규칙으로 덮는다(#201 G0, `precheck`)
+    intent_check: bool
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":

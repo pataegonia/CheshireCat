@@ -36,6 +36,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
+    assert toggles.intent_check is False  # #201 G0 의도 판정. 켜면 요청당 nano +1
     assert toggles.oom_check is False  # #201 B2 자료 확인. 켜면 요청당 nano +1(통합 호출 수 테스트와 함께 정함)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)

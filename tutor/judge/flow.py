@@ -248,10 +248,14 @@ async def answer_v2(
     *,
     deadline: float,
     top_sections: Sequence[RetrievedSection] | None = None,
+    intent: Any = None,
 ) -> dict[str, Any]:
     """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
     `top_sections`는 `cite_top1`이 더할 1위의 검색 결과다(None이면 주 호출 근거 묶음, `precheck`).
+    `intent`(`toggles.intent_check`, `precheck`)는 주 호출 action(실패면 기본값 action)을 받아
+    덮을 (범주, action) 또는 None을 돌려주는 코루틴 함수다. 고정 문장 조합이면 그 고정 문장,
+    아니면 주 호출 문장을 그대로 두고 범주·action만 바꾼다(#220 덮기와 같은 규칙).
 
     가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
     함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).
@@ -299,7 +303,13 @@ async def answer_v2(
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다
         if draft.out is None:
-            return tutor_post(fallback_body(signals, classified))
+            fb = fallback_body(signals, classified)
+            if intent is not None:  # 주 호출 실패: 고정 문장 조합만 덮는다(#220)
+                ov = await intent(fb["action"])
+                kind = None if ov is None else template_for(*ov)
+                if kind is not None:
+                    return tutor_post(fixed_body(kind), ov[0])
+            return tutor_post(fb)
     finally:
         if classify is not None:
             classify.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
@@ -307,6 +317,14 @@ async def answer_v2(
     # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다
     out = delegation_guard(draft.out, signals, state_rule=cfg.toggles.scaffold_state_rule)
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
+    if intent is not None:  # T 이름표 덮기(toggles.intent_check)
+        ov = await intent(action)
+        if ov is not None:
+            kind = template_for(*ov)
+            if kind is not None:
+                return tutor_post(fixed_body(kind), ov[0])
+            out = out.model_copy(update={"category": ov[0]})
+            action = ov[1]
     # 신호 없는 jailbreak classify는 합치기에서만 버린다. 주 호출 실패 기본값(위)은 그대로 쓴다
     trusted = gate_classified(classified, signals, needs_signal=gated)
     merged = merge_category(out.category, action, trusted)

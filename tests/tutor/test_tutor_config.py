@@ -43,7 +43,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.fallback_quote is True  # 동결 설정(11/18): 자료 인용 답 켬(T 관문)
     assert toggles.intent_override == "serial"  # 동결 설정(11/18): T serial
     assert toggles.quote_append is True  # 동결 설정(11/18): 자료 문장 덧붙이기 켬(#225)
-    assert toggles.oom_gate == "off"  # 자료 밖 확인 E 기본 끔(#213 B2)
+    assert toggles.oom_gate == "named_term"  # 동결 설정(11/18): 이름 붙은 말이 KB에 없을 때만 E
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로

@@ -279,6 +279,15 @@ def test_serial_refuse_label_skips_the_main_call():
     assert resp == {"answer": TEXT[Fixed.REFUSE_HARMFUL], "action": "refuse", "citations": []}
 
 
+def test_serial_crisis_label_skips_the_main_call():
+    # 위기 이름표는 주 호출 없이 escalate 고정 문장을 낸다(#233 가드 리뷰: 위기를 주 호출에
+    # 맡기는 집합에 넣는 변이가 살아남았다)
+    llm = RoleLLM(out(), "위기")
+    resp = run(state_with(llm, **SERIAL))
+    assert llm.roles == [intent.ROLE]
+    assert resp == {"answer": TEXT[Fixed.ESCALATE], "action": "escalate", "citations": []}
+
+
 SERIAL_WEAK = [
     ("무관 결과물", Fixed.REDIRECT_OFF_TOPIC, "redirect"),
     ("유해-비하", Fixed.REDIRECT_HARMFUL, "redirect"),

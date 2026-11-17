@@ -215,6 +215,29 @@ def rule_spans(
     return tuple(x for x in spans if normalize(x))
 
 
+# 구간 다듬기(S3.10, output.span_tidy). 공개 정답 구간 39개에 섹션 인용·목록 기호가 하나도 없고,
+# 숫자가 든 정답 구간은 "이에요·예요·이므로"로 끝나지 않는다(results/2026-11-17-cause-fixes.md)
+# 따옴표 안(코드 문자열)이나 더 긴 식별자(FIN-01-02-03)의 일부는 떼지 않는다. 앞 공백은 한 칸만
+# 본다(`\s*`는 긴 공백에서 제곱 시간)
+_CITE_ANY_RX = re.compile(
+    r"\s?[\[(]?(?<![A-Za-z0-9'\"`])(?:PY|PR|FIN)-\d{2}-\d{2}(?![0-9-])[\])]?"
+)
+_LIST_MARK_RX = re.compile(r"^\s*(?:[①-⑳]|\d{1,2}[.)]|[-*•])\s+")
+_COPULA_RX = re.compile(r"\s?(?:이에요|예요|이므로|입니다)[.!]*\s*$")
+
+
+def tidy_span(span: str) -> str:
+    """구간에서 섹션 인용·첫머리 목록 기호를 떼고, 숫자가 든 구간이면 끝의 서술격 조사도 뗀다.
+
+    다듬은 결과가 정규화 뒤 비면 원래 구간을 돌려준다.
+    """
+    s = _LIST_MARK_RX.sub("", _CITE_ANY_RX.sub("", span))
+    if any(ch.isdigit() for ch in s):
+        s = _COPULA_RX.sub("", s)
+    s = s.strip()
+    return s if normalize(s) else span
+
+
 def literal_rule(
     answer_raw: str, hits: Sequence[Hit], margin: float, kb: KbIndex, cfg: GuardConfig
 ) -> tuple[str, ...] | None:

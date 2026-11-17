@@ -36,6 +36,13 @@ class JbCheckOut(_Out):
     verdict: Literal["apply", "study"]
 
 
+class OomCheckOut(_Out):
+    """S3.10 자료 밖 확인. not_stated = 수업 자료에만 있을 값을 묻는데 자료에 없다."""
+
+    evidence: str  # 한 문장
+    verdict: Literal["not_asked", "stated", "not_stated"]
+
+
 # S3.2 선별용 변형(R14 B3): nano는 요청 유형을 고르고 범주는 코드가 대응시킨다.
 # v1 실측에서 nano가 요청은 맞게 읽고 범주 이름을 틀리게 고른 데서 나왔다
 # (results/2026-11-13-input-screening-1.md)

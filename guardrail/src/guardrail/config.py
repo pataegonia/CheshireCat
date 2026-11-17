@@ -66,7 +66,7 @@ class Llm(_Strict):
     retry_jitter_s: tuple[float, float]
     gate: PositiveInt  # 0이면 세마포어가 영영 안 열린다
     # 공통 값이 null이거나 probe()가 끈 파라미터는 여기 적어도 보내지 않는다
-    per_role: dict[Literal["input_judge", "output_judge", "jb_check"], RoleParams]
+    per_role: dict[Literal["input_judge", "output_judge", "jb_check", "oom_check"], RoleParams]
 
 
 class Toggles(_Strict):
@@ -84,6 +84,9 @@ class Toggles(_Strict):
     jb_check: bool  # S3.3 탈옥 2차 판정(1차가 jailbreak_injection일 때만)
     # S3.9: `/guard` 응답에서 nano가 normal·answer_seeking이라 한 자기소개 발화를 pii_disclosure로
     pii_intro_rule: bool
+    # S3.10: nano가 normal이라 한 발화에 KB를 붙여 한 번 더 묻는다(수업 자료에 없는 값을 묻는가).
+    # `/guard` 응답의 범주만 out_of_material로 바꾼다. 탈옥 2차 뒤에는 안 부른다(호출 3회 상한)
+    oom_check: bool
 
 
 class Vectorizer(_Strict):
@@ -148,6 +151,8 @@ class OutputCfg(_Strict):
     tier3_trust: Literal["all", "answer_quote", "both_quotes"]
     quote_min_chars: NonNegativeInt
     context_max_chars: PositiveInt
+    # S3.10: 구간에서 섹션 인용·목록 기호를 떼고, 숫자가 든 구간 끝의 서술격 조사를 뗀다
+    span_tidy: bool
 
 
 class EmbeddingCfg(_Strict):

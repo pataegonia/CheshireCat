@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.7"
+    assert cfg.version == "6.0.8"
     assert cfg.budget_s == 20
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -62,9 +62,10 @@ def test_default_loads_section_4_4_model():
     ]
     assert cfg.prompts == {  # S2.6·S2.7
         "input_judge": "input_judge_en.md",  # R14-D9 채택
-        "output_judge": "output_judge_en.md",
+        "output_judge": "output_judge_en_v2.md",  # S3.10: 확인 항목 7·8
         "output_judge_baseline": "output_judge_baseline.md",
         "jb_check": "jb_check_en.md",  # S3.3, input.jb_check가 켜졌을 때만 쓴다
+        "oom_check": "oom_check_en.md",  # S3.10, toggles.oom_check가 켜졌을 때만 쓴다
     }
     assert cfg.output.tier3_trust == "answer_quote" and cfg.output.quote_min_chars == 8
     assert cfg.toggles.knn_vote and not cfg.toggles.third_call
@@ -130,7 +131,7 @@ def test_load_order_overrides_beat_env_beat_ablation(tmp_path, monkeypatch):
 def test_baseline_differs_only_in_toggles_and_mode():
     base = load_config(BASELINE)
     assert not any(base.toggles.model_dump().values())
-    assert len(base.toggles.model_dump()) == 13
+    assert len(base.toggles.model_dump()) == 14
     assert base.output.mode == "baseline"
     expected = {f"toggles.{t}" for t, on in load_config(DEFAULT).toggles if on} | {"output.mode"}
     assert _diff(base, load_config(DEFAULT)) == expected

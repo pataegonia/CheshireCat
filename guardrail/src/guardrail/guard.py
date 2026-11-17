@@ -16,14 +16,14 @@ from guardrail.classifier import LrClassifier
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow, labeled_rows, load_public
 from guardrail.decide import Tier, fallback_category, output_verdict, safe_of, trusted
-from guardrail.judges.input_judge import build_window, judge_input
+from guardrail.judges.input_judge import build_window, check_oom, judge_input
 from guardrail.judges.output_judge import ask_grounded, output_context, quote_ok
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut
 from guardrail.kb import Hit, KbIndex
 from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags, normalize, reveal_hidden, strip_tags
-from guardrail.rules import literal_rule
+from guardrail.rules import literal_rule, tidy_span
 from guardrail.schema import (
     Category,
     GuardRequest,
@@ -154,6 +154,7 @@ class _Prepared:
     rule_spans: tuple[str, ...] | None
     revealed: str  # 숨긴 문자를 드러낸 답변(출력 nano용)
     output_error: str | None = None  # 출력 쪽 준비(KB 검색·규칙 ②)가 실패했을 때의 오류 코드
+    oom_hits: tuple[Hit, ...] = ()  # 자료 밖 확인(`oom_check`)에 줄 문맥. 꺼졌으면 빈 값
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,8 @@ class Guard:
             load_prompt(cfg, name)
         if cfg.toggles.jb_check:
             load_prompt(cfg, "jb_check")
+        if cfg.toggles.oom_check:
+            load_prompt(cfg, "oom_check")
         self.cfg, self.llm, self.kb, self.knn, self.lr = cfg, llm, kb, knn, lr
         self.block = frozenset(cfg.block_categories)
 
@@ -210,7 +213,8 @@ class Guard:
         return cls(cfg, llm, *await asyncio.to_thread(build_indexes, cfg, rows))
 
     async def judge(self, req: GuardRequest) -> Judgement:
-        return await self._run(req, intro_rule=self.cfg.toggles.pii_intro_rule)
+        t = self.cfg.toggles
+        return await self._run(req, intro_rule=t.pii_intro_rule, oom_check=t.oom_check)
 
     async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
         """마지막 학습자 발화의 범주(nano·low-signal 직행은 `judge`와 같다). nano 1회, 재시도 없음.
@@ -260,10 +264,11 @@ class Guard:
         category: Category | None = None,
         retries: int | None = None,
         intro_rule: bool = False,
+        oom_check: bool = False,
     ) -> Judgement:
         t0 = time.monotonic()
         try:
-            return await self._judge(req, t0, category, retries, intro_rule)
+            return await self._judge(req, t0, category, retries, intro_rule, oom_check)
         except Exception as exc:  # noqa: BLE001 - GR-09: 어떤 실패에도 규격 응답. 종류 이름만 남긴다
             out = (
                 _Output(self._default_output(req)) if category is None
@@ -280,8 +285,12 @@ class Guard:
         given: Category | None = None,
         retries: int | None = None,
         intro_rule: bool = False,
+        oom_check: bool = False,
     ) -> Judgement:
         """given이 있으면 입력 nano 없이 그 범주를 쓴다. retries는 nano마다(None=설정값).
+
+        oom_check도 `judge`만 켠다: nano가 normal이라 한 발화에 KB를 붙여 한 번 더 묻고, 자료에
+        없는 값을 묻는다고 하면 범주를 out_of_material로 낸다(S3.10). 출력은 그대로다.
 
         intro_rule은 `judge`(`/guard` 응답)만 켠다: nano가 normal·answer_seeking이라 한 자기소개
         발화의 범주를 pii_disclosure로 낸다(S3.9). 출력은 nano 범주로 이미 계산한 값 그대로다.
@@ -311,16 +320,7 @@ class Guard:
         trace: dict[str, str | None] = {}  # 탈옥 2차 판정(입력 태스크 안, 같은 마감)의 결과
         if not p.low and given is None:
             tasks["input_judge"] = asyncio.create_task(
-                judge_input(
-                    p.window,
-                    p.target,
-                    p.examples,
-                    self.llm,
-                    cfg,
-                    deadline=deadline,
-                    retries=retries,
-                    trace=trace,
-                )
+                self._input(p, deadline, retries, trace, oom_check)
             )
         wants_nano = baseline or cfg.toggles.nano_tier3 or cfg.output.call_nano_when_unused
         if p.answer and wants_nano and p.output_error is None:
@@ -359,13 +359,55 @@ class Guard:
             except Exception as exc:  # noqa: BLE001 - 입력 판정은 살리고 출력만 기본값으로
                 errors.append(f"output:{type(exc).__name__}")
                 out = self._fallback_output(req, category, p.signals)
-        calls = len(tasks) + ("jb_check" in trace)
-        if intro_rule and source == "nano" and category in ("normal", "answer_seeking"):
-            if is_self_intro(p.target):  # 둘 다 허용 범주라 decision·출력 단·safe는 그대로다
-                category = "pii_disclosure"
+        if trace.get("oom_check", "") is None:  # 자료 밖 확인 실패: 1차(normal)를 두고 오류로 센다
+            errors.append("oom_check")
+        calls = len(tasks) + ("jb_check" in trace) + ("oom_check" in trace)
+        intro = intro_rule and source == "nano" and category in ("normal", "answer_seeking")
+        if intro and is_self_intro(p.target):  # 둘 다 허용 범주라 decision·출력 단·safe는 그대로다
+            category = "pii_disclosure"  # 자기소개 + 학습 질문은 pii가 먼저다(입력 프롬프트)
+        elif trace.get("oom_check") == "not_stated" and source == "nano" and category == "normal":
+            category = "out_of_material"  # normal과 같은 허용 범주라 출력·safe는 그대로다
         return self._result(category, source, out, p, t0, t1, calls, tuple(errors))
 
+    async def _input(
+        self,
+        p: _Prepared,
+        deadline: float,
+        retries: int | None,
+        trace: dict[str, str | None],
+        oom_check: bool,
+    ) -> Category | None:
+        """입력 판정. oom_check면 normal일 때 자료 밖 확인을 이어 부른다(탈옥 2차 뒤에는 생략)."""
+        category = await judge_input(
+            p.window, p.target, p.examples, self.llm, self.cfg,
+            deadline=deadline, retries=retries, trace=trace,
+        )  # fmt: skip
+        # KB 문맥이 없으면(검색 실패) 부르지 않는다: 프롬프트가 kb 없음을 not_stated로 읽는다
+        if oom_check and p.oom_hits and category == "normal" and "jb_check" not in trace:
+            try:
+                trace["oom_check"] = await check_oom(
+                    p.window, p.target, p.oom_hits, self.llm, self.cfg,
+                    deadline=deadline, retries=retries,
+                )  # fmt: skip
+            except Exception:  # noqa: BLE001 - 확인이 깨져도 1차(normal)를 지킨다. trace로 센다
+                trace["oom_check"] = None
+        return category
+
     def _prepare(self, req: GuardRequest) -> _Prepared | Signals:
+        """`_prepare_core` + (oom_check가 켜졌으면) 학습자 발화로 찾은 KB 문맥."""
+        p = self._prepare_core(req)
+        if isinstance(p, Signals) or p.low or not self.cfg.toggles.oom_check:
+            return p
+        try:
+            users = normalize("\n".join(m.content for m in p.window if m.role == "user"))
+            ranking = self.kb.rank(users[-self.cfg.retrieval.max_query_chars :])
+            return dataclasses.replace(
+                p, oom_hits=tuple(output_context(ranking, self.kb, self.cfg))
+            )
+        except Exception:  # noqa: BLE001 - 문맥이 없으면 `_input`이 자료 밖 확인을 건너뛴다
+            return p
+
+    def _prepare_core(self, req: GuardRequest) -> _Prepared | Signals:
         """전처리·신호·kNN·LR·KB 검색·규칙 ②. 받은 글은 모두 상한으로 자른 뒤에 쓴다."""
         cfg, t = self.cfg, self.cfg.toggles
         target = next((m.content for m in reversed(req.messages) if m.role == "user"), None)
@@ -505,6 +547,8 @@ class Guard:
             quote_span,
         )
         safe = safe_of(category, self.block, p.signals, cfg.toggles)
+        if cfg.output.span_tidy:
+            unsupported = tuple(dict.fromkeys(tidy_span(s) for s in unsupported))
         return _Output(
             OutputVerdict(grounded, unsupported, safe),
             tier,

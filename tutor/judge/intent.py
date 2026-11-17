@@ -69,7 +69,8 @@ TARGET: Mapping[str, tuple[str, Action] | None] = {
     "저신호": ("low_signal_input", "clarify"),
     "학습 질문": None,
 }
-NEVER = frozenset({"저신호", "학습 질문"})  # 덮지 않는 이름표
+STUDY = "학습 질문"  # 대행 덮기·자료 인용 답의 T 관문(flow)
+NEVER = frozenset({"저신호", STUDY})  # 덮지 않는 이름표
 # §3 우선순위(앞이 강함, PRD·주 호출 프롬프트와 같다)
 ORDER = ("escalate", "refuse", "redirect", "clarify", "scaffold", "abstain", "answer")
 _SENT_END = re.compile(r"(?<=[.!?。？！])\s+")

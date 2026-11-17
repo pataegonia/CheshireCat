@@ -62,6 +62,7 @@ from tutor.judge.guard_merge import (
     wait_classify,
 )
 from tutor.judge.intent import (
+    STUDY,
     WAIT_GRACE_S,
     IntentJob,
     IntentSkips,
@@ -300,8 +301,13 @@ def tutor_post(body: dict[str, Any], category: str | None = None) -> dict[str, A
 
 
 def _complete(state: Any):
-    """주 호출 어댑터: #107 `TutorLLM.complete`를 `main_call.Complete` 모양으로."""
+    """주 호출 어댑터: #107 `TutorLLM.complete`를 `main_call.Complete` 모양으로.
+
+    T와 가드 classify를 함께 켜면 주 호출 재시도를 끈다. classify는 1차가 탈옥이면 2차 판정까지
+    nano 2회라, 주 호출 1 + classify 2 + T 1 = 4회로 TU-13 절대 4회 안에 둔다(#220 리뷰)."""
     cfg = state.tutor_cfg
+    both = cfg.toggles.intent_override != "off" and cfg.toggles.guard_classify != "off"
+    retries = 0 if both else MAIN_RETRIES
 
     async def complete(messages, schema, *, deadline: float) -> CompleteResult:
         return await state.tutor_llm.complete(
@@ -310,7 +316,7 @@ def _complete(state: Any):
             schema,
             deadline=deadline,
             timeout_s=cfg.llm.timeout_s.main,
-            retries=MAIN_RETRIES,
+            retries=retries,
         )
 
     return complete
@@ -336,6 +342,18 @@ def _start_intent(
 def _classify_wins(trusted: str | None) -> bool:
     """classify(신호 조건을 거친 값)가 위기·공격 범주면 T는 덮지 않는다(합치기·기본값이 정한다)."""
     return trusted in ATTACK_CATEGORIES or trusted == "emotional_distress"
+
+
+def _study(cfg: Any, label: str | None) -> bool:
+    """T를 켰고 T가 학습 질문이라 답했는가. 그러면 대행 덮기를 하지 않는다(신호 오탐을 T가
+    막는다)."""
+    return cfg.toggles.intent_override != "off" and label == STUDY
+
+
+def _quote_allowed(cfg: Any, label: str | None) -> bool:
+    """자료 인용 답을 낼 수 있는가. T를 켰으면 T가 학습 질문이라 답한 때만(실패·다른 이름표는
+    clarify). classify 실패·끔도 "없음"이라 신호 없는 공격·위기가 인용 답을 받던 길을 T로 막는다."""
+    return cfg.toggles.intent_override == "off" or label == STUDY
 
 
 def _intent_fixed(label: str | None, signals: Sequence[Signal], action: Action | None):
@@ -417,13 +435,13 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         if draft.out is None:
             quote = (
                 material_quote(draft.sections, conv.search_query()[0])
-                if cfg.toggles.fallback_quote
+                if cfg.toggles.fallback_quote and _quote_allowed(cfg, intent_label)
                 else None
             )
             body = fallback_body(
                 signals,
                 classified,
-                delegation=cfg.toggles.delegation_override,
+                delegation=cfg.toggles.delegation_override and not _study(cfg, intent_label),
                 quote=quote,
             )
             # T는 기본값의 action을 주 호출 action처럼 보고 고정 문장 조합으로만 덮는다
@@ -447,7 +465,8 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         draft.out,
         signals,
         state_rule=cfg.toggles.scaffold_state_rule,
-        override=cfg.toggles.delegation_override,
+        # T가 학습 질문이라 답하면 대행 덮기를 하지 않는다(신호 정규식 오탐을 T가 막는다)
+        override=cfg.toggles.delegation_override and not _study(cfg, intent_label),
         classified=trusted,
     )
     action = choose_action(out, from_category=cfg.toggles.action_from_category)

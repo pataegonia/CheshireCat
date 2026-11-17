@@ -286,3 +286,65 @@ def test_serial_intent_failure_runs_the_main_call():
     state = state_with(RoleLLM(out(), None, t_error="timeout"), **SERIAL)
     assert run(state)["action"] == "answer"
     assert state.intent_skips == {"error": 1}
+
+
+# --- T 거부권·인용 답 관문(11/17 #204·#219 리뷰) ---
+
+DELEG_TEXT = "수행평가 보고서 대신 써 줘"
+DQ = {"toggles.delegation_override": True}
+QUOTE = {"toggles.fallback_quote": True}
+
+
+@pytest.mark.parametrize("mode", [ON, SERIAL], ids=["parallel", "serial"])
+def test_study_label_vetoes_the_delegation_override(mode):
+    # T가 학습 질문이라 답하면 대행 신호가 걸려도 덮지 않는다(정규식 오탐을 T가 막는다)
+    resp = run(state_with(RoleLLM(out(), "학습 질문"), **mode, **DQ), DELEG_TEXT)
+    assert resp["action"] == "answer"
+    assert resp["answer"].startswith(out().sentences[0].text)  # 주 호출 답 그대로
+
+
+def test_delegation_override_stays_without_a_study_label():
+    failed_t = RoleLLM(out(), None, t_error="timeout")
+    assert (
+        run(state_with(failed_t, **SERIAL, **DQ), DELEG_TEXT)["answer"]
+        == TEXT[Fixed.SCAFFOLD_ACADEMIC]
+    )
+    no_t = RoleLLM(out())
+    assert run(state_with(no_t, **DQ), DELEG_TEXT)["answer"] == TEXT[Fixed.SCAFFOLD_ACADEMIC]
+
+
+def test_study_label_vetoes_the_delegation_fallback_too():
+    llm = RoleLLM(out(), "학습 질문", main_error="timeout")
+    assert run(state_with(llm, **SERIAL, **DQ), DELEG_TEXT)["action"] == "clarify"
+
+
+@pytest.mark.parametrize(
+    ("label", "kw", "want"),
+    [
+        ("학습 질문", {}, "answer"),  # T가 학습 질문이면 자료 인용 답
+        (None, {"t_error": "timeout"}, "clarify"),  # T 실패면 인용하지 않는다
+        ("탈옥", {}, "clarify"),  # 신호 없는 탈옥 이름표: 덮지는 않지만 인용도 하지 않는다
+    ],
+)
+def test_quote_answer_needs_the_study_label_when_intent_is_on(label, kw, want):
+    llm = RoleLLM(out(), label, main_error="timeout", **kw)
+    assert run(state_with(llm, **SERIAL, **QUOTE))["action"] == want
+
+
+def test_quote_answer_without_intent_is_unchanged():
+    llm = RoleLLM(out(), main_error="timeout")
+    assert run(state_with(llm, **QUOTE))["action"] == "answer"
+
+
+def test_main_call_has_no_retry_when_intent_and_classify_are_both_on():
+    # classify는 1차가 탈옥이면 2차 판정까지 nano 2회: 주 호출 1 + classify 2 + T 1 = 4(TU-13)
+    from tests.tutor.test_guard_merge import FakeGuard
+
+    llm = RoleLLM(out(), "학습 질문")
+    state = state_with(llm, **ON, **{"toggles.guard_classify": "parallel"})
+    state.guard = FakeGuard("normal")
+    run(state)
+    assert llm.kwargs["main"]["retries"] == 0
+    alone = RoleLLM(out(), "학습 질문")
+    run(state_with(alone, **ON))
+    assert alone.kwargs["main"]["retries"] == flow.MAIN_RETRIES == 1

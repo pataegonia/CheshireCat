@@ -51,6 +51,9 @@ class Toggles(_Strict):
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
+    # cite_top1이 더할 1위를 튜터 발화까지 넣은 질의(규칙 A)로 다시 검색해 정한다. 주 호출 근거
+    # 묶음은 그대로. LLM 0회, 검색 1회 추가. cite_top1이 꺼져 있으면 아무것도 하지 않는다. 기본 끔
+    top1_dialog_query: bool
     # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,
     # serial은 T 먼저(고정 문장 이름표면 주 호출 없이). 기본 끔(TU-06)
     intent_override: Literal["off", "parallel", "serial"]

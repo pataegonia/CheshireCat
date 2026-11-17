@@ -189,8 +189,10 @@ def fallback_body(
     그다음 classify가 공격 4범주였으면 그 범주의 고정 문장(TU-10, 공격 재현율은 classify 단독 이상).
     주 호출 결과가 없으니 classify를 쓰지 않을 이유가 없다.
     `delegation`(`toggles.delegation_override`)이 켜져 있고 대행 신호가 잡히면 academic 고정
-    scaffold다(TU-06). 성공 경로의 대행 덮기와 같은 순서다(`_delegation_wins`). 그 밖에는 공유 설정
-    `fallback_action`(잠정 clarify)의 고정 문장. 위기가 먼저다(PRD §3 우선순위).
+    scaffold다(TU-06). 성공 경로의 대행 덮기와 같은 순서(`_delegation_wins`)지만, 여기서는
+    `jailbreak_needs_signal` 조건을 거치기 전 classify를 본다(주 호출 결과가 없어 classify를 그대로
+    쓴다). 신호 없는 jailbreak classify면 성공 경로는 academic, 실패 기본값은 refuse가 된다.
+    그 밖에는 공유 설정 `fallback_action`(잠정 clarify)의 고정 문장. 위기가 먼저다(PRD §3 우선순위).
     """
     if Signal.CRISIS in signals or classified == "emotional_distress":
         return fixed_body(Fixed.ESCALATE)

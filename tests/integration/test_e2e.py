@@ -1,7 +1,8 @@
 """I1.7 E2E 제출 가능성 검사: 지금 저장소를 런박스에 띄우면 제출이 되는가.
 
 루트 app.py가 만든 실제 app에 채점기와 같은 모양의 요청을 보낸다(가짜 LLM, 네트워크 0).
-튜터 · 가드 PR이 조립을 깨면 여기서 걸린다. `/tutor`는 v2(기본 설정)와 baseline 두 모드로 돈다.
+튜터 · 가드 PR이 조립을 깨면 여기서 걸린다. `/tutor`는 v2(기준 설정, 동결 토글 끔)와 baseline 두
+모드로 돈다.
 
 - 공개 세트 400행 전부 → 200 + JSON + 경로별 스키마. 가짜 LLM은 "다양한 답" 모드라 응답이
   여러 모양(action 7종, 인용 0–2개, 4,000자 초과 답, 빈 답)을 지난다. v2는 가짜가 틀린 문구로만
@@ -304,7 +305,8 @@ def test_fuzzed_conversations_reach_the_llm_on_tutor(llm_client, llm_mode, fake_
 
 @pytest.mark.parametrize("name", sorted(FUZZ))
 def test_fuzzed_bodies_get_200_in_contract_on_guard(client, fake_send, fake_guard_send, name):
-    """`/guard`는 튜터 모드와 무관하다(튜터 설정만 다르다). 저장소 설정으로 한 번만 돈다."""
+    """`/guard`는 튜터 모드와 무관하다(튜터 설정만 다르다). 기준 설정(동결 토글 끔)으로 한 번만
+    돈다."""
     fake_guard_send.vary = True
     sent = fuzz(FUZZ[name], client, "/guard", guard_send=fake_guard_send)  # 예시마다 상한도 본다
     assert fake_send.count == 0  # 가드는 튜터 LLM을 부르지 않는다

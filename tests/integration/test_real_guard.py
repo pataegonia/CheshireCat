@@ -18,7 +18,8 @@
   단계가 없다(`assert_tutor_uses_guard`). 없으면 건너뛴 수만 센다. 연결을 보는 것이라
   `real_guard_client`는 튜터의 두 단계를 켠 설정으로 띄운다(`tutor_guard_stages_on`).
 - 배포 설정(config/tutor.yaml)은 두 단계를 끈다(11/14 리더 결정, 가드 #170 뒤 런박스 켬/끔 비교
-  전까지). 그 설정의 앱은 가드에 두 함수가 있어도 부르지 않는다.
+  전까지). 기준 설정(동결 토글 끔) 사본도 이 두 값을 그대로 쓴다. 그 설정의 앱은 가드에 두 함수가
+  있어도 부르지 않는다.
 - 요청 내용 · 판정 글이 앱 상태 · 모듈 · 로그 · stdout · stderr에 남지 않는다.
 - 요청마다 가드 nano 호출이 상한(`applib.guard_call_budget(real_guard=True)`) 안이다.
 """
@@ -340,8 +341,8 @@ def test_tutor_guard_check_catches_a_tutor_that_skips_judge_output(
 def test_shipped_tutor_config_calls_no_guard_stage(
     open_real_guard_app, fake_guard_send, monkeypatch
 ):
-    # 배포 설정(11/14 끔): 가드에 classify · judge_output이 있어도 튜터는 부르지 않고 건너뜀으로도
-    # 세지 않는다. 가드 nano도 0회다
+    # 기준 설정(동결 토글 끔, 가드 단계는 배포 설정 그대로 11/14 끔): 가드에 classify ·
+    # judge_output이 있어도 튜터는 부르지 않고 건너뜀으로도 세지 않는다. 가드 nano도 0회다
     called: collections.Counter[str] = collections.Counter()
 
     async def classify(messages):

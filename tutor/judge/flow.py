@@ -376,11 +376,15 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     return append_quote(req, state, body)
 
 
+QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
+
+
 def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
     """`toggles.quote_append`(TU-07): 최종 answer에 첫 인용 섹션의 자료 문장을 덧붙인다.
 
     문장 고르기는 자료 인용 답(TU-12)과 같다(`quote_sentences`: 질문과 2-gram이 가장 겹치는 설명
-    문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 답에 이미 있는 문장은 빼고,
+    문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 그중 물음표로 끝나는 문장(자료가
+    학습자에게 던지는 질문)과 답에 이미 있는 문장은 빼고,
     붙이면 4,000자를 넘거나 붙일 문장이 없으면 그대로 둔다. answer가 아닌 응답·인용 없는 응답·KB에
     없는 인용, 그리고 모델 문장이 모두 걸러져 "자료에서 확인하지 못했어요" 안내가 든 답(빈 답변,
     IN-04-3)은 그대로다(안내와 자료 문장이 한 답에서 부딪히지 않게). action·인용은 바꾸지 않는다.
@@ -397,7 +401,11 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     if section is None:
         return body
     query, _ = tidy(_messages(req)).search_query()
-    picked = [s for s in quote_sentences(section.text, query) if s not in answer]
+    picked = [
+        s
+        for s in quote_sentences(section.text, query)
+        if s not in answer and not s.rstrip().endswith(QUESTION_ENDS)
+    ]
     if not picked:
         return body
     joined = f"{answer} {QUOTE_APPEND_LEAD} {' '.join(picked)}"

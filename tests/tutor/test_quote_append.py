@@ -112,3 +112,23 @@ def test_material_quote_answer_after_main_failure_is_not_doubled():
     resp = ask(state)
     assert resp["action"] == "answer"
     assert QUOTE_APPEND_LEAD not in resp["answer"]
+
+
+def test_question_sentences_from_the_material_are_not_appended(monkeypatch):
+    # 자료가 학습자에게 던지는 질문 문장은 답에 붙여도 도움이 안 되고 다른 맥락을 끌어온다
+    state = state_with(FakeLLM(out()), **ON)
+    monkeypatch.setattr(
+        flow,
+        "quote_sentences",
+        lambda text, query: ["돈은 어떻게 나누나요?", "목표 금액을 정해요."],
+    )
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01"]}
+    joined = flow.append_quote(request(), state, body)["answer"]
+    assert joined == f"답 {QUOTE_APPEND_LEAD} 목표 금액을 정해요."
+
+
+def test_only_question_sentences_leaves_the_answer(monkeypatch):
+    state = state_with(FakeLLM(out()), **ON)
+    monkeypatch.setattr(flow, "quote_sentences", lambda text, query: ["얼마를 모을까요？"])
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01"]}
+    assert flow.append_quote(request(), state, body) is body

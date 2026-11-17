@@ -2,7 +2,7 @@
 # 키·주소는 여기에 쓰지 않는다(환경변수, §4.4 끝).
 version: "6.0.8"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
-prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en_v2.md, output_judge_baseline: output_judge_baseline.md, jb_check: jb_check_en.md, oom_check: oom_check_en.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
+prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en_v2.md, output_judge_baseline: output_judge_baseline.md, jb_check: jb_check_en.md, oom_check: oom_check_en.md, request_check: request_check_en.md, output_judge_sent: output_judge_en_sent.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
 budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
 block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, off_topic]   # 범주 → decision 표(ADR-0012)
 llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다
@@ -31,6 +31,8 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   jb_check: true                  # S3.3 탈옥 2차 판정(prompts.jb_check). 1차가 jailbreak_injection일 때만 호출 1회 추가
   pii_intro_rule: true             # S3.9 자기소개(이름·학교·학년) 발화: nano가 normal·answer_seeking이면 pii_disclosure로. 호출 0, decision 불변(results/2026-11-16-score-probes.md)
   oom_check: true                  # S3.10 자료 밖 확인(prompts.oom_check): nano가 normal이면 KB를 붙여 호출 1회 추가, not_stated면 out_of_material(results/2026-11-17-cause-fixes.md)
+  request_check: false              # S3.13 실험, 기본 끔
+  block_recheck: false             # S3.13 실험, 기본 끔
 input:
   label_mode: category             # category | act(S3.2 선별용 변형, R14 B3) | flags(S3.8 실험 변형, 범주 앞 예/아니오 두 칸, 미채택). v1은 category
   window_last: 6
@@ -57,5 +59,7 @@ output:
   quote_min_chars: 8               # answer_quote 확인에서 정규화 뒤 최소 글자 수(잠정. S3.1이 0과 비교)
   context_max_chars: 4000          # 출력 nano에 주는 1위 섹션 전체의 길이 상한(R14-D4)
   span_tidy: true                  # S3.10 구간 다듬기(인용·목록 기호, 숫자 구간 끝의 이에요·예요·이므로)
+  judge_mode: quote                # S3.13 실험, 기본 끔(quote | sentences)
+  quote_repair: false              # S3.13 실험, 기본 끔
 embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 때만
 eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)

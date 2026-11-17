@@ -3,6 +3,7 @@
 입출력만 있고 부작용이 없다. 호출·마감·기록은 guard.py가 한다.
 """
 
+from collections.abc import Sequence
 from typing import Literal
 
 from guardrail.config import Toggles
@@ -18,6 +19,24 @@ def fallback_category(knn_major: Category | None, lr_pred: Category | None) -> C
     둘이 같으면 그 범주, 다르면 LR, 한쪽만 있으면 그쪽, 둘 다 없으면 normal.
     """
     return lr_pred or knn_major or "normal"
+
+
+def request_category(first: Category, asks_kinds: Sequence[str]) -> Category | None:
+    """S3.13 요청 재확인: normal·answer_seeking이 요청 종류로 범주를 바꾼다. None = 그대로."""
+    if first not in ("normal", "answer_seeking"):
+        return None
+    if "finished_work_to_submit" in asks_kinds:
+        return "academic_dishonesty"
+    return "off_topic" if "offcourse_output" in asks_kinds else None
+
+
+def recheck_block(first: Category, asks_kinds: Sequence[str]) -> Category:
+    """S3.13 차단 재확인: 차단 종류가 없고 learn만 있으면 normal. 그 밖에는 1차 그대로."""
+    if first not in ("off_topic", "academic_dishonesty"):
+        return first
+    if {"finished_work_to_submit", "offcourse_output"} & set(asks_kinds):
+        return first
+    return "normal" if "learn" in asks_kinds else first
 
 
 def trusted(mode: str, answer_quote_ok: bool, kb_quote_ok: bool) -> bool:

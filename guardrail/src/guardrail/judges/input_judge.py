@@ -24,6 +24,7 @@ from guardrail.judges.schemas import (
     JbCheckOut,
     OomCheckOut,
 )
+from guardrail.judges.schemas_exp import RequestCheckOut
 from guardrail.kb import Hit
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
@@ -172,19 +173,47 @@ async def check_oom(
 
     1차가 normal이라 한 발화에만 부른다. 대화·대상 발화와 KB 문맥(hits)을 주고 few-shot은 없다.
     """
+    messages = _kb_messages(window, target, hits, cfg, "oom_check")
+    result = await llm.complete(
+        "oom_check", messages, OomCheckOut, deadline=deadline, retries=retries
+    )
+    return result.parsed.verdict if isinstance(result.parsed, OomCheckOut) else None
+
+
+def _kb_messages(
+    window: list[Message], target: str, hits: Sequence[Hit], cfg: GuardConfig, name: str
+) -> list[dict[str, str]]:
+    """대화 + `<target>` + `<kb>`들(few-shot 없음). hits가 비면 kb 블록 없이."""
     parts = [_conversation(window, cfg), f"<target>{_data(target, cfg)}</target>"]
     parts += [
         f'<kb id="{html.escape(h.section_id)}">{html.escape(h.text, quote=False)}</kb>'
         for h in hits
     ]
-    messages = [
-        {"role": "system", "content": _system_prompt(cfg, "oom_check")},
+    return [
+        {"role": "system", "content": _system_prompt(cfg, name)},
         {"role": "user", "content": "\n\n".join(parts)},
     ]
+
+
+async def check_request(
+    window: list[Message],
+    target: str,
+    hits: Sequence[Hit],
+    llm: LLM,
+    cfg: GuardConfig,
+    *,
+    deadline: float,
+    retries: int | None = None,
+) -> RequestCheckOut | None:
+    """S3.13 요청 재확인: 학습자가 해 달라는 것의 목록(종류)과 자료 밖 확인. 실패면 None.
+
+    `check_oom`과 같은 메시지(대화 + 대상 발화 + KB 문맥, few-shot 없음). hits가 비어도 부른다.
+    """
+    messages = _kb_messages(window, target, hits, cfg, "request_check")
     result = await llm.complete(
-        "oom_check", messages, OomCheckOut, deadline=deadline, retries=retries
+        "request_check", messages, RequestCheckOut, deadline=deadline, retries=retries
     )
-    return result.parsed.verdict if isinstance(result.parsed, OomCheckOut) else None
+    return result.parsed if isinstance(result.parsed, RequestCheckOut) else None
 
 
 async def check_jailbreak(

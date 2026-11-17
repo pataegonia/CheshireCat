@@ -39,6 +39,7 @@ FREEZE_TOGGLES = {
     "fallback_quote": False,
     "intent_override": "off",
     "quote_append": False,
+    "oom_gate": "off",
 }
 
 

@@ -71,6 +71,9 @@ class Toggles(_Strict):
     # 2차 자체 검증(측정용): 주 호출이 normal answer면 nano 1회, 묻는 값이 빠졌으면 고쳐 쓴다.
     # bundle은 근거 묶음 전체, cited는 초안이 인용한 섹션 + 검색 1위. 기본 끔
     self_check: Literal["off", "bundle", "cited"]
+    # 자료 밖 확인 E(#213 B2): 주 호출과 동시에 nano 1회, 최종 answer인데 E가 "근거에 없음"이면
+    # 자료 밖 고정 문장. 기본 끔
+    oom_gate: bool
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -96,6 +99,15 @@ class Toggles(_Strict):
                 raise ValueError(
                     f"toggles.self_check: 요청당 nano {2 + extra + 1}회라 쓸 수 없다"
                     "(TU-13 절대 4회)"
+                )
+        if self.oom_gate:
+            # 주 호출 2(재시도) + T 1 + classify 최대 2 + judge_output 1 + E 1 ≤ TU-13 절대 4회
+            calls = 2 + (self.intent_override != "off") + 2 * (self.guard_classify != "off")
+            calls += (self.verify == "guard") + 1
+            calls += (self.self_check != "off") + (self.oom_check != "off")  # 실험 브랜치 토글
+            if calls > 4:
+                raise ValueError(
+                    f"toggles.oom_gate: 요청당 nano {calls}회라 쓸 수 없다(TU-13 절대 4회)"
                 )
         return self
 
@@ -126,6 +138,7 @@ class Timeouts(_Strict):
     oom_check: PositiveFloat  # 근거 확인 호출(toggles.oom_check)
     intent: PositiveFloat  # T 의도 판정 호출(toggles.intent_override)
     self_check: PositiveFloat  # 2차 자체 검증 호출(toggles.self_check)
+    oom_gate: PositiveFloat  # 자료 밖 확인 E(toggles.oom_gate). 요청 시작부터 센다
 
 
 class Llm(_Strict):

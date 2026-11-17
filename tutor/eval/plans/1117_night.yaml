@@ -1,0 +1,65 @@
+# 11/17 밤(판정 포함, 교차 검증 160행, 셋을 번갈아 2회씩, 예상 약 5,000회).
+# - fz: 동결 조합(대행 덮기·자료 인용 답·T serial, T 제한 8초, T 프롬프트 intent.md = main)
+# - t222: fz + T 프롬프트를 #222(yang-co1, #209 리뷰 반영, cabb493) 사본 intent_222.md로
+# - t222e: t222 + 자료 밖 확인 E(oom_gate, #213 B2의 E, 마감 9초, 한글 없고 라틴 있는 발화 제외)
+items:
+  - name: fz-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: t222-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'prompt.intent="intent_222.md"'
+  - name: t222e-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'prompt.intent="intent_222.md"'
+      - 'toggles.oom_gate=true'
+  - name: fz-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: t222-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'prompt.intent="intent_222.md"'
+  - name: t222e-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'prompt.intent="intent_222.md"'
+      - 'toggles.oom_gate=true'

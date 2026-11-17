@@ -1,0 +1,23 @@
+# 11/17 밤 3차(판정 포함, 교차 검증 160행). 동결 조합 + T 프롬프트 #222(cabb493 사본 intent_222.md) 3회.
+# 1117_night3_fz.yaml과 동시에 다른 큐로 돌린다, 약 1,700회.
+items:
+  - name: t222-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &t222
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'prompt.intent="intent_222.md"'
+  - name: t222-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *t222
+  - name: t222-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *t222

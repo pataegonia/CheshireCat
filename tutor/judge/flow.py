@@ -69,6 +69,8 @@ from tutor.judge.intent import load_system as load_intent_system
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
 from tutor.judge.oom_check import OomSkips, material_absent
 from tutor.judge.oom_check import load_system as load_oom_system
+from tutor.judge.self_check import SelfCheckCounts, self_check
+from tutor.judge.self_check import load_system as load_self_check_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
@@ -120,6 +122,9 @@ def prepare_judge(app_state: Any) -> None:
     oom_on = toggles.oom_check != "off"
     app_state.tutor_oom_prompt = load_oom_system() if oom_on else None  # 근거 확인(#201 B)
     app_state.oom_skips = OomSkips()  # 사유 → 횟수(본문 없음)
+    check_on = toggles.self_check != "off"  # 2차 자체 검증(측정용)
+    app_state.tutor_self_check_prompt = load_self_check_system() if check_on else None
+    app_state.self_check_counts = SelfCheckCounts()  # 사유 → 횟수(본문 없음)
     intent_on = toggles.intent_override != "off"  # T 의도 판정(#209): 프롬프트·목차는 기동 때 한 번
     app_state.tutor_intent_prompt = load_intent_system() if intent_on else None
     sections = app_state.tutor_kb.sections if intent_on else {}
@@ -511,6 +516,28 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     ):
         # #201 B: 근거 확인이 "근거에 없음"이라 했다 → 자료 밖 고정 문장
         return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
+    if (
+        cfg.toggles.self_check != "off"
+        and action == "answer"
+        and merged.category == "normal"
+        and template_for(merged.category, action) is None
+    ):
+        # 2차 자체 검증: 묻는 값이 초안에 없으면 고쳐 쓴 문장으로 바꾼다(범주·action은 그대로)
+        reason, revised = await self_check(
+            state.tutor_llm,
+            state.tutor_self_check_prompt,
+            draft.sections,
+            conv,
+            out.sentences,
+            scope=cfg.toggles.self_check,
+            deadline=deadline,
+            timeout_s=cfg.llm.timeout_s.self_check,
+            skip_s=JUDGE_SKIP_S,
+            counts=getattr(state, "self_check_counts", None),
+        )
+        _note(self_check=reason)  # 측정 전용(ROW_PROBE), 사유만
+        if revised is not None:
+            out = out.model_copy(update={"sentences": revised})
     verdict = None
     # 주 호출 문장이 그대로 나가는 경로만 검증한다(고정 문장에는 판정할 주장이 없다, TU-09)
     if cfg.toggles.verify == "guard" and template_for(merged.category, action) is None:

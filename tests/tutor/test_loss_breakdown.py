@@ -30,7 +30,15 @@ def emitted(action, *, facts=None, faithful=None, complied=None):
     return {"action": action, "facts": facts, "faithful": faithful, "complied": complied}
 
 
-def trace(main_call="ok", claims=None, unverified=None, dropped=None, default=False, intent=None):
+def trace(
+    main_call="ok",
+    claims=None,
+    unverified=None,
+    dropped=None,
+    default=False,
+    intent=None,
+    self_check=None,
+):
     return {
         "default": default,
         "main_call": main_call,
@@ -38,6 +46,7 @@ def trace(main_call="ok", claims=None, unverified=None, dropped=None, default=Fa
         "unverified": unverified,
         "dropped": dropped,
         "intent": intent,  # T 이름표(intent_override를 켰을 때만)
+        "self_check": self_check,  # 2차 자체 검증 사유(self_check를 켰을 때만)
     }
 
 

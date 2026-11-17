@@ -66,6 +66,9 @@ class Toggles(_Strict):
     # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,
     # serial은 T 먼저(고정 문장 이름표면 주 호출 없이). 기본 끔
     intent_override: Literal["off", "parallel", "serial"]
+    # 2차 자체 검증(측정용): 주 호출이 normal answer면 nano 1회, 묻는 값이 빠졌으면 고쳐 쓴다.
+    # bundle은 근거 묶음 전체, cited는 초안이 인용한 섹션 + 검색 1위. 기본 끔
+    self_check: Literal["off", "bundle", "cited"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -78,6 +81,20 @@ class Toggles(_Strict):
         if self.intent_override == "serial" and self.guard_classify != "off":
             # 직렬 T는 classify를 기다리지 않고 고정 문장을 내 classify 우선 규칙을 못 지킨다
             raise ValueError("toggles.intent_override: serial은 guard_classify off에서만 쓴다")
+        if self.self_check != "off":
+            # 주 호출 2(재시도) + 켠 부가 호출 + 자체 검증 1이 요청당 nano 절대 4회(TU-13)를
+            # 넘으면 막는다
+            extra = (
+                (self.intent_override != "off")
+                + (self.guard_classify != "off")
+                + (self.verify == "guard")
+                + (self.oom_check != "off")
+            )
+            if 2 + extra + 1 > 4:
+                raise ValueError(
+                    f"toggles.self_check: 요청당 nano {2 + extra + 1}회라 쓸 수 없다"
+                    "(TU-13 절대 4회)"
+                )
         return self
 
 
@@ -106,6 +123,7 @@ class Timeouts(_Strict):
     embedding: PositiveFloat
     oom_check: PositiveFloat  # 근거 확인 호출(toggles.oom_check)
     intent: PositiveFloat  # T 의도 판정 호출(toggles.intent_override)
+    self_check: PositiveFloat  # 2차 자체 검증 호출(toggles.self_check)
 
 
 class Llm(_Strict):

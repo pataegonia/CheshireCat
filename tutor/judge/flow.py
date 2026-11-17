@@ -30,6 +30,7 @@
 """
 
 import asyncio
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -48,7 +49,7 @@ from tutor.answer.templates import (
     fixed_body,
     template_for,
 )
-from tutor.judge.conversation import Conversation, tidy
+from tutor.judge.conversation import Conversation, normalize_fast, tidy
 from tutor.judge.draft import draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
@@ -378,6 +379,13 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
 CLOSERS = "\"'”’)」』]"  # 물음표 뒤에 붙는 닫는 따옴표·괄호(벗기고 본다)
+_HANGUL = re.compile(r"[가-힣ㄱ-ㆎ]")
+_LATIN = re.compile(r"[A-Za-z]")
+
+
+def _english_only(text: str) -> bool:
+    """한글(완성 음절·호환 자모)이 한 글자도 없고 라틴 글자가 있다(#213 E의 영어 규칙과 같다)."""
+    return _HANGUL.search(text) is None and _LATIN.search(text) is not None
 
 
 def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
@@ -386,7 +394,8 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     문장 고르기는 자료 인용 답(TU-12)과 같다(`quote_sentences`: 질문과 2-gram이 가장 겹치는 설명
     문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 그중 물음표로 끝나는
     문장(자료가 학습자에게 던지는 질문)과 답에 이미 있는 문장은 빼고, 붙이면 4,000자를 넘거나
-    붙일 문장이 없으면 그대로 둔다. answer가 아닌 응답·인용 없는 응답·KB에
+    붙일 문장이 없으면 그대로 둔다. 판단 대상에 한글이 없고 라틴 글자만 있는 영어 질문에도 붙이지
+    않는다(문자 2-gram이 코드 낱말로만 겹친다). answer가 아닌 응답·인용 없는 응답·KB에
     없는 인용, 그리고 모델 문장이 모두 걸러져 "자료에서 확인하지 못했어요" 안내가 든 답(빈 답변,
     IN-04-3)은 그대로다(안내와 자료 문장이 한 답에서 부딪히지 않게). action·인용은 바꾸지 않는다.
     붙이는 글은 KB 원문과 고정 문구뿐이라 출력 후처리(`tutor_post`) 뒤에 붙인다. 입력을 바꾸지
@@ -401,7 +410,10 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     section = state.tutor_kb.sections.get(cites[0]) if cites else None
     if section is None:
         return body
-    query, _ = tidy(_messages(req)).search_query()
+    conv = tidy(_messages(req))
+    if _english_only(normalize_fast(conv.target_raw)):
+        return body  # 영어 질문은 코드 낱말로만 겹쳐 엉뚱한 문장이 골라지기 쉽다(#225 리뷰)
+    query, _ = conv.search_query()
     picked = [
         s
         for s in quote_sentences(section.text, query)

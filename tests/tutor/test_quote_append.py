@@ -140,3 +140,13 @@ def test_only_question_sentences_leaves_the_answer(monkeypatch):
     monkeypatch.setattr(flow, "quote_sentences", lambda text, query: ["얼마를 모을까요？"])
     body = {"answer": "답", "action": "answer", "citations": ["PY-01-01"]}
     assert flow.append_quote(request(), state, body) is body
+
+
+def test_english_questions_are_untouched():
+    # 영어 질문은 코드 낱말로만 겹쳐 엉뚱한 문장이 골라지기 쉬워 붙이지 않는다(#225 리뷰)
+    state = state_with(FakeLLM(out()), **ON)
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01"]}
+    english = request("how many innings does the scoreboard example record")
+    assert flow.append_quote(english, state, body) is body
+    mixed = request("scoreboard example은 몇 회까지 기록해?")
+    assert flow.append_quote(mixed, state, body) is not body  # 한글이 섞이면 붙인다

@@ -50,6 +50,7 @@ class Timeouts(_Strict):
 
 class RoleParams(_Strict):
     # S3.9 실험: 호출 하나(입력·출력·탈옥 2차)만 다른 값으로. None = 공통 값(llm.*)을 따른다
+    # 기본 설정은 비워 둔다(`per_role: {}`). 쓰는 곳이 없는 실험 손잡이다
     reasoning_effort: str | None = None
     verbosity: str | None = None
     max_completion_tokens: int | None = None

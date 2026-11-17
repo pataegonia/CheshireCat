@@ -8,7 +8,10 @@
   정답만 요구하는 질문에 새지 않게 뺀다(#201 제안서 3-2 E의 정답 줄).
 - 점수는 정규화한 문자 2-gram 겹침을 문장 길이로 나눈 값이다(겹친 종류 수 / √문장 2-gram 수,
   코사인과 같은 순서). 긴 문장이 겹침 수만으로 이기지 않게 한다. 같으면 앞 문장.
-- 겹치는 문장이 하나도 없으면 None이다. 부르는 쪽이 지금 기본값을 낸다.
+- 질문과 겹치는 2-gram 종류가 `MIN_SHARED`개보다 적은 문장은 옮기지 않는다. 한 글자 짝이 우연히
+  겹친 무관한 섹션 문장으로 answer를 내지 않게 한다(11/17 리뷰. 공개·점검 세트에서 모든 주 호출이
+  실패했다고 두면 normal 101행 중 1행만 겹침 1개였다).
+- 옮길 문장이 없으면 None이다. 부르는 쪽이 지금 기본값을 낸다.
 - 요청 내용은 지역 변수로만 쓴다(TU-18).
 """
 
@@ -23,6 +26,7 @@ from tutor.retrieval.kb import bigrams
 
 MAX_QUOTED = 2  # 옮기는 자료 문장 수. 첫 문장까지 3문장 이내(TU-06 1–3문장)
 MAX_SENTENCE_CHARS = 400  # 이보다 긴 문장은 옮기지 않는다(답변 4,000자 안, 한 줄 문단 대비)
+MIN_SHARED = 2  # 질문과 겹치는 2-gram 종류가 이보다 적은 문장은 옮기지 않는다
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SKIP_LINE = re.compile(r"^\s*(#|Q\.|A\.|\||>|-{3,}\s*$|\(표:)")
 _LABEL_ONLY = re.compile(r"^\s*\*\*[^*]+\*\*\s*:?\s*$|^[^.!?]{0,30}:\s*$")
@@ -58,10 +62,12 @@ def _sentences(text: str) -> list[str]:
 
 
 def _score(asked: set[str], sentence: str) -> float:
+    """겹친 종류 수 / √문장 2-gram 수. 겹친 종류가 `MIN_SHARED`개보다 적으면 0."""
     grams = set(bigrams(sentence))
-    if not grams:
+    shared = len(asked & grams)
+    if not grams or shared < MIN_SHARED:
         return 0.0
-    return len(asked & grams) / math.sqrt(len(grams))
+    return shared / math.sqrt(len(grams))
 
 
 def quote_sentences(text: str, query: str) -> list[str]:

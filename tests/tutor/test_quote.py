@@ -110,6 +110,12 @@ def test_quote_is_empty_without_overlap():
     assert quote_sentences(TEXT_MD, "zzzz") == []
 
 
+def test_quote_needs_at_least_two_shared_bigrams():
+    # 2-gram 하나("점수")만 겹치는 질문은 우연한 짝일 수 있어 옮기지 않는다(11/17 리뷰)
+    assert quote_sentences(TEXT_MD, "점수") == []
+    assert quote_sentences(TEXT_MD, "점수판") != []  # 둘("점수"·"수판")이면 옮긴다
+
+
 def test_material_quote_answers_with_top_section_citation():
     body = material_quote([section(), section("YY-02-02")], "야구 점수판은 몇 회까지 기록해?")
     assert body is not None
@@ -130,6 +136,7 @@ QUOTE_ON = {"toggles.fallback_quote": True}
 
 
 def test_failure_with_toggle_on_gives_material_quote_answer():
+    # 가드 classify가 없는(None, 끈 설정) 경우다. 이때도 신호가 없으면 인용 답을 낸다
     resp = ask(state_with(FakeLLM(error="timeout"), **QUOTE_ON), QUESTION)
     assert resp["action"] == "answer"
     assert resp["answer"].startswith(MATERIAL_QUOTE_LEAD)

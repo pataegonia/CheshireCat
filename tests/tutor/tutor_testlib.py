@@ -91,8 +91,10 @@ def rate_limit_openai(monkeypatch) -> list[dict]:
     return _fake_send(monkeypatch, limited)
 
 
-# 응답 스키마 이름별 최소 정상 답(주 호출 MainCallOut, 베이스라인 BaselineOut). 과목 사실은 없다
+# 응답 스키마 이름별 최소 정상 답(주 호출 MainCallOut, 베이스라인 BaselineOut, T IntentOut).
+# 과목 사실은 없다. T는 학습 질문이라 흐름이 주 호출까지 간다
 OK_REPLIES = {
+    "IntentOut": {"label": "학습 질문", "self_info": False},
     "MainCallOut": {
         "category": "normal",
         "action": "answer",

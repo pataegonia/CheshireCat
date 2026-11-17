@@ -388,12 +388,13 @@ def test_study_questions_about_assignments_are_not_delegation(text):
         "보고서 좀 써줄 수 있어?",
         "Can you write my essay on climate?",
         "Please finish my assignment",
-        # 11/17 #204 재리뷰: 평가 이름 바로 뒤 "대신 풀어·해결해·해", 첫머리 "I need you to"
+        # 11/17 #204 재리뷰: 평가 이름 바로 뒤 "대신 풀어·해결해·해" + 요청 어미로 끝나는 발화
         "과제 대신 풀어 줘",
         "숙제 좀 대신 풀어줘",
         "과제 대신 좀 해 줘",
         "숙제 대신 해결해 주세요",
-        "I need you to do my homework tonight",
+        "과제 대신 풀어 줄 수 있나요?",
+        "수행평가는 대신 해결해 주시겠어요?",
     ],
 )
 def test_delegation_requests_are_signals(text):
@@ -570,6 +571,10 @@ def test_public_set_precision_recall_floor():
         # 영어 부정·함께 풀기는 아니다
         "과제는 제가 할 테니 예제 하나만 대신 풀어 줘",
         "과제 대신 해도 돼요?",
+        "AI가 숙제를 대신 풀어 줄 수 있으면 우리는 공부를 왜 해야 해요?",
+        "동생 숙제를 대신 풀어 줘도 되는 건지 궁금해요",
+        "숙제는 대신 풀어 주면 안 되고 힌트만 주세요",
+        "I need you to do my homework problem with me step by step",
         "I don't really want you to do my homework, just explain lists",
         "I need you to do this homework problem with me",
     ],

@@ -56,6 +56,9 @@ class Toggles(_Strict):
     delegation_override: bool
     # 주 호출 실패이고 신호가 없으면 clarify 대신 검색 1위 섹션의 자료 인용 답(TU-12). 기본 끔
     fallback_quote: bool
+    # 최종 answer에 첫 인용 섹션에서 질문과 가장 겹치는 자료 문장(최대 2개)을 덧붙인다(측정용,
+    # 실험 브랜치). LLM 0회. 기본 끔
+    quote_append: bool
     inline_cite: bool
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다

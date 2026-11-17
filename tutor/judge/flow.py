@@ -37,7 +37,7 @@ from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, fin
 from integration.actions import _verified_sids as verified_sids  # finalize와 같은 인용 문구 검사
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
 from tutor.answer import postprocess
-from tutor.answer.quote import material_quote
+from tutor.answer.quote import material_quote, quote_sentences
 from tutor.answer.templates import (
     NOT_IN_MATERIAL_NOTE,
     TEXT,
@@ -442,7 +442,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         counts = getattr(state, "oom_gate_counts", None)
         if gate is not None and body.get("action") == "answer" and await gate_absent(gate, counts):
             return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
-        return body
+        return _append_quote(req, state, body)
     finally:
         if gate is not None:
             gate.cancel()
@@ -479,6 +479,33 @@ async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob
         deadline=deadline,
         counts=counts,
     )
+
+
+QUOTE_APPEND_LEAD = "자료에는 이렇게 나와 있어요:"
+ANSWER_MAX_CHARS = 4000  # SPEC §4 answer 상한(유니코드 문자)
+
+
+def _append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
+    """`toggles.quote_append`(측정용): 최종 answer에 첫 인용 섹션의 자료 문장을 덧붙인다.
+
+    문장은 자료 인용 답(TU-12)과 같은 고르기(`quote_sentences`, 질문과 2-gram이 가장 겹치는 설명
+    문장 최대 2개, 퀴즈 답·표·코드 줄 제외)다. 이미 답에 있는 문장은 빼고, 붙이면 4,000자를 넘거나
+    붙일 문장이 없으면 그대로 둔다. action·인용은 바꾸지 않는다. 입력을 바꾸지 않는다."""
+    if not state.tutor_cfg.toggles.quote_append or body.get("action") != "answer":
+        return body
+    cites = body.get("citations") or []
+    section = state.tutor_kb.sections.get(cites[0]) if cites else None
+    if section is None:
+        return body
+    query, _ = tidy(_messages(req)).search_query()
+    answer = body.get("answer") or ""
+    picked = [s for s in quote_sentences(section.text, query) if s not in answer]
+    if not picked:
+        return body
+    joined = f"{answer} {QUOTE_APPEND_LEAD} {' '.join(picked)}"
+    if len(joined) > ANSWER_MAX_CHARS:
+        return body
+    return {**body, "answer": joined}
 
 
 def _named_term(state: Any, conv: Conversation) -> bool:

@@ -1,0 +1,23 @@
+# 11/17 밤 4차(판정 포함, 교차 검증 160행). 동결 조합 + 자료 문장 덧붙이기(quote_append) 3회, 약 1,700회.
+# 1117_night3_fz.yaml(fz-7~9)·1117_night3_t222.yaml과 같은 시간대에 돌려 fz-7~9를 기준으로 쓴다.
+items:
+  - name: fzq-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fzq
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'toggles.quote_append=true'
+  - name: fzq-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fzq
+  - name: fzq-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fzq

@@ -14,10 +14,13 @@
   길(parse_request)로 찾는다.
   서버가 그 뒤에 하는 가드 판정(judge_output)·근거 확인은 판정 없는 재생이라 보지 않는다.
 - delegation_override+intent: 서버 순서대로 대행 덮기를 먼저, 그 결과 action 위에 T 덮기.
+- intent_serial·delegation_override+intent_serial: `intent_override: serial`. 주 호출 없이 정한
+  덮기가 고정 문장 조합이면 그 고정 문장(대행 덮기보다 먼저), 아니면 위와 같다.
 - none: 아무것도 바꾸지 않는다(기준 점수가 그대로 나오는지 확인용).
 
 사용: python -m tutor.eval.replay <기준 결과 JSON> <cases JSONL> <out JSONL>
-    [--run 0] [--transform delegation_override|intent|delegation_override+intent|none]
+    [--run 0] [--transform delegation_override|intent|delegation_override+intent|
+    intent_serial|delegation_override+intent_serial|none]
     [--intent-records intent-….json]
 출력은 행 id·수만(본문 없음).
 """
@@ -62,7 +65,12 @@ def no_change(row: dict[str, Any], emitted: dict[str, Any]) -> dict[str, Any] | 
 
 
 TRANSFORMS: dict[str, Transform] = {"delegation_override": delegation_override, "none": no_change}
-NEEDS_INTENT = ("intent", "delegation_override+intent")
+NEEDS_INTENT = (
+    "intent",
+    "delegation_override+intent",
+    "intent_serial",
+    "delegation_override+intent_serial",
+)
 
 
 def intent_transform(
@@ -70,16 +78,25 @@ def intent_transform(
     *,
     after_delegation: bool,
     failed: Collection[str] = (),
+    serial: bool = False,
 ) -> Transform:
     """T 이름표(행 id → 이름표)로 덮는 변환. after_delegation이면 대행 덮기를 먼저 한다.
 
     failed는 기준 실행에서 주 호출이 실패한 행 id다(row_trace main_call). 서버는 그 행에서 기본값의
-    action 위에 고정 문장 조합만 덮으므로 여기서도 그렇게 한다."""
+    action 위에 고정 문장 조합만 덮으므로 여기서도 그렇게 한다.
+    serial이면 서버 serial처럼 주 호출 action 없이 정한 덮기가 고정 문장 조합인 행은 대행 덮기보다
+    먼저 그 고정 문장이다(주 호출을 부르지 않는다)."""
 
     def fn(row: dict[str, Any], emitted: dict[str, Any]) -> dict[str, Any] | None:
+        label, signals = labels.get(row["id"]), request_signals(row)
+        if serial:
+            early = intent.decide(label, signals, None)
+            kind = template_for(early.category, early.action) if early is not None else None
+            if kind is not None:
+                return dict(fixed_body(kind))
         first = delegation_override(row, emitted) if after_delegation else None
         current = first if first is not None else emitted
-        decided = intent.decide(labels.get(row["id"]), request_signals(row), current.get("action"))
+        decided = intent.decide(label, signals, current.get("action"))
         if decided is None:
             return first
         kind = template_for(decided.category, decided.action)
@@ -145,8 +162,13 @@ def main(argv: list[str] | None = None) -> int:
         failed = failed_rows(base, args.run)
         if failed is None:
             sys.stdout.write("row_trace 없음: 주 호출 실패 행을 모른다(기본값 action으로 본다)\n")
-        after = args.transform != "intent"
-        fn = intent_transform(labels, after_delegation=after, failed=failed or ())
+        after = args.transform.startswith("delegation_override+")
+        fn = intent_transform(
+            labels,
+            after_delegation=after,
+            failed=failed or (),
+            serial=args.transform.endswith("_serial"),
+        )
     else:
         fn = TRANSFORMS[args.transform]
     emitted = base["report"]["cv_emitted_by_run"][args.run]

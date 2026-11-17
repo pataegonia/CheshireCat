@@ -120,7 +120,7 @@ def prepare_judge(app_state: Any) -> None:
     oom_on = toggles.oom_check != "off"
     app_state.tutor_oom_prompt = load_oom_system() if oom_on else None  # 근거 확인(#201 B)
     app_state.oom_skips = OomSkips()  # 사유 → 횟수(본문 없음)
-    intent_on = toggles.intent_override  # T 의도 판정(#209): 프롬프트·과목 목차는 기동 때 한 번
+    intent_on = toggles.intent_override != "off"  # T 의도 판정(#209): 프롬프트·목차는 기동 때 한 번
     app_state.tutor_intent_prompt = load_intent_system() if intent_on else None
     sections = app_state.tutor_kb.sections if intent_on else {}
     app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
@@ -338,9 +338,9 @@ def _complete(state: Any):
 def _start_intent(
     state: Any, conv: Conversation, signals: Sequence[Signal], deadline: float
 ) -> IntentJob | None:
-    """T 의도 판정을 주 호출과 동시에 시작한다(`toggles.intent_override`). 끔이면 None."""
+    """T 의도 판정을 주 호출 앞에서 시작한다(`toggles.intent_override`). 끔이면 None."""
     system = getattr(state, "tutor_intent_prompt", None)
-    if not state.tutor_cfg.toggles.intent_override or system is None:
+    if state.tutor_cfg.toggles.intent_override == "off" or system is None:
         return None
     messages = build_intent_messages(system, state.tutor_intent_toc, conv, signals)
     return start_intent(
@@ -408,6 +408,16 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             if fixed is not None and Signal.CRISIS not in signals:
                 # ⓐ: classify가 템플릿 범주면 주 호출 없이 고정 문장(통합 I13 ⓐ, #83 비교용)
                 return tutor_post(fixed_body(fixed), classified)
+        iskips = getattr(state, "intent_skips", None)
+        if intent is not None and cfg.toggles.intent_override == "serial":
+            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, 고정 문장 이름표면 주 호출 없이 낸다
+            intent_label = await wait_intent(intent, iskips)
+            intent = None  # 받았다(아래 병렬 기다림을 건너뛴다)
+            # 측정 전용(ROW_PROBE), 이름표만. 여기서 고정 문장으로 끝나면 main_call은 남지 않는다
+            _note(intent=intent_label or "none")
+            hit = _intent_fixed(intent_label, signals, None)
+            if hit is not None:
+                return tutor_post(fixed_body(hit[0]), hit[1])
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,
@@ -429,7 +439,6 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         if intent is not None:
             # T 호출 제한과 주 호출이 끝난 때(+여유) 중 늦은 쪽까지 기다린다
             main_done = asyncio.get_running_loop().time() + CLASSIFY_WAIT_GRACE_S
-            iskips = getattr(state, "intent_skips", None)
             intent_label = await wait_intent(intent, iskips, not_before=main_done)
             _note(intent=intent_label or "none")  # 측정 전용(ROW_PROBE), 이름표만
         if draft.out is None:

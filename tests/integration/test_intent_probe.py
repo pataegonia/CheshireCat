@@ -120,3 +120,11 @@ def test_main_without_base_runs_prints_only_label_counts(tmp_path, capsys):
     assert ip.main(["--records", str(a)]) == 0
     out = capsys.readouterr().out
     assert "normal: 학습 질문 1" in out and "덮기 모의" not in out
+
+
+def test_server_serial_rule_overrides_a_stronger_main_with_fixed_sentences():
+    off_topic = rec("a", "무관 결과물", "redirect")
+    assert ip.server_override(off_topic, REFUSE) is None  # parallel: 약한 쪽은 안 덮는다
+    assert ip.server_serial_override(off_topic, REFUSE) == "redirect"  # serial: 주 호출 전에 정함
+    assert ip.server_serial_override(rec("b", "정답만 요구", "scaffold"), ANSWER) == "scaffold"
+    assert ip.server_serial_override(rec("c", "탈옥", "refuse"), ANSWER) is None

@@ -63,8 +63,9 @@ class Toggles(_Strict):
     anchor_unit: bool  # 상위 k에서 앞 대화 단원의 섹션을 앞으로(단원 닻, TU-03). API 호출 0회
     # 근거 확인(#201 B): 주 호출 answer 뒤 nano 1회, found=false면 자료 밖 고정 문장. 기본 끔
     oom_check: Literal["off", "after_answer"]
-    # T 의도 판정(#209): 주 호출과 동시에 nano 1회, 이름표로 action을 덮는다. 기본 끔
-    intent_override: bool
+    # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,
+    # serial은 T 먼저(고정 문장 이름표면 주 호출 없이). 기본 끔
+    intent_override: Literal["off", "parallel", "serial"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -74,6 +75,9 @@ class Toggles(_Strict):
             raise ValueError("toggles.vote는 만들지 않았다(#83, TU-13 호출 상한)")
         if self.verify == "self":
             raise ValueError("toggles.verify: self는 만들지 않았다(#83, TU-13 호출 상한)")
+        if self.intent_override == "serial" and self.guard_classify != "off":
+            # 직렬 T는 classify를 기다리지 않고 고정 문장을 내 classify 우선 규칙을 못 지킨다
+            raise ValueError("toggles.intent_override: serial은 guard_classify off에서만 쓴다")
         return self
 
 

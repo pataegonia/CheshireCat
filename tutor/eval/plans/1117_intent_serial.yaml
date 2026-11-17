@@ -1,0 +1,25 @@
+# 11/17 T 의도 판정 serial 판정 포함 비교(리더가 G-6 때문에 serial을 고르면 이것만 돌린다).
+# A = 채택 후보 묶음(대행 덮기 + 실패 시 자료 인용 답), S = A + T serial(T 먼저, 고정 문장 이름표면
+# 주 호출 없이). 게이트 모의(API 0회): /guard p95 7.2~7.4초, 튜터 p95 12.7~12.9초.
+# 행 단위 비교: python -m tutor.eval.pair_compare --base <A 결과 2개> --variant <S 결과 2개>
+items:
+  - name: judged-a-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true"]
+  - name: judged-s-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true", 'toggles.intent_override="serial"']
+  - name: judged-a-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true"]
+  - name: judged-s-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: ["toggles.delegation_override=true", "toggles.fallback_quote=true", 'toggles.intent_override="serial"']

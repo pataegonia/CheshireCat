@@ -74,6 +74,7 @@ from guardrail.eval.cv import load_splits, train_rows
 from guardrail.eval.run import probe_calls as guard_probe_calls
 from guardrail.guard import Guard
 from guardrail.llm import LLM
+from pydantic import ValidationError
 
 import tutor
 from tutor import pipeline
@@ -751,7 +752,12 @@ def _tutor_config(
         cfg = load_config(overrides=overrides)
     except OSError as exc:  # 설정 파일이 없거나 못 읽음
         ap.error(f"튜터 설정 파일을 읽지 못했다: {type(exc).__name__}")
-    except ValueError as exc:  # pydantic ValidationError도 ValueError
+    except ValidationError as exc:  # 어느 키가 왜 틀렸는지(설정 값만, 요청 내용 없음)
+        where = "; ".join(
+            f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()
+        )
+        ap.error(f"--tutor-set 설정이 맞지 않다: {where}")
+    except ValueError as exc:
         ap.error(f"--tutor-set 설정이 맞지 않다: {type(exc).__name__}")
     if args.preset == "tutor":  # 두 모드 모두 부른다. 없으면 모든 응답이 기본값으로 떨어진다
         missing = missing_api_env()

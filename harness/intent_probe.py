@@ -86,6 +86,15 @@ def server_override(rec: Mapping[str, Any], em: Mapping[str, Any]) -> str | None
     return decided.action
 
 
+def server_serial_override(rec: Mapping[str, Any], em: Mapping[str, Any]) -> str | None:
+    """서버 규칙(serial): 주 호출 없이 정한 덮기가 고정 문장 조합이면 그것, 아니면 parallel 규칙."""
+    signals = [Signal(v) for v in rec["signals"]]
+    first = intent.decide(rec.get("label"), signals, None)
+    if first is not None and template_for(first.category, first.action) is not None:
+        return first.action
+    return server_override(rec, em)
+
+
 def simulate(
     records: Mapping[str, Mapping[str, Any]],
     runs: Sequence[Mapping[str, Mapping[str, Any]]],
@@ -117,7 +126,10 @@ def simulate(
 
 
 def rules() -> list[tuple[str, Any]]:
-    out: list[tuple[str, Any]] = [("서버 규칙(intent.decide)", server_override)]
+    out: list[tuple[str, Any]] = [
+        ("서버 규칙(intent.decide)", server_override),
+        ("서버 규칙 serial", server_serial_override),
+    ]
     for only in (True, False):
         for needs in (False, True):
             name = ("강할 때만" if only else "항상") + (" · 탈옥은 신호 있을 때만" if needs else "")

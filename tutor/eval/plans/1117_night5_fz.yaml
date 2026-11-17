@@ -1,0 +1,21 @@
+# 11/17 밤 5차(판정 포함, 교차 검증 160행). 동결 조합 fz 3회. 1117_night5_quote.yaml과 같은 작업 트리에서 동시에 돌린다.
+items:
+  - name: fz-10
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fz
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: fz-11
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz
+  - name: fz-12
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz

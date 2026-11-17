@@ -1,0 +1,46 @@
+# 11/17 저녁 최종 동결 조합 확인(판정 포함, 교차 검증 160행, main과 번갈아 3+3, 예상 약 4,800회).
+# main = /tmp/xm(origin/main a3c58c3, 가드 oom_check 기본 켬 포함), 최종 = 이 브랜치(#204 5ecceb0·#219·#220 e091613과 같은 코드)
+# + 동결 토글(대행 덮기·자료 인용 답·T serial). T 제한 5초는 이 브랜치 기본값.
+items:
+  - name: main-1
+    workdir: /tmp/xm
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: []
+  - name: final-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: main-2
+    workdir: /tmp/xm
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: []
+  - name: final-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: main-3
+    workdir: /tmp/xm
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: []
+  - name: final-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'

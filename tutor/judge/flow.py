@@ -38,9 +38,10 @@ from guardrail.schema import OutputVerdict
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
 from tutor.answer import postprocess
-from tutor.answer.quote import material_quote
+from tutor.answer.quote import material_quote, quote_sentences
 from tutor.answer.templates import (
     NOT_IN_MATERIAL_NOTE,
+    QUOTE_APPEND_LEAD,
     TEXT,
     Fixed,
     empty_answer,
@@ -369,7 +370,40 @@ def _candidate(out: MainCallOut) -> str:
 
 
 async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
-    """v2 흐름 하나. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+    """v2 흐름 하나. 흐름 본체(`_answer_v2`) 뒤에 자료 문장 덧붙이기(`toggles.quote_append`)를
+    한다. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다)."""
+    body = await _answer_v2(req, state, deadline=deadline)
+    return append_quote(req, state, body)
+
+
+def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
+    """`toggles.quote_append`(TU-07): 최종 answer에 첫 인용 섹션의 자료 문장을 덧붙인다.
+
+    문장 고르기는 자료 인용 답(TU-12)과 같다(`quote_sentences`: 질문과 2-gram이 가장 겹치는 설명
+    문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 답에 이미 있는 문장은 빼고,
+    붙이면 4,000자를 넘거나 붙일 문장이 없으면 그대로 둔다. answer가 아닌 응답·인용 없는 응답·KB에
+    없는 인용은 그대로다. action·인용은 바꾸지 않는다. 입력을 바꾸지 않는다. 요청 내용은 지역
+    변수로만 쓴다(TU-18).
+    """
+    if not state.tutor_cfg.toggles.quote_append or body.get("action") != "answer":
+        return body
+    cites = body.get("citations") or []
+    section = state.tutor_kb.sections.get(cites[0]) if cites else None
+    if section is None:
+        return body
+    query, _ = tidy(_messages(req)).search_query()
+    answer = body.get("answer") or ""
+    picked = [s for s in quote_sentences(section.text, query) if s not in answer]
+    if not picked:
+        return body
+    joined = f"{answer} {QUOTE_APPEND_LEAD} {' '.join(picked)}"
+    if len(joined) > postprocess.MAX_ANSWER_CHARS:
+        return body
+    return {**body, "answer": joined}
+
+
+async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+    """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
     가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
     함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).

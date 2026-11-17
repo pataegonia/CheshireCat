@@ -37,6 +37,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
     assert toggles.delegation_override is False  # TU-06 기본 끔, 동결 후보 측정에서 켠다
+    assert toggles.quote_append is False  # TU-07 자료 문장 덧붙이기 기본 끔
     assert toggles.fallback_quote is False  # TU-12 자료 인용 답 기본 끔(#201 A-2)
     assert toggles.intent_override == "off"  # T 의도 판정 기본 끔(#209)
     assert cfg.llm.reasoning_effort == "low"  # TU-13

@@ -99,9 +99,69 @@ def self_check_counts(runs, out: TextIO) -> None:
         out.write("\n")
 
 
+def cite_kind(cited: Sequence[str], gold: Sequence[str]) -> tuple[str, float]:
+    """(인용 꼴, 인용 F1).
+
+    꼴: exact · extra(정답 + 다른 섹션) · partial(정답 일부) · wrong · none.
+    """
+    c, g = set(cited), set(gold)
+    if not c:
+        return "none", 0.0
+    hit = len(c & g)
+    if hit == 0:
+        return "wrong", 0.0
+    f1 = 2 * hit / (len(c) + len(g))
+    if c == g:
+        return "exact", f1
+    return ("extra" if g <= c else "partial"), f1
+
+
+def citation_rows(runs, gold: Mapping[str, Mapping[str, Any]], out: TextIO) -> None:
+    """정답 근거가 있는 행에서 인용 꼴별 행×실행 수와 잃은 F1 합(1 − F1), 자주 틀린 행."""
+    kinds: Counter[str] = Counter()
+    lost: Counter[str] = Counter()
+    bad: Counter[str] = Counter()
+    for emitted, _trace in runs:
+        for rid, em in emitted.items():
+            g = gold.get(rid)
+            if g is None or not g.get("evidence") or em.get("cited") is None:
+                continue
+            kind, f1 = cite_kind(em["cited"], g["evidence"])
+            kinds[kind] += 1
+            lost[kind] += 1 - f1
+            if kind in ("wrong", "none"):
+                bad[f"{rid}({g['category']}/{g['action']})"] += 1
+    out.write(f"인용 꼴(정답 근거 있는 행×실행 {sum(kinds.values())}): ")
+    out.write(", ".join(f"{k} {kinds[k]}(잃은 F1 {lost[k]:.1f})" for k in sorted(kinds)) + "\n")
+    worst = [f"{r} {n}" for r, n in bad.most_common() if n * 2 > len(runs)]
+    out.write(f"인용이 절반 넘게 틀리거나 없는 행 {len(worst)}개: {' · '.join(worst)}\n")
+
+
+def action_rows(runs, gold: Mapping[str, Mapping[str, Any]], out: TextIO) -> None:
+    """정답 action별로 낸 action 분포(행×실행)와, 절반 넘게 틀린 행."""
+    by_gold: dict[str, Counter[str]] = defaultdict(Counter)
+    wrong: Counter[str] = Counter()
+    for emitted, _trace in runs:
+        for rid, em in emitted.items():
+            g = gold.get(rid)
+            if g is None:
+                continue
+            got = str(em.get("action"))
+            by_gold[f"{g['category']}/{g['action']}"][got] += 1
+            if got != g["action"]:
+                wrong[f"{rid}({g['category']}/{g['action']})"] += 1
+    out.write("정답 → 낸 action(행×실행):\n")
+    for key in sorted(by_gold):
+        out.write(f"- {key}: " + ", ".join(f"{a} {n}" for a, n in by_gold[key].most_common()))
+        out.write("\n")
+    worst = [f"{r} {n}" for r, n in wrong.most_common() if n * 2 > len(runs)]
+    out.write(f"action이 절반 넘게 틀린 행 {len(worst)}개: {' · '.join(worst)}\n")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="동결 후보 실행의 T·normal 사실 행 점검(API 0회)")
     ap.add_argument("runs", nargs="+", type=Path, help="run_local 결과 JSON(row_trace 포함)")
+    ap.add_argument("--more", action="store_true", help="인용 꼴·action 분포도 낸다")
     args = ap.parse_args(argv)
     try:
         runs = load_runs(args.runs)
@@ -111,6 +171,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     intent_table(runs, gold, sys.stdout)
     facts_rows(runs, gold, sys.stdout)
     self_check_counts(runs, sys.stdout)
+    if args.more:
+        citation_rows(runs, gold, sys.stdout)
+        action_rows(runs, gold, sys.stdout)
     return 0
 
 

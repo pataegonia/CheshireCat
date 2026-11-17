@@ -71,3 +71,34 @@ def test_prints_self_check_reasons_when_present(tmp_path, capsys):
     assert "2차 자체 검증(행×실행): " in capsys.readouterr().out
     freeze_rows.main([str(b)])
     assert "2차 자체 검증" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("cited", "gold", "want"),
+    [
+        (["A"], ["A"], ("exact", 1.0)),
+        (["A", "B"], ["A"], ("extra", 2 / 3)),
+        (["A"], ["A", "B"], ("partial", 2 / 3)),
+        (["B"], ["A"], ("wrong", 0.0)),
+        ([], ["A"], ("none", 0.0)),
+    ],
+)
+def test_cite_kind(cited, gold, want):
+    kind, f1 = freeze_rows.cite_kind(cited, gold)
+    assert (kind, round(f1, 6)) == (want[0], round(want[1], 6))
+
+
+def test_more_prints_citation_and_action_tables(tmp_path, capsys):
+    normal, oom = _first("normal"), _first("out_of_material")
+    n, o = normal["id"], oom["id"]
+    sid = normal["labels"]["evidence"][0]
+    run1 = {n: {"action": "answer", "facts": 1.0, "faithful": True, "cited": [sid]},
+            o: {"action": "answer", "cited": []}}  # fmt: skip
+    run2 = {n: {"action": "answer", "facts": 1.0, "faithful": True, "cited": ["ZZ-99-99"]},
+            o: {"action": "answer", "cited": []}}  # fmt: skip
+    a = _write(tmp_path, "a.json", [run1, run2], [{}, {}])
+    freeze_rows.main([str(a), "--more"])
+    out = capsys.readouterr().out
+    assert "exact 1(잃은 F1 0.0)" in out and "wrong 1(잃은 F1 1.0)" in out
+    assert "- out_of_material/abstain: answer 2" in out
+    assert f"action이 절반 넘게 틀린 행 1개: {o}(out_of_material/abstain) 2" in out

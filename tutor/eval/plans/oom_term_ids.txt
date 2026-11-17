@@ -1,0 +1,22 @@
+# 11/17 KB에 없는 이름 힌트 거르기: 교차 검증 자료 밖 행 전부 + 오프라인 점검에서 정상인데 걸린 행(대조군은 facts_set이 더함).
+pub-3112da0a
+pub-c7a51701
+pub-a430bf58
+pub-6a6fab48
+pub-982a4741
+pub-1fb88fb9
+pub-eaf140a7
+pub-c89ae8a4
+pub-3c276614
+pub-280d221d
+pub-66b4408c
+pub-e2dd7ca4
+pub-72e82954
+pub-a95923af
+pub-ff707d29
+pub-bb7dd589
+# 오프라인 점검 오탐(정상·개인정보)
+pub-bd7cc5d8
+pub-793cdc2b
+pub-226fb2b8
+pub-47266933

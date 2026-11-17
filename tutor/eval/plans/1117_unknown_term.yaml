@@ -1,0 +1,54 @@
+# 11/17 KB에 없는 이름 힌트(unknown_term_hint) 거르기, 판정 없음(action·인용만), 자료 밖 16 + 오탐 4 + 대조 normal 30 = 50행, 번갈아 3+3.
+# 세트는 먼저 만든다(API 0회): python -m tutor.eval.facts_set --ids tutor/eval/plans/oom_term_ids.txt --controls 30 --out tutor/eval/runs/oom_set.jsonl
+items:
+  - name: oom-base-1
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: oom-hint-1
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.unknown_term_hint=true'
+  - name: oom-base-2
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: oom-hint-2
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.unknown_term_hint=true'
+  - name: oom-base-3
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+  - name: oom-hint-3
+    cases: tutor/eval/runs/oom_set.jsonl
+    runs: 1
+    judge: false
+    tutor_set:
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'toggles.unknown_term_hint=true'

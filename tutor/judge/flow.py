@@ -79,6 +79,8 @@ from tutor.judge.oom_check import load_system as load_oom_system
 from tutor.judge.self_check import SelfCheckCounts, self_check
 from tutor.judge.self_check import load_system as load_self_check_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
+from tutor.judge.unknown_terms import hint as term_hint
+from tutor.judge.unknown_terms import kb_blob, missing_terms
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
 
@@ -129,6 +131,8 @@ def prepare_judge(app_state: Any) -> None:
     oom_on = toggles.oom_check != "off"
     app_state.tutor_oom_prompt = load_oom_system() if oom_on else None  # 근거 확인(#201 B)
     app_state.oom_skips = OomSkips()  # 사유 → 횟수(본문 없음)
+    term_on = toggles.unknown_term_hint  # KB에 없는 이름 힌트(측정용): KB 글은 기동 때 한 번
+    app_state.tutor_kb_blob = kb_blob(app_state.tutor_kb.sections) if term_on else None
     check_on = toggles.self_check != "off"  # 2차 자체 검증(측정용)
     app_state.tutor_self_check_prompt = load_self_check_system() if check_on else None
     app_state.self_check_counts = SelfCheckCounts()  # 사유 → 횟수(본문 없음)
@@ -385,6 +389,19 @@ def _quote_allowed(cfg: Any, label: str | None) -> bool:
     return not _t_on(cfg) or label == STUDY
 
 
+def _hints(state: Any, conv: Conversation, signals: Sequence[Signal]) -> tuple[str, ...]:
+    """주 호출 `<신호>` 힌트: 결정적 신호(켰을 때)와 KB에 없는 이름(`unknown_term_hint`)."""
+    cfg = state.tutor_cfg
+    out = tuple(labels(signals)) if cfg.toggles.signals else ()
+    blob = getattr(state, "tutor_kb_blob", None)
+    if cfg.toggles.unknown_term_hint and blob is not None:
+        target = next((t.text for t in conv.window if t.is_target), "")
+        extra = term_hint(missing_terms(target, blob))
+        if extra is not None:
+            out = (*out, extra)
+    return out
+
+
 def _intent_fixed(label: str | None, signals: Sequence[Signal], action: Action | None):
     """T가 덮어 고정 문장이 되면 (고정 문장, 범주). 아니면 None."""
     decided = decide_intent(label, signals, action)
@@ -452,7 +469,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             complete=_complete(state),
             deadline=deadline,
             k=cfg.retrieval.k,
-            signals=labels(signals) if cfg.toggles.signals else (),
+            signals=_hints(state, conv, signals),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)

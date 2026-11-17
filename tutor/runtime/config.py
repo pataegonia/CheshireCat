@@ -61,6 +61,8 @@ class Toggles(_Strict):
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
     anchor_unit: bool  # 상위 k에서 앞 대화 단원의 섹션을 앞으로(단원 닻, TU-03). API 호출 0회
+    # 발화의 이름 붙은 말(규칙·지수·등급…)이 KB에 없으면 주 호출 <신호>에 힌트(측정용). API 0회
+    unknown_term_hint: bool
     # 근거 확인(#201 B): 주 호출 answer 뒤 nano 1회, found=false면 자료 밖 고정 문장. 기본 끔
     oom_check: Literal["off", "after_answer"]
     # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,

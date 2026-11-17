@@ -19,6 +19,7 @@ toggles:
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한(TU-13)을 넘어 만들지 않음(#83, true는 로드에서 거부)
   cite_top1: true              # 인용이 있는데 검색 1위 섹션이 빠졌으면 1위를 뒤에 더한다(TU-07). 켜면 인용이 max_citations + 1개까지. 11/15 런박스 짝 비교(같은 답의 끔·켬)로 켬: 판정 없이 인용 F1 +0.034·+0.024, 판정 포함 튜터 +0.31점·충실 하락 0
   anchor_unit: false           # 단원 닻(TU-03, #201 A-6 U). 마지막 학습자 발화를 뺀 앞 대화 끝 4개 발화로 BM25 검색한 1위 섹션의 단원을 상위 k 앞으로 옮긴다(순서만, API 호출 0회). 인용 F1 끔·켬 짝 비교(판정 없이)와 사실·충실 판정 포함 3회로 켤지 정한다
+  unknown_term_hint: false     # 발화의 이름 붙은 말(규칙·지수·분류법·등급·기준·한도 …)이 KB 전체에 없으면 주 호출 <신호>에 "자료에 없는 이름: …" 힌트(측정용, 11/17). 범주·action은 바꾸지 않음. API 0회
   intent_override: "off"       # "off" | parallel | serial. T 의도 판정(#209 프롬프트) nano 1회, 이름표로 주 호출 action을 덮는다(tutor.judge.intent.decide). parallel은 주 호출과 동시에, serial은 T 먼저 · 고정 문장 이름표면 주 호출 없이(guard_classify off에서만, 주 호출의 escalate·더 강한 action 보호가 없다). 11/16 런박스 모의(교차 검증 160행, 기준 5회)의 비교 정책 "항상 · 탈옥은 신호 있을 때만": 실행당 맞게 8.0 · 틀리게 0.6(지금 규칙은 더 좁아 따로 다시 잰다). 게이트 모의(API 0회): parallel /guard p95 9.5초, serial 7.2~7.4초·튜터 p95 12.7~12.9초. 기본 끔(측정용), 켜기 전 조건은 G-6 혼합 부하와 판정 포함 비교
   self_check: "off"           # "off" | bundle | cited. 2차 자체 검증(측정용, 11/17): 주 호출이 normal answer면 nano 1회, 질문이 묻는 값이 초안에 자료 표현대로 없으면 고쳐 쓴다. 범주·action은 그대로. bundle은 근거 묶음 전체, cited는 초안 인용 섹션 + 검색 1위. 요청당 nano 4회(TU-13) 넘는 조합은 로드에서 막는다
   oom_check: "off"            # "off" | after_answer. 근거 확인(#201 B): 주 호출이 answer면 nano 1회(#162 프롬프트), found=false면 자료 밖 고정 문장. 11/16 런박스 모의 순이득 +5행. 기본 끔(측정용)

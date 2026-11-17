@@ -67,6 +67,7 @@ from types import SimpleNamespace
 from typing import Any, NamedTuple, TextIO
 
 import httpx
+import yaml
 from guardrail.config import DEFAULT_CONFIG as GUARD_DEFAULT_CONFIG
 from guardrail.config import load_config as load_guard_config
 from guardrail.guard import ConstantGuard
@@ -116,10 +117,14 @@ REPLIES: dict[str, dict[str, Any]] = {
         "sentences": [{"text": "자료를 바탕으로 답해요.", "kind": "non_claim", "evidence": []}],
     },
 }
+# 실험 브랜치: T(학습 질문이라 주 호출까지 간다, 지연이 가장 긴 쪽)와 E(found=true) 가짜 답
+REPLIES["IntentOut"] = {"label": "학습 질문", "self_info": False}
+REPLIES["OomOut"] = {"asked": "a", "quote": "", "found": True}
 UNKNOWN_REPLY = "모르는 스키마"  # JSON이 아니다
 # 모드마다 튜터 LLM이 쓸 응답 스키마. 다른 이름이 오면(새 호출) 실패로 본다
 EXPECTED_SCHEMAS: dict[str, frozenset[str]] = {
-    "v2": frozenset({"MainCallOut", "CheckedMainCallOut"}),  # 근거 대조 칸 토글(#162)이면 뒤의 것
+    # 근거 대조 칸 토글(#162)이면 CheckedMainCallOut, T·E 토글(실험 브랜치)이면 IntentOut·OomOut
+    "v2": frozenset({"MainCallOut", "CheckedMainCallOut", "IntentOut", "OomOut"}),
     "baseline": frozenset({"BaselineOut"}),
 }
 
@@ -210,7 +215,7 @@ class FakeLLM:
         self.calls += 1
         name = _schema_name(kwargs)
         self.schemas[name] += 1
-        await self.hold(self.tutor_latency)
+        await self.hold(SCHEMA_LATENCY.get(name, self.tutor_latency))
         reply = REPLIES.get(name)
         content = UNKNOWN_REPLY if reply is None else json.dumps(reply, ensure_ascii=False)
         choice = SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")
@@ -399,6 +404,25 @@ def _body(row: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+# 실험 브랜치: 튜터 전송 중 T·E의 가짜 지연(초). T는 런박스 실측(동시 8, p50 2.38·p95 4.18),
+# E는 #213 B2 지연 모의와 같은 값(p50 4.33·p95 6.94). 나머지 스키마는 tutor_latency
+SCHEMA_LATENCY = {
+    "IntentOut": Latency.from_quantiles(2.38, 4.18),
+    "OomOut": Latency.from_quantiles(4.33, 6.94),
+}
+
+
+def _tutor_sets(items: Sequence[str]) -> dict[str, Any] | None:
+    """--tutor-set KEY=VALUE 목록 → 튜터 설정 덮어쓰기(값은 YAML로 읽는다, run_local과 같음)."""
+    out: dict[str, Any] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise SystemExit(f"--tutor-set은 KEY=VALUE 꼴이어야 한다: {item}")
+        out[key] = yaml.safe_load(value)
+    return out or None
+
+
 def plan(n_tutor: int, n_guard: int, rng: random.Random) -> list[tuple[str, dict[str, Any]]]:
     """공개 세트 행을 돌려 가며 튜터·가드 요청을 만들고 섞는다."""
     tutor_rows, guard_rows = _rows("tutor"), _rows("guard")
@@ -417,6 +441,9 @@ def _mock_tutor_llm(state: Any, fake: FakeLLM, overrides: dict[str, Any] | None,
     built = build_llm(state, cfg)
     shared: TimedGate = state.guard.gate
     state.tutor_cfg = cfg
+    from tutor.judge.flow import prepare_judge  # 덮어쓴 토글의 프롬프트(T·E)를 다시 읽는다
+
+    prepare_judge(state)
     state.tutor_llm = CountingLLM(
         fake.send, lambda: shared.slot("tutor"), model=built.model, base=built
     )
@@ -797,6 +824,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="후보 답이 있는 가드 요청의 가짜 판정 호출 수(병렬, 없으면 1회)",
     )
     ap.add_argument("--gate", type=int, help="게이트 크기(기본은 가드 설정 llm.gate)")
+    ap.add_argument("--tutor-set", action="append", default=[], metavar="KEY=VALUE")
     args = ap.parse_args(argv)
     if args.gate is not None and args.gate < 1:  # Semaphore(0)은 끝없이 기다린다
         ap.error("--gate는 1 이상이어야 한다")
@@ -821,6 +849,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             mode=args.mode,
             guard_calls=args.guard_calls,
             gate=args.gate,
+            tutor_overrides=_tutor_sets(args.tutor_set),
         )
     )
     return 0 if show(report, Bar(p50_s=args.max_p50, p95_s=args.max_p95)) else 1

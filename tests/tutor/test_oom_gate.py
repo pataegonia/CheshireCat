@@ -19,7 +19,7 @@ from tutor.request import parse_request
 from tutor.runtime import config
 from tutor.runtime.llm import Result
 
-ON = {"toggles.oom_gate": True}
+ON = {"toggles.oom_gate": "all"}
 
 
 def _result(parsed=None, error=None, finish="stop"):
@@ -275,3 +275,51 @@ def test_gate_fits_the_call_limit(extra):
 def test_gate_over_the_call_limit_fails_at_load(extra):
     with pytest.raises(ValidationError, match="TU-13"):
         config.load_config(overrides={**ON, **extra})
+
+
+NAMED = {"toggles.oom_gate": "named_term"}
+TERM_Q = "꿈틀 중학교 동아리의 은하수 등급 기준은 몇 단계예요?"  # 지어낸 이름(KB에 없음)
+
+
+def test_named_term_scope_skips_questions_without_a_kb_absent_name():
+    llm = RoleLLM(out(), found=False)
+    state = state_with(llm, **NAMED)
+    assert run(state)["action"] == "answer"  # QUESTION에는 이름 붙은 말이 없다
+    assert oom_gate.ROLE not in llm.roles
+    assert state.oom_gate_counts == {"no_term": 1}
+
+
+def test_named_term_scope_calls_the_gate_for_a_kb_absent_name():
+    llm = RoleLLM(out(), found=False)
+    state = state_with(llm, **NAMED)
+    assert run(state, TERM_Q) == ABSTAIN
+    assert llm.roles[0] == oom_gate.ROLE
+    assert state.oom_gate_counts == {"absent": 1}
+
+
+def test_named_term_scope_keeps_the_answer_when_the_gate_finds_it():
+    llm = RoleLLM(out(), found=True)
+    state = state_with(llm, **NAMED)
+    assert run(state, TERM_Q)["action"] == "answer"
+    assert state.oom_gate_counts == {"found": 1}
+
+
+def test_named_term_scope_without_kb_text_makes_no_call():
+    llm = RoleLLM(out(), found=False)
+    state = state_with(llm, **NAMED)
+    assert state.tutor_kb_blob is not None  # 기동 때 만든다
+    state.tutor_kb_blob = None
+    assert run(state, TERM_Q)["action"] == "answer"
+    assert oom_gate.ROLE not in llm.roles
+
+
+def test_all_scope_does_not_build_the_kb_text():
+    state = state_with(RoleLLM(out(), found=True), **ON)
+    assert state.tutor_kb_blob is None  # all은 이름 검사를 하지 않는다
+
+
+def test_named_term_scope_fits_the_call_limit_like_all():
+    serial = {"toggles.intent_override": "serial"}
+    assert config.load_config(overrides={**NAMED, **serial}).toggles.oom_gate == "named_term"
+    with pytest.raises(ValidationError, match="TU-13"):
+        config.load_config(overrides={**NAMED, "toggles.guard_classify": "parallel"})

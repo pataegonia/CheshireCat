@@ -1,0 +1,23 @@
+# 11/17 밤 2차(판정 포함, 교차 검증 160행). 조건부 E만 3회(fzc = 동결 조합 + oom_gate named_term), 약 1,700회.
+# 기준은 1117_night의 fz 3회(같은 날 18:05~18:25)를 쓴다. 시간대가 달라 같은 시간대 번갈아 재는 것보다 덜 엄격하다.
+items:
+  - name: fzc-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fzc
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'toggles.oom_gate="named_term"'
+  - name: fzc-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fzc
+  - name: fzc-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fzc

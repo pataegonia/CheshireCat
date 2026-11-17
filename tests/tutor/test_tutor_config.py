@@ -40,7 +40,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.fallback_quote is False  # TU-12 자료 인용 답 기본 끔(#201 A-2)
     assert toggles.intent_override == "off"  # T 의도 판정 기본 끔(#209, 측정용)
     assert toggles.anchor_unit is False  # TU-03 단원 닻 기본 끔(측정으로 켤지 정함)
-    assert toggles.oom_gate is False  # 자료 밖 확인 E 기본 끔(#213 B2)
+    assert toggles.oom_gate == "off"  # 자료 밖 확인 E 기본 끔(#213 B2)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로

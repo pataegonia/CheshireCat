@@ -72,8 +72,9 @@ class Toggles(_Strict):
     # bundle은 근거 묶음 전체, cited는 초안이 인용한 섹션 + 검색 1위. 기본 끔
     self_check: Literal["off", "bundle", "cited"]
     # 자료 밖 확인 E(#213 B2): 주 호출과 동시에 nano 1회, 최종 answer인데 E가 "근거에 없음"이면
-    # 자료 밖 고정 문장. 기본 끔
-    oom_gate: bool
+    # 자료 밖 고정 문장. all은 모든 요청(영어 발화 빼고), named_term은 판단 대상에 KB에 없는 이름
+    # 붙은 말(규칙·지수·등급 …, tutor.judge.unknown_terms)이 있을 때만. 기본 끔
+    oom_gate: Literal["off", "all", "named_term"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -100,7 +101,7 @@ class Toggles(_Strict):
                     f"toggles.self_check: 요청당 nano {2 + extra + 1}회라 쓸 수 없다"
                     "(TU-13 절대 4회)"
                 )
-        if self.oom_gate:
+        if self.oom_gate != "off":
             # 주 호출 2(재시도) + T 1 + classify 최대 2 + judge_output 1 + E 1 ≤ TU-13 절대 4회
             calls = 2 + (self.intent_override != "off") + 2 * (self.guard_classify != "off")
             calls += (self.verify == "guard") + 1

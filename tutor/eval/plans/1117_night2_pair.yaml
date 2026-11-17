@@ -1,0 +1,42 @@
+# 11/17 밤 2차(판정 포함, 교차 검증 160행). 조건부 E: fz(동결 조합, T 8초) 대 fzc(fz + oom_gate named_term
+# = 판단 대상에 KB에 없는 이름 붙은 말이 있을 때만 E). 같은 시간대 번갈아 3회씩, 약 3,400회.
+items:
+  - name: fz-4
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fz
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+  - name: fzc-1
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: &fzc
+      - 'toggles.delegation_override=true'
+      - 'toggles.fallback_quote=true'
+      - 'toggles.intent_override="serial"'
+      - 'llm.timeout_s.intent=8'
+      - 'toggles.oom_gate="named_term"'
+  - name: fz-5
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz
+  - name: fzc-2
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fzc
+  - name: fz-6
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fz
+  - name: fzc-3
+    cases: public
+    runs: 1
+    judge: true
+    tutor_set: *fzc

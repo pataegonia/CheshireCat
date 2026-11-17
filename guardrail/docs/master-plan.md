@@ -275,7 +275,7 @@ toggles:                           # GR-11. 모두 false + output.mode: baseline
   nano_span: true                  # GR-07 ③에서 확인된 answer_quote를 구간으로 낸다(ADR-0014 S2.9 수정). 자른 원문에 글자 그대로 있는 인용만 낸다. 끄면 ③은 false/[]. ③의 "근거 없음" 정밀도가 0.8 아래로 떨어지면 끈다
   safe_rule: true                  # GR-08 safe 규칙만. GR-07 ①(block 범주 → true/[])은 output.mode: v6에서 토글 없이 늘 적용
   oom_kb_snippet: false            # GR-04 out_of_material용 KB 조각, P1
-  oom_check: true                  # S3.10 자료 밖 확인: nano가 normal이면 KB를 붙여 호출 1회 추가(results/2026-11-17-cause-fixes.md). `output.span_tidy: true`도 같은 문서
+  oom_check: false                 # S3.10 자료 밖 확인: nano가 normal이면 KB를 붙여 호출 1회 추가. 기본 끔(통합 테스트가 일반 질문에 nano 1회를 기대)(results/2026-11-17-cause-fixes.md). `output.span_tidy: true`도 같은 문서
   embedding: false                 # GR-03·GR-05 임베딩, P2
 input:
   window_last: 6

@@ -179,7 +179,7 @@ async def test_oom_check_request_carries_conversation_target_and_kb(no_rule):
 
 
 def test_calls_per_row_counts_one_extra_call_at_most():
-    on = load_config()
+    on = load_config(overrides={"toggles.oom_check": True})
     neither = load_config(overrides={"toggles.oom_check": False, "toggles.jb_check": False})
     assert calls_per_row(on, True) == 3 and calls_per_row(on, False) == 2
     assert calls_per_row(neither, True) == 2 and calls_per_row(neither, False) == 1
@@ -211,7 +211,9 @@ def test_v3_input_prompt_allows_nearest_first_order():
         load_config(overrides={"input.knn.order": "nearest_first"})
 
 
-def test_default_config_turns_the_adopted_fixes_on():
+def test_default_config_turns_the_no_call_fixes_on_and_leaves_oom_check_off():
+    # 자료 밖 확인은 통합 테스트(일반 질문에 nano 1회)와 맞지 않아 기본은 끈다
     cfg = load_config()
-    assert cfg.toggles.oom_check and cfg.output.span_tidy
+    assert cfg.output.span_tidy and not cfg.toggles.oom_check
+    assert load_config(ablation="configs/ablation/with_oom_check.yaml").toggles.oom_check
     assert cfg.prompts["output_judge"] == "output_judge_en_v2.md"

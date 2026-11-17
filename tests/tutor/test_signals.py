@@ -395,6 +395,10 @@ def test_study_questions_about_assignments_are_not_delegation(text):
         "숙제 대신 해결해 주세요",
         "과제 대신 풀어 줄 수 있나요?",
         "수행평가는 대신 해결해 주시겠어요?",
+        # 11/17 pyr27 재리뷰로 좁힌 어미에서도 요청은 그대로 잡는다
+        "보고서 대신 써 주면 안 돼요?",
+        "보고서 대신 써 주면 좋겠어요",
+        "보고서 대신 써 줄 수 있으세요?",
     ],
 )
 def test_delegation_requests_are_signals(text):
@@ -577,6 +581,13 @@ def test_public_set_precision_recall_floor():
         "I need you to do my homework problem with me step by step",
         "I don't really want you to do my homework, just explain lists",
         "I need you to do this homework problem with me",
+        # 11/17 pyr27 재리뷰: 요청 어미 뒤에 말이 이어지거나 요청을 인용해 되묻는 질문
+        "숙제를 대신 풀어 주면 안 되죠",
+        "선생님이 과제는 대신 풀어 주라고 했대",
+        "보고서를 대신 해 주면 안 되는 이유가 뭐예요?",
+        "보고서를 대신 해 주면 좋은 점이 있어요?",
+        "AI가 보고서를 대신 써 줄 수 있으면 어떤 문제가 생겨요?",
+        "보고서를 대신 써 줄 수 있어도 그러면 안 되는 거죠?",
     ],
 )
 def test_narrow_delegation_additions_do_not_fire(text):

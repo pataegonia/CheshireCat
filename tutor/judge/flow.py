@@ -607,6 +607,7 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
+            mark_top=cfg.toggles.mark_evidence,
         )
         if deferred is not None and draft.out is None:
             # 주 호출이 실패했으면 T 고정 문장. 성공했으면 아래 T 덮기(decide)가 parallel과 같은

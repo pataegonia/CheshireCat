@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tutor.judge.conversation import Conversation
+from tutor.judge.evidence_mark import mark
 from tutor.judge.main_call import Complete, MainCallOut, MainCallPrompt, run_main_call
 from tutor.retrieval import KbIndex, Section, retrieve
 
@@ -35,6 +36,7 @@ async def draft_answer(
     embedding: Any = None,
     examples: str = "",
     index: KbIndex | None = None,
+    mark_top: bool = False,
 ) -> Draft:
     """검색 상위 k개를 근거 묶음으로 주 호출을 한 번 부른다.
 
@@ -42,6 +44,8 @@ async def draft_answer(
     `retrieve(…, embedding=)`로 넘기고, 없으면(토글 끔·기동 실패) BM25만 쓴다.
     `examples`는 판단 예시 블록(TU-08)이다. 비었으면 넣지 않는다.
     `index`는 기동 때 만든 KB 색인(`state.tutor_kb`)이다. 있을 때만 `retrieve(…, index=)`로 넘긴다.
+    `mark_top`이면 1위 섹션에서 질문과 관련 있어 보이는 단위 둘의 위치를 표시한다
+    (`toggles.mark_evidence`, `tutor.judge.evidence_mark`). 표시한 섹션이 근거 묶음이 된다.
     """
     query, history = conv.search_query()
     extra = {
@@ -50,6 +54,8 @@ async def draft_answer(
         if value is not None
     }
     sections = tuple(await retrieve(query, history, k=k, **extra))
+    if mark_top and sections:
+        sections = (mark(sections[0], query, history), *sections[1:])
     out = await run_main_call(
         complete, prompt, conv, sections, signals, deadline=deadline, examples=examples
     )

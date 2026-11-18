@@ -62,6 +62,9 @@ class Toggles(_Strict):
     # 자료 밖 고정 문장. all은 모든 요청(영어 발화 빼고), named_term은 판단 대상에 KB에 없는 이름
     # 붙은 말(tutor.judge.unknown_terms)이 있을 때만. 기본 끔
     oom_gate: Literal["off", "all", "named_term"]
+    # 주 호출에 보이는 검색 1위 섹션에서 질문과 관련 있어 보이는 단위 둘의 위치를 표시한다(원문은
+    # 그대로, tutor.judge.evidence_mark). LLM 0회. 측정판, 기본 끔
+    mark_evidence: bool
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":

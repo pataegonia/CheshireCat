@@ -77,9 +77,14 @@ from tutor.judge.intent import build_messages as build_intent_messages
 from tutor.judge.intent import decide as decide_intent
 from tutor.judge.intent import load_system as load_intent_system
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
+from tutor.judge.oom_gate import GateCounts, GateJob, english_only, material_absent, start_gate
+from tutor.judge.oom_gate import build_messages as build_gate_messages
+from tutor.judge.oom_gate import load_system as load_gate_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
+from tutor.judge.unknown_terms import kb_blob, missing_terms
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
+from tutor.retrieval import retrieve
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
@@ -104,6 +109,11 @@ def prepare_judge(app_state: Any) -> None:
     sections = app_state.tutor_kb.sections if intent_on else {}
     app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
     app_state.intent_skips = IntentSkips()  # 사유 → 횟수(본문 없음)
+    gate_on = toggles.oom_gate != "off"  # 자료 밖 확인 E(#213 B2): 프롬프트는 기동 때 한 번
+    app_state.tutor_oom_gate_prompt = load_gate_system() if gate_on else None
+    app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
+    named = toggles.oom_gate == "named_term"  # KB 전체 글(비교용)도 기동 때 한 번
+    app_state.tutor_kb_blob = kb_blob(app_state.tutor_kb.sections) if named else None
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -371,10 +381,37 @@ def _candidate(out: MainCallOut) -> str:
 
 
 async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
-    """v2 흐름 하나. 흐름 본체(`_answer_v2`) 뒤에 자료 문장 덧붙이기(`toggles.quote_append`)를
-    한다. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다)."""
-    body = await _answer_v2(req, state, deadline=deadline)
-    return append_quote(req, state, body)
+    """v2 흐름 하나. 자료 밖 확인 E(`toggles.oom_gate`)를 켰으면 요청 시작 때 E를 함께 띄우고,
+    흐름이 끝나 최종 action이 answer이고 E가 "근거에 없음"이면 자료 밖 고정 문장(abstain)으로
+    바꾼다. E가 마감(E 시작부터 `llm.timeout_s.oom_gate`) 안에 끝나지 않거나 실패하면 흐름
+    결과 그대로다. E 준비(검색·메시지 만들기)가 예외를 내도 E 없이 흐름을 그대로 탄다
+    (`start_error`로 센다). abstain으로 바꾸지 않은 결과에만 자료 문장 덧붙이기
+    (`toggles.quote_append`)를 한다. 빠져나갈 때 아직 도는 E는 취소한다(TU-18). 흐름 본체의
+    예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+    """
+    gate = None
+    if state.tutor_cfg.toggles.oom_gate != "off":
+        try:
+            gate = await _start_gate(req, state, deadline)
+        except Exception:  # 메시지는 남기지 않는다
+            counts = getattr(state, "oom_gate_counts", None)
+            if counts is not None:
+                counts["start_error"] += 1
+    try:
+        if gate is not None:
+            await asyncio.sleep(0)  # E 요청이 주 호출·T보다 먼저 나가도록 한 번 양보한다
+        body = await _answer_v2(req, state, deadline=deadline)
+        counts = getattr(state, "oom_gate_counts", None)
+        if (
+            gate is not None
+            and body.get("action") == "answer"
+            and await material_absent(gate, counts)
+        ):
+            return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
+        return append_quote(req, state, body)
+    finally:
+        if gate is not None:
+            gate.cancel()
 
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
@@ -437,6 +474,61 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     if len(joined) > postprocess.MAX_ANSWER_CHARS:
         return body
     return {**body, "answer": joined}
+
+
+# 이 신호가 있으면 E를 부르지 않는다. 맞는 답이 escalate·refuse라 E(answer → abstain)가 고칠 것이
+# 없고 nano 1회만 든다(#232 가드 리뷰). 공개 세트에서 named_term이 걸리는 14행에는 이 신호가 없다
+GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
+
+
+async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
+    """E 호출 시작. 프롬프트가 없거나(기동 때 읽지 않음) 저신호 직접 판정·위기·지시 무력화 신호·영어
+    발화면 부르지 않는다. `oom_gate: named_term`이면 판단 대상에 KB에 없는 이름 붙은 말이 없을
+    때도 부르지 않는다.
+
+    근거 묶음은 주 호출과 같은 질의·k의 BM25 검색이다. 영어 판정은 창 본문이 아니라 판단 대상
+    원문을 정규화해서 본다(창 본문의 "[숨긴 문자: …]" 표기에 한글이 있다)."""
+    system = getattr(state, "tutor_oom_gate_prompt", None)
+    if system is None:
+        return None
+    conv: Conversation = tidy(_messages(req))
+    if direct_clarify(conv):
+        return None
+    counts = getattr(state, "oom_gate_counts", None)
+    if GATE_SKIP_SIGNALS.intersection(detect(conv)):
+        if counts is not None:
+            counts["signal"] += 1
+        return None
+    if english_only(normalize_fast(conv.target_raw)):
+        if counts is not None:
+            counts["english"] += 1
+        return None
+    cfg = state.tutor_cfg
+    if cfg.toggles.oom_gate == "named_term" and not _named_term(state, conv):
+        if counts is not None:
+            counts["no_term"] += 1
+        return None
+    query, history = conv.search_query()
+    sections = await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb)
+    messages = build_gate_messages(system, sections, conv)
+    return start_gate(
+        state.tutor_llm,
+        messages,
+        timeout_s=cfg.llm.timeout_s.oom_gate,
+        deadline=deadline,
+        counts=counts,
+    )
+
+
+def _named_term(state: Any, conv: Conversation) -> bool:
+    """판단 대상(창 본문)에 KB 전체 글에 없는 이름 붙은 말이 있는가(`oom_gate: named_term`).
+
+    KB 글이 없으면(기동 때 만들지 않음) False라 E를 부르지 않는다."""
+    blob = getattr(state, "tutor_kb_blob", None)
+    if blob is None:
+        return False
+    target = next((t.text for t in conv.window if t.is_target), "")
+    return bool(missing_terms(target, blob))
 
 
 async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:

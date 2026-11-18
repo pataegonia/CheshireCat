@@ -20,6 +20,9 @@ from guardrail.schema import GuardRequest, Message, OutputVerdict
 pytestmark = pytest.mark.anyio
 
 DEFAULT = str(Path(__file__).parents[1] / "configs/default.yaml")
+# S3.13 요청 점검 토글은 기본이 켜져 있고 --input-only가 지원하지 않으므로 이 파일에서는 끈다.
+OFF = {"toggles.request_check": False, "toggles.block_recheck": False}
+OFF_ARGS = ["--set", "toggles.request_check=false", "--set", "toggles.block_recheck=false"]
 PING = [{"role": "user", "content": "ping"}]
 
 
@@ -46,7 +49,7 @@ def _judge_calls(llm):
 
 
 async def _guard(reply, n_train=60):
-    cfg = load_config(DEFAULT)
+    cfg = load_config(DEFAULT, OFF)
     train = labeled_rows(load_public(cfg.paths.public))[:n_train]
     llm = _llm(cfg.llm, reply)
     await llm.start()
@@ -103,11 +106,20 @@ async def test_long_last_message_keeps_head_and_tail_in_target():
 
 @pytest.mark.parametrize("switch", ["third_call", "oom_kb_snippet", "embedding"])
 async def test_unsupported_switch_is_rejected(switch, tmp_path):
-    cfg = load_config(DEFAULT, {f"toggles.{switch}": True})
+    cfg = load_config(DEFAULT, {**OFF, f"toggles.{switch}": True})
     with pytest.raises(ValueError, match=f"toggles.{switch}"):
         run.InputOnlyGuard(cfg, _llm(cfg.llm), [])
     made = []
-    args = ["--config", DEFAULT, "--name", "t", "--out", str(tmp_path / "runs"), "--input-only"]
+    args = [
+        "--config",
+        DEFAULT,
+        "--name",
+        "t",
+        "--out",
+        str(tmp_path / "runs"),
+        "--input-only",
+        *OFF_ARGS,
+    ]
     code = await run.amain([*args, "--set", f"toggles.{switch}=true"], make_llm=made.append)
     assert code == 2 and not made and not (tmp_path / "runs").exists()
 
@@ -134,7 +146,16 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
         made.append(_llm(cfg_llm))
         return made[-1]
 
-    args = ["--config", DEFAULT, "--name", "t", "--out", str(tmp_path / "runs"), "--input-only"]
+    args = [
+        "--config",
+        DEFAULT,
+        "--name",
+        "t",
+        "--out",
+        str(tmp_path / "runs"),
+        "--input-only",
+        *OFF_ARGS,
+    ]
     assert await run.amain([*args, "--estimate"], make_llm=make_llm) == 0 and not made
     est = int(capsys.readouterr().out.split("estimate_calls=")[1].split()[0])
 
@@ -142,11 +163,11 @@ async def test_cli_input_only_estimate_is_an_upper_bound_and_report_is_marked(tm
     out = tmp_path / "runs" / "t"
     recs = [json.loads(x) for x in (out / "responses.jsonl").read_text("utf-8").splitlines()]
     summary = json.loads((out / "summary.json").read_text("utf-8"))
-    probes = run.probe_calls(load_config(DEFAULT).llm)
+    probes = run.probe_calls(load_config(DEFAULT, OFF).llm)
     direct = sum(r["source"] == "low_signal" for r in recs)
     calls = _judge_calls(made[0])
     # 행당 입력 1 + 탈옥 2차 1(상한). 후보 답변이 있어도 출력 호출은 없다
-    assert est == probes + (1 + load_config(DEFAULT).toggles.jb_check) * len(recs)
+    assert est == probes + (1 + load_config(DEFAULT, OFF).toggles.jb_check) * len(recs)
     assert direct > 0 and len(calls) == len(recs) - direct  # 저신호 직접 판정만큼 덜 부른다
     assert all("InputOut" in json.dumps(c.get("response_format")) for c in calls)
     assert summary["judge_kind"] == "InputOnlyGuard" and summary["input_only"] is True
@@ -184,7 +205,16 @@ async def _run_flaky(tmp_path, fail_first_n):
     def make_llm(cfg_llm):
         return LLM(cfg_llm, send=FakeLLM(respond=_flaky_llm(fail_first_n)).send)
 
-    args = ["--config", DEFAULT, "--name", "t", "--out", str(tmp_path / "runs"), "--input-only"]
+    args = [
+        "--config",
+        DEFAULT,
+        "--name",
+        "t",
+        "--out",
+        str(tmp_path / "runs"),
+        "--input-only",
+        *OFF_ARGS,
+    ]
     code = await run.amain(args, make_llm=make_llm)
     out = tmp_path / "runs" / "t"
     summary = json.loads((out / "summary.json").read_text("utf-8"))

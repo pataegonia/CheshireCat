@@ -119,6 +119,9 @@ async def make(respond=None, config=DEFAULT, indexes=None, **overrides):
     출력 1회)를 지키려는 것이고, 켠 동작은 test_cause_fixes가 본다.
     """
     overrides.setdefault("toggles__oom_check", False)
+    # 요청 점검(S3.13)도 기본이 켜졌으니 끈다: 켠 동작은 test_s313이 본다.
+    overrides.setdefault("toggles__request_check", False)
+    overrides.setdefault("toggles__block_recheck", False)
     cfg = load_config(config, overrides={k.replace("__", "."): v for k, v in overrides.items()})
     fake = FakeLLM(respond=respond or responder())
     llm = LLM(cfg.llm, send=fake.send, sleep=_nosleep)

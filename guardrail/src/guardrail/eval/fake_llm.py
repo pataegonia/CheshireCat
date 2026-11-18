@@ -22,6 +22,12 @@ FLAG_REPLY = {
 OUTPUT_REPLY = {"answer_quote": "", "kb_quote": "", "grounded": True, "refuses": False}
 BASELINE_REPLY = {"reason": "fake", "grounded": True, "safe": True}
 OOM_REPLY = {"evidence": "fake", "verdict": "not_asked"}
+REQUEST_REPLY = {
+    "asks": [{"quote": "fake", "wants": "fake", "kind": "learn"}],
+    "evidence": "fake",
+    "verdict": "not_asked",
+}
+SENT_REPLY = {"checks": [], **OUTPUT_REPLY}
 
 
 def _reply(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -35,6 +41,10 @@ def _reply(kwargs: dict[str, Any]) -> dict[str, Any]:
         return FLAG_REPLY
     if "OomCheckOut" in probe:
         return OOM_REPLY
+    if "RequestCheckOut" in probe:
+        return REQUEST_REPLY
+    if "OutputSentOut" in probe:
+        return SENT_REPLY
     if "OutputBaselineOut" in probe:
         return BASELINE_REPLY
     if "OutputOut" in probe:

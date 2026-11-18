@@ -17,6 +17,8 @@ from tutor.judge.main_call import (
     EvidenceOut,
     MainCallOut,
     MainCallPrompt,
+    QuoteFirstMainCallOut,
+    QuoteFirstSentenceOut,
     SentenceOut,
     build_messages,
     clean,
@@ -182,6 +184,89 @@ def test_clean_drops_evidence_check_field():
         action="abstain",
         sentences=[SentenceOut(text="자료에 없어요.", kind="non_claim", evidence=[])],
     )
+
+
+# --- 근거 먼저(toggles.quote_first, TU-07) ---
+
+FIELD_HEADS = ("  - text:", "  - kind:", "  - evidence:")
+
+
+def _field_order(system: str) -> list[str]:
+    return [h for line in system.splitlines() for h in FIELD_HEADS if line.startswith(h)]
+
+
+def test_quote_first_off_keeps_text_kind_evidence_order(prompt):
+    # 끄면(기본) 문장 필드 설명이 토글이 없던 때처럼 text·kind·evidence 순서이고 스키마도 그대로다
+    assert prompt.quote_first is False and prompt.schema is MainCallOut
+    assert _field_order(prompt.system) == ["  - text:", "  - kind:", "  - evidence:"]
+    assert prompt == MainCallPrompt.load(TABLE, quote_first=False)
+
+
+def test_quote_first_on_moves_only_the_three_field_lines():
+    on = MainCallPrompt.load(TABLE, quote_first=True)
+    assert on.schema is QuoteFirstMainCallOut
+    assert _field_order(on.system) == ["  - kind:", "  - evidence:", "  - text:"]
+    assert not re.search(r"\{[a-z_]+\}", on.system)
+    # 같은 줄들이고 순서만 다르다(새 지시 문장을 더하지 않는다)
+    off = MainCallPrompt.load(TABLE).system.splitlines()
+    assert sorted(on.system.splitlines()) == sorted(off)
+    assert [x != y for x, y in zip(on.system.splitlines(), off)].count(True) == 3
+
+
+def test_quote_first_schema_differs_only_in_sentence_field_order():
+    off, on = strict_schema(MainCallOut), strict_schema(QuoteFirstMainCallOut)
+    assert list(on["properties"]) == list(off["properties"]) == ["category", "action", "sentences"]
+    item_on = on["$defs"]["QuoteFirstSentenceOut"]
+    item_off = off["$defs"]["SentenceOut"]
+    assert item_on["required"] == ["kind", "evidence", "text"]
+    assert item_off["required"] == ["text", "kind", "evidence"]
+    # 제목·설명은 끈 판과 같다(docstring이 description으로 모델에 가지 않게)
+    assert item_on["title"] == item_off["title"] and "description" not in item_on
+    assert (on["title"], on["description"]) == (off["title"], off["description"])
+    assert item_on["properties"] == {k: item_off["properties"][k] for k in item_on["properties"]}
+
+
+def test_clean_turns_quote_first_into_main_call_out():
+    parsed = QuoteFirstMainCallOut(
+        category="normal",
+        action="answer",
+        sentences=[
+            QuoteFirstSentenceOut(
+                kind="claim",
+                evidence=[EvidenceOut(sid=" FIN-02-02 ", quote="매달 1만 원부터")],
+                text=" 매달 1만 원부터 넣을 수 있어요. ",
+            )
+        ],
+    )
+    out = clean(parsed)
+    assert type(out) is MainCallOut
+    assert out.sentences == [
+        SentenceOut(
+            text="매달 1만 원부터 넣을 수 있어요.",
+            kind="claim",
+            evidence=[EvidenceOut(sid="FIN-02-02", quote="매달 1만 원부터")],
+        )
+    ]
+
+
+def test_quote_first_and_evidence_check_together_are_rejected():
+    with pytest.raises(ValueError, match="함께 켤 수 없다"):
+        MainCallPrompt.load(TABLE, evidence_check=True, quote_first=True)
+
+
+def test_from_rules_passes_quote_first():
+    on = MainCallPrompt.from_rules(quote_first=True)
+    assert on.quote_first is True and on.schema is QuoteFirstMainCallOut
+
+
+def test_prompt_rejects_missing_sentence_fields_slot(tmp_path: Path):
+    src = (Path(__file__).resolve().parents[2] / "tutor" / "prompts" / "main_call.md").read_text(
+        encoding="utf-8"
+    )
+    (tmp_path / "main_call.md").write_text(src.replace("{sentence_fields}\n", ""), encoding="utf-8")
+    for on in (True, False):
+        with pytest.raises(ValueError, match="문장 필드 자리"):
+            MainCallPrompt.load(TABLE, tmp_path, quote_first=on)
 
 
 def test_from_rules_passes_scaffold_state_rule():
@@ -412,6 +497,24 @@ async def test_run_main_call_with_evidence_check_asks_checked_schema():
     assert out == PARSED and type(out) is MainCallOut
     ((_, schema, _),) = fake.calls
     assert schema is CheckedMainCallOut
+
+
+@pytest.mark.anyio
+async def test_run_main_call_with_quote_first_asks_quote_first_schema():
+    on = MainCallPrompt.load(TABLE, quote_first=True)
+    s = PARSED.sentences[0]
+    parsed = QuoteFirstMainCallOut(
+        category=PARSED.category,
+        action=PARSED.action,
+        sentences=[QuoteFirstSentenceOut(kind=s.kind, evidence=s.evidence, text=s.text)],
+    )
+    fake = FakeComplete(Result(parsed, None))
+    out = await run_main_call(fake, on, conv(), [Sec("FIN-02-02", "매달 1만 원부터")], deadline=1)
+    assert out == PARSED and type(out) is MainCallOut
+    ((_, schema, _),) = fake.calls
+    assert schema is QuoteFirstMainCallOut
+    # 끈 프롬프트의 결과(MainCallOut)는 근거 먼저 설정에서 받지 않는다
+    assert await run_main_call(FakeComplete(Result(PARSED, None)), on, conv(), [], deadline=1) is None
 
 
 @pytest.mark.anyio

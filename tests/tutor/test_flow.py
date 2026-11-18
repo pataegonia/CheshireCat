@@ -103,6 +103,20 @@ def test_prepare_judge_follows_evidence_check_toggle(on):
     assert ("asked_in_evidence" in s.tutor_prompt.system) is on
 
 
+@pytest.mark.parametrize("on", [True, False])
+def test_prepare_judge_follows_quote_first_toggle(on):
+    # TU-07: 근거 먼저는 설정 토글이 정한다(기본 끔). 프롬프트와 출력 스키마가 함께 바뀐다
+    s = types.SimpleNamespace(tutor_cfg=load_config(overrides={"toggles.quote_first": on}))
+    flow.prepare_judge(s)
+    assert s.tutor_prompt.quote_first is on
+    assert s.tutor_prompt.schema.__name__ == ("QuoteFirstMainCallOut" if on else "MainCallOut")
+
+
+def test_quote_first_and_evidence_check_together_fail_at_load():
+    with pytest.raises(ValueError, match="함께 켤 수 없다"):
+        load_config(overrides={"toggles.quote_first": True, "toggles.evidence_check": True})
+
+
 # --- 빈 판단 대상·실패 ---
 
 

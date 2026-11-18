@@ -49,6 +49,8 @@ class Toggles(_Strict):
     quote_append: bool
     inline_cite: bool
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
+    # 주 호출이 문장마다 근거 문구(evidence)를 문장(text)보다 먼저 쓴다. 필드 순서만 바꾼다(TU-07)
+    quote_first: bool
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
     # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,
@@ -67,6 +69,9 @@ class Toggles(_Strict):
             raise ValueError("toggles.vote는 만들지 않았다(#83, TU-13 호출 상한)")
         if self.verify == "self":
             raise ValueError("toggles.verify: self는 만들지 않았다(#83, TU-13 호출 상한)")
+        if self.evidence_check and self.quote_first:
+            # 두 칸을 함께 쓰는 출력 스키마는 만들지 않았다
+            raise ValueError("toggles.evidence_check와 quote_first는 함께 켤 수 없다")
         if self.intent_override == "serial" and self.guard_classify != "off":
             # 직렬 T는 classify를 기다리지 않고 고정 문장을 내 classify 우선 규칙을 못 지킨다
             raise ValueError("toggles.intent_override: serial은 guard_classify off에서만 쓴다")

@@ -94,14 +94,16 @@ REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
 def prepare_judge(app_state: Any) -> None:
     """기동 때 한 번: 범주 → action 표와 scaffold 정책(`scaffold_state_rule`)·근거 대조 칸
-    (`evidence_check`)으로 주 호출 프롬프트를, 판단 예시를 켰으면 예시 색인을 만들고,
-    가드 단계 건너뜀 횟수를 0으로 둔다.
+    (`evidence_check`)·근거 먼저(`quote_first`)로 주 호출 프롬프트를, 판단 예시를 켰으면 예시
+    색인을 만들고, 가드 단계 건너뜀 횟수를 0으로 둔다.
 
     `tutor.startup.prepare`가 부른다. 공개 세트 파일을 못 읽으면 예외가 나서 서버가 뜨지 않는다
     (KB와 같다). 예시를 끈 설정에서는 파일을 읽지 않는다."""
     toggles = app_state.tutor_cfg.toggles
     app_state.tutor_prompt = MainCallPrompt.from_rules(
-        scaffold_state_rule=toggles.scaffold_state_rule, evidence_check=toggles.evidence_check
+        scaffold_state_rule=toggles.scaffold_state_rule,
+        evidence_check=toggles.evidence_check,
+        quote_first=toggles.quote_first,
     )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
     intent_on = toggles.intent_override != "off"  # T 의도 판정(#209): 프롬프트·목차는 기동 때 한 번

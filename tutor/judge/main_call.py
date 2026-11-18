@@ -59,6 +59,32 @@ class MainCallOut(_Out):
     sentences: list[SentenceOut]
 
 
+# `toggles.quote_first`(TU-07): 문장마다 근거 문구를 문장보다 먼저 쓴다. 필드 순서대로
+# 생성하므로 claim이면 원문 문구를 옮긴 뒤 그 문구에 맞춰 문장을 쓴다. 필드는 `SentenceOut`·
+# `MainCallOut`과 같고 순서만 다르다. docstring은 스키마 description으로 모델에 가므로 쓰지 않고,
+# 제목·설명은 끈 판과 같게 둔다(달라지는 것은 필드 순서와 스키마 이름뿐). `clean`이
+# `MainCallOut`으로 바꾼다.
+class QuoteFirstSentenceOut(_Out):
+    model_config = ConfigDict(extra="forbid", strict=True, title="SentenceOut")
+
+    kind: Literal["claim", "non_claim"]
+    evidence: list[EvidenceOut]
+    text: str
+
+
+class QuoteFirstMainCallOut(_Out):
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        title="MainCallOut",
+        json_schema_extra={"description": MainCallOut.__doc__},
+    )
+
+    category: Category
+    action: Action
+    sentences: list[QuoteFirstSentenceOut]
+
+
 class CheckedMainCallOut(_Out):
     """`toggles.evidence_check`(TU-06, #162): 범주보다 먼저 근거 대조 결과를 쓰게 한다.
 
@@ -161,6 +187,27 @@ _EVIDENCE_CHECK_FIELD = (
 )
 
 
+# 문장 필드 설명(`toggles.quote_first`, TU-07). 끄면 text·kind·evidence 순서로 프롬프트가 토글이
+# 없던 때와 글자까지 같고, 켜면 같은 세 줄을 kind·evidence·text 순서로 쓴다(출력 스키마 순서와 같다)
+_SENTENCE_FIELDS_SLOT = "{sentence_fields}\n"
+_TEXT_FIELD = "  - text: 문장 하나\n"
+_KIND_FIELD = (
+    '  - kind: 근거 묶음에서 가져온 과목 사실이 들어 있으면 "claim", '
+    '일반 설명·격려·되묻기·거절·안내이면 "non_claim"\n'
+)
+_EVIDENCE_FIELD = (
+    "  - evidence: claim이면 그 사실이 나온 섹션의 id(sid)와 그 섹션 원문에서 글자 그대로 옮긴 "
+    "짧은 문구(quote, 한 구절)를 1개 이상. non_claim이면 빈 목록\n"
+)
+
+
+def render_sentence_fields(quote_first: bool) -> str:
+    """문장 필드 설명 세 줄. 순서가 출력 스키마(`SentenceOut`·`QuoteFirstSentenceOut`)와 같다."""
+    if quote_first:
+        return _KIND_FIELD + _EVIDENCE_FIELD + _TEXT_FIELD
+    return _TEXT_FIELD + _KIND_FIELD + _EVIDENCE_FIELD
+
+
 def render_action_table(table: Mapping[str, Sequence[str]]) -> str:
     """통합 표(범주 → 허용 action)를 프롬프트 줄로 그린다. 표 순서를 그대로 쓴다."""
     lines = []
@@ -176,10 +223,15 @@ class MainCallPrompt:
     version: str
     system: str
     evidence_check: bool = False  # 근거 대조 칸을 쓰는 출력 스키마인가(#162)
+    quote_first: bool = False  # 문장마다 근거 문구를 먼저 쓰는 출력 스키마인가(TU-07)
 
     @property
-    def schema(self) -> type[MainCallOut] | type[CheckedMainCallOut]:
+    def schema(
+        self,
+    ) -> type[MainCallOut] | type[CheckedMainCallOut] | type[QuoteFirstMainCallOut]:
         """이 프롬프트가 요구하는 출력 스키마. 프롬프트 출력 목록과 늘 같이 바뀐다."""
+        if self.quote_first:
+            return QuoteFirstMainCallOut
         return CheckedMainCallOut if self.evidence_check else MainCallOut
 
     @classmethod
@@ -190,7 +242,11 @@ class MainCallPrompt:
         *,
         scaffold_state_rule: bool = False,
         evidence_check: bool = False,
+        quote_first: bool = False,
     ) -> "MainCallPrompt":
+        if evidence_check and quote_first:
+            # 두 칸을 함께 쓰는 출력 스키마는 만들지 않았다(근거 대조 칸은 측정 후 끔)
+            raise ValueError("evidence_check와 quote_first는 함께 켤 수 없다")
         # Windows 체크아웃(autocrlf)의 CRLF도 같은 프롬프트로 읽는다(런박스는 LF)
         raw = (prompt_dir / f"{PROMPT_ID}.md").read_text(encoding="utf-8")
         text = raw.replace("\r\n", "\n")
@@ -209,7 +265,15 @@ class MainCallPrompt:
             raise ValueError("main_call 프롬프트에 근거 대조 칸 자리가 없다")
         field = _EVIDENCE_CHECK_FIELD + "\n" if evidence_check else ""
         body = body.replace(_EVIDENCE_CHECK_SLOT, field)
-        return cls(version=str(head["version"]), system=body.strip(), evidence_check=evidence_check)
+        if _SENTENCE_FIELDS_SLOT not in body:
+            raise ValueError("main_call 프롬프트에 문장 필드 자리가 없다")
+        body = body.replace(_SENTENCE_FIELDS_SLOT, render_sentence_fields(quote_first))
+        return cls(
+            version=str(head["version"]),
+            system=body.strip(),
+            evidence_check=evidence_check,
+            quote_first=quote_first,
+        )
 
     @classmethod
     def from_rules(
@@ -219,6 +283,7 @@ class MainCallPrompt:
         *,
         scaffold_state_rule: bool = False,
         evidence_check: bool = False,
+        quote_first: bool = False,
     ) -> "MainCallPrompt":
         """통합 표(`integration.actions.load_actions()`, 기본은 `config/actions.yaml`)로 만든다.
 
@@ -231,6 +296,7 @@ class MainCallPrompt:
             prompt_dir,
             scaffold_state_rule=scaffold_state_rule,
             evidence_check=evidence_check,
+            quote_first=quote_first,
         )
 
 
@@ -331,10 +397,11 @@ class Complete(Protocol):
     ) -> CompleteResult: ...
 
 
-def clean(out: MainCallOut | CheckedMainCallOut) -> MainCallOut:
+def clean(out: MainCallOut | CheckedMainCallOut | QuoteFirstMainCallOut) -> MainCallOut:
     """형식만 다듬는다: 공백 정리, 빈 문장 제거, non_claim의 evidence 비우기, evidence 중복 제거.
 
-    근거 대조 칸(`CheckedMainCallOut.asked_in_evidence`)은 버린다. 뒤 단계는 `MainCallOut`만 본다.
+    근거 대조 칸(`CheckedMainCallOut.asked_in_evidence`)은 버리고, 근거 먼저 쓴 문장
+    (`QuoteFirstSentenceOut`)은 `SentenceOut`으로 바꾼다. 뒤 단계는 `MainCallOut`만 본다.
 
     인용 문구가 원문에 있는지, sid가 근거 묶음 안인지는 통합 결정적 수정(IN-04)이 본다.
     """

@@ -68,6 +68,11 @@ class Toggles(_Strict):
     # 자료 밖 고정 문장. all은 모든 요청(영어 발화 빼고), named_term은 판단 대상에 KB에 없는 이름
     # 붙은 말(tutor.judge.unknown_terms)이 있을 때만. 기본 끔
     oom_gate: Literal["off", "all", "named_term"]
+    # E를 언제 보내나(oom_gate가 켜졌을 때만 뜻이 있다). with_request는 요청 시작 때(T·주 호출과
+    # 동시에). after_intent는 직렬 T가 주 호출 없이 끝낼 요청에는 보내지 않고, 주 호출 직전에
+    # 보낸다. E 마감은 요청 시작부터 llm.timeout_s.oom_gate로 같다(호출 순서만 바꾼다).
+    # after_intent_fresh는 같은 순서에 E 마감만 E 시작부터 센다(요청 마감보다 늦지 않게)
+    oom_schedule: Literal["with_request", "after_intent", "after_intent_fresh"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":

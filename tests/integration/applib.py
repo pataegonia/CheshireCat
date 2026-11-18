@@ -91,6 +91,8 @@ FREEZE_TOGGLES_OFF = {
     "quote_append": False,  # 튜터 #225: 최종 answer에 자료 문장 덧붙이기
     "top1_dialog_query": False,  # 튜터 #236: 인용에 더할 검색 1위를 대화 질의로 고르기
     "oom_gate": "off",  # 튜터 #232: 자료 밖 확인 E(OomOut, 주 호출과 동시에 nano 1회)
+    # 튜터 oom_schedule: E를 보내는 때(동결 설정 after_intent_fresh, 기준은 요청 시작 때)
+    "oom_schedule": "with_request",
 }
 
 

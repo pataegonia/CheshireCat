@@ -6,12 +6,15 @@
 본다.
 
 - 기준 설정 사본은 저장소 설정과 동결 토글 키에서만 다르다.
+- 저장소 설정에서 켜진 토글은 동결 토글(`FREEZE_TOGGLES_OFF`)이거나 기준 목록(`BASELINE_ON`)에
+  있다. 동결 설정에 새 토글이 켜졌는데 기준 설정에서 끄지 않으면 여기서 걸린다.
 - 정상 질문 1건: 200 + 튜터 스키마, 가짜 LLM의 답이 나간다. 튜터 LLM 호출 스키마 순서는
   intent_override가 off면 [MainCallOut], serial이면 [IntentOut, MainCallOut], parallel이면 둘이
   한 번씩.
 - serial에서 T 이름표가 고정 문장 조합(유해-실행)이면 주 호출 없이 refuse를 낸다.
 - T 호출이 실패해도 200 + 스키마이고 주 호출 답이 나간다.
 - 공개 튜터 200행: 행마다 200 + 스키마, 요청당 튜터 LLM 호출이 off면 1회 이하, 켜져 있으면 2회 이하.
+  그 요청에서 자료 밖 확인 E(OomOut, 튜터 #232 `oom_gate`)를 불렀으면 상한이 1 더 크다.
 
 학습자 발화는 test_real_guard.py의 QUESTION을 다시 쓴다. 공개 세트 행은 test_e2e의 것을 그대로
 보낸다.
@@ -25,6 +28,7 @@ import yaml
 from tests.integration.applib import (
     ANSWER_WORD,
     FREEZE_TOGGLES_OFF,
+    OOM_GATE,
     ROOT,
     assert_tutor_contract,
     user,
@@ -38,7 +42,14 @@ from tests.integration.test_e2e import (
 from tests.integration.test_real_guard import QUESTION
 
 MAIN, INTENT = "MainCallOut", "IntentOut"
+# 동결 설정 전부터 main에서 켜져 있던 토글(기준 설정에서도 켠다)
+BASELINE_ON = frozenset({"signals", "cite_top1", "max_citations"})
 
+
+def is_off(value) -> bool:
+    """꺼진 값: false · "off" · 빈 값(0은 꺼진 값으로 보지 않는다)."""
+    return value is False or value is None or value == "off"
+  
 
 def intent_mode(client) -> str:
     """앱이 읽은 intent_override. 토글이 없으면(동결 설정 전의 main) "off"."""
@@ -65,6 +76,19 @@ def test_baseline_copy_differs_from_the_repo_config_only_in_freeze_toggles(basel
     assert set(copy["toggles"]) == set(repo["toggles"])  # 저장소에 없는 키는 더하지 않는다
     assert {k: copy["toggles"][k] for k in present} == {k: FREEZE_TOGGLES_OFF[k] for k in present}
 
+    
+def test_repo_config_turns_on_only_freeze_toggles_and_the_baseline_list():
+    """저장소 설정의 toggles 가운데 꺼지지 않은 값은 FREEZE_TOGGLES_OFF나 BASELINE_ON에 있어야
+    한다(#227 리뷰). 없으면 기준 설정이 그 토글을 켠 채로 다른 통합 테스트를 돌린다."""
+    repo = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
+    toggles = repo["toggles"]
+    assert BASELINE_ON <= set(toggles), sorted(BASELINE_ON - set(toggles))  # 기준 목록 이름 확인
+    stray = {
+        k: v
+        for k, v in toggles.items()
+        if not is_off(v) and k not in FREEZE_TOGGLES_OFF and k not in BASELINE_ON
+    }
+    assert stray == {}, f"켜졌는데 applib.FREEZE_TOGGLES_OFF에도 기준 목록에도 없는 토글: {stray}"
 
 def test_normal_question_calls_intent_then_main_as_the_repo_config_says(
     repo_config_client, fake_send
@@ -114,6 +138,7 @@ def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fak
     client = repo_config_client
     mode = intent_mode(client)
     budget = 1 if mode == "off" else 2
+    base = 1 if mode == "off" else 2
     fake_send.vary = True
     over = []
     for row in TUTOR_ROWS:
@@ -126,3 +151,10 @@ def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fak
         if calls > budget:
             over.append((row["id"], fake_send.names[before:]))
     assert over == [], f"intent_override={mode}, 요청당 튜터 LLM 상한 {budget}회를 넘은 행: {over}"
+        names = fake_send.names[before:]
+        budget = base + (OOM_GATE in names)  # E를 부른 요청은 E · T · 주 호출
+        if len(names) > budget:
+            over.append((row["id"], names))
+    assert over == [], (
+        f"intent_override={mode}, 요청당 튜터 LLM 상한 {base}회(E면 +1)를 넘은 행: {over}"
+    )

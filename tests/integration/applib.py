@@ -80,6 +80,11 @@ def user(content: str) -> dict[str, Any]:
 TUTOR_GUARD_STAGES_ON = {"guard_classify": "parallel", "verify": "guard"}
 
 
+
+# 튜터 동결 설정(11/18, 튜터 #220 · #225)이 켜는 토글 네 개를 끈 값. 통합 테스트는 이 토글들을
+# 끈 기준 설정에서 돈다(튜터 테스트 tests/tutor/conftest.py와 같은 방식). 저장소 설정 그대로의
+# 앱은 test_freeze_config.py가 본다. 저장소 설정에 아직 없는 키는 건드리지 않는다(동결 설정 전
+# main)
 # 튜터 동결 설정(11/18, 튜터 #220 · #225 · #232 · #236)이 켜는 토글 여섯 개를 끈 값. 통합
 # 테스트는 이 토글들을 끈 기준 설정에서 돈다(튜터 테스트 tests/tutor/conftest.py와 같은 방식).
 # 저장소 설정 그대로의 앱은 test_freeze_config.py가 본다. 저장소 설정에 아직 없는 키는 건드리지
@@ -185,7 +190,6 @@ class IntentFailure(RuntimeError):
 INTENT_STUDY = "학습 질문"  # T 의도 판정의 덮지 않는 이름표(tutor.judge.intent)
 OOM_GATE = "OomOut"  # 튜터 자료 밖 확인 E의 응답 스키마 이름(tutor.judge.oom_gate)
 
-
 def _schema_name(kwargs: dict[str, Any], system: str) -> str:
     """요청한 응답 스키마 이름. json_schema 방식이면 이름으로, json_object 방식이면 system에
     붙은 스키마의 필드로 알아본다."""
@@ -196,6 +200,7 @@ def _schema_name(kwargs: dict[str, Any], system: str) -> str:
         return "MainCallOut"
     if '"label"' in system and '"self_info"' in system:
         return "IntentOut"
+
     if '"asked"' in system and '"found"' in system:
         return OOM_GATE
     return "BaselineOut" if '"citations"' in system and '"answer"' in system else ""
@@ -216,6 +221,7 @@ class FakeSend:
     - T 의도 판정(IntentOut, 튜터 #220 `toggles.intent_override`)에는
       {"label": `intent_label`, "self_info": false}로 답한다(기본 이름표 "학습 질문"은 덮지 않는다).
       `intent_fails`면 IntentOut 호출만 `IntentFailure`로 실패한다(`unknown`에는 넣지 않는다).
+
     - 자료 밖 확인 E(OomOut, 튜터 #232 `toggles.oom_gate`)에는
       {"asked": 표식, "quote": "", "found": `oom_found`}로 답한다. 기본 `oom_found=True`는 답을
       바꾸지 않는다(False면 최종 answer가 자료 밖 고정 문장이 된다).

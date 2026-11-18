@@ -49,7 +49,7 @@ BASELINE_ON = frozenset({"signals", "cite_top1", "max_citations"})
 def is_off(value) -> bool:
     """꺼진 값: false · "off" · 빈 값(0은 꺼진 값으로 보지 않는다)."""
     return value is False or value is None or value == "off"
-
+  
 
 def intent_mode(client) -> str:
     """앱이 읽은 intent_override. 토글이 없으면(동결 설정 전의 main) "off"."""
@@ -76,7 +76,7 @@ def test_baseline_copy_differs_from_the_repo_config_only_in_freeze_toggles(basel
     assert set(copy["toggles"]) == set(repo["toggles"])  # 저장소에 없는 키는 더하지 않는다
     assert {k: copy["toggles"][k] for k in present} == {k: FREEZE_TOGGLES_OFF[k] for k in present}
 
-
+    
 def test_repo_config_turns_on_only_freeze_toggles_and_the_baseline_list():
     """저장소 설정의 toggles 가운데 꺼지지 않은 값은 FREEZE_TOGGLES_OFF나 BASELINE_ON에 있어야
     한다(#227 리뷰). 없으면 기준 설정이 그 토글을 켠 채로 다른 통합 테스트를 돌린다."""
@@ -89,7 +89,6 @@ def test_repo_config_turns_on_only_freeze_toggles_and_the_baseline_list():
         if not is_off(v) and k not in FREEZE_TOGGLES_OFF and k not in BASELINE_ON
     }
     assert stray == {}, f"켜졌는데 applib.FREEZE_TOGGLES_OFF에도 기준 목록에도 없는 토글: {stray}"
-
 
 def test_normal_question_calls_intent_then_main_as_the_repo_config_says(
     repo_config_client, fake_send
@@ -138,6 +137,7 @@ def test_a_failed_intent_call_still_sends_the_main_call_answer(repo_config_clien
 def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fake_send):
     client = repo_config_client
     mode = intent_mode(client)
+    budget = 1 if mode == "off" else 2
     base = 1 if mode == "off" else 2
     fake_send.vary = True
     over = []
@@ -147,6 +147,10 @@ def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fak
         r = client.post("/tutor", content=raw, headers=HEADERS)
         assert r.status_code == 200, row["id"]
         assert_tutor_response(r.json())
+        calls = len(fake_send.names) - before
+        if calls > budget:
+            over.append((row["id"], fake_send.names[before:]))
+    assert over == [], f"intent_override={mode}, 요청당 튜터 LLM 상한 {budget}회를 넘은 행: {over}"
         names = fake_send.names[before:]
         budget = base + (OOM_GATE in names)  # E를 부른 요청은 E · T · 주 호출
         if len(names) > budget:

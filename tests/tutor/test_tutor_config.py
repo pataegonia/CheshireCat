@@ -1,7 +1,9 @@
 """튜터 설정(TU-14): 루트 config/tutor.yaml을 가드 GR-11과 같은 형식으로 읽는다."""
 
 import asyncio
+import os
 import types
+from pathlib import Path
 
 import pytest
 import yaml
@@ -13,7 +15,8 @@ from tutor.runtime import config
 
 
 def repo_raw():
-    return yaml.safe_load((config.ROOT / config.DEFAULT_CONFIG).read_text(encoding="utf-8"))
+    """테스트 기준 설정(conftest: 동결 토글을 끈 저장소 설정)의 원본 매핑."""
+    return yaml.safe_load(Path(os.environ[config.CONFIG_ENV]).read_text(encoding="utf-8"))
 
 
 def write(tmp_path, data, name="tutor.yaml"):
@@ -23,7 +26,7 @@ def write(tmp_path, data, name="tutor.yaml"):
 
 
 def test_repo_config_has_the_prd_defaults():
-    cfg = config.load_config()
+    cfg = config.load_config(config.ROOT / config.DEFAULT_CONFIG)  # 저장소 파일 그대로
     toggles = cfg.toggles
     assert cfg.mode == "v2"
     assert toggles.action_from_category is False  # TU-06 기본 끔
@@ -36,11 +39,11 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
-    assert toggles.delegation_override is False  # TU-06 기본 끔, 동결 후보 측정에서 켠다
-    assert toggles.quote_append is False  # TU-07 자료 문장 덧붙이기 기본 끔
-    assert toggles.fallback_quote is False  # TU-12 자료 인용 답 기본 끔(#201 A-2)
-    assert toggles.oom_gate == "off"  # 자료 밖 확인 E 기본 끔(#213 B2)
-    assert toggles.intent_override == "off"  # T 의도 판정 기본 끔(#209)
+    assert toggles.delegation_override is True  # 동결 설정(11/18): 대행 덮기 켬
+    assert toggles.fallback_quote is True  # 동결 설정(11/18): 자료 인용 답 켬(T 관문)
+    assert toggles.intent_override == "serial"  # 동결 설정(11/18): T serial
+    assert toggles.quote_append is True  # 동결 설정(11/18): 자료 문장 덧붙이기 켬(#225)
+    assert toggles.oom_gate == "named_term"  # 동결 설정(11/18): 이름 붙은 말이 KB에 없을 때만 E
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로
@@ -187,6 +190,7 @@ def test_env_picks_the_config_file(tmp_path, monkeypatch):
 
 
 def test_default_file_is_found_from_another_directory(tmp_path, monkeypatch):
+    monkeypatch.delenv(config.CONFIG_ENV)  # 테스트 기준 설정(conftest) 대신 저장소 기본 파일
     monkeypatch.chdir(tmp_path)  # 저장소 루트가 아닌 곳에서 띄워도 config/tutor.yaml을 찾는다
     assert config.load_config() == config.load_config(config.ROOT / config.DEFAULT_CONFIG)
 

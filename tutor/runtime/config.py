@@ -52,7 +52,7 @@ class Toggles(_Strict):
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
     cite_top1: bool  # 인용에 검색 1위 섹션을 더한다. 켜면 max_citations + 1개까지(TU-07)
     # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,
-    # serial은 T 먼저(고정 문장 이름표면 주 호출 없이). 기본 끔(TU-06)
+    # serial은 T 먼저(refuse·위기 고정 문장 이름표면 주 호출 없이). 기본 끔(TU-06)
     intent_override: Literal["off", "parallel", "serial"]
     # 자료 밖 확인 E(#213 B2): 주 호출과 동시에 nano 1회, 최종 answer인데 E가 "근거에 없음"이면
     # 자료 밖 고정 문장. all은 모든 요청(영어 발화 빼고), named_term은 판단 대상에 KB에 없는 이름

@@ -297,8 +297,8 @@ SERIAL_WEAK = [
 
 @pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
 def test_serial_weak_fixed_label_still_sends_its_fixed_sentence(label, fixed, action):
-    # redirect·scaffold 고정 문장 이름표도 주 호출을 부르지만, 주 호출이 escalate가 아니면
-    # T 고정 문장을 그대로 낸다(#220 가드 리뷰 1번)
+    # redirect·scaffold 고정 문장 이름표도 주 호출을 부르고, 주 호출이 answer처럼 더 약한
+    # action이면 T 고정 문장을 낸다(parallel과 같은 규칙, #220·#233 가드 리뷰)
     llm = RoleLLM(out(), label)
     resp = run(state_with(llm, **SERIAL))
     assert llm.roles == [intent.ROLE, "main"]

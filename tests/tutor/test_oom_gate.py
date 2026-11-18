@@ -231,7 +231,7 @@ def test_serial_intent_fixed_label_is_not_overridden_by_the_gate():
     llm = RoleLLM(out(), found=False, label="무관 결과물")
     state = state_with(llm, **ON, **{"toggles.intent_override": "serial"})
     resp = run(state)
-    # T 고정 문장(answer가 아님)은 그대로. 직렬 T의 redirect는 주 호출이 escalate인지 본 뒤 낸다
+    # T 고정 문장(answer가 아님)은 그대로. 직렬 T의 redirect는 주 호출 action을 본 뒤 정한다
     assert resp["action"] == "redirect" and resp["answer"] == TEXT[Fixed.REDIRECT_OFF_TOPIC]
 
 

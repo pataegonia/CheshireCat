@@ -47,6 +47,9 @@ class Toggles(_Strict):
     # 최종 answer에 첫 인용 섹션에서 질문과 가장 겹치는 자료 문장(최대 2개)을 덧붙인다(TU-07).
     # LLM 0회. 기본 끔
     quote_append: bool
+    # quote_append가 붙일 자료 문장을 첫 인용 대신 cite_top1이 뒤에 더한 검색 1위 섹션에서
+    # 고른다. 인용이 max_citations보다 많을 때만(그때 마지막 인용이 더한 1위다). LLM 0회. 기본 끔
+    quote_from_top1: bool
     inline_cite: bool
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다

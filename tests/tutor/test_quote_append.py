@@ -91,6 +91,48 @@ def test_only_the_first_citation_is_quoted():
     assert not any(s in joined for s in _picked(state, other) if s not in _picked(state))
 
 
+TOP1 = {**ON, "toggles.quote_from_top1": True}
+
+
+def _only(state, sid, other):
+    return [s for s in _picked(state, sid) if s not in _picked(state, other)]
+
+
+def _other(state):
+    # PY-01-01에 없는 자료 문장이 골라지는 다른 섹션
+    sections = state.tutor_kb.sections
+    return next(s for s in sections if s != "PY-01-01" and _only(state, s, "PY-01-01"))
+
+
+def test_top1_source_quotes_the_section_cite_top1_added():
+    # max_citations 1인데 인용이 둘이면 뒤의 것이 cite_top1이 더한 1위다. 그 섹션에서 고른다
+    state = state_with(FakeLLM(out()), **TOP1)
+    assert state.tutor_cfg.toggles.max_citations == 1
+    other = _other(state)
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01", other]}
+    joined = flow.append_quote(request(), state, body)["answer"]
+    assert all(s in joined for s in _picked(state, other))
+    assert not any(s in joined for s in _only(state, "PY-01-01", other))
+
+
+def test_top1_source_keeps_the_first_when_nothing_was_added():
+    # 인용이 max_citations개 이하면 더한 1위가 없으므로 지금처럼 첫 인용에서 고른다
+    on = state_with(FakeLLM(out()), **TOP1)
+    off = state_with(FakeLLM(out()), **ON)
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01"]}
+    assert flow.append_quote(request(), on, body) == flow.append_quote(request(), off, body)
+
+
+def test_top1_source_follows_max_citations():
+    # max_citations 2면 인용 둘은 모두 모델 인용이라 첫 인용에서 고른다
+    state = state_with(FakeLLM(out()), **TOP1, **{"toggles.max_citations": 2})
+    other = _other(state)
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01", other]}
+    joined = flow.append_quote(request(), state, body)["answer"]
+    assert all(s in joined for s in _picked(state))
+    assert not any(s in joined for s in _only(state, other, "PY-01-01"))
+
+
 def test_empty_answer_note_is_untouched():
     # 모델 문장이 모두 걸러져 "자료에서 확인하지 못했어요"만 남은 답(IN-04-3)에는 붙이지 않는다
     state = state_with(FakeLLM(out(sentences=[])), **ON)

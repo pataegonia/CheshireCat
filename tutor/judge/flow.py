@@ -447,6 +447,9 @@ def _english_only(text: str) -> bool:
 def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
     """`toggles.quote_append`(TU-07): 최종 answer에 첫 인용 섹션의 자료 문장을 덧붙인다.
 
+    `toggles.quote_from_top1`이면 인용이 `max_citations`보다 많을 때(모델 인용은 그 수까지라
+    마지막 인용이 `cite_top1`이 더한 검색 1위다) 그 1위 섹션에서 고른다.
+
     문장 고르기는 자료 인용 답(TU-12)과 같다(`quote_sentences`: 질문과 2-gram이 가장 겹치는 설명
     문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 그중 물음표로 끝나는
     문장(자료가 학습자에게 던지는 질문)과 답에 이미 있는 문장은 빼고, 붙이면 4,000자를 넘거나
@@ -466,7 +469,9 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     if NOT_IN_MATERIAL_NOTE in answer:
         return body
     cites = body.get("citations") or []
-    section = state.tutor_kb.sections.get(cites[0]) if cites else None
+    toggles = state.tutor_cfg.toggles
+    from_top1 = toggles.quote_from_top1 and len(cites) > toggles.max_citations
+    section = state.tutor_kb.sections.get(cites[-1] if from_top1 else cites[0]) if cites else None
     if section is None:
         return body
     conv = tidy(_messages(req))

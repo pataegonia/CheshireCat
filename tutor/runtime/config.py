@@ -53,6 +53,11 @@ class Toggles(_Strict):
     # 최종 answer에 첫 인용 섹션에서 질문과 가장 겹치는 자료 문장(최대 2개)을 덧붙인다(TU-07).
     # LLM 0회. 기본 끔
     quote_append: bool
+    # quote_append가 붙일 자료 문장을 첫 인용 대신 cite_top1이 뒤에 더한 1위 섹션에서
+    # 고른다. 인용이 max_citations보다 많을 때만(그때 마지막 인용이 더한 1위다). LLM 0회.
+    # max_citations 2에서는 모델이 하나만 인용하면 1위를 더해도 켜지지 않는다(놓치기만 하고 다른
+    # 섹션을 고르지는 않는다). 동결 설정에서 켬(11/18)
+    quote_from_top1: bool
     inline_cite: bool
     evidence_check: bool  # 주 호출이 범주 전에 근거 대조 칸을 쓴다(TU-06, #162)
     max_citations: Annotated[int, Field(ge=1, le=2)]  # Literal[1, 2]는 true·1.0도 받는다
@@ -68,6 +73,11 @@ class Toggles(_Strict):
     # 자료 밖 고정 문장. all은 모든 요청(영어 발화 빼고), named_term은 판단 대상에 KB에 없는 이름
     # 붙은 말(tutor.judge.unknown_terms)이 있을 때만. 기본 끔
     oom_gate: Literal["off", "all", "named_term"]
+    # E를 언제 보내나(oom_gate가 켜졌을 때만 뜻이 있다). with_request는 요청 시작 때(T·주 호출과
+    # 동시에). after_intent는 직렬 T가 주 호출 없이 끝낼 요청에는 보내지 않고, 주 호출 직전에
+    # 보낸다. E 마감은 요청 시작부터 llm.timeout_s.oom_gate로 같다(호출 순서만 바꾼다).
+    # after_intent_fresh는 같은 순서에 E 마감만 E 시작부터 센다(요청 마감보다 늦지 않게)
+    oom_schedule: Literal["with_request", "after_intent", "after_intent_fresh"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":

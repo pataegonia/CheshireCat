@@ -45,7 +45,9 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.fallback_quote is True  # 동결 설정(11/18): 자료 인용 답 켬(T 관문)
     assert toggles.intent_override == "serial"  # 동결 설정(11/18): T serial
     assert toggles.quote_append is True  # 동결 설정(11/18): 자료 문장 덧붙이기 켬(#225)
+    assert toggles.quote_from_top1 is True  # 동결 설정(11/18): 덧붙일 문장을 더한 1위 섹션에서
     assert toggles.oom_gate == "named_term"  # 동결 설정(11/18): 이름 붙은 말이 KB에 없을 때만 E
+    assert toggles.oom_schedule == "after_intent_fresh"  # 동결 설정(11/18): E를 T 뒤에
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로
@@ -68,16 +70,18 @@ def test_main_call_timeout_uses_the_budget_headroom():
     assert backstop_s(budget) < 30  # 안전망까지 SPEC §3 요청당 30초 안
 
 
-def test_repo_config_scales_the_guard_budget_to_24s():
+def test_repo_config_keeps_the_guard_budget_and_scale_can_raise_it():
     from guardrail.config import load_config as load_guard_config
 
     from tutor.runtime.budget import budget_s
 
     cfg = config.load_config(config.ROOT / config.DEFAULT_CONFIG)
-    assert cfg.budget_scale == 1.2
+    assert cfg.budget_scale == 1.0  # 11/18 제출 5대5에서 1.2가 점수 차이를 내지 못해 끔
     guard = load_guard_config()
     assert guard.budget_s == 20  # 가드 예산은 그대로
-    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(24)
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(20)
+    scaled = config.load_config(overrides={"budget_scale": 1.2})
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=scaled)) == pytest.approx(24)
 
 
 @pytest.mark.parametrize(
@@ -111,8 +115,8 @@ def test_budget_scale_key_is_required_and_budget_s_is_gone(tmp_path):
 
 def test_repo_config_has_the_hedge_and_intent_wait_limits():
     timeouts = config.load_config(config.ROOT / config.DEFAULT_CONFIG).llm.timeout_s
-    assert (timeouts.main_hedge, timeouts.intent_wait) == (12, 8)
-    assert timeouts.main_hedge < timeouts.main  # 겹쳐 보내기는 켬
+    assert (timeouts.main_hedge, timeouts.intent_wait) == (18, 8)
+    assert timeouts.main_hedge >= timeouts.main  # 겹쳐 보내기는 끔(11/18 제출 5대5: 점수 차이 없음)
     assert timeouts.intent_wait >= timeouts.intent  # T 대기 상한은 끔(11/18 모의 부하: 가드 지연)
 
 
@@ -168,6 +172,7 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("toggles.top1_dialog_query", "yes"),
         ("toggles.english_embedding", "yes"),
         ("toggles.english_embedding", 1),
+        ("toggles.quote_from_top1", "yes"),
         ("toggles.delegation_override", "yes"),
         ("toggles.fallback_quote", "yes"),
         ("toggles.intent_override", True),  # off | parallel | serial만 받는다
@@ -317,3 +322,13 @@ def test_english_embedding_needs_the_oom_gate():
     assert gated.toggles.english_embedding is True
     with pytest.raises(ValueError, match="english_embedding"):
         config.load_config(overrides={**on, "toggles.oom_gate": "off"})
+
+
+def test_oom_schedule_key_is_required_and_loads_all_values(tmp_path):
+    data = repo_raw()
+    for value in ("with_request", "after_intent", "after_intent_fresh"):
+        data["toggles"]["oom_schedule"] = value
+        assert config.load_config(write(tmp_path, data)).toggles.oom_schedule == value
+    del data["toggles"]["oom_schedule"]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))

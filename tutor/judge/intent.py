@@ -42,9 +42,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from integration.contracts import Action
 from pydantic import BaseModel, ConfigDict
 
+from integration.contracts import Action
 from tutor.answer.templates import template_for
 from tutor.judge.conversation import Conversation
 from tutor.judge.main_call import _turn_block, defuse

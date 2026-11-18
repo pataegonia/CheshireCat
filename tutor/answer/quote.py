@@ -29,6 +29,7 @@ from tutor.retrieval import Section
 from tutor.retrieval.kb import bigrams
 
 MAX_QUOTED = 2  # 옮기는 자료 문장 수. 첫 문장까지 3문장 이내(TU-06 1–3문장)
+APPEND_QUOTED = 3  # 최종 answer 뒤 자료 문장 덧붙이기(quote_append)가 옮기는 문장 수(측정용)
 MAX_SENTENCE_CHARS = 400  # 이보다 긴 문장은 옮기지 않는다(답변 4,000자 안, 한 줄 문단 대비)
 MIN_SHARED = 2  # 질문과 겹치는 2-gram 종류가 이보다 적은 문장은 옮기지 않는다
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -74,14 +75,14 @@ def _score(asked: set[str], sentence: str) -> float:
     return shared / math.sqrt(len(grams))
 
 
-def quote_sentences(text: str, query: str) -> list[str]:
+def quote_sentences(text: str, query: str, limit: int = MAX_QUOTED) -> list[str]:
     """질문과 겹치는 문장을 점수 순으로 `MAX_QUOTED`개까지, 본문 순서대로 돌려준다.
 
     둘째부터는 가장 높은 점수의 절반 이상일 때만 넣는다(관련 없는 문장을 덧붙이지 않게).
     """
     asked = set(bigrams(query))
     scored = [(_score(asked, s), -i, s) for i, s in enumerate(_sentences(text))]
-    ranked = sorted((t for t in scored if t[0] > 0), reverse=True)[:MAX_QUOTED]
+    ranked = sorted((t for t in scored if t[0] > 0), reverse=True)[:limit]
     if not ranked:
         return []
     top = ranked[0][0]

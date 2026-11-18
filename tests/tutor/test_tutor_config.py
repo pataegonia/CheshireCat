@@ -44,6 +44,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.fallback_quote is True  # 동결 설정(11/18): 자료 인용 답 켬(T 관문)
     assert toggles.intent_override == "serial"  # 동결 설정(11/18): T serial
     assert toggles.quote_append is True  # 동결 설정(11/18): 자료 문장 덧붙이기 켬(#225)
+    assert toggles.quote_from_top1 is True  # 동결 설정(11/18): 덧붙일 문장을 더한 1위 섹션에서
     assert toggles.oom_gate == "named_term"  # 동결 설정(11/18): 이름 붙은 말이 KB에 없을 때만 E
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
@@ -105,6 +106,7 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("toggles.signals", "yes"),
         ("toggles.cite_top1", "yes"),
         ("toggles.top1_dialog_query", "yes"),
+        ("toggles.quote_from_top1", "yes"),
         ("toggles.delegation_override", "yes"),
         ("toggles.fallback_quote", "yes"),
         ("toggles.intent_override", True),  # off | parallel | serial만 받는다

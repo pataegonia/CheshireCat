@@ -445,10 +445,11 @@ def _english_only(text: str) -> bool:
 
 
 def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[str, Any]:
-    """`toggles.quote_append`(TU-07): 최종 answer에 첫 인용 섹션의 자료 문장을 덧붙인다.
+    """`toggles.quote_append`(TU-07): 최종 answer에 인용 섹션(기본 첫 인용)의 자료 문장을 붙인다.
 
     `toggles.quote_from_top1`이면 인용이 `max_citations`보다 많을 때(모델 인용은 그 수까지라
-    마지막 인용이 `cite_top1`이 더한 검색 1위다) 그 1위 섹션에서 고른다.
+    마지막 인용이 `cite_top1`이 더한 1위다) 그 1위 섹션에서 고른다. 그 섹션에서 고를 문장이 없으면
+    첫 인용으로 돌아가지 않고 붙이지 않는다.
 
     문장 고르기는 자료 인용 답(TU-12)과 같다(`quote_sentences`: 질문과 2-gram이 가장 겹치는 설명
     문장 최대 2개, 퀴즈 답·표·코드 줄 제외, 문장부호·목록 기호 정리). 그중 물음표로 끝나는

@@ -46,6 +46,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.quote_append is True  # 동결 설정(11/18): 자료 문장 덧붙이기 켬(#225)
     assert toggles.quote_from_top1 is True  # 동결 설정(11/18): 덧붙일 문장을 더한 1위 섹션에서
     assert toggles.oom_gate == "named_term"  # 동결 설정(11/18): 이름 붙은 말이 KB에 없을 때만 E
+    assert toggles.oom_schedule == "after_intent_fresh"  # 동결 설정(11/18): E를 T 뒤에
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로
@@ -236,3 +237,13 @@ def test_local_run_cap_comes_from_the_config(capsys):
     run_local._inputs(ap, args)
     assert args.max_calls == config.load_config().eval.max_calls
     assert f"상한 {args.max_calls}회" in capsys.readouterr().out
+
+
+def test_oom_schedule_key_is_required_and_loads_all_values(tmp_path):
+    data = repo_raw()
+    for value in ("with_request", "after_intent", "after_intent_fresh"):
+        data["toggles"]["oom_schedule"] = value
+        assert config.load_config(write(tmp_path, data)).toggles.oom_schedule == value
+    del data["toggles"]["oom_schedule"]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))

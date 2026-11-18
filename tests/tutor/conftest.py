@@ -41,6 +41,7 @@ FREEZE_TOGGLES = {
     "quote_append": False,
     "quote_from_top1": False,
     "oom_gate": "off",
+    "oom_schedule": "with_request",
 }
 
 

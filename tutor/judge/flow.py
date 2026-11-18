@@ -31,7 +31,7 @@
 
 import asyncio
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from guardrail.schema import OutputVerdict
@@ -402,20 +402,48 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     (`start_error`로 센다). abstain으로 바꾸지 않은 결과에만 자료 문장 덧붙이기
     (`toggles.quote_append`)를 한다. 빠져나갈 때 아직 도는 E는 취소한다(TU-18). 흐름 본체의
     예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+
+    `toggles.oom_schedule`이 after_intent·after_intent_fresh면 E를 요청 시작 때가 아니라 흐름이
+    주 호출을 부르기 직전에 띄운다(`_answer_v2`의 `begin_gate`). 그래서 직렬 T가 주 호출 없이 끝내는
+    요청(refuse·위기 고정 문장)과 주 호출 전에 끝나는 요청에는 E를 보내지 않는다. 그 요청들의
+    최종 action은 answer가 아니라 E 결과를 쓰지 않던 요청이다. after_intent는 E 마감을 요청
+    시작부터 센 값 그대로 두고(호출 순서만 바뀐다), after_intent_fresh는 E 시작부터 센다.
     """
-    gate = None
-    if state.tutor_cfg.toggles.oom_gate != "off":
+    toggles = state.tutor_cfg.toggles
+    jobs: list[GateJob] = []  # 이 요청이 띄운 E(많아야 하나). finally에서 취소한다
+
+    async def begin(gate_deadline: float) -> None:
         try:
-            gate = await _start_gate(req, state, deadline)
+            job = await _start_gate(req, state, gate_deadline)
         except Exception:  # 메시지는 남기지 않는다
             counts = getattr(state, "oom_gate_counts", None)
             if counts is not None:
                 counts["start_error"] += 1
+            return
+        if job is not None:
+            jobs.append(job)
+            await asyncio.sleep(0)  # E 요청이 뒤따르는 호출보다 먼저 나가도록 한 번 양보한다
+
+    later = None
+    if toggles.oom_gate != "off":
+        if toggles.oom_schedule == "with_request":
+            await begin(deadline)
+        else:
+            started = asyncio.get_running_loop().time()
+            gate_deadline = (
+                deadline
+                if toggles.oom_schedule == "after_intent_fresh"
+                else min(deadline, started + state.tutor_cfg.llm.timeout_s.oom_gate)
+            )
+
+            async def later() -> None:
+                if not jobs:  # 한 요청에 한 번만
+                    await begin(gate_deadline)
+
     try:
-        if gate is not None:
-            await asyncio.sleep(0)  # E 요청이 주 호출·T보다 먼저 나가도록 한 번 양보한다
-        body = await _answer_v2(req, state, deadline=deadline)
+        body = await _answer_v2(req, state, deadline=deadline, begin_gate=later)
         counts = getattr(state, "oom_gate_counts", None)
+        gate = jobs[0] if jobs else None
         if (
             gate is not None
             and body.get("action") == "answer"
@@ -424,8 +452,8 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
         return append_quote(req, state, body)
     finally:
-        if gate is not None:
-            gate.cancel()
+        for job in jobs:
+            job.cancel()
 
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
@@ -551,8 +579,16 @@ def _named_term(state: Any, conv: Conversation) -> bool:
     return bool(missing_terms(target, blob))
 
 
-async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
+async def _answer_v2(
+    req: TutorRequest,
+    state: Any,
+    *,
+    deadline: float,
+    begin_gate: Callable[[], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+
+    `begin_gate`가 있으면 주 호출 바로 앞에서 한 번 부른다(`oom_schedule: after_intent`의 E 시작).
 
     가드 classify는 주 호출과 동시에 시작한다. 이 함수가 취소·예외로 빠져나가면 아직 도는 classify도
     함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).
@@ -603,6 +639,8 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
                 deferred = hit
             elif hit is not None:
                 return tutor_post(fixed_body(hit[0]), hit[1])
+        if begin_gate is not None:
+            await begin_gate()  # 직렬 T가 고정 문장으로 끝내지 않은 요청만 여기에 온다
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,

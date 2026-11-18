@@ -36,6 +36,10 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
+    assert toggles.delegation_override is False  # TU-06 기본 끔, 동결 후보 측정에서 켠다
+    assert toggles.quote_append is False  # TU-07 자료 문장 덧붙이기 기본 끔
+    assert toggles.fallback_quote is False  # TU-12 자료 인용 답 기본 끔(#201 A-2)
+    assert toggles.intent_override == "off"  # T 의도 판정 기본 끔(#209)
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로
@@ -95,12 +99,39 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("retrieval.k", True),
         ("toggles.signals", "yes"),
         ("toggles.cite_top1", "yes"),
+        ("toggles.delegation_override", "yes"),
+        ("toggles.fallback_quote", "yes"),
+        ("toggles.intent_override", True),  # off | parallel | serial만 받는다
+        ("toggles.intent_override", "on"),
         ("toggles.signals", 1),
     ],
 )
 def test_invalid_values_fail_at_load(dotted, value):
     with pytest.raises(ValidationError):
         config.load_config(overrides={dotted: value})
+
+
+@pytest.mark.parametrize("classify", ["serial", "parallel"])
+def test_serial_intent_needs_classify_off(classify):
+    overrides = {"toggles.intent_override": "serial", "toggles.guard_classify": classify}
+    with pytest.raises(ValidationError, match="guard_classify off"):
+        config.load_config(overrides=overrides)
+    ok = {"toggles.intent_override": "parallel", "toggles.guard_classify": classify}
+    assert config.load_config(overrides=ok).toggles.intent_override == "parallel"
+
+
+def test_intent_with_classify_and_verify_exceeds_the_call_limit():
+    # 주 호출 1(재시도 끔) + classify 최대 2 + T + judge_output = 5회 > TU-13 절대 4회
+    over = {
+        "toggles.intent_override": "parallel",
+        "toggles.guard_classify": "parallel",
+        "toggles.verify": "guard",
+    }
+    with pytest.raises(ValidationError, match="TU-13"):
+        config.load_config(overrides=over)
+    for drop in ("toggles.guard_classify", "toggles.verify"):
+        ok = {**over, drop: "off"}
+        assert config.load_config(overrides=ok).toggles.intent_override == "parallel"
 
 
 @pytest.mark.parametrize(("dotted", "value"), [("toggles.vote", True), ("toggles.verify", "self")])

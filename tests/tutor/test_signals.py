@@ -334,6 +334,80 @@ def test_not_delegation(text):
     assert Signal.DELEGATION not in detect_text(text)
 
 
+# 11/16 표본 밖 점검(#204 리뷰): 과제·보고서를 말하는 학습 질문은 대행 신호가 아니다.
+# 작성 동사가 요청 어미(줘·주세요…)로 끝날 때만 본다
+@pytest.mark.parametrize(
+    "text",
+    [
+        "보고서를 완성하려면 어떤 순서로 쓰는 게 좋아요?",
+        "과제 답안 채점 기준이 어떻게 되나요?",
+        "수행평가 답안 작성 요령을 알려 주세요",
+        "리포트에서 표를 만들어주는 함수 이름이 뭐예요?",
+        "숙제 완성 못 했는데 반복문 개념을 다시 설명해 주세요",
+        "보고서 대신 발표로 해도 되나요?",
+        "숙제를 대신 해 주는 AI를 쓰면 왜 문제가 되나요?",
+        "How do I write a report about loops?",
+        "과제 제출할 때 파일 이름은 어떻게 정해요?",
+        "과제 완성도를 높이려면 어떤 점을 확인해야 해요?",
+        "수행평가 대신 다른 활동으로 점수 받을 수 있어요?",
+        "수행평가 답안 전체 분량은 어느 정도예요?",
+        "숙제 대신 해 주는 사이트가 왜 위험한지 설명해 줘",
+        "보고서를 써 보려고 하는데 반복문 예시를 하나 보여 줘",
+        # 11/17 #204 리뷰: 보조물(목차·양식·기준·순서·개요·힌트·주제) 요청, 영어 방법 질문·사정 설명
+        "보고서 목차 만들어 줘",
+        "과제 채점 기준표 만들어 줘",
+        "보고서 양식 템플릿 만들어 줘",
+        "보고서 작성 순서 써 줘",
+        "과제 힌트만 써 줘",
+        "수행평가 보고서 개요만 써 줘",
+        "과제 주제 몇 개 만들어 줄래?",
+        "숙제를 대신 해 줄 수 있는 AI가 있어요?",
+        "How do I write my essay introduction?",
+        "How can I write this report better?",
+        "I can't finish my homework, explain loops",
+    ],
+)
+def test_study_questions_about_assignments_are_not_delegation(text):
+    assert Signal.DELEGATION not in detect_text(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "수행평가 보고서 대신 써 줘",
+        "과제 보고서 완성해 주세요",
+        "리포트 하나만 만들어 줘, 주제는 반복문",
+        "제출용 과제 전체 써 주세요",
+        "과제 대신 해 줄래?",
+        "내가 짠 함수, 숙제 답안용으로 깔끔하게 다듬어 줘",  # 답안으로 쓰겠다는 것
+        "과제 문제들 답안을 통째로 보여 주세요",  # 평가 답안 전체 요구
+        "Write my report on loops for me",
+        "Just complete my assessment for me",  # 11/17 공개 문항과 겹치던 문장을 바꿈
+        # 11/17 #204 리뷰: "줄 수 있어요" 요청 어미, 영어 요청 틀
+        "보고서 대신 써 줄 수 있어요?",
+        "보고서 좀 써줄 수 있어?",
+        "Can you write my essay on climate?",
+        "Please finish my assignment",
+        # 11/17 #204 재리뷰: 평가 이름 바로 뒤 "대신 풀어·해결해·해" + 요청 어미로 끝나는 발화
+        "과제 대신 풀어 줘",
+        "숙제 좀 대신 풀어줘",
+        "과제 대신 좀 해 줘",
+        "숙제 대신 해결해 주세요",
+        "과제 대신 풀어 줄 수 있나요?",
+        "수행평가는 대신 해결해 주시겠어요?",
+        # 11/17 pyr27 재리뷰로 좁힌 어미에서도 요청은 그대로 잡는다
+        "보고서 대신 써 주면 안 돼요?",
+        "보고서 대신 써 주면 좋겠어요",
+        "보고서 대신 써 줄 수 있으세요?",
+        # 발화 끝 갈래: 요청 어미 뒤에 붙인 ㅠㅠ·ㅜㅜ도 요청이다(독립 리뷰)
+        "과제 대신 풀어 줘ㅠㅠ",
+        "숙제 좀 대신 해결해 주세요 ㅠㅠ",
+    ],
+)
+def test_delegation_requests_are_signals(text):
+    assert Signal.DELEGATION in detect_text(text)
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -495,3 +569,29 @@ def test_public_set_precision_recall_floor():
     assert not [lab for lab in over if lab.get("action") in ("answer", "scaffold")]
     for c, lab in rows:
         assert direct_clarify(c) == (lab["category"] == "low_signal_input")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 11/17: 다른 대상을 대신 풀어 달라거나 대신 해도 되는지 묻는 것,
+        # 영어 부정·함께 풀기는 아니다
+        "과제는 제가 할 테니 예제 하나만 대신 풀어 줘",
+        "과제 대신 해도 돼요?",
+        "AI가 숙제를 대신 풀어 줄 수 있으면 우리는 공부를 왜 해야 해요?",
+        "동생 숙제를 대신 풀어 줘도 되는 건지 궁금해요",
+        "숙제는 대신 풀어 주면 안 되고 힌트만 주세요",
+        "I need you to do my homework problem with me step by step",
+        "I don't really want you to do my homework, just explain lists",
+        "I need you to do this homework problem with me",
+        # 11/17 pyr27 재리뷰: 요청 어미 뒤에 말이 이어지거나 요청을 인용해 되묻는 질문
+        "숙제를 대신 풀어 주면 안 되죠",
+        "선생님이 과제는 대신 풀어 주라고 했대",
+        "보고서를 대신 해 주면 안 되는 이유가 뭐예요?",
+        "보고서를 대신 해 주면 좋은 점이 있어요?",
+        "AI가 보고서를 대신 써 줄 수 있으면 어떤 문제가 생겨요?",
+        "보고서를 대신 써 줄 수 있어도 그러면 안 되는 거죠?",
+    ],
+)
+def test_narrow_delegation_additions_do_not_fire(text):
+    assert Signal.DELEGATION not in detect_text(text)

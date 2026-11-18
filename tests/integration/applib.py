@@ -10,7 +10,7 @@ import json
 import re
 import sys
 import types
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, get_args, get_origin
 
@@ -80,10 +80,31 @@ def user(content: str) -> dict[str, Any]:
 TUTOR_GUARD_STAGES_ON = {"guard_classify": "parallel", "verify": "guard"}
 
 
-def write_tutor_config(path: Path, **toggles: str) -> Path:
-    """config/tutor.yaml에서 `toggles` 아래 값만 바꾼 사본을 path에 쓴다(주석은 빠진다)."""
+# 튜터 동결 설정(11/18, 튜터 #220 · #225 · #232 · #236)이 켜는 토글 여섯 개를 끈 값. 통합
+# 테스트는 이 토글들을 끈 기준 설정에서 돈다(튜터 테스트 tests/tutor/conftest.py와 같은 방식).
+# 저장소 설정 그대로의 앱은 test_freeze_config.py가 본다. 저장소 설정에 아직 없는 키는 건드리지
+# 않는다(동결 설정 전 main)
+FREEZE_TOGGLES_OFF = {
+    "delegation_override": False,
+    "fallback_quote": False,
+    "intent_override": "off",
+    "quote_append": False,  # 튜터 #225: 최종 answer에 자료 문장 덧붙이기
+    "top1_dialog_query": False,  # 튜터 #236: 인용에 더할 검색 1위를 대화 질의로 고르기
+    "oom_gate": "off",  # 튜터 #232: 자료 밖 확인 E(OomOut, 주 호출과 동시에 nano 1회)
+}
+
+
+def write_tutor_config(path: Path, *, mode: str | None = None, **toggles: str) -> Path:
+    """config/tutor.yaml의 기준 설정 사본을 path에 쓴다(주석은 빠진다).
+
+    FREEZE_TOGGLES_OFF 가운데 저장소 설정에 실제로 있는 키만 끄고, 그 위에 `toggles`를 덮어 쓴다.
+    mode를 주면 최상위 mode도 바꾼다.
+    """
     raw = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
-    raw["toggles"] = {**raw["toggles"], **toggles}
+    off = {k: v for k, v in FREEZE_TOGGLES_OFF.items() if k in raw["toggles"]}
+    raw["toggles"] = {**raw["toggles"], **off, **toggles}
+    if mode is not None:
+        raw["mode"] = mode
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")  # "off"는 따옴표로
     return path
 
@@ -91,6 +112,7 @@ def write_tutor_config(path: Path, **toggles: str) -> Path:
 # 요청 하나에 튜터가 **자기 전송 함수로** LLM을 부르는 횟수의 상한(모드별). 튜터가 자기 호출을
 # 늘리면 여기 한 곳과 FakeSend의 응답(스키마 이름별 분기)을 고친다. 튜터가 가드에 맡기는 판정
 # (classify · judge_output, #88)은 튜터 전송 함수를 지나지 않는다: 아래 가드 쪽 상한에서 센다.
+# 기준 설정 기준이며, 저장소 설정 그대로의 호출 수는 test_freeze_config.py가 본다.
 MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
 
 # 요청 하나에 가드 LLM(`guardrail.llm.LLM`)이 nano를 부르는 횟수의 상한(경로별). probe는 세지
@@ -156,6 +178,14 @@ class UnknownSchema(AssertionError):
     """튜터가 가짜 전송이 모르는 스키마로 LLM을 불렀다(새 호출이 붙었다). FakeSend를 고친다."""
 
 
+class IntentFailure(RuntimeError):
+    """`FakeSend.intent_fails`일 때 T 의도 판정(IntentOut) 호출이 내는 가짜 실패."""
+
+
+INTENT_STUDY = "학습 질문"  # T 의도 판정의 덮지 않는 이름표(tutor.judge.intent)
+OOM_GATE = "OomOut"  # 튜터 자료 밖 확인 E의 응답 스키마 이름(tutor.judge.oom_gate)
+
+
 def _schema_name(kwargs: dict[str, Any], system: str) -> str:
     """요청한 응답 스키마 이름. json_schema 방식이면 이름으로, json_object 방식이면 system에
     붙은 스키마의 필드로 알아본다."""
@@ -164,6 +194,10 @@ def _schema_name(kwargs: dict[str, Any], system: str) -> str:
         return str(spec.get("name", ""))
     if '"sentences"' in system and '"category"' in system:
         return "MainCallOut"
+    if '"label"' in system and '"self_info"' in system:
+        return "IntentOut"
+    if '"asked"' in system and '"found"' in system:
+        return OOM_GATE
     return "BaselineOut" if '"citations"' in system and '"answer"' in system else ""
 
 
@@ -179,10 +213,21 @@ class FakeSend:
       문장 수 · claim 여부 · evidence 수 · 맞는/틀린 인용 문구 · 4,000자 초과 · 빈 답.
     - 모르는 스키마로 부르면 `UnknownSchema`를 던지고 `unknown`에 이름을 남긴다. 튜터는 전송
       예외를 오류 코드로 바꿔 삼키므로, `fake_send` 픽스처가 끝날 때 `unknown`이 비었는지 본다.
+    - T 의도 판정(IntentOut, 튜터 #220 `toggles.intent_override`)에는
+      {"label": `intent_label`, "self_info": false}로 답한다(기본 이름표 "학습 질문"은 덮지 않는다).
+      `intent_fails`면 IntentOut 호출만 `IntentFailure`로 실패한다(`unknown`에는 넣지 않는다).
+    - 자료 밖 확인 E(OomOut, 튜터 #232 `toggles.oom_gate`)에는
+      {"asked": 표식, "quote": "", "found": `oom_found`}로 답한다. 기본 `oom_found=True`는 답을
+      바꾸지 않는다(False면 최종 answer가 자료 밖 고정 문장이 된다).
+    - `names`: 호출마다 요청한 스키마 이름(순서대로).
     """
 
     def __init__(self, *, vary: bool = False) -> None:
         self.vary = vary
+        self.intent_label = INTENT_STUDY
+        self.intent_fails = False
+        self.oom_found = True
+        self.names: list[str] = []
         self.count = 0
         self.digests: list[str] = []
         self.unknown: list[str] = []
@@ -203,8 +248,16 @@ class FakeSend:
         answer = f"{ANSWER_WORD} {digest}"
         picks = itertools.cycle(full.digest())  # 해시 바이트를 차례로 꺼내 모양을 고른다
         name = _schema_name(kwargs, system)
+        self.names.append(name)
         log = NO_EVIDENCE
-        if name == "MainCallOut":  # v2 주 호출(tutor.judge.main_call)
+        if name == "IntentOut":  # T 의도 판정(tutor.judge.intent)
+            if self.intent_fails:
+                self.evidence.append(log)
+                raise IntentFailure("가짜 의도 판정 실패")
+            reply = {"label": self.intent_label, "self_info": False}
+        elif name == OOM_GATE:  # 자료 밖 확인 E(tutor.judge.oom_gate)
+            reply = {"asked": answer, "quote": "", "found": self.oom_found}
+        elif name == "MainCallOut":  # v2 주 호출(tutor.judge.main_call)
             user_part = messages[-1]["content"] if messages else ""
             if self.vary:
                 reply, log = _varied_main(answer, user_part, picks)
@@ -256,6 +309,34 @@ def _guard_models() -> dict[str, type[BaseModel]]:
 
 # 가짜가 아는 가드 판정 스키마(이름 → 모델). 테스트는 monkeypatch.setitem으로 임시 모델을 넣는다
 GUARD_MODELS = _guard_models()
+
+
+def _request_check_reply(note: str) -> dict[str, Any]:
+    """RequestCheckOut 고정 응답. 문자열 필드에는 일반 경로처럼 판정 글 표식(`note`)을 넣는다
+    (요청 점검 결과가 상태 · 로그로 새면 누출 탐색에 걸리게). kind "other"는 가드가 1차 범주를
+    바꾸지 않는 종류다(request_category · recheck_block)."""
+    return {
+        "asks": [{"quote": note, "wants": note, "kind": "other"}],
+        "evidence": note,
+        "verdict": "not_asked",
+    }
+
+
+def _guard_fixed_replies() -> dict[str, tuple[type[BaseModel], Callable[[str], dict[str, Any]]]]:
+    """`_guard_reply`의 일반 경로로 못 만드는 가드 스키마(이름 → (모델, note → 고정 응답)).
+
+    - RequestCheckOut(가드 S3.13 요청 점검, `guardrail.judges.schemas_exp`, #229(요청 점검)에서
+      기본 켬): `asks`가 중첩 목록이다. 종류 other 하나 · not_asked로 답한다(1차 범주를 두고,
+      자료 밖으로 바꾸지 않는다). 그 모듈이나 이름이 없는 가드(#229 전)에서는 빈 표다.
+    """
+    try:
+        from guardrail.judges.schemas_exp import RequestCheckOut
+    except ImportError:
+        return {}
+    return {"RequestCheckOut": (RequestCheckOut, _request_check_reply)}
+
+
+GUARD_FIXED_REPLIES = _guard_fixed_replies()
 # json_object 방식에서 스키마를 알아보지 못했을 때 `FakeGuardSend.unknown`에 남기는 표시
 UNKNOWN_JSON_OBJECT = "json_object:알 수 없는 스키마"
 
@@ -278,9 +359,8 @@ def _guard_schema_name(kwargs: dict[str, Any], system: str) -> str:
         schema = json.loads(tail)
     except ValueError:
         return ""
-    return next(
-        (name for name, model in GUARD_MODELS.items() if strict_schema(model) == schema), ""
-    )
+    known = {**GUARD_MODELS, **{name: model for name, (model, _) in GUARD_FIXED_REPLIES.items()}}
+    return next((name for name, model in known.items() if strict_schema(model) == schema), "")
 
 
 class FakeGuardSend:
@@ -297,6 +377,8 @@ class FakeGuardSend:
     - `force`: 필드 이름 → 값. 그 필드가 모델에 있으면 이 값을 쓴다(vary보다 먼저). 예:
       `{"category": "jailbreak_injection"}`로 1차 입력 판정을 탈옥으로 만든다. 스키마에 맞지 않는
       값이면 검증 실패로 `unknown`에 남는다.
+    - `GUARD_FIXED_REPLIES`의 스키마(RequestCheckOut)는 고정 응답에 `force`의 같은 이름 필드만
+      덮어 답한다.
     - 모르는 스키마로 부르거나, 만든 응답이 모델 검증을 통과하지 못하면 `UnknownSchema`를 던지고
       `unknown`에 남긴다. 가짜 안에서 그 밖의 예외가 나도 "가짜 내부 오류: <클래스 이름>"으로
       남기고 다시 던진다. 가드 LLM은 전송 예외를 오류 코드로 바꿔 삼키므로, `fake_guard_send`
@@ -342,6 +424,19 @@ class FakeGuardSend:
         picks = itertools.cycle(full.digest())
         note = f"{GUARD_WORD} {digest}"
         model = GUARD_MODELS.get(name)
+        fixed = GUARD_FIXED_REPLIES.get(name)
+        if model is None and fixed is not None:
+            model, build = fixed
+            # force 가운데 이 모델에 있는 필드(예: verdict)만 덮는다
+            forced = {k: v for k, v in self.force.items() if k in model.model_fields}
+            reply = {**build(note), **forced}
+            try:
+                model.model_validate(reply)
+            except ValidationError:
+                problem = f"{name}: 가짜 응답이 스키마와 맞지 않음"
+                self.unknown.append(problem)
+                raise UnknownSchema(problem) from None
+            return _completion(json.dumps(reply, ensure_ascii=False))
         if model is None:
             # json_object 방식은 이름이 없다. 빈 문자열 대신 알아볼 수 있는 표시를 남긴다
             # (요청 본문은 남기지 않는다)

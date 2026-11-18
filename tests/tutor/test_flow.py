@@ -361,7 +361,8 @@ def test_top1_dialog_premise_tutor_turn_changes_the_top_section():
 
 def test_top1_dialog_off_keeps_the_main_bundle_top_and_one_search(monkeypatch):
     calls = count_retrieves(monkeypatch)
-    state = state_with(FakeLLM(out()), **{"toggles.cite_top1": True})
+    off = {"toggles.cite_top1": True, "toggles.top1_dialog_query": False}
+    state = state_with(FakeLLM(out()), **off)
     resp = ask(state, *DIALOG, roles=ROLES)
     assert resp["citations"] == ["PY-01-01", "PY-03-04"]
     assert len(calls) == 1

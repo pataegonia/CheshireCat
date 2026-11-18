@@ -39,7 +39,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
-    assert toggles.top1_dialog_query is False  # 규칙 A 질의로 1위 더하기: 기본 끔
+    assert toggles.top1_dialog_query is True  # 동결 설정(11/18): 규칙 A 질의로 1위 더하기 켬
     assert toggles.delegation_override is True  # 동결 설정(11/18): 대행 덮기 켬
     assert toggles.fallback_quote is True  # 동결 설정(11/18): 자료 인용 답 켬(T 관문)
     assert toggles.intent_override == "serial"  # 동결 설정(11/18): T serial

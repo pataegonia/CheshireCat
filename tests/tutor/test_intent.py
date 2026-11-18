@@ -320,7 +320,11 @@ def test_serial_weak_fixed_label_yields_to_a_main_escalate(label, fixed, action)
         ("제출물 대행", ("jailbreak_injection", "refuse"), "refuse"),
         ("유해-비하", ("harmful_content", "refuse"), "redirect"),  # parallel 유해-비하 예외
         ("제출물 대행", ("low_signal_input", "clarify"), "clarify"),  # 더 강한 clarify도 지킨다
-        ("무관 결과물", ("low_signal_input", "clarify"), "redirect"),  # redirect가 clarify보다 강하다
+        (
+            "무관 결과물",
+            ("low_signal_input", "clarify"),
+            "redirect",
+        ),  # redirect가 clarify보다 강하다
     ],
 )
 def test_serial_weak_fixed_label_follows_the_parallel_rule_on_the_main_action(label, main, want):
@@ -359,6 +363,60 @@ def test_serial_intent_failure_runs_the_main_call():
     state = state_with(RoleLLM(out(), None, t_error="timeout"), **SERIAL)
     assert run(state)["action"] == "answer"
     assert state.intent_skips == {"error": 1}
+
+
+# --- 직렬 T 단축 대기(`llm.timeout_s.intent_wait`) ---
+
+WAIT = {**SERIAL, "llm.timeout_s.intent_wait": 0.03}
+
+
+def test_serial_intent_within_the_wait_behaves_as_before():
+    llm = RoleLLM(out(), "유해-실행", t_sleep=0.01)
+    resp = run(state_with(llm, **SERIAL, **{"llm.timeout_s.intent_wait": 0.5}))
+    assert llm.roles == [intent.ROLE]  # 주 호출 없이 refuse 고정 문장
+    assert resp == {"answer": TEXT[Fixed.REFUSE_HARMFUL], "action": "refuse", "citations": []}
+
+
+def test_late_serial_intent_lets_the_main_call_go_first_and_still_overrides_it():
+    llm = RoleLLM(out(), "유해-실행", t_sleep=0.15)
+    resp = run(state_with(llm, **WAIT))
+    assert llm.roles == [intent.ROLE, "main"]  # 주 호출이 T를 기다리지 않고 나갔다
+    assert not llm.t_cancelled  # T는 취소하지 않고 늦게라도 받는다
+    assert resp == {"answer": TEXT[Fixed.REFUSE_HARMFUL], "action": "refuse", "citations": []}
+
+
+def test_late_study_label_keeps_the_main_answer():
+    llm = RoleLLM(out(), "학습 질문", t_sleep=0.15)
+    resp = run(state_with(llm, **WAIT))
+    assert llm.roles == [intent.ROLE, "main"] and not llm.t_cancelled
+    assert resp["action"] == "answer" and resp["citations"] == ["PY-01-01"]
+
+
+@pytest.mark.parametrize(
+    ("label", "want"),
+    [
+        ("학습 질문", "answer"),  # 자료 인용 답(fallback_quote)
+        ("무관 결과물", "redirect"),
+        ("유해-실행", "refuse"),
+    ],
+)
+def test_late_intent_label_decides_the_default_when_the_main_call_fails(label, want):
+    llm = RoleLLM(out(), label, t_sleep=0.15, main_error="timeout")
+    resp = run(state_with(llm, **WAIT, **QUOTE))
+    assert llm.roles == [intent.ROLE, "main"] and not llm.t_cancelled
+    assert resp["action"] == want
+    if label != "학습 질문":
+        fixed = {"redirect": Fixed.REDIRECT_OFF_TOPIC, "refuse": Fixed.REFUSE_HARMFUL}[want]
+        assert resp["answer"] == TEXT[fixed]
+
+
+@pytest.mark.parametrize("wait", [0.3, 1.0], ids=["equal", "longer"])
+def test_intent_wait_at_or_over_the_intent_limit_waits_for_the_whole_limit(wait):
+    # 0.1초 걸리는 T를 intent 제한(0.3초)까지 기다린다: 주 호출 없이 refuse
+    llm = RoleLLM(out(), "유해-실행", t_sleep=0.1)
+    overrides = {"llm.timeout_s.intent": 0.3, "llm.timeout_s.intent_wait": wait}
+    resp = run(state_with(llm, **SERIAL, **overrides))
+    assert llm.roles == [intent.ROLE] and resp["action"] == "refuse"
 
 
 # --- 대행 덮기와 T·인용 답 관문(11/17 #204·#219 리뷰) ---

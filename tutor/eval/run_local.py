@@ -759,7 +759,8 @@ def _own_state(cfg: TutorConfig, overrides: dict[str, Any], *, guard: bool = Fal
     켰을 때도다(기본 state의 예시 색인은 200행 전부라 평가 행 자신이 예시로 들어간다). 가드를
     붙일 때도다(기본 state에는 가드가 없다).
     """
-    return guard or bool(overrides) or cfg.toggles.embedding or cfg.toggles.fewshot != "off"
+    embedding = cfg.toggles.embedding or cfg.toggles.english_embedding
+    return guard or bool(overrides) or embedding or cfg.toggles.fewshot != "off"
 
 
 @dataclass(frozen=True)
@@ -856,7 +857,7 @@ def _tutor_state(
     else:
         state = pipeline.default_state()
     state.tutor_llm.max_calls = cap
-    if not cfg.toggles.embedding:
+    if not (cfg.toggles.embedding or cfg.toggles.english_embedding):
         return state, None, (0, 0)
     counted = CountedEmbed(openai_embed())
     asyncio.run(build_embedding(state, counted))
@@ -1012,7 +1013,7 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
     sys.stdout.write(f"운영진 API 예상 호출 {calls}회")
     sys.stdout.write(f"(재시도 여유 1.1배, 상한 {args.max_calls}회)\n")
     embedding = 0
-    if args.preset == "tutor" and cfg.toggles.embedding:
+    if args.preset == "tutor" and (cfg.toggles.embedding or cfg.toggles.english_embedding):
         if cfg.mode == "baseline":  # 기동 호출을 헛되게 쓰지 않는다
             ap.error("베이스라인은 정의상 BM25만 쓴다(TU-14): 임베딩을 켜고 재지 않는다")
         missing = missing_embedding_env()

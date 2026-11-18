@@ -54,6 +54,7 @@ async def retrieve(
     subject: str | None = None,
     k: int = DEFAULT_K,
     embedding: EmbeddingSearch | None = None,
+    english_only_embedding: bool = False,
     index: KbIndex | None = None,
 ) -> list[Section]:
     """KB 섹션을 점수 높은 순으로 0개 이상 k개 이하 돌려준다.
@@ -67,6 +68,8 @@ async def retrieve(
     subject는 과목 폴더 이름(python·prompt·finance)으로 거른다.
     embedding(기동 때 만든 임베딩 검색)을 주면 영어 위주 질의에 한해 질의 임베딩 순위를 BM25
     순위와 RRF로 섞는다(TU-11). 2-gram이 없는 질의는 임베딩도 부르지 않는다.
+    english_only_embedding(`toggles.english_embedding`)이면 그 영어 질의는 BM25와 섞지 않고
+    임베딩 순위만 쓴다(임베딩을 못 쓰면 BM25 순위). 한국어 질의에는 영향이 없다.
     index는 기동 때 만든 색인이다(서버는 `app.state.tutor_kb`). 없으면 `default_index()`를 쓴다.
     """
     if k <= 0:
@@ -79,5 +82,7 @@ async def retrieve(
         allowed = None
         if subject is not None:
             allowed = {sid for sid, section in index.sections.items() if section.subject == subject}
-        ranked = await embedding.rerank(text, ranked, allowed=allowed)
+        ranked = await embedding.rerank(
+            text, ranked, allowed=allowed, embedding_only=english_only_embedding
+        )
     return [index.section(sid) for sid in ranked[:k]]

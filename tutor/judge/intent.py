@@ -42,9 +42,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from integration.contracts import Action
 from pydantic import BaseModel, ConfigDict
 
-from integration.contracts import Action
 from tutor.answer.templates import template_for
 from tutor.judge.conversation import Conversation
 from tutor.judge.main_call import _turn_block, defuse
@@ -226,6 +226,17 @@ def start_intent(
         return None
     task = asyncio.ensure_future(_call(llm, messages, deadline, limit, skips))
     return IntentJob(task, now + limit + WAIT_GRACE_S)
+
+
+async def intent_in_time(job: IntentJob, wait_s: float) -> bool:
+    """직렬 T를 지금 받을 때인가: `wait_s` 안에 끝났거나, `wait_s`가 T 제한까지 남은 시간 이상이다.
+
+    False면 T가 늦는 것이다. 취소하지 않고 그대로 둔다(부르는 쪽이 주 호출을 먼저 보내고
+    `wait_intent(not_before=)`로 받는다). 느린 T가 주 호출 창을 깎지 않게 한다."""
+    if wait_s >= job.until - asyncio.get_running_loop().time():
+        return True  # 지금처럼 T 제한까지 기다린다(wait_intent)
+    done, _ = await asyncio.wait({job.task}, timeout=wait_s)
+    return bool(done)
 
 
 async def wait_intent(

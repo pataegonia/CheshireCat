@@ -110,9 +110,15 @@ class EmbeddingSearch:
         return sorted(best, key=lambda sid: (-best[sid], sid))
 
     async def rerank(
-        self, text: str, ranked: Sequence[str], *, allowed: Collection[str] | None
+        self,
+        text: str,
+        ranked: Sequence[str],
+        *,
+        allowed: Collection[str] | None,
+        embedding_only: bool = False,
     ) -> list[str]:
         """질의 임베딩 순위를 BM25 순위(ranked)와 RRF로 섞는다. allowed가 있으면 그 섹션만.
+        embedding_only면 섞지 않고 임베딩 순위만 돌려준다(`toggles.english_embedding`).
 
         질의 임베딩이 실패하거나 timeout_s(게이트 대기 포함)를 넘으면 ranked를 그대로 돌려주고,
         까닭은 예외 클래스 이름만 경고로 남긴다(본문·메시지 없음, TU-15). 취소는 전파한다.
@@ -125,7 +131,8 @@ class EmbeddingSearch:
         except Exception as exc:  # 시간 초과·API 오류·모양이 다른 벡터: BM25만 쓴다
             log.warning("질의 임베딩을 못 써서 BM25만 쓴다: %s", type(exc).__name__)
             return list(ranked)
-        return rrf(ranked, [sid for sid in found if allowed is None or sid in allowed])
+        by_embedding = [sid for sid in found if allowed is None or sid in allowed]
+        return by_embedding if embedding_only else rrf(ranked, by_embedding)
 
 
 def openai_embed() -> Embed:

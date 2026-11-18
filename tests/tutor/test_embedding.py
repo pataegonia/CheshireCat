@@ -320,6 +320,20 @@ def test_startup_builds_the_kb_embedding_only_when_turned_on(monkeypatch):
     assert on.tutor_emb.gate is on.tutor_llm.gate  # 튜터 LLM과 같은 게이트(서버는 가드 slot)
 
 
+def test_startup_builds_the_kb_embedding_for_english_embedding_alone(monkeypatch):
+    monkeypatch.setattr(startup, "openai_embed", FakeEmbed)
+    state = SimpleNamespace()
+    startup.prepare(
+        state,
+        load_config(
+            overrides={"toggles.english_embedding": True, "toggles.oom_gate": "named_term"}
+        ),
+    )
+    assert state.tutor_cfg.toggles.embedding is False
+    run(startup.build_embedding(state))
+    assert isinstance(state.tutor_emb, emb.EmbeddingSearch)
+
+
 def test_startup_uses_the_guard_gate_for_query_embeddings(monkeypatch):
     monkeypatch.setattr(startup, "openai_embed", FakeEmbed)
     slot = contextlib.nullcontext  # 가드 LLM의 slot() 자리

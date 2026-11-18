@@ -35,9 +35,9 @@ from collections.abc import Sequence
 from typing import Any
 
 from guardrail.schema import OutputVerdict
-
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
+
 from tutor.answer import postprocess
 from tutor.answer.quote import material_quote, quote_sentences
 from tutor.answer.templates import (
@@ -69,6 +69,7 @@ from tutor.judge.intent import (
     WAIT_GRACE_S,
     IntentJob,
     IntentSkips,
+    intent_in_time,
     start_intent,
     table_of_contents,
     wait_intent,
@@ -88,6 +89,8 @@ from tutor.retrieval import retrieve
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
+MAIN_HEDGE_ROLE = "main_hedge"  # 겹쳐 보낸 두 번째 주 호출(따로 센다)
+HEDGE_MIN_LEFT_S = 4.0  # 요청 마감까지 이보다 덜 남았으면 겹쳐 보내지 않는다(끝낼 수 없다)
 # safe=false일 때 답 전체를 대신하는 거절 문장(IN-04). 범주를 모르므로 일반 거절
 REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
@@ -325,15 +328,41 @@ def _complete(state: Any):
     both = _t_on(cfg) and cfg.toggles.guard_classify != "off"
     retries = 0 if both else MAIN_RETRIES
 
-    async def complete(messages, schema, *, deadline: float) -> CompleteResult:
-        return await state.tutor_llm.complete(
-            MAIN_ROLE,
-            messages,
-            schema,
-            deadline=deadline,
-            timeout_s=cfg.llm.timeout_s.main,
-            retries=retries,
+    def send(role: str, tries: int, messages, schema, deadline: float):
+        return asyncio.ensure_future(
+            state.tutor_llm.complete(
+                role,
+                messages,
+                schema,
+                deadline=deadline,
+                timeout_s=cfg.llm.timeout_s.main,
+                retries=tries,
+            )
         )
+
+    async def complete(messages, schema, *, deadline: float) -> CompleteResult:
+        """주 호출. `llm.timeout_s.main_hedge`초 안에 안 끝나면 같은 요청을 한 번 더 겹쳐 보내고
+        먼저 성공한 쪽을 쓴다(둘 다 실패면 마지막 실패). 느린 호출은 호출마다 따로 생겨서
+        (11/18 계측: 같은 문항이 되풀이해 느리지 않다) 두 번째가 살린다. 남은 호출은 취소한다."""
+        tasks = {send(MAIN_ROLE, retries, messages, schema, deadline)}
+        try:
+            done, _ = await asyncio.wait(tasks, timeout=cfg.llm.timeout_s.main_hedge)
+            left = deadline - asyncio.get_running_loop().time()
+            hedge_on = cfg.llm.timeout_s.main_hedge < cfg.llm.timeout_s.main  # main 이상이면 끔
+            if hedge_on and not done and left > HEDGE_MIN_LEFT_S:
+                tasks.add(send(MAIN_HEDGE_ROLE, 0, messages, schema, deadline))
+            result, pending = None, set(tasks)
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    result = task.result()  # 실패는 예외가 아니라 Result.error로 온다
+                    if result.error is None:
+                        return result
+            return result
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()  # 요청이 끝난 뒤 남는 작업이 없게(TU-18). 취소는 삼키지 않는다
 
     return complete
 
@@ -495,13 +524,24 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
 GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
 
 
+def _english_embedding(state: Any) -> dict[str, Any]:
+    """`toggles.english_embedding`이 켜졌으면 retrieve에 넘길 인자(영어 질의는 임베딩 순위만).
+    기동 때 임베딩을 못 만들었으면 `embedding`이 None이라 BM25다. 꺼졌으면 빈 인자."""
+    if not state.tutor_cfg.toggles.english_embedding:
+        return {}
+    return {"embedding": getattr(state, "tutor_emb", None), "english_only_embedding": True}
+
+
 async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
     """E 호출 시작. 프롬프트가 없거나(기동 때 읽지 않음) 저신호 직접 판정·위기·지시 무력화 신호·영어
     발화면 부르지 않는다. `oom_gate: named_term`이면 판단 대상에 KB에 없는 이름 붙은 말이 없을
     때도 부르지 않는다.
 
-    근거 묶음은 주 호출과 같은 질의·k의 BM25 검색이다. 영어 판정은 창 본문이 아니라 판단 대상
-    원문을 정규화해서 본다(창 본문의 "[숨긴 문자: …]" 표기에 한글이 있다)."""
+    `toggles.english_embedding`이 켜져 있고 기동 때 만든 임베딩이 있으면 영어 발화도 부른다(이름
+    붙은 말 검사는 영어에 뜻이 없어 건너뛴다). 임베딩이 없으면 영어 발화는 지금처럼 건너뛴다.
+
+    근거 묶음은 주 호출과 같은 질의·k의 BM25 검색이다(영어 발화는 임베딩 순위만). 영어 판정은
+    창 본문이 아니라 판단 대상 원문을 정규화해서 본다(창 본문의 "[숨긴 문자: …]"에 한글이 있다)."""
     system = getattr(state, "tutor_oom_gate_prompt", None)
     if system is None:
         return None
@@ -513,17 +553,25 @@ async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob
         if counts is not None:
             counts["signal"] += 1
         return None
-    if english_only(normalize_fast(conv.target_raw)):
+    cfg = state.tutor_cfg
+    english = english_only(normalize_fast(conv.target_raw))
+    by_embedding = english and getattr(state, "tutor_emb", None) is not None
+    by_embedding = by_embedding and cfg.toggles.english_embedding
+    if english and not by_embedding:
         if counts is not None:
             counts["english"] += 1
         return None
-    cfg = state.tutor_cfg
-    if cfg.toggles.oom_gate == "named_term" and not _named_term(state, conv):
+    if by_embedding:
+        if counts is not None:
+            counts["english_called"] += 1
+    elif cfg.toggles.oom_gate == "named_term" and not _named_term(state, conv):
         if counts is not None:
             counts["no_term"] += 1
         return None
     query, history = conv.search_query()
-    sections = await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb)
+    sections = await retrieve(
+        query, history, k=cfg.retrieval.k, index=state.tutor_kb, **_english_embedding(state)
+    )
     messages = build_gate_messages(system, sections, conv)
     return start_gate(
         state.tutor_llm,
@@ -586,10 +634,18 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
                 return tutor_post(fixed_body(fixed), classified)
         iskips = getattr(state, "intent_skips", None)
         deferred = None  # 직렬 T의 redirect·scaffold 고정 문장(주 호출이 실패했을 때만 낸다)
-        if intent is not None and cfg.toggles.intent_override == "serial":
-            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, refuse·위기 고정 문장이면 주 호출 없이
-            # 낸다. redirect·scaffold 고정 문장은 주 호출도 불러 parallel과 같은 규칙으로
-            # 정한다
+        if (
+            intent is not None
+            and cfg.toggles.intent_override == "serial"
+            and (
+                cfg.llm.timeout_s.intent_wait >= cfg.llm.timeout_s.intent  # 지금처럼 끝까지
+                or await intent_in_time(intent, cfg.llm.timeout_s.intent_wait)
+            )
+        ):
+            # 직렬 T: 주 호출 앞에서 `intent_wait`초까지 기다리고, refuse·위기 고정 문장이면 주
+            # 호출 없이 낸다. redirect·scaffold 고정 문장은 주 호출도 불러 parallel과 같은
+            # 규칙으로 정한다. 그 안에 T가 안 오면 주 호출을 먼저 보내고 아래 병렬 기다림에서
+            # T를 받아 parallel 규칙으로 정한다(느린 T가 주 호출 창을 깎지 않게)
             intent_label = await wait_intent(intent, iskips)
             intent = None  # 받았다(아래 병렬 기다림을 건너뛴다)
             hit = _intent_fixed(intent_label, signals, None)
@@ -605,6 +661,7 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
             k=cfg.retrieval.k,
             signals=labels(signals) if cfg.toggles.signals else (),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
+            english_only_embedding=cfg.toggles.english_embedding,
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
@@ -695,7 +752,14 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
         query, history = conv.search_query(all_roles=True)
         try:  # 더할 인용 하나를 고르는 일이라, 실패하거나 비면 끔일 때의 1위로 돌아간다
             top_sections = (
-                await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb) or None
+                await retrieve(
+                    query,
+                    history,
+                    k=cfg.retrieval.k,
+                    index=state.tutor_kb,
+                    **_english_embedding(state),
+                )
+                or None
             )
         except Exception:  # 메시지는 남기지 않는다
             top_sections = None

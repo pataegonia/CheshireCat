@@ -7,8 +7,9 @@ T는 학습자의 마지막 발화에 이름표 하나(위기·탈옥·유해-�
 - serial: T를 먼저 끝까지 기다려, 주 호출 action 없이(None) 정한 덮기가 고정 문장 조합이면 주 호출
   없이 낸다. 아니면 주 호출을 부르고 parallel과 같이 정한다(가드 classify를 끈 설정에서만).
   다만 redirect·scaffold 고정 문장(무관 결과물·유해-비하·제출물 대행)은 주 호출도 불러, 주 호출이
-  escalate면 escalate를 따르고 아니면 그 고정 문장을 낸다(flow `SERIAL_YIELDS_TO_ESCALATE`). 위기
-  신호에 안 걸린 우회 표현을 T가 대행·무관 결과물로 보면 escalate가 빠지던 것이다(#220 가드 리뷰).
+  성공하면 parallel과 같이 정하고 실패하면 그 고정 문장을 낸다(flow `SERIAL_ASKS_MAIN`). 위기
+  신호에 안 걸린 우회 표현을 T가 대행·무관 결과물로 보면 escalate가 빠지던 것(#220 가드 리뷰)과
+  주 호출 refuse를 약한 T 고정 문장이 이기던 것(#233 가드 리뷰)이다.
   refuse 고정 문장(유해-실행·탈옥)은 주 호출 없이 내므로, 우회 위기 표현에 유해·탈옥 요청이
   섞이면 escalate 대신 refuse가 나갈 수 있다.
 

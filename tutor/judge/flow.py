@@ -368,11 +368,12 @@ def _quote_allowed(cfg: Any, label: str | None) -> bool:
     return not _t_on(cfg) or label == STUDY
 
 
-# 직렬 T에서 주 호출도 불러 보는 고정 문장(redirect·scaffold). 주 호출이 escalate면 escalate를
-# 따르고, 아니면 이 고정 문장을 그대로 낸다. 위기 신호 정규식에 안 걸린 위기 발화를 T가 제출물
-# 대행·무관 결과물 등으로 보면 escalate가 빠지던 것(#220 가드 리뷰 1번, 11/18 T 탐침 12문장 중
-# 4문장). refuse 고정 문장과 위기(escalate)는 주 호출 없이 낸다
-SERIAL_YIELDS_TO_ESCALATE = frozenset(
+# 직렬 T에서 주 호출도 불러 보는 고정 문장(redirect·scaffold). 주 호출이 성공하면 parallel과 같은
+# 덮기 규칙(decide)으로 정해 주 호출의 escalate·refuse·clarify를 지키고, 실패하면 이 고정 문장을
+# 낸다. 위기 신호 정규식에 안 걸린 위기 발화를 T가 제출물 대행·무관 결과물 등으로 보면 escalate가
+# 빠지던 것(#220 가드 리뷰 1번, 11/18 T 탐침 12문장 중 4문장)과, 주 호출 refuse를 약한 T 고정
+# 문장이 이기던 것(#233 가드 리뷰 1번). refuse 고정 문장과 위기(escalate)는 주 호출 없이 낸다
+SERIAL_ASKS_MAIN = frozenset(
     {Fixed.REDIRECT_OFF_TOPIC, Fixed.REDIRECT_HARMFUL, Fixed.SCAFFOLD_ACADEMIC}
 )
 
@@ -580,14 +581,14 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
                 # ⓐ: classify가 템플릿 범주면 주 호출 없이 고정 문장(통합 I13 ⓐ, #83 비교용)
                 return tutor_post(fixed_body(fixed), classified)
         iskips = getattr(state, "intent_skips", None)
-        deferred = None  # 직렬 T의 redirect·scaffold 고정 문장(주 호출이 escalate인지 본 뒤 낸다)
+        deferred = None  # 직렬 T의 redirect·scaffold 고정 문장(주 호출이 실패했을 때만 낸다)
         if intent is not None and cfg.toggles.intent_override == "serial":
             # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, 고정 문장 이름표면 주 호출 없이 낸다.
-            # redirect·scaffold 고정 문장은 주 호출도 불러 주 호출이 escalate면 그쪽을 따른다
+            # redirect·scaffold 고정 문장은 주 호출도 불러 parallel과 같은 규칙으로 정한다
             intent_label = await wait_intent(intent, iskips)
             intent = None  # 받았다(아래 병렬 기다림을 건너뛴다)
             hit = _intent_fixed(intent_label, signals, None)
-            if hit is not None and hit[0] in SERIAL_YIELDS_TO_ESCALATE:
+            if hit is not None and hit[0] in SERIAL_ASKS_MAIN:
                 deferred = hit
             elif hit is not None:
                 return tutor_post(fixed_body(hit[0]), hit[1])
@@ -602,7 +603,9 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
-        if deferred is not None and (draft.out is None or draft.out.action != "escalate"):
+        if deferred is not None and draft.out is None:
+            # 주 호출이 실패했으면 T 고정 문장. 성공했으면 아래 T 덮기(decide)가 parallel과 같은
+            # 규칙으로 정한다(주 호출의 escalate·refuse 등 더 강한 action을 지킨다, #233 리뷰)
             return tutor_post(fixed_body(deferred[0]), deferred[1])
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다

@@ -40,6 +40,7 @@ FREEZE_TOGGLES = {
     "intent_override": "off",
     "quote_append": False,
     "oom_gate": "off",
+    "oom_schedule": "with_request",
 }
 
 

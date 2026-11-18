@@ -33,7 +33,8 @@ class SlowIntentLLM(RoleLLM):
         return await super().complete(role, messages, schema, **kw)
 
 
-def test_repo_default_is_with_request():
+def test_unit_test_baseline_is_with_request():
+    """튜터 단위 테스트 기준 설정은 동결 토글을 끈 값(conftest)이라 with_request다."""
     assert config.load_config().toggles.oom_schedule == "with_request"
 
 

@@ -17,9 +17,9 @@
    고정 문장으로 바꾼다(`toggles.guard_classify`). serial(ⓐ)은 classify를 먼저 기다려 템플릿 범주면
    주 호출 없이 고정 문장을 낸다
 ⑤-3 T 의도 판정 덮기(TU-06, `tutor.judge.intent`, `toggles.intent_override`): #209 프롬프트로 nano를
-   1회 불러 이름표로 주 호출 action을 덮는다. parallel은 주 호출과 동시에, serial은 T 먼저(고정 문장
-   이름표면 주 호출 없이). 가드 classify가 위기·공격 범주면 T는 비킨다. 자료 인용 답은 T가 학습
-   질문이라 답한 때만 낸다(T 관문)
+   1회 불러 이름표로 주 호출 action을 덮는다. parallel은 주 호출과 동시에, serial은 T 먼저
+   (refuse·위기 고정 문장 이름표면 주 호출 없이). 가드 classify가 위기·공격 범주면 T는 비킨다.
+   자료 인용 답은 T가 학습 질문이라 답한 때만 낸다(T 관문)
 ⑥ 가드 judge_output 검증(TU-09 ②): 주 호출 문장이 그대로 나가는 경로에만, 합친 범주를 넘겨 부른다
    (`toggles.verify: guard`). 시간 부족·실패면 판정만 건너뛴다
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
@@ -368,11 +368,12 @@ def _quote_allowed(cfg: Any, label: str | None) -> bool:
     return not _t_on(cfg) or label == STUDY
 
 
-# 직렬 T에서 주 호출도 불러 보는 고정 문장(redirect·scaffold). 주 호출이 성공하면 parallel과 같은
-# 덮기 규칙(decide)으로 정해 주 호출의 escalate·refuse·clarify를 지키고, 실패하면 이 고정 문장을
-# 낸다. 위기 신호 정규식에 안 걸린 위기 발화를 T가 제출물 대행·무관 결과물 등으로 보면 escalate가
-# 빠지던 것(#220 가드 리뷰 1번, 11/18 T 탐침 12문장 중 4문장)과, 주 호출 refuse를 약한 T 고정
-# 문장이 이기던 것(#233 가드 리뷰 1번). refuse 고정 문장과 위기(escalate)는 주 호출 없이 낸다
+# 직렬 T에서 주 호출도 불러 보는 고정 문장(redirect·scaffold). 주 호출이 성공하면 parallel과
+# 같은 덮기 규칙(decide)으로 정해 주 호출의 escalate·refuse 등 더 강한 action을 지키고,
+# 실패하면 이 고정 문장을 낸다. 위기 신호 정규식에 안 걸린 위기 발화를 T가 제출물 대행·무관
+# 결과물 등으로 보면 escalate가 빠지던 것(#220 가드 리뷰 1번, 11/18 T 탐침 12문장 중 4문장)과,
+# 주 호출 refuse를 약한 T 고정 문장이 이기던 것(#233 가드 리뷰 1번). refuse 고정 문장과
+# 위기(escalate)는 주 호출 없이 낸다
 SERIAL_ASKS_MAIN = frozenset(
     {Fixed.REDIRECT_OFF_TOPIC, Fixed.REDIRECT_HARMFUL, Fixed.SCAFFOLD_ACADEMIC}
 )
@@ -583,8 +584,9 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
         iskips = getattr(state, "intent_skips", None)
         deferred = None  # 직렬 T의 redirect·scaffold 고정 문장(주 호출이 실패했을 때만 낸다)
         if intent is not None and cfg.toggles.intent_override == "serial":
-            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, 고정 문장 이름표면 주 호출 없이 낸다.
-            # redirect·scaffold 고정 문장은 주 호출도 불러 parallel과 같은 규칙으로 정한다
+            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, refuse·위기 고정 문장이면 주 호출 없이
+            # 낸다. redirect·scaffold 고정 문장은 주 호출도 불러 parallel과 같은 규칙으로
+            # 정한다
             intent_label = await wait_intent(intent, iskips)
             intent = None  # 받았다(아래 병렬 기다림을 건너뛴다)
             hit = _intent_fixed(intent_label, signals, None)

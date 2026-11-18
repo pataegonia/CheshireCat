@@ -297,8 +297,8 @@ SERIAL_WEAK = [
 
 @pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
 def test_serial_weak_fixed_label_still_sends_its_fixed_sentence(label, fixed, action):
-    # redirect·scaffold 고정 문장 이름표도 주 호출을 부르고, 주 호출이 answer처럼 더 약한
-    # action이면 T 고정 문장을 낸다(parallel과 같은 규칙, #220·#233 가드 리뷰)
+    # redirect·scaffold 고정 문장 이름표도 주 호출을 부르고, 주 호출 action이 T보다 약하면
+    # (여기서는 answer) T 고정 문장을 낸다(parallel과 같은 규칙, #220·#233 가드 리뷰)
     llm = RoleLLM(out(), label)
     resp = run(state_with(llm, **SERIAL))
     assert llm.roles == [intent.ROLE, "main"]
@@ -320,6 +320,7 @@ def test_serial_weak_fixed_label_yields_to_a_main_escalate(label, fixed, action)
         ("제출물 대행", ("jailbreak_injection", "refuse"), "refuse"),
         ("유해-비하", ("harmful_content", "refuse"), "redirect"),  # parallel 유해-비하 예외
         ("제출물 대행", ("low_signal_input", "clarify"), "clarify"),  # 더 강한 clarify도 지킨다
+        ("무관 결과물", ("low_signal_input", "clarify"), "redirect"),  # redirect가 clarify보다 강하다
     ],
 )
 def test_serial_weak_fixed_label_follows_the_parallel_rule_on_the_main_action(label, main, want):

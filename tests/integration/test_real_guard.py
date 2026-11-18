@@ -13,9 +13,9 @@
   (`toggles.oom_check`, 가드 #215)이 켜져 있으면 1회 더(OomCheckOut). verdict가 not_stated면
   응답 input이 allow · out_of_material, not_asked · stated면 allow · normal. 탈옥 2차와 한 요청에서
   같이 부르지 않는다. 토글이 없는 main에서는 0회다. 스키마 이름은 문자열로만 쓴다.
-  가드 6.0.9(S3.13 `toggles.request_check`)는 그 자리에 요청 점검(RequestCheckOut)을 부르고 그
-  verdict를 같은 규칙으로 읽는다. 그래서 이 확인 호출은 두 스키마 호출 수의 합으로 센다
-  (`second_checks`).
+  가드 #229(요청 점검, S3.13 `toggles.request_check`)는 그 자리에 요청 점검(RequestCheckOut)을
+  부르고 그 verdict를 같은 규칙으로 읽는다. 확인 호출은 스키마별로 센다(`check_calls`): 요청 점검이
+  켜져 있으면 RequestCheckOut만, 꺼져 있거나 토글이 없으면 OomCheckOut만 는다(`expected_checks`).
 - `/tutor`에서 classify가 탈옥이면: 2차 꺼짐 1회, 켜짐 + study 3회, 켜짐 + apply 2회.
 - `/tutor` → 가드: 가드에 classify · judge_output이 있으면 튜터가 각각 정확히 1회 부르고 건너뛴
   단계가 없다(`assert_tutor_uses_guard`). 없으면 건너뛴 수만 센다. 연결을 보는 것이라
@@ -133,7 +133,7 @@ def oom_check_on(client) -> bool:
 
 
 def request_check_on(client) -> bool:
-    """가드 설정에 요청 점검(S3.13)이 켜져 있는가. 6.0.9 전의 가드에는 이 토글이 없다(False)."""
+    """가드 설정에 요청 점검(S3.13)이 켜져 있는가. #229 전의 가드에는 이 토글이 없다(False)."""
     return bool(getattr(client.app.state.cfg.toggles, "request_check", False))
 
 
@@ -142,13 +142,22 @@ def second_check_on(client) -> bool:
     return oom_check_on(client) or request_check_on(client)
 
 
-# 1차 normal 뒤 확인 호출의 스키마: 6.0.8은 OomCheckOut, 6.0.9(request_check 켬)는 RequestCheckOut
+# 1차 normal 뒤 확인 호출의 스키마: 자료 밖 확인은 OomCheckOut, #229(요청 점검)를 켜면 그 자리에
+# RequestCheckOut
 SECOND_CHECKS = ("OomCheckOut", "RequestCheckOut")
 
 
-def second_checks(by_schema: collections.Counter) -> int:
-    """확인 호출 수: OomCheckOut과 RequestCheckOut의 합."""
-    return sum(by_schema[name] for name in SECOND_CHECKS)
+def check_calls(by_schema: collections.Counter, before: collections.Counter) -> dict[str, int]:
+    """이번 요청에서 는 확인 호출 수(스키마별)."""
+    return {name: by_schema[name] - before[name] for name in SECOND_CHECKS}
+
+
+def expected_checks(client, n: int) -> dict[str, int]:
+    """확인 호출 n회의 스키마별 기대: 요청 점검이 켜져 있으면 RequestCheckOut n · OomCheckOut 0,
+    꺼져 있거나 토글이 없으면(main) 그 반대."""
+    if request_check_on(client):
+        return {"OomCheckOut": 0, "RequestCheckOut": n}
+    return {"OomCheckOut": n, "RequestCheckOut": 0}
 
 
 def toggles_seen(client, fake_guard_send, before: collections.Counter) -> str:
@@ -165,7 +174,7 @@ def test_guard_calls_nano_once_per_judge_plus_the_oom_check_when_it_is_on(
     real_guard_client, fake_send, fake_guard_send
 ):
     """일반 질문의 `/guard`: 입력 판정 1회(+ 후보 답변이 있으면 출력 판정 1회). 자료 밖 확인이 켜져
-    있으면 요청마다 확인 호출 1회가 더해진다(가드 #215 OomCheckOut, 6.0.9는 그 자리의
+    있으면 요청마다 확인 호출 1회가 더해진다(가드 #215 OomCheckOut, #229(요청 점검)는 그 자리의
     RequestCheckOut. main은 토글이 없어 0회)."""
     client = real_guard_client
     oom = int(second_check_on(client))
@@ -176,7 +185,7 @@ def test_guard_calls_nano_once_per_judge_plus_the_oom_check_when_it_is_on(
         )
         seen = f"{toggles_seen(client, fake_guard_send, before)}, 이번 요청 {calls}회"
         assert calls == judges + oom, seen
-        assert second_checks(fake_guard_send.by_schema) - second_checks(before) == oom, seen
+        assert check_calls(fake_guard_send.by_schema, before) == expected_checks(client, oom), seen
         assert_guard_contract(r.json(), has_candidate=candidate is not None)
     assert fake_send.count == 0  # 가드는 튜터 전송을 쓰지 않는다
 
@@ -226,7 +235,9 @@ def test_first_judge_jailbreak_calls_the_second_check_when_it_is_on(
             )
             assert calls == judges + jb, seen
             # 1차가 탈옥이면 자료 밖 확인은 부르지 않는다(탈옥 2차와 한 요청에서 같이 부르지 않음)
-            assert second_checks(fake_guard_send.by_schema) == second_checks(before), seen
+            assert check_calls(fake_guard_send.by_schema, before) == expected_checks(client, 0), (
+                seen
+            )
             assert_guard_contract(r.json(), has_candidate=candidate is not None)
             assert got == expected_input(jb, used), seen
             if jb:
@@ -245,7 +256,7 @@ def test_normal_question_calls_the_oom_check_when_it_is_on(real_guard_client, fa
     """1차 입력 판정이 normal인 일반 질문. 자료 밖 확인이 켜져 있으면 요청마다 nano 1회
     (OomCheckOut)가 더해지고, verdict가 not_stated면 input이 allow · out_of_material, 그 밖에는
     allow · normal이다. 꺼져 있거나 토글이 없으면(main) 0회이고 input은 force와 상관없이 normal.
-    #215 전의 main, #215 그대로(끔), #215에서 켠 상태 모두에서 통과한다. 6.0.9는 그 자리에
+    #215 전의 main, #215 그대로(끔), #215에서 켠 상태 모두에서 통과한다. #229(요청 점검)는 그 자리에
     RequestCheckOut을 부르고(가짜는 force의 verdict를 그대로 낸다) 자료 밖 규칙은 oom_check가
     켜져 있을 때만 읽는다."""
     client = real_guard_client
@@ -261,7 +272,9 @@ def test_normal_question_calls_the_oom_check_when_it_is_on(real_guard_client, fa
             f"{toggles_seen(client, fake_guard_send, before)}, force {force}, input={got},"
             f" 이번 요청 {calls}회"
         )
-        assert second_checks(fake_guard_send.by_schema) - second_checks(before) == extra, seen
+        assert check_calls(fake_guard_send.by_schema, before) == expected_checks(client, extra), (
+            seen
+        )
         assert calls == 1 + extra, seen
         assert_guard_contract(r.json(), has_candidate=False)
         want = OUT_OF_MATERIAL if oom and verdict == "not_stated" else ALLOWED_NORMAL

@@ -10,7 +10,7 @@ import json
 import re
 import sys
 import types
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, get_args, get_origin
 
@@ -310,23 +310,29 @@ def _guard_models() -> dict[str, type[BaseModel]]:
 GUARD_MODELS = _guard_models()
 
 
-def _guard_fixed_replies() -> dict[str, tuple[type[BaseModel], dict[str, Any]]]:
-    """`_guard_reply`의 일반 경로로 못 만드는 가드 스키마(이름 → (모델, 고정 응답)).
+def _request_check_reply(note: str) -> dict[str, Any]:
+    """RequestCheckOut 고정 응답. 문자열 필드에는 일반 경로처럼 판정 글 표식(`note`)을 넣는다
+    (요청 점검 결과가 상태 · 로그로 새면 누출 탐색에 걸리게). kind "other"는 가드가 1차 범주를
+    바꾸지 않는 종류다(request_category · recheck_block)."""
+    return {
+        "asks": [{"quote": note, "wants": note, "kind": "other"}],
+        "evidence": note,
+        "verdict": "not_asked",
+    }
 
-    - RequestCheckOut(가드 S3.13 요청 점검, `guardrail.judges.schemas_exp`, 6.0.9 기본 켬):
-      `asks`가 중첩 목록이다. 해 달라는 것 없음 · not_asked로 답한다(1차 범주를 두고, 자료 밖으로
-      바꾸지 않는다). 그 모듈이나 이름이 없는 가드(6.0.8 이전)에서는 빈 표다.
+
+def _guard_fixed_replies() -> dict[str, tuple[type[BaseModel], Callable[[str], dict[str, Any]]]]:
+    """`_guard_reply`의 일반 경로로 못 만드는 가드 스키마(이름 → (모델, note → 고정 응답)).
+
+    - RequestCheckOut(가드 S3.13 요청 점검, `guardrail.judges.schemas_exp`, #229(요청 점검)에서
+      기본 켬): `asks`가 중첩 목록이다. 종류 other 하나 · not_asked로 답한다(1차 범주를 두고,
+      자료 밖으로 바꾸지 않는다). 그 모듈이나 이름이 없는 가드(#229 전)에서는 빈 표다.
     """
     try:
         from guardrail.judges.schemas_exp import RequestCheckOut
     except ImportError:
         return {}
-    return {
-        "RequestCheckOut": (
-            RequestCheckOut,
-            {"asks": [], "evidence": "x", "verdict": "not_asked"},
-        )
-    }
+    return {"RequestCheckOut": (RequestCheckOut, _request_check_reply)}
 
 
 GUARD_FIXED_REPLIES = _guard_fixed_replies()
@@ -419,9 +425,10 @@ class FakeGuardSend:
         model = GUARD_MODELS.get(name)
         fixed = GUARD_FIXED_REPLIES.get(name)
         if model is None and fixed is not None:
-            model, base = fixed
+            model, build = fixed
             # force 가운데 이 모델에 있는 필드(예: verdict)만 덮는다
-            reply = {**base, **{k: v for k, v in self.force.items() if k in model.model_fields}}
+            forced = {k: v for k, v in self.force.items() if k in model.model_fields}
+            reply = {**build(note), **forced}
             try:
                 model.model_validate(reply)
             except ValidationError:

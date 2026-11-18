@@ -238,6 +238,27 @@ def test_search_turns_exclude_assistant_and_button():
     assert conv.search_turns() == ("적금이 뭐야", "이자는?")
 
 
+def test_search_query_all_roles_keeps_tutor_turns_and_drops_button_and_target():
+    # 규칙 A(toggles.top1_dialog_query): 창 안의 판단 대상·버튼 문구를 뺀 모든 발화, 역할 무관
+    msgs = [
+        u("영상의 내용을 요약해주세요."),
+        a("요약"),
+        u("적금이 뭐야"),
+        a("원금에 이자가 붙어요"),
+    ]
+    conv = tidy([*msgs, u("이자는?")])
+    history = ("요약", "적금이 뭐야", "원금에 이자가 붙어요")
+    assert conv.search_query(all_roles=True) == ("이자는?", history)
+    assert conv.search_query() == ("이자는?", ("적금이 뭐야",))  # 기본은 그대로
+
+
+def test_search_query_all_roles_stays_inside_the_window():
+    msgs = [u("첫"), a("a2"), u("q2"), a("a3"), u("q3"), a("a4"), u("q4"), a("a5"), u("q5")]
+    query, history = tidy([*msgs, a("끝")]).search_query(all_roles=True)  # 창: 첫 + 마지막 6개
+    assert query == "q5"
+    assert history == ("첫", "q3", "a4", "q4", "a5", "끝")
+
+
 # --- 견고성·속도 ---
 
 messages_strategy = st.lists(

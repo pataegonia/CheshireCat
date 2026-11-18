@@ -277,11 +277,13 @@ def assemble(
     max_citations: int,
     verdict: OutputVerdict | None = None,
     cite_top1: bool = False,
+    top_sections: Sequence[RetrievedSection] | None = None,
 ) -> dict[str, Any]:
     """주 호출 결과 → 규격 본문. 템플릿 조합이면 고정 문장, 아니면 결정적 수정(IN-04).
 
     `verdict`는 가드 `judge_output` 결과다. None(판정 생략·실패)이면 판정 단계만 건너뛴다.
-    `cite_top1`이면 결정적 수정이 정한 인용에 검색 1위 섹션을 더한다(`add_top_citation`)."""
+    `cite_top1`이면 결정적 수정이 정한 인용에 검색 1위 섹션을 더한다(`add_top_citation`).
+    `top_sections`를 주면 근거 묶음 대신 그 목록의 1위를 더한다(규칙 A, `top1_dialog_query`)."""
     kind = template_for(out.category, action)
     if kind is not None:
         return fixed_body(kind)
@@ -300,7 +302,8 @@ def assemble(
         action=action,
     )
     body = result.model_dump()
-    return add_top_citation(body, sections) if cite_top1 else body
+    top = sections if top_sections is None else top_sections
+    return add_top_citation(body, top) if cite_top1 else body
 
 
 def tutor_post(body: dict[str, Any], category: str | None = None) -> dict[str, Any]:
@@ -683,6 +686,19 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
     if unsafe is not None:
         # safe=false인데 범주가 공격이면 일반 거절 대신 그 범주의 고정 문장(IN-04 거절의 범주판)
         return tutor_post(fixed_body(unsafe), merged.category)
+    top_sections = None
+    if (
+        cfg.toggles.cite_top1
+        and cfg.toggles.top1_dialog_query
+        and template_for(merged.category, action) is None  # 고정 문장은 인용이 없다
+    ):  # 규칙 A: 튜터 발화까지 넣은 질의로 한 번 더 찾아 1위만 쓴다(LLM 0회, BM25만)
+        query, history = conv.search_query(all_roles=True)
+        try:  # 더할 인용 하나를 고르는 일이라, 실패하거나 비면 끔일 때의 1위로 돌아간다
+            top_sections = (
+                await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb) or None
+            )
+        except Exception:  # 메시지는 남기지 않는다
+            top_sections = None
     body = assemble(
         out,
         draft.sections,
@@ -690,5 +706,6 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
         max_citations=cfg.toggles.max_citations,
         verdict=verdict,
         cite_top1=cfg.toggles.cite_top1,
+        top_sections=top_sections,
     )
     return tutor_post(body, merged.category)

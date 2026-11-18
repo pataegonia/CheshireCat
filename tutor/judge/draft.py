@@ -45,7 +45,8 @@ async def draft_answer(
     `examples`는 판단 예시 블록(TU-08)이다. 비었으면 넣지 않는다.
     `index`는 기동 때 만든 KB 색인(`state.tutor_kb`)이다. 있을 때만 `retrieve(…, index=)`로 넘긴다.
     `mark_top`이면 1위 섹션에서 질문과 관련 있어 보이는 단위 둘의 위치를 표시한다
-    (`toggles.mark_evidence`, `tutor.judge.evidence_mark`). 표시한 섹션이 근거 묶음이 된다.
+    (`toggles.mark_evidence`, `tutor.judge.evidence_mark`). 표시는 주 호출에만 보이고,
+    근거 묶음(`Draft.sections`)과 그 뒤 단계(자료 인용 답·문장 덧붙이기·인용)는 원본을 쓴다.
     """
     query, history = conv.search_query()
     extra = {
@@ -54,9 +55,10 @@ async def draft_answer(
         if value is not None
     }
     sections = tuple(await retrieve(query, history, k=k, **extra))
+    shown = sections
     if mark_top and sections:
-        sections = (mark(sections[0], query, history), *sections[1:])
+        shown = (mark(sections[0], query, history), *sections[1:])
     out = await run_main_call(
-        complete, prompt, conv, sections, signals, deadline=deadline, examples=examples
+        complete, prompt, conv, shown, signals, deadline=deadline, examples=examples
     )
     return Draft(sections=sections, out=out)

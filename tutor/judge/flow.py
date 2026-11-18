@@ -488,7 +488,8 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
 
 
 # 이 신호가 있으면 E를 부르지 않는다. 맞는 답이 escalate·refuse라 E(answer → abstain)가 고칠 것이
-# 없고 nano 1회만 든다(#232 가드 리뷰). 공개 세트에서 named_term이 걸리는 14행에는 이 신호가 없다
+# 없고 nano 1회만 든다(#232 가드 리뷰). 공개 세트에서 named_term이 걸리는 19행에는 위기·지시
+# 무력화 신호가 없다
 GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
 
 

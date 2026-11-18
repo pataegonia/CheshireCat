@@ -234,3 +234,13 @@ def test_local_run_cap_comes_from_the_config(capsys):
     run_local._inputs(ap, args)
     assert args.max_calls == config.load_config().eval.max_calls
     assert f"상한 {args.max_calls}회" in capsys.readouterr().out
+
+
+def test_oom_schedule_key_is_required_and_loads_all_values(tmp_path):
+    data = repo_raw()
+    for value in ("with_request", "after_intent", "after_intent_fresh"):
+        data["toggles"]["oom_schedule"] = value
+        assert config.load_config(write(tmp_path, data)).toggles.oom_schedule == value
+    del data["toggles"]["oom_schedule"]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))

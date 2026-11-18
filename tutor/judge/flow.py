@@ -17,9 +17,9 @@
    고정 문장으로 바꾼다(`toggles.guard_classify`). serial(ⓐ)은 classify를 먼저 기다려 템플릿 범주면
    주 호출 없이 고정 문장을 낸다
 ⑤-3 T 의도 판정 덮기(TU-06, `tutor.judge.intent`, `toggles.intent_override`): #209 프롬프트로 nano를
-   1회 불러 이름표로 주 호출 action을 덮는다. parallel은 주 호출과 동시에, serial은 T 먼저(고정 문장
-   이름표면 주 호출 없이). 가드 classify가 위기·공격 범주면 T는 비킨다. 자료 인용 답은 T가 학습
-   질문이라 답한 때만 낸다(T 관문)
+   1회 불러 이름표로 주 호출 action을 덮는다. parallel은 주 호출과 동시에, serial은 T 먼저
+   (refuse·위기 고정 문장 이름표면 주 호출 없이). 가드 classify가 위기·공격 범주면 T는 비킨다.
+   자료 인용 답은 T가 학습 질문이라 답한 때만 낸다(T 관문)
 ⑥ 가드 judge_output 검증(TU-09 ②): 주 호출 문장이 그대로 나가는 경로에만, 합친 범주를 넘겨 부른다
    (`toggles.verify: guard`). 시간 부족·실패면 판정만 건너뛴다
 ⑦ 튜터 후처리(TU-07, `tutor.answer.postprocess.finalize`): 모든 응답이 마지막에 지난다
@@ -77,9 +77,14 @@ from tutor.judge.intent import build_messages as build_intent_messages
 from tutor.judge.intent import decide as decide_intent
 from tutor.judge.intent import load_system as load_intent_system
 from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
+from tutor.judge.oom_gate import GateCounts, GateJob, english_only, material_absent, start_gate
+from tutor.judge.oom_gate import build_messages as build_gate_messages
+from tutor.judge.oom_gate import load_system as load_gate_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
+from tutor.judge.unknown_terms import kb_blob, missing_terms
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
+from tutor.retrieval import retrieve
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
@@ -104,6 +109,11 @@ def prepare_judge(app_state: Any) -> None:
     sections = app_state.tutor_kb.sections if intent_on else {}
     app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
     app_state.intent_skips = IntentSkips()  # 사유 → 횟수(본문 없음)
+    gate_on = toggles.oom_gate != "off"  # 자료 밖 확인 E(#213 B2): 프롬프트는 기동 때 한 번
+    app_state.tutor_oom_gate_prompt = load_gate_system() if gate_on else None
+    app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
+    named = toggles.oom_gate == "named_term"  # KB 전체 글(비교용)도 기동 때 한 번
+    app_state.tutor_kb_blob = kb_blob(app_state.tutor_kb.sections) if named else None
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -358,6 +368,17 @@ def _quote_allowed(cfg: Any, label: str | None) -> bool:
     return not _t_on(cfg) or label == STUDY
 
 
+# 직렬 T에서 주 호출도 불러 보는 고정 문장(redirect·scaffold). 주 호출이 성공하면 parallel과
+# 같은 덮기 규칙(decide)으로 정해 주 호출의 escalate·refuse 등 더 강한 action을 지키고,
+# 실패하면 이 고정 문장을 낸다. 위기 신호 정규식에 안 걸린 위기 발화를 T가 제출물 대행·무관
+# 결과물 등으로 보면 escalate가 빠지던 것(#220 가드 리뷰 1번, 11/18 T 탐침 12문장 중 4문장)과,
+# 주 호출 refuse를 약한 T 고정 문장이 이기던 것(#233 가드 리뷰 1번). refuse 고정 문장과
+# 위기(escalate)는 주 호출 없이 낸다
+SERIAL_ASKS_MAIN = frozenset(
+    {Fixed.REDIRECT_OFF_TOPIC, Fixed.REDIRECT_HARMFUL, Fixed.SCAFFOLD_ACADEMIC}
+)
+
+
 def _intent_fixed(label: str | None, signals: Sequence[Signal], action: Action | None):
     """T가 덮어 고정 문장이 되면 (고정 문장, 범주). 아니면 None."""
     decided = decide_intent(label, signals, action)
@@ -371,10 +392,37 @@ def _candidate(out: MainCallOut) -> str:
 
 
 async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
-    """v2 흐름 하나. 흐름 본체(`_answer_v2`) 뒤에 자료 문장 덧붙이기(`toggles.quote_append`)를
-    한다. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다)."""
-    body = await _answer_v2(req, state, deadline=deadline)
-    return append_quote(req, state, body)
+    """v2 흐름 하나. 자료 밖 확인 E(`toggles.oom_gate`)를 켰으면 요청 시작 때 E를 함께 띄우고,
+    흐름이 끝나 최종 action이 answer이고 E가 "근거에 없음"이면 자료 밖 고정 문장(abstain)으로
+    바꾼다. E가 마감(E 시작부터 `llm.timeout_s.oom_gate`) 안에 끝나지 않거나 실패하면 흐름
+    결과 그대로다. E 준비(검색·메시지 만들기)가 예외를 내도 E 없이 흐름을 그대로 탄다
+    (`start_error`로 센다). abstain으로 바꾸지 않은 결과에만 자료 문장 덧붙이기
+    (`toggles.quote_append`)를 한다. 빠져나갈 때 아직 도는 E는 취소한다(TU-18). 흐름 본체의
+    예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+    """
+    gate = None
+    if state.tutor_cfg.toggles.oom_gate != "off":
+        try:
+            gate = await _start_gate(req, state, deadline)
+        except Exception:  # 메시지는 남기지 않는다
+            counts = getattr(state, "oom_gate_counts", None)
+            if counts is not None:
+                counts["start_error"] += 1
+    try:
+        if gate is not None:
+            await asyncio.sleep(0)  # E 요청이 주 호출·T보다 먼저 나가도록 한 번 양보한다
+        body = await _answer_v2(req, state, deadline=deadline)
+        counts = getattr(state, "oom_gate_counts", None)
+        if (
+            gate is not None
+            and body.get("action") == "answer"
+            and await material_absent(gate, counts)
+        ):
+            return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
+        return append_quote(req, state, body)
+    finally:
+        if gate is not None:
+            gate.cancel()
 
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
@@ -439,6 +487,61 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
     return {**body, "answer": joined}
 
 
+# 이 신호가 있으면 E를 부르지 않는다. 맞는 답이 escalate·refuse라 E(answer → abstain)가 고칠 것이
+# 없고 nano 1회만 든다(#232 가드 리뷰). 공개 세트에서 named_term이 걸리는 14행에는 이 신호가 없다
+GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
+
+
+async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
+    """E 호출 시작. 프롬프트가 없거나(기동 때 읽지 않음) 저신호 직접 판정·위기·지시 무력화 신호·영어
+    발화면 부르지 않는다. `oom_gate: named_term`이면 판단 대상에 KB에 없는 이름 붙은 말이 없을
+    때도 부르지 않는다.
+
+    근거 묶음은 주 호출과 같은 질의·k의 BM25 검색이다. 영어 판정은 창 본문이 아니라 판단 대상
+    원문을 정규화해서 본다(창 본문의 "[숨긴 문자: …]" 표기에 한글이 있다)."""
+    system = getattr(state, "tutor_oom_gate_prompt", None)
+    if system is None:
+        return None
+    conv: Conversation = tidy(_messages(req))
+    if direct_clarify(conv):
+        return None
+    counts = getattr(state, "oom_gate_counts", None)
+    if GATE_SKIP_SIGNALS.intersection(detect(conv)):
+        if counts is not None:
+            counts["signal"] += 1
+        return None
+    if english_only(normalize_fast(conv.target_raw)):
+        if counts is not None:
+            counts["english"] += 1
+        return None
+    cfg = state.tutor_cfg
+    if cfg.toggles.oom_gate == "named_term" and not _named_term(state, conv):
+        if counts is not None:
+            counts["no_term"] += 1
+        return None
+    query, history = conv.search_query()
+    sections = await retrieve(query, history, k=cfg.retrieval.k, index=state.tutor_kb)
+    messages = build_gate_messages(system, sections, conv)
+    return start_gate(
+        state.tutor_llm,
+        messages,
+        timeout_s=cfg.llm.timeout_s.oom_gate,
+        deadline=deadline,
+        counts=counts,
+    )
+
+
+def _named_term(state: Any, conv: Conversation) -> bool:
+    """판단 대상(창 본문)에 KB 전체 글에 없는 이름 붙은 말이 있는가(`oom_gate: named_term`).
+
+    KB 글이 없으면(기동 때 만들지 않음) False라 E를 부르지 않는다."""
+    blob = getattr(state, "tutor_kb_blob", None)
+    if blob is None:
+        return False
+    target = next((t.text for t in conv.window if t.is_target), "")
+    return bool(missing_terms(target, blob))
+
+
 async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[str, Any]:
     """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
@@ -479,12 +582,17 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
                 # ⓐ: classify가 템플릿 범주면 주 호출 없이 고정 문장(통합 I13 ⓐ, #83 비교용)
                 return tutor_post(fixed_body(fixed), classified)
         iskips = getattr(state, "intent_skips", None)
+        deferred = None  # 직렬 T의 redirect·scaffold 고정 문장(주 호출이 실패했을 때만 낸다)
         if intent is not None and cfg.toggles.intent_override == "serial":
-            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, 고정 문장 이름표면 주 호출 없이 낸다
+            # 직렬 T: 주 호출 앞에서 T 제한까지 기다리고, refuse·위기 고정 문장이면 주 호출 없이
+            # 낸다. redirect·scaffold 고정 문장은 주 호출도 불러 parallel과 같은 규칙으로
+            # 정한다
             intent_label = await wait_intent(intent, iskips)
             intent = None  # 받았다(아래 병렬 기다림을 건너뛴다)
             hit = _intent_fixed(intent_label, signals, None)
-            if hit is not None:
+            if hit is not None and hit[0] in SERIAL_ASKS_MAIN:
+                deferred = hit
+            elif hit is not None:
                 return tutor_post(fixed_body(hit[0]), hit[1])
         draft = await draft_answer(
             conv,
@@ -497,6 +605,10 @@ async def _answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
+        if deferred is not None and draft.out is None:
+            # 주 호출이 실패했으면 T 고정 문장. 성공했으면 아래 T 덮기(decide)가 parallel과 같은
+            # 규칙으로 정한다(주 호출의 escalate·refuse 등 더 강한 action을 지킨다, #233 리뷰)
+            return tutor_post(fixed_body(deferred[0]), deferred[1])
         if classify is not None and not serial:
             classified = await wait_classify(classify, skips)  # 자기 시간 제한 안에서 끝난다
         if intent is not None:

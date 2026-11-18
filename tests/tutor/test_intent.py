@@ -272,11 +272,68 @@ def test_delegation_then_intent_on_the_server():
 # --- 직렬(serial) ---
 
 
-def test_serial_fixed_label_skips_the_main_call():
-    llm = RoleLLM(out(), "무관 결과물")
+def test_serial_refuse_label_skips_the_main_call():
+    llm = RoleLLM(out(), "유해-실행")
     resp = run(state_with(llm, **SERIAL))
     assert llm.roles == [intent.ROLE]
-    assert resp == {"answer": TEXT[Fixed.REDIRECT_OFF_TOPIC], "action": "redirect", "citations": []}
+    assert resp == {"answer": TEXT[Fixed.REFUSE_HARMFUL], "action": "refuse", "citations": []}
+
+
+def test_serial_crisis_label_skips_the_main_call():
+    # 위기 이름표는 주 호출 없이 escalate 고정 문장을 낸다(#233 가드 리뷰: 위기를 주 호출에
+    # 맡기는 집합에 넣는 변이가 살아남았다)
+    llm = RoleLLM(out(), "위기")
+    resp = run(state_with(llm, **SERIAL))
+    assert llm.roles == [intent.ROLE]
+    assert resp == {"answer": TEXT[Fixed.ESCALATE], "action": "escalate", "citations": []}
+
+
+SERIAL_WEAK = [
+    ("무관 결과물", Fixed.REDIRECT_OFF_TOPIC, "redirect"),
+    ("유해-비하", Fixed.REDIRECT_HARMFUL, "redirect"),
+    ("제출물 대행", Fixed.SCAFFOLD_ACADEMIC, "scaffold"),
+]
+
+
+@pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
+def test_serial_weak_fixed_label_still_sends_its_fixed_sentence(label, fixed, action):
+    # redirect·scaffold 고정 문장 이름표도 주 호출을 부르고, 주 호출 action이 T보다 약하면
+    # (여기서는 answer) T 고정 문장을 낸다(parallel과 같은 규칙, #220·#233 가드 리뷰)
+    llm = RoleLLM(out(), label)
+    resp = run(state_with(llm, **SERIAL))
+    assert llm.roles == [intent.ROLE, "main"]
+    assert resp == {"answer": TEXT[fixed], "action": action, "citations": []}
+
+
+@pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
+def test_serial_weak_fixed_label_yields_to_a_main_escalate(label, fixed, action):
+    # 위기 신호 정규식에 안 걸린 위기 발화를 T가 약한 이름표로 보아도 주 호출이 escalate면 escalate
+    llm = RoleLLM(out("emotional_distress", "escalate", sentences=[]), label)
+    resp = run(state_with(llm, **SERIAL))
+    assert resp["action"] == "escalate" and resp["answer"] == TEXT[Fixed.ESCALATE]
+
+
+@pytest.mark.parametrize(
+    ("label", "main", "want"),
+    [
+        ("무관 결과물", ("harmful_content", "refuse"), "refuse"),  # 주 호출의 refuse를 지킨다
+        ("제출물 대행", ("jailbreak_injection", "refuse"), "refuse"),
+        ("유해-비하", ("harmful_content", "refuse"), "redirect"),  # parallel 유해-비하 예외
+        ("제출물 대행", ("low_signal_input", "clarify"), "clarify"),  # 더 강한 clarify도 지킨다
+        ("무관 결과물", ("low_signal_input", "clarify"), "redirect"),  # redirect가 clarify보다 강하다
+    ],
+)
+def test_serial_weak_fixed_label_follows_the_parallel_rule_on_the_main_action(label, main, want):
+    # 주 호출 결과가 있으면 parallel과 같은 T 덮기 규칙으로 정한다(#233 가드 리뷰 1번)
+    llm = RoleLLM(out(*main, sentences=[]), label)
+    assert run(state_with(llm, **SERIAL))["action"] == want
+
+
+@pytest.mark.parametrize(("label", "fixed", "action"), SERIAL_WEAK)
+def test_serial_weak_fixed_label_keeps_its_sentence_when_the_main_call_fails(label, fixed, action):
+    llm = RoleLLM(out(), label, main_error="timeout")
+    resp = run(state_with(llm, **SERIAL))
+    assert resp == {"answer": TEXT[fixed], "action": action, "citations": []}
 
 
 def test_serial_waits_for_intent_before_the_main_call():

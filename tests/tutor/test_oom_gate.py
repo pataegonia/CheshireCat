@@ -231,8 +231,8 @@ def test_serial_intent_fixed_label_is_not_overridden_by_the_gate():
     llm = RoleLLM(out(), found=False, label="무관 결과물")
     state = state_with(llm, **ON, **{"toggles.intent_override": "serial"})
     resp = run(state)
-    assert resp["action"] == "redirect"  # T 고정 문장(answer가 아님)은 그대로
-    assert "main" not in llm.roles
+    # T 고정 문장(answer가 아님)은 그대로. 직렬 T의 redirect는 주 호출 action을 본 뒤 정한다
+    assert resp["action"] == "redirect" and resp["answer"] == TEXT[Fixed.REDIRECT_OFF_TOPIC]
 
 
 def test_gate_task_is_cancelled_when_the_flow_raises(monkeypatch):

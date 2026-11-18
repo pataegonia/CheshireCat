@@ -17,7 +17,7 @@ from tutor.judge.main_call import MainCallOut, _section_block, _turn_block, clea
 
 ROLE = "repair"  # TutorLLM.calls에 세는 역할 이름
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "repair.md"
-TIMEOUT_S = 8.0  # 호출 하나의 상한
+TIMEOUT_S = 10.0  # 호출 하나의 상한(11/18 8초에서 25회 중 18회 시간 초과)
 MIN_LEFT_S = 4.0  # 요청 마감까지 이보다 적게 남았으면 부르지 않는다
 _NOT_WORD = re.compile(r"[^0-9A-Za-z가-힣]")
 
@@ -60,7 +60,9 @@ def _draft_block(out: MainCallOut) -> str:
 def build_messages(
     system: str, sections: Sequence[Any], added: Any, out: MainCallOut, conv: Conversation
 ) -> list[dict[str, str]]:
-    blocks = [_section_block(s) for s in sections]
+    cited = {e.sid for s in out.sentences for e in s.evidence}
+    used = [s for s in sections if s.id in cited and s.id != added.id] or list(sections[:1])
+    blocks = [_section_block(s) for s in used]  # 입력을 줄인다: 초안이 인용한 섹션 + 더한 1위
     extra = _section_block(added).replace("<섹션 id=", '<섹션 추가="예" id=', 1)
     bundle = "\n".join([*blocks, extra])
     user = f"<근거 묶음>\n{bundle}\n</근거 묶음>\n\n{_draft_block(out)}\n\n{_turn_block(conv)}"

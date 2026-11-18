@@ -37,6 +37,7 @@ from typing import Any
 from guardrail.schema import OutputVerdict
 
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
+from integration.actions import _verified_sids as verified_sids  # 통합 IN-04와 같은 문구 확인
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
 from tutor.answer import postprocess
 from tutor.answer.quote import material_quote, quote_sentences
@@ -269,6 +270,39 @@ def add_top_citation(body: dict[str, Any], sections: Sequence[RetrievedSection])
     return {**body, "citations": [*cites, sections[0].id]}
 
 
+def repair_quote_sids(
+    sentences: Sequence[Sentence], sections: Sequence[Section], min_chars: int
+) -> list[Sentence]:
+    """claim 근거 문구가 단 섹션 원문에 없고 근거 묶음의 다른 섹션에 그대로 있으면 그 섹션 ID로
+    고친다.
+
+    주 호출이 문구는 원문에서 옮기고 섹션 ID만 틀리게 다는 경우, 통합 확인(IN-04)이 그 근거를
+    버리고 인용이 검색 1위로 채워진다. 문구 확인은 통합과 같은 함수로 하고, 여러 섹션에 있으면
+    근거 묶음 순서(검색 순위)의 첫 섹션을 쓴다. 문구가 어디에도 없으면 그대로 둔다(LLM 0회).
+    """
+    out: list[Sentence] = []
+    for s in sentences:
+        if s.kind != "claim" or not s.evidence:
+            out.append(s)
+            continue
+        fixed = []
+        for ev in s.evidence:
+            if verified_sids(s.model_copy(update={"evidence": [ev]}), sections, min_chars):
+                fixed.append(ev)
+                continue
+            moved = None
+            for sec in sections:
+                cand = ev.model_copy(update={"sid": sec.id})
+                if sec.id != ev.sid and verified_sids(
+                    s.model_copy(update={"evidence": [cand]}), sections, min_chars
+                ):
+                    moved = cand
+                    break
+            fixed.append(moved or ev)
+        out.append(s.model_copy(update={"evidence": fixed}))
+    return out
+
+
 def assemble(
     out: MainCallOut,
     sections: Sequence[RetrievedSection],
@@ -293,10 +327,12 @@ def assemble(
         refuse_text=REFUSE_TEXT,
         max_citations=max_citations,
     )
+    contract_sections = [_contract_section(s) for s in sections]
+    sentences = repair_quote_sids(sentences, contract_sections, cfg.min_quote_chars)
     result = finalize(
         sentences,
         verdict,
-        [_contract_section(s) for s in sections],
+        contract_sections,
         action_for(out.category),
         cfg,
         action=action,

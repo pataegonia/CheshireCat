@@ -80,10 +80,10 @@ def user(content: str) -> dict[str, Any]:
 TUTOR_GUARD_STAGES_ON = {"guard_classify": "parallel", "verify": "guard"}
 
 
-# 튜터 동결 설정(11/18, 튜터 #220 · #225 · #232 · #236)이 켜는 토글 일곱 개를 끈 값. 통합
-# 테스트는 이 토글들을 끈 기준 설정에서 돈다(튜터 테스트 tests/tutor/conftest.py와 같은 방식).
-# 저장소 설정 그대로의 앱은 test_freeze_config.py가 본다. 저장소 설정에 아직 없는 키는 건드리지
-# 않는다(동결 설정 전 main)
+# 튜터 동결 설정(11/18, 튜터 #220 · #225 · #232 · #236)과 영어 장치(11/19, #242)가 켜는 토글을
+# 끈 값. 통합 테스트는 이 토글들을 끈 기준 설정에서 돈다(튜터 테스트 tests/tutor/conftest.py와
+# 같은 방식). 저장소 설정 그대로의 앱은 test_freeze_config.py가 본다. 저장소 설정에 아직 없는
+# 키는 건드리지 않는다(동결 설정 전 main)
 FREEZE_TOGGLES_OFF = {
     "delegation_override": False,
     "fallback_quote": False,
@@ -94,6 +94,9 @@ FREEZE_TOGGLES_OFF = {
     "oom_gate": "off",  # 튜터 #232: 자료 밖 확인 E(OomOut, 주 호출과 동시에 nano 1회)
     # 튜터 oom_schedule: E를 보내는 때(동결 설정 after_intent_fresh, 기준은 요청 시작 때)
     "oom_schedule": "with_request",
+    # 튜터 #242 english_embedding: 영어 발화는 임베딩 순위만 + 영어에도 E. E를 끈 기준에서는
+    # 켤 수 없다(튜터 설정 로드에서 거부)
+    "english_embedding": False,
 }
 
 

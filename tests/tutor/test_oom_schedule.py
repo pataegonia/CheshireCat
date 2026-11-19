@@ -138,3 +138,43 @@ def test_nano_calls_stay_within_the_budget(mode):
 def test_invalid_schedule_fails_at_load(value):
     with pytest.raises(ValidationError):
         config.load_config(overrides={"toggles.oom_schedule": value})
+
+
+# --- 다른 장치와 함께(직렬 T 단축 대기 · 영어 임베딩 · 주 호출 겹쳐 보내기) ---
+
+
+@pytest.mark.parametrize("mode", ["after_intent", "after_intent_fresh"])
+def test_late_serial_intent_still_sends_e_once_before_main(mode):
+    # T가 intent_wait보다 늦으면 주 호출이 먼저 나간다. 그때도 E는 주 호출 앞에서 한 번만 나간다
+    llm = SlowIntentLLM(out(), found=False, label="학습 질문", intent_sleep=0.15)
+    state = state_with(llm, **after(mode, **{"llm.timeout_s.intent_wait": 0.03}))
+    assert run(state) == ABSTAIN
+    assert llm.roles.count(oom_gate.ROLE) == 1 and llm.roles.count("main") == 1
+    assert llm.roles.index(oom_gate.ROLE) < llm.roles.index("main")
+
+
+@pytest.mark.parametrize("mode", ["with_request", "after_intent", "after_intent_fresh"])
+def test_english_utterance_sends_e_once_in_every_schedule(mode):
+    from tests.tutor.test_english_embedding import EN_Q, fake_search, with_embedding
+
+    llm = RoleLLM(out(), found=False, label="학습 질문")
+    overrides = after(mode, **{"toggles.english_embedding": True, "toggles.oom_gate": "named_term"})
+    state = with_embedding(state_with(llm, **overrides), fake_search(lambda text: "PY-01-01"))
+    assert run(state, EN_Q) == ABSTAIN
+    assert llm.roles.count(oom_gate.ROLE) == 1
+    assert state.oom_gate_counts == {"english_called": 1, "absent": 1}
+
+
+@pytest.mark.parametrize("mode", ["after_intent", "after_intent_fresh"])
+def test_hedged_main_call_does_not_resend_e(mode):
+    class SlowMainLLM(RoleLLM):
+        async def complete(self, role, messages, schema, **kw):
+            if role == "main":
+                await asyncio.sleep(0.15)  # 겹쳐 보내는 시각(0.03초)을 넘긴다
+            return await super().complete(role, messages, schema, **kw)
+
+    llm = SlowMainLLM(out(), found=False, label="학습 질문")
+    state = state_with(llm, **after(mode, **{"llm.timeout_s.main_hedge": 0.03}))
+    assert run(state) == ABSTAIN
+    assert flow.MAIN_HEDGE_ROLE in llm.roles  # 겹쳐 보낸 주 호출이 나갔다
+    assert llm.roles.count(oom_gate.ROLE) == 1

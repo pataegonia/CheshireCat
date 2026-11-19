@@ -570,7 +570,10 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
         monkeypatch.setenv(name, value)
     fake = FakeEmbed()
     monkeypatch.setattr(run_local, "openai_embed", lambda: fake)
-    code = run_local.main(["--preset", "tutor", *ON, "--out", str(tmp_path)])
+    # 영어 장치는 끈다: 켜면 E 근거 묶음·규칙 A 다시 찾기도 질의 임베딩을 불러 아래 1:1이 깨진다
+    # (켠 경로는 test_english_embedding이 본다)
+    off = ("--tutor-set", "toggles.english_embedding=false")
+    code = run_local.main(["--preset", "tutor", *ON, *off, "--out", str(tmp_path)])
     assert sent  # v2 주 호출까지 갔다(가짜 전송)
     english = [used for is_english, used in searched if is_english]
     assert english and all(isinstance(used, emb.EmbeddingSearch) for used in english)
@@ -754,3 +757,52 @@ def test_embedding_summary_judges_failures_and_unused_queries(
     assert use.ok is ok
     run_local.embedding_summary(use, sys.stdout)
     assert said in capsys.readouterr().out
+
+
+# --- 영어 장치를 켰을 때의 예상 호출 수(#242 리뷰) ---
+
+
+def _toggles(**overrides):
+    from tutor.runtime import config
+
+    return config.load_config(overrides=overrides).toggles
+
+
+RULE_A = {"toggles.cite_top1": True, "toggles.top1_dialog_query": True}
+
+
+@pytest.mark.parametrize(
+    "overrides,sites",
+    [
+        ({"toggles.english_embedding": False, "toggles.oom_gate": "all", **RULE_A}, 1),
+        ({"toggles.oom_gate": "named_term", "toggles.top1_dialog_query": False}, 2),
+        ({"toggles.oom_gate": "all", **RULE_A}, 3),
+    ],
+)
+def test_embedding_sites_counts_every_retrieve_of_one_english_request(overrides, sites):
+    from tutor.eval.recall import embedding_sites
+
+    on = {"toggles.english_embedding": True, **overrides}
+    assert embedding_sites(_toggles(**on)) == sites
+
+
+def test_expected_embedding_calls_multiply_english_queries_by_sites():
+    from tutor.eval.recall import english_queries, expected_embedding_calls, public_rows
+
+    rows = public_rows()
+    assert expected_embedding_calls(rows, runs=2, sites=3) == 4 + 2 * 3 * english_queries(rows)
+    assert expected_embedding_calls(rows, runs=2) == 4 + 2 * english_queries(rows)  # 기본은 한 곳
+
+
+def test_embedding_use_expects_english_queries_times_sites():
+    from types import SimpleNamespace
+
+    from tutor.eval import run_local
+    from tutor.eval.recall import english_queries, public_rows
+
+    rows = public_rows()
+    counted = SimpleNamespace(calls=4 + 10, failures=0)
+    use = run_local._embedding_use(counted, (4, 0), rows, 2, sites=3)
+    assert use.queries == 2 * 3 * english_queries(rows)
+    one = run_local._embedding_use(counted, (4, 0), rows, 2)
+    assert one.queries == 2 * english_queries(rows)  # 기본은 한 곳

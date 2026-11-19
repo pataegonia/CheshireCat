@@ -35,9 +35,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from guardrail.schema import OutputVerdict
+
 from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
-
 from tutor.answer import postprocess
 from tutor.answer.quote import material_quote, quote_sentences
 from tutor.answer.templates import (

@@ -70,18 +70,18 @@ def test_main_call_timeout_uses_the_budget_headroom():
     assert backstop_s(budget) < 30  # 안전망까지 SPEC §3 요청당 30초 안
 
 
-def test_repo_config_keeps_the_guard_budget_and_scale_can_raise_it():
+def test_repo_config_scales_the_guard_budget_to_24s():
     from guardrail.config import load_config as load_guard_config
 
     from tutor.runtime.budget import budget_s
 
     cfg = config.load_config(config.ROOT / config.DEFAULT_CONFIG)
-    assert cfg.budget_scale == 1.0  # 11/18 제출 5대5에서 1.2가 점수 차이를 내지 못해 끔
+    assert cfg.budget_scale == 1.2  # 실제 제출 5회 평균 89.82가 기록된 5bda8be 값
     guard = load_guard_config()
     assert guard.budget_s == 20  # 가드 예산은 그대로
-    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(20)
-    scaled = config.load_config(overrides={"budget_scale": 1.2})
-    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=scaled)) == pytest.approx(24)
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(24)
+    plain = config.load_config(overrides={"budget_scale": 1.0})
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=plain)) == pytest.approx(20)
 
 
 @pytest.mark.parametrize(
@@ -115,8 +115,8 @@ def test_budget_scale_key_is_required_and_budget_s_is_gone(tmp_path):
 
 def test_repo_config_has_the_hedge_and_intent_wait_limits():
     timeouts = config.load_config(config.ROOT / config.DEFAULT_CONFIG).llm.timeout_s
-    assert (timeouts.main_hedge, timeouts.intent_wait) == (18, 8)
-    assert timeouts.main_hedge >= timeouts.main  # 겹쳐 보내기는 끔(11/18 제출 5대5: 점수 차이 없음)
+    assert (timeouts.main_hedge, timeouts.intent_wait) == (12, 8)
+    assert timeouts.main_hedge < timeouts.main  # 겹쳐 보내기는 켬(5bda8be 실행값)
     assert timeouts.intent_wait >= timeouts.intent  # T 대기 상한은 끔(11/18 모의 부하: 가드 지연)
 
 

@@ -165,3 +165,23 @@ def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fak
     assert over == [], (
         f"intent_override={mode}, 요청당 튜터 LLM 상한 {base}회(E면 +1)를 넘은 행: {over}"
     )
+
+
+def test_repo_config_with_multi_draft_off_calls_one_main_like_before(
+    open_app, monkeypatch, tmp_path, fake_send
+):
+    """실험 브랜치의 대조군(런박스 끔 측정): 저장소 설정에서 llm.multi_draft.enabled만 끄면 정상
+    질문의 튜터 LLM 호출이 동결 설정 그대로다(serial이면 [IntentOut, MainCallOut])."""
+    raw = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
+    if "multi_draft" not in raw["llm"]:
+        pytest.skip("multi_draft 키가 없는 설정")
+    raw["llm"]["multi_draft"]["enabled"] = False
+    path = tmp_path / "tutor-multi-off.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setenv("TUTOR_CONFIG", str(path))
+    with open_app() as client:
+        mode = intent_mode(client)
+        body, names = ask(client, fake_send, user(QUESTION))
+    assert_tutor_contract(body)
+    expected = {"off": [MAIN], "serial": [INTENT, MAIN]}.get(mode, sorted([INTENT, MAIN]))
+    assert (names if mode in ("off", "serial") else sorted(names)) == expected, names

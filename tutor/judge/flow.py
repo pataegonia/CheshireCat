@@ -394,6 +394,9 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
     async def complete(messages, schema, *, deadline: float) -> CompleteResult:
         loop = asyncio.get_running_loop()
         start = loop.time()
+        shadow = multi_draft.SHADOW.get()
+        if shadow is not None:  # 안전망 시간 초과로 빠져나가도 칸이 남게 보내기 전에 센다
+            shadow.started += len(md.drafts)
         tasks = []
         for i, spec in enumerate(md.drafts):
             low = spec.effort == "low"
@@ -416,7 +419,6 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
 
         cut = min(start + md.wait_s, deadline - md.margin_s)
         await multi_draft.wait_drafts(tasks, cut=cut, deadline=deadline, valid=valid)
-        shadow = multi_draft.SHADOW.get()
         ended = loop.time()
         results = [t.result() if t.done() and not t.cancelled() else None for t in tasks]
         for i, (spec, result) in enumerate(zip(md.drafts, results, strict=True)):
@@ -432,8 +434,6 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
                         gate_ms=getattr(result, "gate_ms", 0.0) if result else 0.0,
                     )
                 )
-        if shadow is not None:
-            shadow.started += len(tasks)
         done = [r for r in results if r is not None]
         return next((r for r in done if valid(r)), results[0] or (done[-1] if done else _NO_RESULT))
 

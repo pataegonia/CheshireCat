@@ -86,6 +86,6 @@ fixed·broken은 행 점수(차단 결정이 맞으면 1 + 정답이 normal이 �
 ## 알아 둘 한계
 
 - answer_seeking·out_of_material은 차단 범주가 아니다. 그쪽 rescue는 범주 정확도만 움직인다. 개발 160행에 answer_seeking 4행, academic_dishonesty 5행뿐이라 "순이득 ≥ 3"은 거의 닿지 않는다.
-- eval 반쪽은 개발 가드 160행 중 63행이다(해시가 그렇게 갈랐다).
+- eval 반쪽은 개발 가드 160행 중 63행이다(해시가 그렇게 갈랐다). 지속 오답 4행(4bdbbc40·93bcd46e·07b7a4b5·8a9c43cf)은 모두 design 반쪽에 있다. eval 줄만으로는 이 행들이 고쳐지는지 볼 수 없고, 그 행들은 각 절의 지속 오답 행 줄에서 본다.
 - 캐시 여부는 프록시가 `usage.prompt_tokens_details.cached_tokens`를 돌려줄 때만 알 수 있다.
 - 전문가 스키마를 하나로 둔 것은 응답 스키마가 접두 캐시에 드는지 확인하지 못해서다.

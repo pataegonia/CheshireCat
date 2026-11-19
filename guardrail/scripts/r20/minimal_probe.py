@@ -467,6 +467,12 @@ def analyze(args: argparse.Namespace) -> int:
         Path(args.baseline).read_text("utf-8").splitlines(), get_args(Category)
     )
     base = {i: by_short[pa.short(i)] for i in gold if pa.short(i) in by_short}
+    if not base:
+        say(
+            f"사용법 오류: 기준선 {info['lines']}줄 중 개발 행과 맞는 것이 없다"
+            f"(범주를 읽은 줄 {info['used']}). 필요한 칸은 README의 analyze 절"
+        )
+        return EXIT_USAGE
     notes = [
         f"기준선 {Path(args.baseline).name}: 줄 {info['lines']}, 쓴 줄 {info['used']}, 버린 줄 "
         f"{info['skipped']}, id {info['ids']}(여러 줄인 id {info['multi']}는 다수결), 개발 행과 맞은 것 "

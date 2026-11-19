@@ -390,5 +390,10 @@ def test_analyze_cli_matches_baseline_ids_with_or_without_prefix(tmp_path, capsy
     rc = mp.main(["analyze", "--dir", str(out), "--baseline", str(tmp_path / "dec.jsonl"),
                   "--out", str(tmp_path / "report.txt")])  # fmt: skip
     assert rc == 0
+    (tmp_path / "bad.jsonl").write_text('{"id": "pub-zzzzzzzz", "decision": "block"}', "utf-8")
+    bad = ["analyze", "--dir", str(out), "--baseline", str(tmp_path / "bad.jsonl")]
+    assert mp.main(bad) == mp.EXIT_USAGE  # 맞는 행이 없으면 빈 보고서를 내지 않는다
+    capsys.readouterr()
+    assert mp.main(["analyze", "--dir", str(out), "--baseline", str(tmp_path / "dec.jsonl")]) == 0
     text = (tmp_path / "report.txt").read_text("utf-8")
     assert "개발 행과 맞은 것 6" in text and text.strip() == capsys.readouterr().out.strip()

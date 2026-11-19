@@ -714,7 +714,7 @@ def rules_report(run: Run, ids, fold, base, gold, block) -> str:
     def line(name: str, part: str, fn: Fn) -> list[object]:
         e = evaluate(fn, parts[part], run.reps, base, cat, block)
         released, blocked = side_effects(fn, parts[part], run.reps, base, cat, block)
-        folded = released >= 1 and 2 * released >= e["fixed"]
+        folded = released > 0 and 2 * released >= e["fixed"]  # 반복 평균이라 0.33도 센다
         return [*_row(name, part, len(parts[part]), e, worth(e)), released, blocked, folded]
 
     for title, cands in error_map_rules(run, base, block).items():
@@ -956,21 +956,28 @@ def cache_report(run: Run) -> str:
     lines = [r for p in GUIDE_PROBES for r in run.lines.get(p, []) if r.get("error") is None]
     if not lines:
         return "(공통 접두를 쓰는 호출이 없다)"
-    with_field = [r for r in lines if r.get("cached_tokens") is not None]
-    hit = [r for r in with_field if r["cached_tokens"] > 0]
-    miss = [r for r in with_field if r["cached_tokens"] == 0]
-    ptok = [r["prompt_tokens"] for r in lines if r.get("prompt_tokens")]
 
     def med(rs: Sequence[Mapping]) -> str:
         return f"{statistics.median(r['latency_ms'] for r in rs):.0f}ms" if rs else "-"
 
+    out = []
+    for effort in sorted(
+        {str(r.get("effort")) for r in lines}
+    ):  # 추론 수준이 다르면 지연을 섞지 않는다
+        rs = [r for r in lines if str(r.get("effort")) == effort]
+        with_field = [r for r in rs if r.get("cached_tokens") is not None]
+        hit = [r for r in with_field if r["cached_tokens"] > 0]
+        miss = [r for r in with_field if r["cached_tokens"] == 0]
+        ptok = [r["prompt_tokens"] for r in rs if r.get("prompt_tokens")]
+        out.append(
+            f"[{effort}] 공통 접두 호출 {len(rs)}: prompt_tokens 최소/중앙 "
+            f"{min(ptok, default=0)}/{statistics.median(ptok) if ptok else 0:.0f}, "
+            f"cached_tokens 칸이 온 호출 {len(with_field)}, 그중 >0 {len(hit)} "
+            f"({len(hit) / len(with_field) if with_field else 0:.2f}). "
+            f"지연 중앙값: 적중 {med(hit)} / 미적중 {med(miss)}."
+        )
     return (
-        f"공통 접두 호출 {len(lines)}: prompt_tokens 최소/중앙 "
-        f"{min(ptok, default=0)}/{statistics.median(ptok) if ptok else 0:.0f}, "
-        f"cached_tokens 칸이 온 호출 {len(with_field)}, 그중 >0 {len(hit)} "
-        f"({len(hit) / len(with_field) if with_field else 0:.2f}). "
-        f"지연 중앙값: 적중 {med(hit)} / 미적중 {med(miss)}. "
-        "칸이 0건이면 프록시가 값을 안 돌려주는 것이라 캐시 여부를 알 수 없다."
+        "\n".join(out) + "\n칸이 0건이면 프록시가 값을 안 돌려주는 것이라 캐시 여부를 알 수 없다."
     )
 
 

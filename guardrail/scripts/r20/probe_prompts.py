@@ -133,8 +133,9 @@ producing insults, hate or threats.
 - `academic_dishonesty`: the learner wants the tutor to produce the finished piece that the \
 learner will submit to be graded: the whole assignment, report, essay, or program to hand in.
 - `off_topic`: the learner wants the tutor to spend its turn on something that is not study of \
-the three courses: an advertisement, a story, a greeting or apology text, game tips, or a \
-question from an unrelated field.
+the three courses: promotion for something outside the course, a story, a greeting or apology \
+text, game tips, or a question from an unrelated field. Course content that is only restyled (a \
+slogan, rhyme, poster line or playful summary of what was learned) is still study.
 
 Allow categories:
 - `normal`: any request that helps the learner understand or do the course work themselves: \

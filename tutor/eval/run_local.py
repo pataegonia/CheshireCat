@@ -87,7 +87,13 @@ from tutor.judge.examples import build_index, load_examples
 from tutor.judge.main_call import EVIDENCE_CHECK_PROBE
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
-from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, ROOT, TutorConfig, load_config
+from tutor.runtime.config import (
+    PROXY_MAX_COMPLETION_TOKENS,
+    ROOT,
+    TutorConfig,
+    load_config,
+    request_calls,
+)
 from tutor.runtime.llm import TOKEN_BUCKET, missing_api_env
 from tutor.startup import build_embedding, prepare
 
@@ -95,8 +101,10 @@ PRESETS = ("tutor", "reference", "reference_top1")
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
 # 튜터 요청당 nano 정상 호출 수(v2 최종 구성 = 주 호출 + 가드 classify + judge_output, TU-14).
 # 지금 v2는 주 호출만 해서(#97, classify·judge_output은 #88) 예상이 실제보다 크다(상한 쪽이라 안전).
+# 요청당 nano 정상 호출 수의 아래 끝(주 호출 + 가드 classify + judge_output 몫, TU-14). 실행 때는
+# 이 값과 설정에서 센 정상 경로 수(`request_calls`: 주 호출 + T + classify + judge_output + E) 중 큰
+# 쪽을 쓴다(상한 쪽이라 안전). 재시도·겹쳐 보내기는 1.1배 여유와 실행 중 튜터 LLM 상한이 막는다
 TUTOR_CALLS = 3
-CALLS_PER_REQUEST = {"v2": TUTOR_CALLS, "baseline": 1}  # 모드별 요청당 nano 호출(재시도 제외)
 SHOW_IDS = 30  # 화면에 낼 행 id 수(전체는 결과 JSON에 있다)
 # --guard: 요청당 가드 호출(classify + judge_output, TU-13). TUTOR_CALLS 안에서 나눠 쓴다.
 # 가드 LLM 기동 시험(probe) 호출 수는 가드 설정에서 센다(guard_probe_calls)
@@ -1012,12 +1020,15 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         preset=args.preset,
         runs=args.runs,
         judge=args.judge,
-        tutor_calls=CALLS_PER_REQUEST[cfg.mode],
+        tutor_calls=max(TUTOR_CALLS, request_calls(cfg)[0]),  # 3회는 classify·judge_output 몫
     )
-    if args.guard:  # 가드 classify·judge_output은 TUTOR_CALLS 안에 이미 있다. probe만 더한다
+    if args.guard:  # 가드 classify·judge_output은 요청당 정상 호출 안에 이미 있다. probe만 더한다
         calls += guard_probe_calls(load_guard_config().llm)
+    normal, worst = request_calls(cfg)
     sys.stdout.write(f"운영진 API 예상 호출 {calls}회")
-    sys.stdout.write(f"(재시도 여유 1.1배, 상한 {args.max_calls}회)\n")
+    sys.stdout.write(f"(요청당 정상 {normal}회·최악 {worst}회 ≤ llm.request_max_calls")
+    sys.stdout.write(f" {cfg.llm.request_max_calls}회, 재시도 여유 1.1배")
+    sys.stdout.write(f", 상한 {args.max_calls}회)\n")
     embedding = 0
     if args.preset == "tutor" and (cfg.toggles.embedding or cfg.toggles.english_embedding):
         if cfg.mode == "baseline":  # 기동 호출을 헛되게 쓰지 않는다
@@ -1131,6 +1142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             per_request=calls_log,
             p50=_pct(latency, 0.5),
             p95=_pct(latency, 0.95),
+            nano_max=cfg.llm.request_max_calls,
         )
         if state is not None
         else None

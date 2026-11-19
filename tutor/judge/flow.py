@@ -86,9 +86,9 @@ from tutor.judge.unknown_terms import kb_blob, missing_terms
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
 from tutor.retrieval import retrieve
+from tutor.runtime.config import MAIN_RETRIES  # 재시도는 주 호출만 1회(TU-13)
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
-MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
 MAIN_HEDGE_ROLE = "main_hedge"  # 겹쳐 보낸 두 번째 주 호출(따로 센다)
 HEDGE_MIN_LEFT_S = 4.0  # 요청 마감까지 이보다 덜 남았으면 겹쳐 보내지 않는다(끝낼 수 없다)
 # safe=false일 때 답 전체를 대신하는 거절 문장(IN-04). 범주를 모르므로 일반 거절
@@ -440,10 +440,13 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     """
     toggles = state.tutor_cfg.toggles
     jobs: list[GateJob] = []  # 이 요청이 띄운 E(많아야 하나). finally에서 취소한다
+    emb = getattr(state, "tutor_emb", None)  # 기동 때 만든 임베딩 검색(없으면 None)
+    if emb is not None and toggles.share_query_embedding:
+        emb = emb.for_request()  # 이 요청 안에서만 같은 질의 임베딩을 나눠 쓴다(끝나면 버린다)
 
     async def begin(gate_deadline: float) -> None:
         try:
-            job = await _start_gate(req, state, gate_deadline)
+            job = await _start_gate(req, state, gate_deadline, emb)
         except Exception:  # 메시지는 남기지 않는다
             counts = getattr(state, "oom_gate_counts", None)
             if counts is not None:
@@ -470,7 +473,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
                     await begin(gate_deadline)
 
     try:
-        body = await _answer_v2(req, state, deadline=deadline, begin_gate=later)
+        body = await _answer_v2(req, state, deadline=deadline, begin_gate=later, emb=emb)
         counts = getattr(state, "oom_gate_counts", None)
         gate = jobs[0] if jobs else None
         if (
@@ -483,6 +486,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     finally:
         for job in jobs:
             job.cancel()
+        shared = getattr(emb, "shared", None)
+        if shared is not None:
+            shared.close()  # 남은 질의 임베딩을 취소하고 버린다(TU-18)
 
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
@@ -558,15 +564,18 @@ def append_quote(req: TutorRequest, state: Any, body: dict[str, Any]) -> dict[st
 GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
 
 
-def _english_embedding(state: Any) -> dict[str, Any]:
+def _english_embedding(state: Any, emb: Any) -> dict[str, Any]:
     """`toggles.english_embedding`이 켜졌으면 retrieve에 넘길 인자(영어 질의는 임베딩 순위만).
-    기동 때 임베딩을 못 만들었으면 `embedding`이 None이라 BM25다. 꺼졌으면 빈 인자."""
+    `emb`는 이 요청의 임베딩 검색(기동 때 만든 것, 나눠 쓰기를 켰으면 요청용 사본)이다. 기동 때
+    임베딩을 못 만들었으면 None이라 BM25다. 꺼졌으면 빈 인자."""
     if not state.tutor_cfg.toggles.english_embedding:
         return {}
-    return {"embedding": getattr(state, "tutor_emb", None), "english_only_embedding": True}
+    return {"embedding": emb, "english_only_embedding": True}
 
 
-async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
+async def _start_gate(
+    req: TutorRequest, state: Any, deadline: float, emb: Any = None
+) -> GateJob | None:
     """E 호출 시작. 프롬프트가 없거나(기동 때 읽지 않음) 저신호 직접 판정·위기·지시 무력화 신호·영어
     발화면 부르지 않는다. `oom_gate: named_term`이면 판단 대상에 KB에 없는 이름 붙은 말이 없을
     때도 부르지 않는다.
@@ -589,7 +598,7 @@ async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob
         return None
     cfg = state.tutor_cfg
     english = english_only(normalize_fast(conv.target_raw))
-    by_embedding = english and getattr(state, "tutor_emb", None) is not None
+    by_embedding = english and emb is not None
     by_embedding = by_embedding and cfg.toggles.english_embedding
     if english and not by_embedding:
         if counts is not None:
@@ -604,7 +613,7 @@ async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob
         return None
     query, history = conv.search_query()
     sections = await retrieve(
-        query, history, k=cfg.retrieval.k, index=state.tutor_kb, **_english_embedding(state)
+        query, history, k=cfg.retrieval.k, index=state.tutor_kb, **_english_embedding(state, emb)
     )
     messages = build_gate_messages(system, sections, conv)
     return start_gate(
@@ -633,8 +642,11 @@ async def _answer_v2(
     *,
     deadline: float,
     begin_gate: Callable[[], Awaitable[None]] | None = None,
+    emb: Any = None,
 ) -> dict[str, Any]:
     """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
+
+    `emb`는 이 요청의 임베딩 검색(`answer_v2`가 정한다: 기동 때 만든 것 또는 요청용 사본)이다.
 
     `begin_gate`가 있으면 주 호출 바로 앞에서 한 번 부른다(`oom_schedule: after_intent`의 E 시작).
 
@@ -704,7 +716,7 @@ async def _answer_v2(
             deadline=deadline,
             k=cfg.retrieval.k,
             signals=labels(signals) if cfg.toggles.signals else (),
-            embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
+            embedding=emb,  # 토글이 켜져 만들어졌을 때만(TU-11). 나눠 쓰기면 요청용 사본
             english_only_embedding=cfg.toggles.english_embedding,
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
@@ -801,7 +813,7 @@ async def _answer_v2(
                     history,
                     k=cfg.retrieval.k,
                     index=state.tutor_kb,
-                    **_english_embedding(state),
+                    **_english_embedding(state, emb),
                 )
                 or None
             )

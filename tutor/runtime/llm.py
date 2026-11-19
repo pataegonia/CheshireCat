@@ -22,6 +22,7 @@ import random
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -37,10 +38,33 @@ from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig
 Send = Callable[[dict[str, Any]], Awaitable[Any]]  # chat.completions.create(**kwargs)와 같은 모양
 Gate = Callable[[], AbstractAsyncContextManager[Any]]
 Structured = Literal["json_schema", "json_object"]
-Outcome = Literal["sent", "budget", "gate", "no_time"]
+Outcome = Literal["sent", "budget", "request_cap", "gate", "no_time"]
 OPTIONAL_PARAMS = ("reasoning_effort", "verbosity", "max_completion_tokens")
 RETRY_JITTER_S = (0.2, 0.5)  # 가드 기본 설정(llm.retry_jitter_s)과 같다
 TOKEN_BUCKET = 100  # 성공한 시도의 completion_tokens 분포 구간 폭
+
+
+class RequestQuota:
+    """요청 하나가 보낼 수 있는 튜터 LLM 시도 수(`llm.request_max_calls`).
+
+    `pipeline.respond`가 요청마다 하나 만들어 `REQUEST_QUOTA`에 건다. 그 요청에서 만든 작업(T·E·R·
+    주 호출·겹쳐 보내기)은 같은 객체를 본다(작업은 만들 때의 컨텍스트를 물려받는다). 예약은 게이트를
+    잡은 뒤 실제로 보내기 직전에 한다. 확인과 더하기 사이에 await가 없어 병렬 작업이 동시에 상한을
+    넘지 못한다. 가드 LLM(classify·judge_output)과 임베딩은 여기서 세지 않는다(설정 검증이 센다).
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.used = 0
+
+    def take(self) -> bool:
+        if self.used >= self.limit:
+            return False
+        self.used += 1
+        return True
+
+
+REQUEST_QUOTA: ContextVar[RequestQuota | None] = ContextVar("tutor_request_quota", default=None)
 
 
 @dataclass(frozen=True)
@@ -139,6 +163,9 @@ class TutorLLM:
         self.unexpected: Counter[str] = Counter()  # 분류 밖 예외의 클래스 이름별 수(메시지 없음)
         self.max_calls: int | None = None  # 하네스 예산(넘으면 error="budget", 보내지 않음)
         self.blocked: Counter[str] = Counter()  # 예산에 막혀 보내지 못한 호출 수(역할별)
+        # 요청당 시도 상한(RequestQuota)에 막혀 보내지 못한 호출 수(역할별). 설정 검증이 최악을
+        # 상한 안에 두므로 0이어야 한다. 0이 아니면 세는 식이 코드와 어긋난 것이다
+        self.capped: Counter[str] = Counter()
         # 오류로 끝난 호출 수((역할, 최종 오류 코드)별, 하네스가 센다). complete 한 번이 1회다:
         # 재시도 뒤 최종 오류·게이트 대기 초과도 1회(calls는 보낸 시도 수라 단위가 다르다).
         # 예산 막힘은 blocked에만 센다
@@ -208,6 +235,9 @@ class TutorLLM:
             if outcome == "budget":
                 self.blocked[role] += 1
                 return self._result(_Attempt(error="budget"), attempts, t0)
+            if outcome == "request_cap":  # 앞 시도의 오류가 있으면 그것을, 없으면 budget
+                self.capped[role] += 1
+                return self._result(last if attempts else _Attempt(error="budget"), attempts, t0)
             if a is None:  # 게이트 대기로 마감이나 다시 보낼 시간을 다 썼다(앞 오류를 그대로)
                 return self._result(last, attempts, t0)
             attempts, last = attempts + 1, a
@@ -247,6 +277,9 @@ class TutorLLM:
             left = deadline - self._now()
             if retrying and limit > left:  # 가드와 같이: 게이트 대기 뒤 다시 보낼 시간이 모자람
                 return "no_time", None
+            quota = REQUEST_QUOTA.get()
+            if quota is not None and not quota.take():  # 확인과 예약 사이에 await 없음
+                return "request_cap", None
             self.calls[role] += 1
             cap = min(limit, left)
             try:

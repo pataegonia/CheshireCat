@@ -218,16 +218,18 @@ def test_serial_intent_needs_classify_off(classify):
 
 
 def test_intent_with_classify_and_verify_exceeds_the_call_limit():
-    # 주 호출 1(재시도 끔) + classify 최대 2 + T + judge_output = 5회 > TU-13 절대 4회
+    # 주 호출 1(재시도 끔) + classify 최대 2 + T + judge_output = 5회. 11/19부터 상한은 옛 TU-13
+    # 4회가 아니라 llm.request_max_calls(기본 8)라, 4로 낮추면 거부하고 기본값에서는 로드된다
     over = {
         "toggles.intent_override": "parallel",
         "toggles.guard_classify": "parallel",
         "toggles.verify": "guard",
     }
-    with pytest.raises(ValidationError, match="TU-13"):
-        config.load_config(overrides=over)
+    assert config.request_calls(config.load_config(overrides=over))[1] == 5
+    with pytest.raises(ValidationError, match="request_max_calls"):
+        config.load_config(overrides={**over, "llm.request_max_calls": 4})
     for drop in ("toggles.guard_classify", "toggles.verify"):
-        ok = {**over, drop: "off"}
+        ok = {**over, drop: "off", "llm.request_max_calls": 4}
         assert config.load_config(overrides=ok).toggles.intent_override == "parallel"
 
 

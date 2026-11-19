@@ -21,6 +21,7 @@ from tests.tutor.tutor_testlib import block_openai
 from tutor import TUTOR_DEFAULT
 from tutor.eval import run_local
 from tutor.judge.guard_merge import has_classify, has_judge_output
+from tutor.runtime import config as tutor_config
 
 
 class FakeGuardLLM:
@@ -179,7 +180,9 @@ def test_cli_guard_reports_the_gate_conditions_per_request(monkeypatch, tmp_path
     (saved,) = tmp_path.glob("tutor-*.json")
     gate = json.loads(saved.read_text(encoding="utf-8"))["gate"]
     assert gate["nano_per_request"] == {"max": 3, "histogram": {"3": len(seen)}, "n": len(seen)}
-    assert gate["limits"] == {"p50_s": 6.0, "p95_s": 12.0, "nano": 4}
+    # 요청당 nano 상한은 설정 llm.request_max_calls(11/19부터 옛 TU-13 4회 대신)
+    nano_max = tutor_config.load_config().llm.request_max_calls
+    assert gate["limits"] == {"p50_s": 6.0, "p95_s": 12.0, "nano": nano_max}
     assert gate["pass"]["nano"] is True and gate["pass"]["p50"] is True
     assert gate["attack_complied_by_run"] is None  # --judge 없이는 응함을 재지 않는다
     out = capsys.readouterr().out

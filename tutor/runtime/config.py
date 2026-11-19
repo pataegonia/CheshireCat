@@ -21,6 +21,11 @@ DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
+# 재시도는 주 호출만 1회(TU-13). T·classify를 함께 켜면 0(tutor.judge.flow._complete)
+MAIN_RETRIES = 1
+# 요청당 nano 시도 상한의 위 끝(11/19 사용자 허용: 4회 초과 가능, 대회 규정은 30초·동시 64만).
+# 후보 단독 실험의 관리 상한이라 대회 규정이 아니다. 올리려면 근거와 예상 부하를 먼저 문서화한다
+REQUEST_CALLS_CEILING = 8
 
 
 class _Strict(BaseModel):
@@ -78,6 +83,9 @@ class Toggles(_Strict):
     # 보낸다. E 마감은 요청 시작부터 llm.timeout_s.oom_gate로 같다(호출 순서만 바꾼다).
     # after_intent_fresh는 같은 순서에 E 마감만 E 시작부터 센다(요청 마감보다 늦지 않게)
     oom_schedule: Literal["with_request", "after_intent", "after_intent_fresh"]
+    # 한 요청 안에서 같은 질의 문자열의 임베딩(E·주 호출·규칙 A)을 한 번만 부르고 결과를 나눠 쓴다.
+    # 요청 사이에는 나누지 않는다(요청이 끝나면 버린다). 실패한 결과는 나누지 않는다. 기본 끔
+    share_query_embedding: bool
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -90,29 +98,9 @@ class Toggles(_Strict):
         if self.intent_override == "serial" and self.guard_classify != "off":
             # 직렬 T는 classify를 기다리지 않고 고정 문장을 내 classify 우선 규칙을 못 지킨다
             raise ValueError("toggles.intent_override: serial은 guard_classify off에서만 쓴다")
-        if (
-            self.intent_override != "off"
-            and self.guard_classify != "off"
-            and self.verify == "guard"
-        ):
-            # T와 classify를 함께 켜면 주 호출 재시도를 꺼도 주 호출 1 + classify 최대 2 + T 1
-            # + judge_output 1 = 5회로 TU-13 절대 4회를 넘는다
-            raise ValueError(
-                "toggles.intent_override는 guard_classify와 verify: guard를 함께 켜면"
-                " 요청당 nano 5회라 쓸 수 없다(TU-13 절대 4회)"
-            )
         if self.english_embedding and self.oom_gate == "off":
             # E 없이 영어에 임베딩만 켜면 영어 자료 밖 질문이 그대로 answer가 된다(11/18 측정)
             raise ValueError("toggles.english_embedding은 oom_gate가 off가 아닐 때만 켠다")
-        if self.oom_gate != "off":
-            # 주 호출 2(재시도) + T 1 + classify 최대 2 + judge_output 1 + E 1 ≤ TU-13 절대 4회.
-            # 겹쳐 보낸 주 호출(main_hedge)은 세지 않는다: 느린 요청에서만 1회 더 나간다
-            calls = 2 + (self.intent_override != "off") + 2 * (self.guard_classify != "off")
-            calls += (self.verify == "guard") + 1
-            if calls > 4:
-                raise ValueError(
-                    f"toggles.oom_gate: 요청당 nano {calls}회라 쓸 수 없다(TU-13 절대 4회)"
-                )
         return self
 
 
@@ -150,6 +138,10 @@ class Llm(_Strict):
     # 튜터 주 호출 상한(가드 판정 호출과 따로). 프록시 상한을 넘으면 로드에서 실패한다
     max_completion_tokens: Annotated[int, Field(ge=1, le=PROXY_MAX_COMPLETION_TOKENS)]
     timeout_s: Timeouts
+    # 요청당 nano 시도 상한(재시도·겹쳐 보내기·T·E·가드 단계 모두). 설정이 낼 수 있는 최악
+    # (`request_calls`)이 이 값을 넘으면 로드에서 거부하고, 서버는 튜터 LLM 시도를 보내기 직전에
+    # 요청별로 예약해 넘는 시도를 보내지 않는다(tutor.runtime.llm.RequestQuota). 임베딩은 따로 센다
+    request_max_calls: Annotated[int, Field(ge=1, le=REQUEST_CALLS_CEILING)]
 
 
 class EvalCfg(_Strict):
@@ -168,6 +160,36 @@ class TutorConfig(_Strict):
     answer: Answer
     llm: Llm
     eval: EvalCfg
+
+    @model_validator(mode="after")
+    def _calls_fit(self) -> "TutorConfig":
+        normal, worst = request_calls(self)
+        if worst > self.llm.request_max_calls:
+            raise ValueError(
+                f"요청당 nano 최악 {worst}회(정상 {normal}회)가 llm.request_max_calls"
+                f" {self.llm.request_max_calls}회를 넘는다"
+            )
+        return self
+
+
+def request_calls(cfg: "TutorConfig") -> tuple[int, int]:
+    """(정상 경로, 최악) 요청당 nano 시도 수. 설정·검증·측정 예상 호출이 모두 이 값을 쓴다.
+
+    정상 = 주 호출 1 + T + classify 1 + judge_output + E(켠 것만, 재시도·겹쳐 보내기 없이).
+    최악 = 주 호출 1 + 재시도(MAIN_RETRIES, T와 classify를 함께 켜면 0) + 겹쳐 보낸 주 호출 1
+    (main_hedge < main일 때, 재시도 없이) + T + classify 2(1차 탈옥이면 2차) + judge_output + E.
+    겹쳐 보낸 주 호출이 나가도 처음 주 호출은 재시도할 수 있어 둘을 함께 센다. 베이스라인은 1·2.
+    E는 named_term이면 일부 요청에만 나가지만 상한 쪽으로 센다. 임베딩은 세지 않는다.
+    """
+    if cfg.mode == "baseline":
+        return 1, 1 + MAIN_RETRIES
+    t = cfg.toggles
+    t_on = t.intent_override != "off" and t.guard_classify != "serial"
+    classify = t.guard_classify != "off"
+    extra = int(t_on) + int(t.verify == "guard") + int(t.oom_gate != "off")
+    retries = 0 if (t_on and classify) else MAIN_RETRIES
+    hedge = int(cfg.llm.timeout_s.main_hedge < cfg.llm.timeout_s.main)
+    return 1 + int(classify) + extra, 1 + retries + hedge + 2 * int(classify) + extra
 
 
 def resolve_path(path: str | Path) -> Path:

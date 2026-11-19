@@ -274,8 +274,12 @@ def test_gate_fits_the_call_limit(extra):
     ids=["with-classify", "intent-and-verify"],
 )
 def test_gate_over_the_call_limit_fails_at_load(extra):
-    with pytest.raises(ValidationError, match="TU-13"):
-        config.load_config(overrides={**ON, **extra})
+    # 최악(주 호출 2 + E 1 + classify 2, 또는 + T 1 + judge_output 1) 5회가 상한 4회를 넘는다.
+    # 11/19부터 상한은 llm.request_max_calls(기본 8)라 그 안이면 로드된다
+    capped = {**ON, **extra, "llm.request_max_calls": 4}
+    with pytest.raises(ValidationError, match="request_max_calls"):
+        config.load_config(overrides=capped)
+    assert config.load_config(overrides={**ON, **extra}).toggles.oom_gate == "all"
 
 
 NAMED = {"toggles.oom_gate": "named_term"}
@@ -322,8 +326,9 @@ def test_all_scope_does_not_build_the_kb_text():
 def test_named_term_scope_fits_the_call_limit_like_all():
     serial = {"toggles.intent_override": "serial"}
     assert config.load_config(overrides={**NAMED, **serial}).toggles.oom_gate == "named_term"
-    with pytest.raises(ValidationError, match="TU-13"):
-        config.load_config(overrides={**NAMED, "toggles.guard_classify": "parallel"})
+    over = {**NAMED, "toggles.guard_classify": "parallel", "llm.request_max_calls": 4}
+    with pytest.raises(ValidationError, match="request_max_calls"):
+        config.load_config(overrides=over)
 
 
 def test_named_term_scope_looks_only_at_the_last_learner_turn():

@@ -13,6 +13,7 @@ from tutor.answer import postprocess
 from tutor.judge import flow
 from tutor.request import TutorRequest, parse_request
 from tutor.runtime.budget import backstop_s, budget_s
+from tutor.runtime.llm import REQUEST_QUOTA, RequestQuota
 from tutor.runtime.response import default_response, ensure_contract
 from tutor.startup import prepare
 
@@ -26,7 +27,12 @@ async def respond(body: Any, *, deadline: float, state: Any) -> dict[str, Any]:
     req = parse_request(body)
     if req is None or req.last_user is None:
         return default_response()  # TU-12: 요청을 못 읽음 → clarify
-    return await _answer(req, deadline=deadline, state=state)
+    # 요청당 nano 시도 상한(llm.request_max_calls). 이 요청이 만드는 작업이 모두 같은 객체를 본다
+    token = REQUEST_QUOTA.set(RequestQuota(state.tutor_cfg.llm.request_max_calls))
+    try:
+        return await _answer(req, deadline=deadline, state=state)
+    finally:
+        REQUEST_QUOTA.reset(token)
 
 
 async def _answer(req: TutorRequest, *, deadline: float, state: Any) -> dict[str, Any]:

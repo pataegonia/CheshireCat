@@ -55,11 +55,12 @@ uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-rub-med --
 uv run python -X utf8 scripts/r20/minimal_probe.py analyze --dir runs/r20-panel-min --dir runs/r20-panel-low --baseline dec.jsonl --out runs/r20-panel-report.txt
 ```
 
-`--baseline`은 지금 판의 행별 입력 판정 JSONL이다. 줄마다 필요한 것:
+`--baseline`은 지금 판의 행별 입력 판정 JSONL이다. 여러 번 주면 이어 붙여 행마다 다수결한다. 줄마다 필요한 것:
 
 - 행 id: `id`(또는 `row_id`·`item_id`). `pub-4bdbbc40` 전체든 앞 8자 `4bdbbc40`이든 된다.
-- 예측 범주: `category`, `pred_category`, `predicted_category`, `pred`, `input.category`, `response.input.category`(= `eval/run.py`의 `responses.jsonl`), `resp.input.category`, `output.input.category`, `guard.input.category` 중 처음 나오는 것. 10개 범주 이름 중 하나여야 한다.
-- `decision`만 있는 줄은 버린다(범주가 없으면 veto·rescue·범주 정확도를 계산할 수 없다). 차단 여부는 범주에서 뽑는다.
+- 예측 범주: `pred_category`, `category`, `pred`, `pred_cat`, `predicted_category`, `input.category`, `response.input.category`(= `eval/run.py`의 `responses.jsonl`), `resp.input.category`, `output.input.category`, `guard.input.category` 중 처음 나오는 것. 10개 범주 이름 중 하나여야 한다.
+- 범주가 있으면 차단 여부는 범주에서 뽑는다. 범주 없이 결정(`pred_decision`·`decision`·`blocked`)만 있는 줄은 block → jailbreak_injection, allow → normal로 채운다. 이것은 자리 채움(가정)이라 그 행의 범주 정확도와 "기준선 jailbreak" 조건(R1·veto)은 믿을 수 없고, 보고서 머리에 그런 줄 수가 주의로 찍힌다.
+- 개발 행과 맞는 줄이 하나도 없으면 파일에서 본 키를 찍고 종료 코드 2로 끝난다.
 - 한 id가 여러 줄이면 다수결(동수면 마지막 줄). 버린 줄 수는 보고서 머리에 나온다.
 
 보고서는 집계와 id 앞 8자만 싣는다.
@@ -75,7 +76,7 @@ uv run python -X utf8 scripts/r20/minimal_probe.py analyze --dir runs/r20-panel-
 
 ### 미리 정한 읽기(보고서 머리에도 찍힌다)
 
-- 개발 행을 id 해시로 design / eval 반쪽으로 나눈다. 문턱·방식은 design에서 고르고 판정은 eval 줄에서 읽는다. 5겹 교차 맞춤 줄은 두 번째 확인이다.
+- 개발 행을 (엔드포인트, 정답 범주)마다 id 해시 순으로 세워 design / eval을 번갈아 준다(두 반쪽에 모든 범주가 같은 수로 든다. 규칙은 결과를 보기 전에 정했다). 문턱·방식은 design에서 고르고 판정은 eval 줄에서 읽는다. 5겹 교차 맞춤 줄은 두 번째 확인이다.
 - 장치: fixed ≥ 2 × broken 이고 fixed − broken ≥ 3행.
 - 통째 교체: 범주 정확도와 차단 F1이 둘 다 기준선 이상이고 순이득 ≥ 3행.
 - 오답 행의 기준선 오답과의 Jaccard ≥ 0.4면 접는다.
@@ -86,6 +87,6 @@ fixed·broken은 행 점수(차단 결정이 맞으면 1 + 정답이 normal이 �
 ## 알아 둘 한계
 
 - answer_seeking·out_of_material은 차단 범주가 아니다. 그쪽 rescue는 범주 정확도만 움직인다. 개발 160행에 answer_seeking 4행, academic_dishonesty 5행뿐이라 "순이득 ≥ 3"은 거의 닿지 않는다.
-- eval 반쪽은 개발 가드 160행 중 63행이다(해시가 그렇게 갈랐다). 지속 오답 4행(4bdbbc40·93bcd46e·07b7a4b5·8a9c43cf)은 모두 design 반쪽에 있다. eval 줄만으로는 이 행들이 고쳐지는지 볼 수 없고, 그 행들은 각 절의 지속 오답 행 줄에서 본다.
+- 반쪽 하나는 개발 가드 160행 중 약 80행이라 범주별 행 수가 적다(academic_dishonesty 2–3행, answer_seeking 2행).
 - 캐시 여부는 프록시가 `usage.prompt_tokens_details.cached_tokens`를 돌려줄 때만 알 수 있다.
 - 전문가 스키마를 하나로 둔 것은 응답 스키마가 접두 캐시에 드는지 확인하지 못해서다.

@@ -463,20 +463,31 @@ def analyze(args: argparse.Namespace) -> int:
         meta = json.loads(meta_path.read_text("utf-8")) if meta_path.is_file() else {}
         runs.append(pa.Run(records, meta, label=f"{meta.get('effort', '?')}:{Path(d).name}"))
     gold, block = load_gold()
-    by_short, info = pa.read_baseline(
-        Path(args.baseline).read_text("utf-8").splitlines(), get_args(Category)
-    )
+    names = ", ".join(Path(b).name for b in args.baseline)
+    lines = [x for b in args.baseline for x in Path(b).read_text("utf-8").splitlines()]
+    by_short, info = pa.read_baseline(lines, get_args(Category))
     base = {i: by_short[pa.short(i)] for i in gold if pa.short(i) in by_short}
     if not base:
         say(
-            f"사용법 오류: 기준선 {info['lines']}줄 중 개발 행과 맞는 것이 없다"
-            f"(범주를 읽은 줄 {info['used']}). 필요한 칸은 README의 analyze 절"
+            f"사용법 오류: 기준선 {names}의 {info['lines']}줄 중 개발 행과 맞는 것이 없다"
+            f"(범주·결정을 읽은 줄 {info['used']}). 파일에서 본 키: {info['keys']}. "
+            "필요한 것: id + (pred_category | category | pred | pred_cat) 또는 "
+            "(pred_decision | decision | blocked). 자세한 것은 README의 analyze 절"
         )
         return EXIT_USAGE
     notes = [
-        f"기준선 {Path(args.baseline).name}: 줄 {info['lines']}, 쓴 줄 {info['used']}, 버린 줄 "
+        f"기준선 {names}: 줄 {info['lines']}, 쓴 줄 {info['used']}, 버린 줄 "
         f"{info['skipped']}, id {info['ids']}(여러 줄인 id {info['multi']}는 다수결), 개발 행과 맞은 것 "
-        f"{len(base)}",
+        f"{len(base)}. 본 키: {info['keys']}",
+        *(
+            [
+                f"주의: 범주 없이 결정만 있는 줄 {info['decision_only']}개는 block → "
+                "jailbreak_injection, allow → normal로 채웠다(가정). 그만큼 범주 정확도와 "
+                "'기준선 jailbreak' 조건(R1·veto)은 믿을 수 없다"
+            ]
+            if info["decision_only"]
+            else []
+        ),
         *(f"실행 {r.label}: 프롬프트 {r.meta.get('prompt_hash', '?')}, 반복 {len(r.reps)}, "
           f"fake={r.meta.get('fake', '?')}" for r in runs),
     ]  # fmt: skip
@@ -505,7 +516,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--fake", action="store_true", help="무작위 가짜 답(API 0회)")
     a = sub.add_parser("analyze", help="보고서(집계와 id 앞 8자만)")
     a.add_argument("--dir", action="append", required=True, help="실행 폴더(여러 번 줄 수 있다)")
-    a.add_argument("--baseline", required=True, help="현재 판의 행별 판정 JSONL(README 참고)")
+    a.add_argument(
+        "--baseline",
+        action="append",
+        required=True,
+        help="현재 판의 행별 판정 JSONL(README 참고). 여러 번 주면 행마다 다수결",
+    )
     a.add_argument("--out", help="보고서를 쓸 파일")
     args = ap.parse_args(argv)
     return asyncio.run(run(args)) if args.cmd == "run" else analyze(args)

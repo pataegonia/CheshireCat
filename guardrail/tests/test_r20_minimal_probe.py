@@ -208,13 +208,13 @@ def test_read_baseline_accepts_flat_nested_and_votes():
         '{"row_id": "pub-cccccccc", "input": {"category": "jailbreak_injection"}}',
         '{"id": "pub-cccccccc", "pred_category": "normal"}',
         '{"id": "pub-cccccccc", "pred": "normal"}',
-        '{"id": "pub-dddddddd", "decision": "block"}',  # 범주가 없으면 버린다
+        '{"id": "pub-dddddddd", "decision": "block"}',  # 범주가 없으면 결정으로 채운다
         "not json",
         "",
     ]
     base, info = pa.read_baseline(lines, pa.ABBR)
-    assert base == {"aaaaaaaa": "normal", "bbbbbbbb": "off_topic", "cccccccc": "normal"}
-    assert (info["lines"], info["used"], info["skipped"], info["multi"]) == (7, 5, 2, 1)
+    assert base == {"aaaaaaaa": NORMAL, "bbbbbbbb": "off_topic", "cccccccc": NORMAL, "dddddddd": JB}
+    assert (info["lines"], info["used"], info["skipped"], info["multi"]) == (7, 6, 1, 1)
 
 
 def test_auc_and_points_and_metrics():
@@ -290,6 +290,31 @@ def test_half_is_deterministic_and_splits():
     assert set(parts["design"]) | set(parts["eval"]) == set(ids)
     assert not set(parts["design"]) & set(parts["eval"]) and 60 < len(parts["design"]) < 140
     assert pa.half("pub-4bdbbc40") == pa.half("pub-4bdbbc40")
+
+
+def test_stratified_halves_balance_every_category():
+    gold = {
+        f"pub-{n:08x}": {"category": JB if n % 5 == 0 else NORMAL, "endpoint": "guard"}
+        for n in range(101)
+    }
+    halves = pa.stratified_halves(gold)
+    assert halves == pa.stratified_halves(dict(reversed(gold.items())))  # 입력 순서와 무관
+    for cat in (JB, NORMAL):
+        got = [halves[i] for i in gold if gold[i]["category"] == cat]
+        assert 0 <= got.count("design") - got.count("eval") <= 1
+
+
+def test_read_baseline_falls_back_to_decision_and_reports_keys():
+    lines = [
+        '{"id": "pub-aaaaaaaa", "pred_decision": "block"}',
+        '{"id": "pub-bbbbbbbb", "blocked": false}',
+        '{"id": "pub-cccccccc", "pred_cat": "off_topic", "pred_decision": "allow"}',
+        '{"id": "pub-dddddddd", "score": 1}',
+    ]
+    base, info = pa.read_baseline(lines, pa.ABBR)
+    assert base == {"aaaaaaaa": JB, "bbbbbbbb": NORMAL, "cccccccc": "off_topic"}  # 범주가 먼저
+    assert info["decision_only"] == 2 and info["skipped"] == 1
+    assert info["keys"] == ["blocked", "id", "pred_cat", "pred_decision", "score"]
 
 
 def test_panel_prio_priority_thresholds_and_release():
@@ -393,7 +418,10 @@ def test_analyze_cli_matches_baseline_ids_with_or_without_prefix(tmp_path, capsy
     (tmp_path / "bad.jsonl").write_text('{"id": "pub-zzzzzzzz", "decision": "block"}', "utf-8")
     bad = ["analyze", "--dir", str(out), "--baseline", str(tmp_path / "bad.jsonl")]
     assert mp.main(bad) == mp.EXIT_USAGE  # 맞는 행이 없으면 빈 보고서를 내지 않는다
-    capsys.readouterr()
+    assert "파일에서 본 키: ['decision', 'id']" in capsys.readouterr().out
+    two = ["--baseline", str(tmp_path / "dec.jsonl"), "--baseline", str(tmp_path / "dec.jsonl")]
+    assert mp.main(["analyze", "--dir", str(out), *two]) == 0
+    assert "줄 12" in capsys.readouterr().out  # 파일 여러 개는 이어 붙여 행마다 다수결
     assert mp.main(["analyze", "--dir", str(out), "--baseline", str(tmp_path / "dec.jsonl")]) == 0
     text = (tmp_path / "report.txt").read_text("utf-8")
     assert "개발 행과 맞은 것 6" in text and text.strip() == capsys.readouterr().out.strip()

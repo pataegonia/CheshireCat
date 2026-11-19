@@ -454,3 +454,86 @@ def test_run_local_rows_jsonl_has_ids_scores_and_draft_record(tmp_path, monkeypa
     assert all(r["md_a_action"] == r["md_pick_action"] == "answer" for r in drafted)
     text = rows.read_text(encoding="utf-8")
     assert "자료를 바탕으로" not in text  # 답변 본문은 남기지 않는다
+
+
+# --- abstain_if_any: 고른 action이 answer인데 abstain 초안이 하나라도 있으면 abstain으로 ---
+
+AA = "llm.multi_draft.abstain_if_any"
+ANSWER_X2_ABSTAIN = [GOOD_OUT, GOOD_OUT, ABSTAIN_OUT]
+
+
+def aa_run(mode, outs=None, **overrides):
+    outs = outs or ANSWER_X2_ABSTAIN
+    llm = ScriptLLM(*[(0.0, ok(o)) for o in outs])
+    return (*run_flow(llm, **{AA: mode, **overrides}), llm)
+
+
+def test_aa_override_picks_the_first_abstaining_valid_draft():
+    outs = [draft("answer"), draft("answer"), draft("abstain"), draft("abstain")]
+    assert pick(outs, [LOW, LOW, LOW, LOW]) in (0, 1)  # 다수결은 동률
+    assert multi_draft.abstain_override(outs, 0) == 2
+    assert multi_draft.abstain_override([draft("answer"), None, draft("abstain")], 0) == 2
+
+
+@pytest.mark.parametrize("action", ["scaffold", "clarify", "refuse", "redirect", "abstain"])
+def test_aa_never_fires_when_the_chosen_action_is_not_answer(action):
+    outs = [draft(action), draft(action), draft("abstain" if action != "abstain" else "answer")]
+    chosen = pick(outs)
+    assert outs[chosen].action == action
+    assert multi_draft.abstain_override(outs, chosen) is None
+
+
+def test_aa_needs_an_abstaining_draft_and_a_chosen_draft():
+    assert multi_draft.abstain_override([draft("answer")] * 3, 0) is None
+    assert multi_draft.abstain_override([None, None], None) is None
+
+
+def test_aa_off_is_identical_and_leaves_no_record():
+    body, _t, shadow, _llm = aa_run("off")
+    assert body["action"] == "answer" and "aa" not in shadow.stages
+    assert "aa=" not in shadow.log_field()
+
+
+def test_aa_shadow_keeps_the_response_but_records():
+    off_body = aa_run("off")[0]
+    body, _t, shadow, _llm = aa_run("shadow")
+    assert body == off_body
+    rec = shadow.stages["aa"]
+    assert (rec.trig, rec.before, rec.after, rec.changed) == (True, "answer", "abstain", False)
+    assert shadow.chosen_action == "answer"
+    assert shadow.log_field().endswith(";aa=1;aa_ch=0")
+
+
+def test_aa_on_turns_an_answer_majority_with_one_abstain_into_abstain():
+    body, _t, shadow, _llm = aa_run("on")
+    assert body["action"] == "abstain" and body["citations"] == []
+    rec = shadow.stages["aa"]
+    assert (rec.trig, rec.before, rec.after, rec.changed) == (True, "answer", "abstain", True)
+    assert shadow.chosen == 2 and shadow.chosen_action == "abstain"
+    assert shadow.log_field().endswith(";aa=1;aa_ch=1")
+
+
+def test_aa_on_without_an_abstaining_draft_changes_nothing():
+    body, _t, shadow, _llm = aa_run("on", [GOOD_OUT] * 3)
+    assert body["action"] == "answer"
+    assert (shadow.stages["aa"].trig, shadow.stages["aa"].changed) == (False, False)
+    assert shadow.log_field().endswith(";aa=0;aa_ch=0")
+
+
+def test_aa_on_leaves_a_refuse_majority_and_sj_still_runs():
+    jailbreak = MainCallOut(category="jailbreak_injection", action="refuse", sentences=[])
+    llm = ScriptLLM(
+        *[(0.0, ok(o)) for o in (jailbreak, jailbreak, ABSTAIN_OUT)],
+        (0.0, ok(GOOD_OUT)),  # sj 초안
+    )
+    body, _t, shadow = run_flow(llm, **{AA: "on", "toggles.soft_jailbreak_draft": "on"})
+    assert [c["role"] for c in llm.calls][-1] == "sj"
+    assert body["action"] == "answer" and shadow.stages["sj"].changed
+    assert not shadow.stages["aa"].trig
+
+
+def test_aa_config_accepts_off_shadow_on_and_rejects_others():
+    for value in ("off", "shadow", "on"):
+        assert load_config(overrides={AA: value}).llm.multi_draft.abstain_if_any == value
+    with pytest.raises(ValueError):
+        load_config(overrides={AA: True})

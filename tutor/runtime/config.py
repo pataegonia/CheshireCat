@@ -171,6 +171,9 @@ class MultiDraft(_Strict):
     drafts: Annotated[list[Draft], Field(min_length=2, max_length=len("abcdefgh"))]
     wait_s: PositiveFloat
     margin_s: PositiveFloat
+    # 고른 action이 answer인데 유효한 초안 하나라도 abstain이면 그 초안으로 바꾼다(실험).
+    # shadow는 기록만
+    abstain_if_any: Stage = "off"
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":

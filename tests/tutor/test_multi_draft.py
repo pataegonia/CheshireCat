@@ -455,6 +455,6 @@ def test_run_local_rows_jsonl_has_ids_scores_and_draft_record(tmp_path, monkeypa
     assert keys <= set(recs[0])
     drafted = [r for r in recs if r["md_n"]]
     assert drafted and all(r["md_n"] == 3 and r["md_ok"] == 3 for r in drafted)
-    assert all(r["md_a_action"] == "answer" for r in drafted)
+    assert all(r["md_a_action"] == r["md_pick_action"] == "answer" for r in drafted)
     text = rows.read_text(encoding="utf-8")
     assert "자료를 바탕으로" not in text  # 답변 본문은 남기지 않는다

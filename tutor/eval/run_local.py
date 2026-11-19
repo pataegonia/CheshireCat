@@ -742,7 +742,8 @@ def row_records(
 
     항목 점수는 채점기 결과 그대로다(그 문항에 없는 항목·판정하지 않은 항목은 None). md_*는 주 호출
     초안 기록(`llm.multi_draft`): 보낸 초안 수·유효한 수·고른 번호·갈림·초안 A 혼자의 action
-    (초안 A가 무효면 None)·초안별 코드. 끄면 md_n이 0이다. --responses면 md_*가 없다.
+    (초안 A가 무효면 None)·고른 초안의 action(뒤 단계 T·E가 바꾸기 전, 없으면 None)·초안별 코드.
+    `action`은 뒤 단계를 지난 최종 action이다. 끄면 md_n이 0이다. --responses면 md_*가 없다.
     """
     out = []
     for run, rows in enumerate(scored):
@@ -771,6 +772,7 @@ def row_records(
                     md_pick=shadow.chosen,
                     md_split=shadow.split,
                     md_a_action=shadow.a_action,
+                    md_pick_action=shadow.chosen_action,
                     md_codes=[d.code for d in shadow.drafts],
                 )
             out.append(rec)

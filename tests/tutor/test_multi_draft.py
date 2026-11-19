@@ -355,17 +355,13 @@ def test_global_medium_is_rejected_with_multi_draft():
         cfg(**{"llm.reasoning_effort": "medium"})
 
 
-def test_call_cap_is_six_with_multi_draft():
-    # 주 호출 A 2(재시도) + B·C 2 + T 1 + E 1 = 6 (TU-13 4회를 넘는다: 이 브랜치만)
-    cfg(**{"toggles.intent_override": "serial", "toggles.oom_gate": "all"})
+def test_call_cap_is_eight_with_multi_draft():
+    # 주 호출 A 2(재시도) + 나머지 초안 4 + T 1 + E 1 = 8: 초안 5개까지 로드, 6개는 9회라 거절
+    on = {"toggles.intent_override": "serial", "toggles.oom_gate": "all"}
+    c = cfg(**on, **{"llm.multi_draft.drafts": [{"effort": "low"}] * 5})
+    assert len(c.llm.multi_draft.drafts) == 5
     with pytest.raises(ValueError):
-        cfg(
-            **{
-                "toggles.intent_override": "serial",
-                "toggles.oom_gate": "all",
-                "llm.multi_draft.drafts": [{"effort": "low"}] * 3 + [{"effort": "medium"}],
-            }
-        )
+        cfg(**on, **{"llm.multi_draft.drafts": [{"effort": "low"}] * 6})
 
 
 # --- 서버 경로: 접근 로그 끝 칸 · 로컬 측정 행별 결과 ---
@@ -403,14 +399,14 @@ def test_router_appends_the_draft_field_to_the_tutor_access_line(tmp_path, monke
     with TestClient(tutor_testlib.make_app()) as c:
         r = c.post("/tutor", json=body, headers={"Authorization": f"Bearer {tutor_testlib.TOKEN}"})
     assert r.status_code == 200 and r.json()["action"] == "answer"
-    assert [k.get("reasoning_effort") for k in sent] == ["low", "low", "medium"]
+    assert [k.get("reasoning_effort") for k in sent] == ["low", "low", "low"]
     lines = [x.getMessage() for x in caplog.records if x.name == "guardrail.access"]
     line = next(x for x in lines if " /tutor " in x)
     assert ACCESS_LINE.fullmatch(line), line
     tail = line.rsplit(" ", 1)[1]
     assert re.fullmatch(
-        r"calls=3;md_n=3;md_ok=3;md_split=0;md_pick=2;md_a_same=1"
-        r";low_a=\d+/1/-/\d+;low_b=\d+/1/-/\d+;med_c=\d+/1/-/\d+",
+        r"calls=3;md_n=3;md_ok=3;md_split=0;md_pick=0;md_a_same=1"
+        r";low_a=\d+/1/-/\d+;low_b=\d+/1/-/\d+;low_c=\d+/1/-/\d+",
         tail,
     ), tail
     from guardrail.eval.load import _fields

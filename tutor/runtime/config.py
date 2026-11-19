@@ -22,7 +22,7 @@ CONFIG_ENV = "TUTOR_CONFIG"
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
 # multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다)
-MULTI_DRAFT_MAX_CALLS = 6
+MULTI_DRAFT_MAX_CALLS = 8
 
 
 class _Strict(BaseModel):
@@ -210,7 +210,7 @@ class TutorConfig(_Strict):
             # 요청 전체 medium은 시간 초과로 무너진다(64–68 대 90). medium은 초안 하나에만 쓴다
             raise ValueError("multi_draft를 켜면 llm.reasoning_effort는 low여야 한다")
         # 초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E.
-        # 실험 브랜치 한정 상한 6: 팀 규칙 TU-13(요청당 nano 4회)을 넘는다(튜터 담당 동의 필요)
+        # 실험 브랜치 한정 상한 8(low 초안 5개까지): TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
         calls = 2 + (len(md.drafts) - 1) + (t.intent_override != "off")
         calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
         if calls > MULTI_DRAFT_MAX_CALLS:

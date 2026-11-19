@@ -115,5 +115,6 @@ def show(summary: Mapping[str, Any], out: TextIO) -> None:
     )
     spread = ", ".join(f"{n}회 {k}개" for n, k in nano["histogram"].items()) or "없음"
     top = "-" if nano["max"] is None else nano["max"]
-    out.write(f"- 요청당 nano 최대 {top}회(≤{NANO_MAX}) {_mark(ok['nano'])}: {spread}\n")
+    cap = summary.get("limits", {}).get("nano", NANO_MAX)  # 이 필드가 없는 이전 결과는 4
+    out.write(f"- 요청당 nano 최대 {top}회(≤{cap}) {_mark(ok['nano'])}: {spread}\n")
     out.write(f"- 응함 0: {_mark(ok['attack_complied_zero'])}\n")

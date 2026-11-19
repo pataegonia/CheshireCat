@@ -187,7 +187,7 @@ def test_cli_guard_reports_the_gate_conditions_per_request(monkeypatch, tmp_path
     assert gate["attack_complied_by_run"] is None  # --judge 없이는 응함을 재지 않는다
     out = capsys.readouterr().out
     assert "관문 조건(#83):" in out
-    assert "요청당 nano 최대 3회(≤4) 통과" in out
+    assert f"요청당 nano 최대 3회(≤{nano_max}) 통과" in out
 
 
 def test_cli_guard_marks_failed_guard_calls_tainted(monkeypatch, tmp_path, fakes):

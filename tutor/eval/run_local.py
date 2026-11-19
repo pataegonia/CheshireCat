@@ -467,6 +467,8 @@ def _write(
             "failures": _by_role(llm.failures),  # 호출 단위 최종 오류
             "attempt_errors": _by_role(llm.attempt_errors),  # 시도 단위 갈래(재시도 포함)
             "completion_buckets": _by_role(llm.completion_buckets),  # 성공한 시도의 토큰 구간
+            # 요청당 시도 상한(llm.request_max_calls)에 막혀 보내지 못한 수(역할별). 0이어야 한다
+            "capped": dict(sorted(getattr(llm, "capped", {}).items())),
         }
     data["report"] = asdict(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1020,7 +1022,12 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         preset=args.preset,
         runs=args.runs,
         judge=args.judge,
-        tutor_calls=max(TUTOR_CALLS, request_calls(cfg)[0]),  # 3회는 classify·judge_output 몫
+        # v2는 3회(classify·judge_output 몫)와 설정 계산 중 큰 쪽, 베이스라인은 설정 계산(1회)
+        tutor_calls=(
+            request_calls(cfg)[0]
+            if cfg.mode == "baseline"
+            else max(TUTOR_CALLS, request_calls(cfg)[0])
+        ),
     )
     if args.guard:  # 가드 classify·judge_output은 요청당 정상 호출 안에 이미 있다. probe만 더한다
         calls += guard_probe_calls(load_guard_config().llm)
@@ -1123,9 +1130,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     by_axis = case_set.axis_scores(scored, rows, judged=judge is not None) if team else None
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
+    # 요청당 시도 상한에 막힌 시도: 설정 계산이 코드와 어긋난 것이라 측정값으로 쓰지 않는다
+    capped = sum(getattr(state.tutor_llm, "capped", {}).values()) if state is not None else 0
+    if capped:
+        sys.stdout.write(f"요청당 시도 상한에 막혀 보내지 못한 튜터 호출 {capped}회(측정값 아님)\n")
     use = _embedding_use(counted, built, rows, args.runs, embedding_sites(cfg.toggles))
     guard_run = _guard_run(guard_llm, getattr(state, "guard_skips", None))
-    tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
+    tainted = bool(blocked) or bool(failed) or bool(capped)
+    tainted = tainted or (use is not None and not use.ok) or stop.tripped
     # 가드 단계를 건너뛰었거나 가드 호출이 오류로 끝난 행은 튜터 단독·가드 기본값 결과다(#165 리뷰)
     tainted = tainted or (guard_run is not None and not guard_run["clean"])
     invalid = stop.reason()

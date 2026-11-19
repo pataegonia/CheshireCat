@@ -178,3 +178,48 @@ def test_pipeline_gives_each_request_its_own_quota(monkeypatch):
     assert asyncio.run(go()) is None  # 요청이 끝나면 걸어 둔 상한을 거둔다
     limit = state.tutor_cfg.llm.request_max_calls
     assert seen == [(limit, 0), (limit, 0)]  # 요청마다 새로 센다
+
+
+def test_hedged_and_retried_main_call_is_counted_by_the_real_llm():
+    """겹쳐 보낸 주 호출과 처음 주 호출의 재시도가 함께 나가도 예약 수 = 보낸 시도 수 ≤ 최악 계산."""
+    import httpx
+    import openai
+
+    from tests.tutor.test_flow import state_with
+    from tutor.judge import flow
+
+    req = httpx.Request("POST", "http://fake.invalid/v1/chat/completions")
+    order = []
+
+    async def send(kwargs):
+        index = len(order)
+        order.append(index)
+        if index == 0:  # 처음 주 호출: 겹쳐 보내기 시간이 지난 뒤 500(재시도 대상)
+            await asyncio.sleep(0.1)
+            raise openai.APIStatusError("x", response=httpx.Response(500, request=req), body=None)
+        if index == 1:  # 겹쳐 보낸 주 호출: 늦게 실패
+            await asyncio.sleep(0.6)
+            raise openai.APIStatusError("x", response=httpx.Response(500, request=req), body=None)
+        return reply()  # 처음 주 호출의 재시도: 성공
+
+    llm = llm_with(send)
+    llm._rand = lambda: 0.0  # 재시도 지터 0.2초
+    over = {"llm.timeout_s.main_hedge": 0.05, "llm.timeout_s.main": 1.0}
+    state = state_with(llm, **over)
+    complete = flow._complete(state)
+
+    async def go():
+        quota = RequestQuota(state.tutor_cfg.llm.request_max_calls)
+        REQUEST_QUOTA.set(quota)
+        deadline = asyncio.get_running_loop().time() + 10
+        got = await complete([], Out, deadline=deadline)
+        await asyncio.sleep(0)
+        return got, quota
+
+    got, quota = asyncio.run(go())
+    assert got.error is None
+    assert dict(llm.calls) == {"main": 2, "main_hedge": 1}
+    assert quota.used == sum(llm.calls.values()) == 3
+    # 이 설정의 최악 계산(주 호출 1 + 재시도 1 + 겹쳐 보내기 1)이 실제로 나간 수를 덮는다
+    main_only = config.request_calls(state.tutor_cfg)
+    assert main_only == (1, 3) and quota.used <= main_only[1]

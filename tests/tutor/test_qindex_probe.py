@@ -194,6 +194,9 @@ def test_check_questions_keeps_korean_questions_full_of_identifiers():
     assert why is None
     assert len(questions) == PER_CHUNK
     assert questions[0] == ("answerable", "ko", ko[0])
+    # 한국어 예제 이름을 그대로 둔 영어 질문도 남긴다
+    en = ["How many innings does the 꿈틀 중학교 scoreboard example record?"] * 4
+    assert qp.check_questions(qp.ChunkQuestions(**{**GOOD, "answerable_en": en}))[1] is None
 
 
 def test_gen_sends_bad_replies_to_gen_errors_and_retries_them_next_run(monkeypatch, tmp_path):

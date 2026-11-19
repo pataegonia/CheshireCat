@@ -131,8 +131,9 @@ def _has_hangul(text: str) -> bool:
 def check_questions(out: ChunkQuestions) -> tuple[list[tuple[str, str, str]], str | None]:
     """응답 검증 → ((kind, lang, 질문) 목록, 버린 까닭). 하나라도 틀리면 조각 전체를 버린다.
 
-    까닭: `count:<칸>`(수 부족), `empty:<칸>`(빈 문자열), `lang:<칸>`(언어 뒤바뀜). 언어는 한글이
-    있는지로만 본다(식별자가 많은 한국어 질문을 영어로 보지 않게). 수가 넘치면 앞에서부터 쓴다.
+    까닭: `count:<칸>`(수 부족), `empty:<칸>`(빈 문자열), `lang:<칸>`(언어 뒤바뀜). 한국어 칸은
+    한글이 있으면 되고(식별자가 많아도 된다) 영어 칸은 글자 대부분이 라틴 문자면 된다(한국어
+    예제 이름을 그대로 둔 영어 질문은 남긴다). 수가 넘치면 앞에서부터 쓴다.
     """
     questions: list[tuple[str, str, str]] = []
     for (kind, lang), count in COUNTS.items():
@@ -142,7 +143,7 @@ def check_questions(out: ChunkQuestions) -> tuple[list[tuple[str, str, str]], st
             return [], f"count:{name}"
         if not all(items):
             return [], f"empty:{name}"
-        if any(_has_hangul(item) != (lang == "ko") for item in items):
+        if not all(_has_hangul(x) if lang == "ko" else is_english(x) for x in items):
             return [], f"lang:{name}"
         questions += [(kind, lang, item) for item in items]
     return questions, None

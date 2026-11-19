@@ -86,6 +86,7 @@ from tutor.eval.recall import (
 from tutor.judge.examples import build_index, load_examples
 from tutor.judge.main_call import EVIDENCE_CHECK_PROBE
 from tutor.judge.multi_draft import SHADOW, Shadow
+from tutor.judge.specialists import STAGE_ROLES
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, ROOT, TutorConfig, load_config
@@ -783,6 +784,12 @@ def row_records(
     return out
 
 
+def answer_failures(failures: Mapping[tuple[str, str], int]) -> int:
+    """답을 기본값으로 바꾼 최종 실패 수. 실험 단계 호출(rq·sj)의 실패는 응답을 바꾸지 않으므로
+    (그대로 둔다) 결과를 tainted로 만들지 않는다. 그 수는 실패 줄과 행별 stages에 그대로 남는다."""
+    return sum(n for (role, _), n in failures.items() if role not in STAGE_ROLES)
+
+
 def write_rows_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = (json.dumps(rec, ensure_ascii=False) for rec in records)
@@ -1202,7 +1209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_rows_jsonl(args.rows_jsonl, row_records(scored, shadows or None))
     by_axis = case_set.axis_scores(scored, rows, judged=judge is not None) if team else None
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
-    failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
+    failed = answer_failures(state.tutor_llm.failures) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs, embedding_sites(cfg.toggles))
     guard_run = _guard_run(guard_llm, getattr(state, "guard_skips", None))
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped

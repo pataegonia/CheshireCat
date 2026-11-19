@@ -404,3 +404,29 @@ def test_rows_jsonl_carries_draft_actions_and_stage_records():
     (rec,) = row_records(scored, [{"r1": shadow}])
     assert rec["md_actions"] == ["answer", None, "abstain"]
     assert rec["stages"]["rq"]["verdict"] == "attr" and rec["stages"]["rq"]["conf"] == 4
+
+
+def test_sj_skips_crisis_and_delegation_signals():
+    llm = sj_llm()
+    text = "몇 주째 혼자 버티기 힘들어요 " + QUESTION
+    _, stages, _, _ = run(llm, text, **{"toggles.soft_jailbreak_draft": "on"})
+    assert "sj" not in llm.roles() and not stages["sj"].trig
+
+
+def test_sj_and_rq_never_both_run_even_without_a_record_holder():
+    # 기록 칸(Shadow)이 없어도 sj가 낸 answer에 rq가 돌지 않는다(요청당 호출 상한 8의 전제)
+    llm = sj_llm()
+    llm.by_role.update(rq_a=(0.0, REBUILT), rq_b=(0.0, compare()))
+    overrides = {"toggles.soft_jailbreak_draft": "on", "toggles.reverse_question": "on"}
+    state = state_with(llm, **overrides)
+    req = parse_request({"messages": [{"role": "user", "content": QUESTION}]})
+    body = asyncio.run(flow.answer_v2(req, state, deadline=1e12))
+    assert body["action"] == "answer" and llm.roles() == ["main", "sj"]
+
+
+def test_stage_call_failures_do_not_taint_a_measurement():
+    from tutor.eval.run_local import answer_failures
+
+    failures = {("rq_a", "timeout"): 2, ("sj", "bad_json"): 1, ("main", "timeout"): 1}
+    assert answer_failures(failures) == 1  # 주 호출 실패만 기본값을 낳는다
+    assert answer_failures({("rq_b", "server"): 3}) == 0

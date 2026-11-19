@@ -585,7 +585,8 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
                     await begin(gate_deadline)
 
     try:
-        body = await _answer_v2(req, state, deadline=deadline, begin_gate=later)
+        seen: dict[str, Any] = {}  # 요청 안에서만: sj가 쓸 주 호출 메시지·sj가 답을 냈나
+        body = await _answer_v2(req, state, deadline=deadline, begin_gate=later, seen=seen)
         counts = getattr(state, "oom_gate_counts", None)
         gate = jobs[0] if jobs else None
         if (
@@ -594,7 +595,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             and await material_absent(gate, counts)
         ):
             return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
-        replaced = await _reverse_question(req, state, body, deadline)
+        replaced = (
+            None if seen.get("sj_used") else await _reverse_question(req, state, body, deadline)
+        )  # sj가 낸 answer에는 rq를 돌리지 않는다(한 요청에 단계 하나, 호출 상한 8의 전제)
         if replaced is not None:
             return replaced
         return append_quote(req, state, body)
@@ -751,6 +754,7 @@ async def _answer_v2(
     *,
     deadline: float,
     begin_gate: Callable[[], Awaitable[None]] | None = None,
+    seen: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
@@ -763,7 +767,7 @@ async def _answer_v2(
     if direct_clarify(conv):
         return tutor_post(fixed_body(Fixed.CLARIFY))  # TU-05: 빈 발화, 앞 대화 뒤의 자모·기호만
     cfg = state.tutor_cfg
-    seen: dict[str, Any] = {}  # sj가 쓸 주 호출 메시지·스키마(요청 안에서만)
+    seen = {} if seen is None else seen  # sj가 쓸 주 호출 메시지·스키마(요청 안에서만)
     signals = detect(conv)  # 기본값 선택에는 토글과 상관없이 쓴다(TU-12)
     guard = getattr(state, "guard", None)
     skips: GuardSkips | None = getattr(state, "guard_skips", None)
@@ -994,6 +998,10 @@ def _mention_marker(
     return decided
 
 
+# sj를 돌리지 않는 신호: 지시 무력화(진짜 탈옥), 위기(escalate가 먼저), 과제 대행(대행 덮기 몫)
+SJ_BLOCKERS = frozenset({Signal.OVERRIDE, Signal.CRISIS, Signal.DELEGATION})
+
+
 async def _soft_jailbreak(
     state: Any,
     kind: Fixed,
@@ -1011,7 +1019,7 @@ async def _soft_jailbreak(
     if (
         mode == "off"
         or kind != Fixed.REFUSE_JAILBREAK
-        or Signal.OVERRIDE in signals
+        or not SJ_BLOCKERS.isdisjoint(signals)
         or "messages" not in seen
     ):
         return None
@@ -1057,6 +1065,7 @@ async def _soft_jailbreak(
     if mode != "on":
         return None
     rec.changed = True
+    seen["sj_used"] = True
     return tutor_post(body, "normal")
 
 
@@ -1077,9 +1086,7 @@ async def _reverse_question(
     if mode == "off" or prompts is None or body.get("action") != "answer":
         return None
     answer = body.get("answer") or ""
-    shadow = multi_draft.SHADOW.get()
-    sj_used = shadow is not None and "sj" in shadow.stages and shadow.stages["sj"].changed
-    if not answer or NOT_IN_MATERIAL_NOTE in answer or sj_used:
+    if not answer or NOT_IN_MATERIAL_NOTE in answer:
         return None
     conv = tidy(_messages(req))
     if CODE_FENCE in conv.target_raw:

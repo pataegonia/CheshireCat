@@ -1,7 +1,9 @@
 """튜터 설정(TU-14): 루트 config/tutor.yaml을 가드 GR-11과 같은 형식으로 읽는다."""
 
 import asyncio
+import os
 import types
+from pathlib import Path
 
 import pytest
 import yaml
@@ -13,7 +15,8 @@ from tutor.runtime import config
 
 
 def repo_raw():
-    return yaml.safe_load((config.ROOT / config.DEFAULT_CONFIG).read_text(encoding="utf-8"))
+    """테스트 기준 설정(conftest: 동결 토글을 끈 저장소 설정)의 원본 매핑."""
+    return yaml.safe_load(Path(os.environ[config.CONFIG_ENV]).read_text(encoding="utf-8"))
 
 
 def write(tmp_path, data, name="tutor.yaml"):
@@ -23,7 +26,7 @@ def write(tmp_path, data, name="tutor.yaml"):
 
 
 def test_repo_config_has_the_prd_defaults():
-    cfg = config.load_config()
+    cfg = config.load_config(config.ROOT / config.DEFAULT_CONFIG)  # 저장소 파일 그대로
     toggles = cfg.toggles
     assert cfg.mode == "v2"
     assert toggles.action_from_category is False  # TU-06 기본 끔
@@ -36,6 +39,14 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
+    assert toggles.top1_dialog_query is True  # 동결 설정(11/18): 규칙 A 질의로 1위 더하기 켬
+    assert toggles.delegation_override is True  # 동결 설정(11/18): 대행 덮기 켬
+    assert toggles.fallback_quote is True  # 동결 설정(11/18): 자료 인용 답 켬(T 관문)
+    assert toggles.intent_override == "serial"  # 동결 설정(11/18): T serial
+    assert toggles.quote_append is True  # 동결 설정(11/18): 자료 문장 덧붙이기 켬(#225)
+    assert toggles.quote_from_top1 is True  # 동결 설정(11/18): 덧붙일 문장을 더한 1위 섹션에서
+    assert toggles.oom_gate == "named_term"  # 동결 설정(11/18): 이름 붙은 말이 KB에 없을 때만 E
+    assert toggles.oom_schedule == "after_intent_fresh"  # 동결 설정(11/18): E를 T 뒤에
     assert cfg.llm.reasoning_effort == "low"  # TU-13
     # 주 호출 상한 = 운영진 프록시 상한(11/14 실측: 1600은 length로 잘린 답이 기본값으로 나감)
     assert cfg.llm.max_completion_tokens == 2000  # 가드 판정 호출 상한과 따로
@@ -95,12 +106,52 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("retrieval.k", True),
         ("toggles.signals", "yes"),
         ("toggles.cite_top1", "yes"),
+        ("toggles.top1_dialog_query", "yes"),
+        ("toggles.quote_from_top1", "yes"),
+        ("toggles.delegation_override", "yes"),
+        ("toggles.fallback_quote", "yes"),
+        ("toggles.intent_override", True),  # off | parallel | serial만 받는다
+        ("toggles.intent_override", "on"),
         ("toggles.signals", 1),
     ],
 )
 def test_invalid_values_fail_at_load(dotted, value):
     with pytest.raises(ValidationError):
         config.load_config(overrides={dotted: value})
+
+
+def test_top1_dialog_query_key_is_required_and_loads_both_values(tmp_path):
+    data = repo_raw()
+    for value in (True, False):
+        data["toggles"]["top1_dialog_query"] = value
+        loaded = config.load_config(write(tmp_path, data))
+        assert loaded.toggles.top1_dialog_query is value
+    del data["toggles"]["top1_dialog_query"]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))
+
+
+@pytest.mark.parametrize("classify", ["serial", "parallel"])
+def test_serial_intent_needs_classify_off(classify):
+    overrides = {"toggles.intent_override": "serial", "toggles.guard_classify": classify}
+    with pytest.raises(ValidationError, match="guard_classify off"):
+        config.load_config(overrides=overrides)
+    ok = {"toggles.intent_override": "parallel", "toggles.guard_classify": classify}
+    assert config.load_config(overrides=ok).toggles.intent_override == "parallel"
+
+
+def test_intent_with_classify_and_verify_exceeds_the_call_limit():
+    # 주 호출 1(재시도 끔) + classify 최대 2 + T + judge_output = 5회 > TU-13 절대 4회
+    over = {
+        "toggles.intent_override": "parallel",
+        "toggles.guard_classify": "parallel",
+        "toggles.verify": "guard",
+    }
+    with pytest.raises(ValidationError, match="TU-13"):
+        config.load_config(overrides=over)
+    for drop in ("toggles.guard_classify", "toggles.verify"):
+        ok = {**over, drop: "off"}
+        assert config.load_config(overrides=ok).toggles.intent_override == "parallel"
 
 
 @pytest.mark.parametrize(("dotted", "value"), [("toggles.vote", True), ("toggles.verify", "self")])
@@ -155,6 +206,7 @@ def test_env_picks_the_config_file(tmp_path, monkeypatch):
 
 
 def test_default_file_is_found_from_another_directory(tmp_path, monkeypatch):
+    monkeypatch.delenv(config.CONFIG_ENV)  # 테스트 기준 설정(conftest) 대신 저장소 기본 파일
     monkeypatch.chdir(tmp_path)  # 저장소 루트가 아닌 곳에서 띄워도 config/tutor.yaml을 찾는다
     assert config.load_config() == config.load_config(config.ROOT / config.DEFAULT_CONFIG)
 
@@ -185,3 +237,13 @@ def test_local_run_cap_comes_from_the_config(capsys):
     run_local._inputs(ap, args)
     assert args.max_calls == config.load_config().eval.max_calls
     assert f"상한 {args.max_calls}회" in capsys.readouterr().out
+
+
+def test_oom_schedule_key_is_required_and_loads_all_values(tmp_path):
+    data = repo_raw()
+    for value in ("with_request", "after_intent", "after_intent_fresh"):
+        data["toggles"]["oom_schedule"] = value
+        assert config.load_config(write(tmp_path, data)).toggles.oom_schedule == value
+    del data["toggles"]["oom_schedule"]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))

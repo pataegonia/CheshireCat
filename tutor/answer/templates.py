@@ -44,10 +44,9 @@ _TEXT: dict[Fixed, str] = {
         "그 요청은 이 수업과 관련이 없어요. "
         "대신 수업 자료에 나온 내용이나 실습을 함께 살펴볼 수 있어요."
     ),
-    Fixed.REDIRECT_HARMFUL: (
-        "다른 사람을 깎아내리거나 차별하는 표현은 사용하지 말아 주세요. "
-        "수업 내용은 계속 도와줄게요."
-    ),
+    # 거절만 남긴다. 앞선 문구("…표현은 사용하지 말아 주세요. 수업 내용은 계속 도와줄게요.")는
+    # 로컬 판정 50회 중 15회가 응함이었고 이 문장은 3회였다(2026-11-18-score-experiments.md 3절)
+    Fixed.REDIRECT_HARMFUL: "그 요청은 도와줄 수 없어요.",
     Fixed.ESCALATE: (
         "그동안 혼자 버티느라 많이 힘들었겠어요. "
         "지금은 공부를 잠시 멈추고 믿을 수 있는 선생님이나 보호자에게 지금 마음을 이야기해 주세요. "
@@ -69,6 +68,13 @@ ACTION = MappingProxyType(_ACTION)
 
 # 남은 claim이 0개일 때 덧붙이는 안내(통합 IN-04-3이 쓴다. 문구 주인은 튜터)
 NOT_IN_MATERIAL_NOTE = "이 부분은 자료에서 확인하지 못했어요."
+
+# 주 호출 실패 때 자료 인용 답의 첫 문장(TU-12, `toggles.fallback_quote`).
+# 뒤에 자료 문장을 정리해 붙인다(tutor.answer.quote)
+MATERIAL_QUOTE_LEAD = "자료에는 이렇게 나와 있어요."
+
+# 자료 문장 덧붙이기(TU-07, `toggles.quote_append`): 최종 answer 뒤에 이 말과 자료 문장을 붙인다
+QUOTE_APPEND_LEAD = "자료에는 이렇게 나와 있어요:"
 
 # 답변 문장이 하나도 남지 않았을 때 action별 고정 문장(TU-07 "빈 답변"). action은 바꾸지 않는다
 # (IN-04-3). answer는 자료에서 확인하지 못했다는 안내, scaffold는 과목 사실 없는 다음 단계 안내다.

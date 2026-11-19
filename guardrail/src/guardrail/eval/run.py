@@ -93,7 +93,7 @@ class InputOnlyGuard:
     쓰지 않고 normal로 두고 오류로 센다(재려는 것이 프롬프트라서다).
     """
 
-    UNSUPPORTED = ("third_call", "oom_kb_snippet", "embedding")  # 구현하지 않은 스위치
+    UNSUPPORTED = ("third_call", "oom_kb_snippet", "embedding", "request_check", "block_recheck")
 
     @classmethod
     def check(cls, cfg: GuardConfig) -> None:
@@ -291,8 +291,9 @@ def probe_calls(cfg: Llm) -> int:
 
 def calls_per_row(cfg: GuardConfig, has_candidate: bool) -> int:
     """행당 호출 수의 상한 추정(저신호 직접 판정 등으로 덜 부를 수 있다). 재시도는 세지 않는다."""
-    # 입력 판정(+ 탈옥 2차 또는 자료 밖 확인: 한 요청에 둘 중 하나만 부른다. 상한이라 늘 센다)
-    n = 1 + (cfg.toggles.jb_check or cfg.toggles.oom_check)
+    # 입력 판정(+ 탈옥 2차·자료 밖 확인·요청 재확인: 한 요청에 하나만 부른다. 상한이라 늘 센다)
+    t = cfg.toggles
+    n = 1 + (t.jb_check or t.oom_check or t.request_check or t.block_recheck)
     out = cfg.output
     if has_candidate and (
         out.mode == "baseline" or cfg.toggles.nano_tier3 or out.call_nano_when_unused
@@ -958,6 +959,7 @@ async def _measure(
                     "answer_quote_ok": j.answer_quote_ok,
                     "kb_quote_ok": j.kb_quote_ok,
                     "nano_refuses": j.nano_refuses,
+                    "quote_repaired": j.quote_repaired,
                     "calls": j.calls,
                     "errors": list(j.errors),
                     "knn_major": j.knn_major,

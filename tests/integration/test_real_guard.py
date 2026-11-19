@@ -13,12 +13,16 @@
   (`toggles.oom_check`, 가드 #215)이 켜져 있으면 1회 더(OomCheckOut). verdict가 not_stated면
   응답 input이 allow · out_of_material, not_asked · stated면 allow · normal. 탈옥 2차와 한 요청에서
   같이 부르지 않는다. 토글이 없는 main에서는 0회다. 스키마 이름은 문자열로만 쓴다.
+  가드 #229(요청 점검, S3.13 `toggles.request_check`)는 그 자리에 요청 점검(RequestCheckOut)을
+  부르고 그 verdict를 같은 규칙으로 읽는다. 확인 호출은 스키마별로 센다(`check_calls`): 요청 점검이
+  켜져 있으면 RequestCheckOut만, 꺼져 있거나 토글이 없으면 OomCheckOut만 는다(`expected_checks`).
 - `/tutor`에서 classify가 탈옥이면: 2차 꺼짐 1회, 켜짐 + study 3회, 켜짐 + apply 2회.
 - `/tutor` → 가드: 가드에 classify · judge_output이 있으면 튜터가 각각 정확히 1회 부르고 건너뛴
   단계가 없다(`assert_tutor_uses_guard`). 없으면 건너뛴 수만 센다. 연결을 보는 것이라
   `real_guard_client`는 튜터의 두 단계를 켠 설정으로 띄운다(`tutor_guard_stages_on`).
 - 배포 설정(config/tutor.yaml)은 두 단계를 끈다(11/14 리더 결정, 가드 #170 뒤 런박스 켬/끔 비교
-  전까지). 그 설정의 앱은 가드에 두 함수가 있어도 부르지 않는다.
+  전까지). 기준 설정(동결 토글 끔) 사본도 이 두 값을 그대로 쓴다. 그 설정의 앱은 가드에 두 함수가
+  있어도 부르지 않는다.
 - 요청 내용 · 판정 글이 앱 상태 · 모듈 · 로그 · stdout · stderr에 남지 않는다.
 - 요청마다 가드 nano 호출이 상한(`applib.guard_call_budget(real_guard=True)`) 안이다.
 """
@@ -128,10 +132,41 @@ def oom_check_on(client) -> bool:
     return bool(getattr(client.app.state.cfg.toggles, "oom_check", False))
 
 
+def request_check_on(client) -> bool:
+    """가드 설정에 요청 점검(S3.13)이 켜져 있는가. #229 전의 가드에는 이 토글이 없다(False)."""
+    return bool(getattr(client.app.state.cfg.toggles, "request_check", False))
+
+
+def second_check_on(client) -> bool:
+    """1차 normal 뒤 확인 호출(자료 밖 확인 또는 그 자리의 요청 점검)을 한 번 더 부르는가."""
+    return oom_check_on(client) or request_check_on(client)
+
+
+# 1차 normal 뒤 확인 호출의 스키마: 자료 밖 확인은 OomCheckOut, #229(요청 점검)를 켜면 그 자리에
+# RequestCheckOut
+SECOND_CHECKS = ("OomCheckOut", "RequestCheckOut")
+
+
+def check_calls(by_schema: collections.Counter, before: collections.Counter) -> dict[str, int]:
+    """이번 요청에서 는 확인 호출 수(스키마별)."""
+    return {name: by_schema[name] - before[name] for name in SECOND_CHECKS}
+
+
+def expected_checks(client, n: int) -> dict[str, int]:
+    """확인 호출 n회의 스키마별 기대: 요청 점검이 켜져 있으면 RequestCheckOut n · OomCheckOut 0,
+    꺼져 있거나 토글이 없으면(main) 그 반대."""
+    if request_check_on(client):
+        return {"OomCheckOut": 0, "RequestCheckOut": n}
+    return {"OomCheckOut": n, "RequestCheckOut": 0}
+
+
 def toggles_seen(client, fake_guard_send, before: collections.Counter) -> str:
     """실패 메시지: 토글 상태와 이번 요청의 스키마별 호출 수(가드 PR에서 무엇이 달라졌는지)."""
     delta = dict(collections.Counter(fake_guard_send.by_schema) - before)
-    state = f"oom_check={oom_check_on(client)}, jb_check={jb_check_on(client)}"
+    state = (
+        f"oom_check={oom_check_on(client)}, request_check={request_check_on(client)},"
+        f" jb_check={jb_check_on(client)}"
+    )
     return f"{state}, 이번 요청 by_schema={delta}"
 
 
@@ -139,9 +174,10 @@ def test_guard_calls_nano_once_per_judge_plus_the_oom_check_when_it_is_on(
     real_guard_client, fake_send, fake_guard_send
 ):
     """일반 질문의 `/guard`: 입력 판정 1회(+ 후보 답변이 있으면 출력 판정 1회). 자료 밖 확인이 켜져
-    있으면 요청마다 OomCheckOut 1회가 더해진다(가드 #215, main은 토글이 없어 0회)."""
+    있으면 요청마다 확인 호출 1회가 더해진다(가드 #215 OomCheckOut, #229(요청 점검)는 그 자리의
+    RequestCheckOut. main은 토글이 없어 0회)."""
     client = real_guard_client
-    oom = int(oom_check_on(client))
+    oom = int(second_check_on(client))
     for candidate, judges in ((None, 1), (CANDIDATE, 2)):
         before = collections.Counter(fake_guard_send.by_schema)
         r, calls = sent(
@@ -149,7 +185,7 @@ def test_guard_calls_nano_once_per_judge_plus_the_oom_check_when_it_is_on(
         )
         seen = f"{toggles_seen(client, fake_guard_send, before)}, 이번 요청 {calls}회"
         assert calls == judges + oom, seen
-        assert fake_guard_send.by_schema["OomCheckOut"] - before["OomCheckOut"] == oom, seen
+        assert check_calls(fake_guard_send.by_schema, before) == expected_checks(client, oom), seen
         assert_guard_contract(r.json(), has_candidate=candidate is not None)
     assert fake_send.count == 0  # 가드는 튜터 전송을 쓰지 않는다
 
@@ -199,7 +235,9 @@ def test_first_judge_jailbreak_calls_the_second_check_when_it_is_on(
             )
             assert calls == judges + jb, seen
             # 1차가 탈옥이면 자료 밖 확인은 부르지 않는다(탈옥 2차와 한 요청에서 같이 부르지 않음)
-            assert fake_guard_send.by_schema["OomCheckOut"] == before["OomCheckOut"], seen
+            assert check_calls(fake_guard_send.by_schema, before) == expected_checks(client, 0), (
+                seen
+            )
             assert_guard_contract(r.json(), has_candidate=candidate is not None)
             assert got == expected_input(jb, used), seen
             if jb:
@@ -218,9 +256,12 @@ def test_normal_question_calls_the_oom_check_when_it_is_on(real_guard_client, fa
     """1차 입력 판정이 normal인 일반 질문. 자료 밖 확인이 켜져 있으면 요청마다 nano 1회
     (OomCheckOut)가 더해지고, verdict가 not_stated면 input이 allow · out_of_material, 그 밖에는
     allow · normal이다. 꺼져 있거나 토글이 없으면(main) 0회이고 input은 force와 상관없이 normal.
-    #215 전의 main, #215 그대로(끔), #215에서 켠 상태 모두에서 통과한다."""
+    #215 전의 main, #215 그대로(끔), #215에서 켠 상태 모두에서 통과한다. #229(요청 점검)는 그 자리에
+    RequestCheckOut을 부르고(가짜는 force의 verdict를 그대로 낸다) 자료 밖 규칙은 oom_check가
+    켜져 있을 때만 읽는다."""
     client = real_guard_client
     oom = oom_check_on(client)
+    extra = int(second_check_on(client))
     for verdict in OOM_VERDICTS:
         force = {"category": "normal", "verdict": verdict}
         fake_guard_send.force = force
@@ -231,8 +272,10 @@ def test_normal_question_calls_the_oom_check_when_it_is_on(real_guard_client, fa
             f"{toggles_seen(client, fake_guard_send, before)}, force {force}, input={got},"
             f" 이번 요청 {calls}회"
         )
-        assert fake_guard_send.by_schema["OomCheckOut"] - before["OomCheckOut"] == int(oom), seen
-        assert calls == 1 + int(oom), seen
+        assert check_calls(fake_guard_send.by_schema, before) == expected_checks(client, extra), (
+            seen
+        )
+        assert calls == 1 + extra, seen
         assert_guard_contract(r.json(), has_candidate=False)
         want = OUT_OF_MATERIAL if oom and verdict == "not_stated" else ALLOWED_NORMAL
         assert got == want, seen
@@ -340,8 +383,8 @@ def test_tutor_guard_check_catches_a_tutor_that_skips_judge_output(
 def test_shipped_tutor_config_calls_no_guard_stage(
     open_real_guard_app, fake_guard_send, monkeypatch
 ):
-    # 배포 설정(11/14 끔): 가드에 classify · judge_output이 있어도 튜터는 부르지 않고 건너뜀으로도
-    # 세지 않는다. 가드 nano도 0회다
+    # 기준 설정(동결 토글 끔, 가드 단계는 배포 설정 그대로 11/14 끔): 가드에 classify ·
+    # judge_output이 있어도 튜터는 부르지 않고 건너뜀으로도 세지 않는다. 가드 nano도 0회다
     called: collections.Counter[str] = collections.Counter()
 
     async def classify(messages):

@@ -161,12 +161,15 @@ class Conversation:
         """검색 질의용 학습자 발화(창 안, 버튼 문구 제외, 판단 대상이 마지막). TU-03."""
         return tuple(t.text for t in self.window if t.role == "user" and not t.is_button)
 
-    def search_query(self) -> tuple[str, tuple[str, ...]]:
+    def search_query(self, *, all_roles: bool = False) -> tuple[str, tuple[str, ...]]:
         """`retrieve(query, history)` 인자: (판단 대상, 창 안의 다른 학습자 발화).
 
-        버튼 문구는 뺀다."""
+        버튼 문구는 뺀다. `all_roles`면 튜터 발화를 포함해 판단 대상 말고 창 안의 모든 발화를
+        넣는다(규칙 A, `toggles.top1_dialog_query`)."""
         history = tuple(
-            t.text for t in self.window if t.role == "user" and not t.is_button and not t.is_target
+            t.text
+            for t in self.window
+            if (all_roles or t.role == "user") and not t.is_button and not t.is_target
         )
         return self.target, history
 

@@ -15,15 +15,32 @@ from typing import Literal, cast, get_args
 from guardrail.classifier import LrClassifier
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow, labeled_rows, load_public
-from guardrail.decide import Tier, fallback_category, output_verdict, safe_of, trusted
-from guardrail.judges.input_judge import build_window, check_oom, judge_input
-from guardrail.judges.output_judge import ask_grounded, output_context, quote_ok
+from guardrail.decide import (
+    Tier,
+    fallback_category,
+    output_verdict,
+    recheck_block,
+    request_category,
+    safe_of,
+    trusted,
+)
+from guardrail.judges.input_judge import build_window, check_oom, check_request, judge_input
+from guardrail.judges.output_judge import (
+    MAX_SENTENCES,
+    ask_grounded,
+    flagged_sentences,
+    output_context,
+    quote_ok,
+    repair_quote,
+    sentence_span,
+)
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut
+from guardrail.judges.schemas_exp import OutputSentOut
 from guardrail.kb import Hit, KbIndex
 from guardrail.knn import KnnIndex
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags, normalize, reveal_hidden, strip_tags
-from guardrail.rules import literal_rule, tidy_span
+from guardrail.rules import literal_rule, sentences, tidy_span
 from guardrail.schema import (
     Category,
     GuardRequest,
@@ -65,6 +82,9 @@ class Judgement:
     answer_quote_ok: bool | None = None
     kb_quote_ok: bool | None = None
     nano_refuses: bool | None = None  # 기록만 하고 safe에 쓰지 않는다(R14-D3)
+    quote_repaired: bool | None = (
+        None  # S3.13 인용을 근사 일치로 고쳐 썼는가(nano 결과가 없으면 None)
+    )
 
 
 class ConstantGuard:
@@ -165,6 +185,20 @@ class _Output:
     answer_quote_ok: bool | None = None
     kb_quote_ok: bool | None = None
     nano_refuses: bool | None = None
+    quote_repaired: bool | None = None
+
+
+@dataclass(frozen=True)
+class _NanoRead:
+    """출력 nano 값을 읽은 결과. answer_ok는 인용 자체의 검증, answer_trusted는 ③ 판단용."""
+
+    ungrounded: bool | None = None
+    refuses: bool | None = None
+    answer_ok: bool | None = None
+    kb_ok: bool | None = None
+    answer_trusted: bool | None = None
+    quote_span: str | None = None
+    repaired: bool | None = None
 
 
 class Guard:
@@ -199,6 +233,10 @@ class Guard:
             load_prompt(cfg, "jb_check")
         if cfg.toggles.oom_check:
             load_prompt(cfg, "oom_check")
+        if cfg.toggles.request_check or cfg.toggles.block_recheck:
+            load_prompt(cfg, "request_check")
+        if cfg.output.judge_mode == "sentences" and not baseline:
+            load_prompt(cfg, "output_judge_sent")
         self.cfg, self.llm, self.kb, self.knn, self.lr = cfg, llm, kb, knn, lr
         self.block = frozenset(cfg.block_categories)
 
@@ -214,7 +252,13 @@ class Guard:
 
     async def judge(self, req: GuardRequest) -> Judgement:
         t = self.cfg.toggles
-        return await self._run(req, intro_rule=t.pii_intro_rule, oom_check=t.oom_check)
+        return await self._run(
+            req,
+            intro_rule=t.pii_intro_rule,
+            oom_check=t.oom_check,
+            request_check=t.request_check,
+            block_recheck=t.block_recheck,
+        )
 
     async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
         """마지막 학습자 발화의 범주(nano·low-signal 직행은 `judge`와 같다).
@@ -267,10 +311,14 @@ class Guard:
         retries: int | None = None,
         intro_rule: bool = False,
         oom_check: bool = False,
+        request_check: bool = False,
+        block_recheck: bool = False,
     ) -> Judgement:
         t0 = time.monotonic()
         try:
-            return await self._judge(req, t0, category, retries, intro_rule, oom_check)
+            return await self._judge(
+                req, t0, category, retries, intro_rule, oom_check, request_check, block_recheck
+            )
         except Exception as exc:  # noqa: BLE001 - GR-09: 어떤 실패에도 규격 응답. 종류 이름만 남긴다
             out = (
                 _Output(self._default_output(req)) if category is None
@@ -288,11 +336,17 @@ class Guard:
         retries: int | None = None,
         intro_rule: bool = False,
         oom_check: bool = False,
+        request_check: bool = False,
+        block_recheck: bool = False,
     ) -> Judgement:
         """given이 있으면 입력 nano 없이 그 범주를 쓴다. retries는 nano마다(None=설정값).
 
         oom_check도 `judge`만 켠다: nano가 normal이라 한 발화에 KB를 붙여 한 번 더 묻고, 자료에
         없는 값을 묻는다고 하면 범주를 out_of_material로 낸다(S3.10). 출력은 그대로다.
+
+        request_check·block_recheck(S3.13)도 `judge`만 켠다. 입력 쪽 추가 호출은 탈옥 2차·자료 밖
+        확인·요청 재확인 가운데 최대 하나라 `/guard`당 nano는 최대 3회다. 범주를 바꾸면 그 범주로
+        decision·출력 단 ①·safe를 계산한다(응답 범주만 바꾸는 oom_check와 다르다).
 
         intro_rule은 `judge`(`/guard` 응답)만 켠다: nano가 normal·answer_seeking이라 한 자기소개
         발화의 범주를 pii_disclosure로 낸다(S3.9). 출력은 nano 범주로 이미 계산한 값 그대로다.
@@ -301,7 +355,8 @@ class Guard:
         deadline = t0 + cfg.budget_s
         # CPU 단계는 길이 상한으로 자른 뒤 한 번에 스레드로 보낸다(이벤트 루프를 막지 않는다)
         p = await asyncio.to_thread(self._prepare, req)
-        if oom_check and isinstance(p, _Prepared) and not p.low and given is None:
+        wants_kb = oom_check or request_check or block_recheck
+        if wants_kb and isinstance(p, _Prepared) and not p.low and given is None:
             p = await asyncio.to_thread(self._with_oom_hits, p)  # classify()는 검색하지 않는다
         t1 = time.monotonic()
         if isinstance(p, Signals) and given is not None:  # 발화는 없지만 범주는 받았다
@@ -324,7 +379,7 @@ class Guard:
         trace: dict[str, str | None] = {}  # 탈옥 2차 판정(입력 태스크 안, 같은 마감)의 결과
         if not p.low and given is None:
             tasks["input_judge"] = asyncio.create_task(
-                self._input(p, deadline, retries, trace, oom_check)
+                self._input(p, deadline, retries, trace, oom_check, request_check, block_recheck)
             )
         wants_nano = baseline or cfg.toggles.nano_tier3 or cfg.output.call_nano_when_unused
         if p.answer and wants_nano and p.output_error is None:
@@ -365,7 +420,11 @@ class Guard:
                 out = self._fallback_output(req, category, p.signals)
         if trace.get("oom_check", "") is None:  # 자료 밖 확인 실패: 1차(normal)를 두고 오류로 센다
             errors.append("oom_check")
-        calls = len(tasks) + ("jb_check" in trace) + ("oom_check" in trace)
+        if trace.get("request_check", "") is None:  # 요청 재확인 실패: 1차를 두고 오류로 센다
+            errors.append("request_check")
+        # 입력 쪽 추가 호출은 하나뿐이다. request_check가 oom_check 칸도 채우므로 한 번만 센다
+        second = "oom_check" in trace or "request_check" in trace
+        calls = len(tasks) + ("jb_check" in trace) + second
         intro = intro_rule and source == "nano" and category in ("normal", "answer_seeking")
         if intro and is_self_intro(p.target):  # 둘 다 허용 범주라 decision·출력 단·safe는 그대로다
             category = "pii_disclosure"  # 자기소개 + 학습 질문은 pii가 먼저다(입력 프롬프트)
@@ -380,14 +439,27 @@ class Guard:
         retries: int | None,
         trace: dict[str, str | None],
         oom_check: bool,
+        request_check: bool = False,
+        block_recheck: bool = False,
     ) -> Category | None:
-        """입력 판정. oom_check면 normal일 때 자료 밖 확인을 이어 부른다(탈옥 2차 뒤에는 생략)."""
+        """입력 판정. 1차 뒤에 확인 호출을 최대 하나 이어 부른다(탈옥 2차가 불렸으면 생략).
+
+        - request_check: 1차가 normal·answer_seeking이면 요청 재확인(oom_check 칸을 대신 쓴다).
+          offcourse_output일 때만 off_topic으로 바꾼다
+        - block_recheck: 1차가 off_topic이면 요청 재확인(academic_dishonesty는 부르지 않는다)
+        - oom_check: normal이면 자료 밖 확인
+        """
         category = await judge_input(
             p.window, p.target, p.examples, self.llm, self.cfg,
             deadline=deadline, retries=retries, trace=trace,
         )  # fmt: skip
+        if category is None or "jb_check" in trace:
+            return category
+        opening = request_check and category in ("normal", "answer_seeking")
+        if opening or (block_recheck and category == "off_topic"):
+            return await self._recheck_request(p, category, deadline, retries, trace, oom_check)
         # KB 문맥이 없으면(검색 실패) 부르지 않는다: 프롬프트가 kb 없음을 not_stated로 읽는다
-        if oom_check and p.oom_hits and category == "normal" and "jb_check" not in trace:
+        if oom_check and not request_check and p.oom_hits and category == "normal":
             try:
                 trace["oom_check"] = await check_oom(
                     p.window, p.target, p.oom_hits, self.llm, self.cfg,
@@ -396,6 +468,34 @@ class Guard:
             except Exception:  # noqa: BLE001 - 확인이 깨져도 1차(normal)를 지킨다. trace로 센다
                 trace["oom_check"] = None
         return category
+
+    async def _recheck_request(
+        self,
+        p: _Prepared,
+        first: Category,
+        deadline: float,
+        retries: int | None,
+        trace: dict[str, str | None],
+        oom_check: bool,
+    ) -> Category:
+        """S3.13 요청 재확인 1회. 실패(예외·None)면 1차 범주를 두고 trace["request_check"]=None."""
+        try:
+            out = await check_request(
+                p.window, p.target, p.oom_hits, self.llm, self.cfg,
+                deadline=deadline, retries=retries,
+            )  # fmt: skip
+        except Exception:  # noqa: BLE001 - 확인이 깨져도 1차를 지킨다. trace로 센다
+            out = None
+        if out is None:
+            trace["request_check"] = None
+            return first
+        kinds = [a.kind for a in out.asks]
+        trace["request_check"] = ",".join(kinds)
+        if first in ("normal", "answer_seeking"):
+            if first == "normal" and oom_check and p.oom_hits:  # 기존 out_of_material 규칙이 읽는다
+                trace["oom_check"] = out.verdict
+            return request_category(first, kinds) or first
+        return recheck_block(first, kinds)
 
     def _with_oom_hits(self, p: _Prepared) -> _Prepared:
         """자료 밖 확인에 줄 KB 문맥(학습자 발화로 검색). `judge`가 확인을 켰을 때만 부른다."""
@@ -529,23 +629,17 @@ class Guard:
                 return _Output(verdict, nano_grounded=nano.grounded)
             return _Output(OutputVerdict(True, (), True))
 
-        ungrounded = answer_ok = kb_ok = refuses = quote_span = None
-        if isinstance(nano, OutputOut) and p.answer is not None:
-            ungrounded, refuses = not nano.grounded, nano.refuses
-            answer_ok = quote_ok(nano.answer_quote, p.answer, cfg.output.quote_min_chars)
-            kb_ok = quote_ok(nano.kb_quote, "\n".join(h.text for h in p.hits), 1)
-            quote = html.unescape(nano.answer_quote)
-            if answer_ok and quote in p.answer:  # 구간은 원문에 글자 그대로 있는 것만
-                quote_span = quote
+        read = self._read_nano(p, nano)
         grounded, unsupported, tier = output_verdict(
             category,
             self.block,
             p.rule_spans,
-            ungrounded,
-            ungrounded is not None and trusted(cfg.output.tier3_trust, answer_ok, kb_ok),
+            read.ungrounded,
+            read.ungrounded is not None
+            and trusted(cfg.output.tier3_trust, read.answer_trusted, read.kb_ok),
             cfg.toggles,
             cfg.output.failure_default,
-            quote_span,
+            read.quote_span,
         )
         safe = safe_of(category, self.block, p.signals, cfg.toggles)
         if cfg.output.span_tidy:
@@ -553,11 +647,38 @@ class Guard:
         return _Output(
             OutputVerdict(grounded, unsupported, safe),
             tier,
-            None if ungrounded is None else not ungrounded,
-            answer_ok,
-            kb_ok,
-            refuses,
+            None if read.ungrounded is None else not read.ungrounded,
+            read.answer_ok,
+            read.kb_ok,
+            read.refuses,
+            read.repaired,
         )
+
+    def _read_nano(self, p: _Prepared, nano: object | None) -> "_NanoRead":
+        """출력 nano 값 → 근거 없음 여부·인용 검증·③에 쓸 구간. nano 결과가 없으면 모두 None."""
+        cfg = self.cfg
+        if not (isinstance(nano, OutputOut | OutputSentOut) and p.answer is not None):
+            return _NanoRead()
+        ungrounded = not nano.grounded
+        flagged: list[int] = []
+        if isinstance(nano, OutputSentOut):  # 문장 하나라도 어긋나면 근거 없음
+            shown = min(len(sentences(p.revealed)), MAX_SENTENCES)
+            flagged = flagged_sentences(nano.checks, shown)
+            ungrounded = ungrounded or bool(flagged)
+        answer_ok = quote_ok(nano.answer_quote, p.answer, cfg.output.quote_min_chars)
+        kb_ok = quote_ok(nano.kb_quote, "\n".join(h.text for h in p.hits), 1)
+        quote = html.unescape(nano.answer_quote)
+        span = quote if answer_ok and quote in p.answer else None  # 구간은 원문에 글자 그대로만
+        trusted_answer, repaired = answer_ok, False
+        if ungrounded and not answer_ok:  # 인용 검증 실패: 근사 일치 → 문장 대체 순서로 구한다
+            fixed = None
+            if cfg.output.quote_repair:
+                fixed = repair_quote(nano.answer_quote, p.answer, cfg.output.quote_min_chars)
+            repaired = fixed is not None
+            fixed = fixed or sentence_span(p.answer, p.revealed, flagged)  # 문장은 원문 그대로다
+            if fixed is not None:
+                span, trusted_answer = fixed, True
+        return _NanoRead(ungrounded, nano.refuses, answer_ok, kb_ok, trusted_answer, span, repaired)
 
     @staticmethod
     def _result(
@@ -589,4 +710,5 @@ class Guard:
             answer_quote_ok=out.answer_quote_ok,
             kb_quote_ok=out.kb_quote_ok,
             nano_refuses=out.nano_refuses,
+            quote_repaired=out.quote_repaired,
         )

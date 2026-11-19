@@ -19,6 +19,8 @@
 
 전문가: `spec_injection`, `spec_persona`, `spec_harmful`, `spec_abusive`, `spec_ghostwrite`, `spec_answer_only`, `spec_scope`, `spec_covered`(자료 문맥 포함), `spec_tone`, `spec_advocate`(막지 말 이유만), `spec_quoted_vs_used`, `spec_study_artifact`, `spec_graded_submission`. 의장은 전문가 보고(JSON)와 발화만 받는다. 의장의 추론 수준은 `--chair-efforts`(기본 `low`).
 
+| `span` | 후보 답변이 있는 행만: 지금 판의 출력 판정(low)으로 근거 없는 구간을 얻고, 구간이 나온 행만 `span_tighten`으로 줄인다 | 1–2 |
+
 기본값은 `battery,output`이다. 이름을 쉼표로 섞어 줄 수 있다(`--probes rubric,override`).
 
 ## run
@@ -39,6 +41,14 @@ uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-rub-low --
 uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-rub-med --probes rubric --effort medium --yes
 ```
 
+```
+# 구간 줄이기(후보 답변 64행 x 반복 3 = 192칸. 출력 판정 192회 + 구간이 나온 칸만 구간당 1회, 많아야 약 384회)
+uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-span-min --probes span --effort minimal --limit 3 --yes
+uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-span-min --probes span --effort minimal --yes
+uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-span-low --probes span --effort low --yes
+uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-span-med --probes span --effort medium --yes
+```
+
 - `--yes`가 없으면 보낼 호출 수만 찍고 끝난다. `--fake`는 API 없이 무작위 답으로 돈다.
 - 행: 공개 세트에서 홀드아웃 묶음을 뺀 개발 행. `--rows guard`(기본, 160행) · `tutor` · `all`. "자료 밖인데 튜터가 답한" 지속 오답 행(1fb88fb9 등)은 튜터 행이라 `--rows all`이나 `tutor`로만 들어온다.
 - 시작할 때 `LLM.start()`의 점검이 프록시가 `reasoning_effort` 값을 받는지 본다. 거절되면 `LLM`은 그 파라미터를 조용히 빼는데, 그러면 다른 것을 재게 되므로 이 도구는 호출 없이 끝낸다(종료 코드 7). `minimal`을 프록시가 받는지는 3행 시험에서 드러난다.
@@ -47,6 +57,7 @@ uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-rub-med --
 - 호출 실패가 20회 이어지거나 인증 오류가 나면 멈춘다(종료 코드 6). `bad_json`은 세지 않는다.
 - 첫 호출은 혼자 보내 접두 캐시를 덥힌 뒤 나머지를 `--concurrency`(기본 32)로 보낸다.
 - `probes.jsonl` 한 줄 = (행 id, 질문, 반복): `answer`, `error`, `finish_reason`(`length` = 잘림), `latency_ms`, `attempts`, `completion_tokens`, `prompt_tokens`, `cached_tokens`, `seq`, `t_s`. 학습자 발화는 쓰지 않는다. `reason`·`reasoning` 칸에 모델이 쓴 짧은 글은 남는다(보고서에는 싣지 않는다).
+- `span` 묶음은 `Guard.judge_output`(이 브랜치의 기본 설정에서 `output.medium_parallel`만 끔, 입력 호출 없이 정답 범주를 넘김)을 low로 불러 구간을 얻는다. `span_base` 줄에는 그 구간의 [시작, 길이](후보 답변 안의 위치)만, `span_tighten` 줄에는 줄인 뒤의 [시작, 길이]만 남긴다(구간 글·모델이 쓴 글은 쓰지 않는다). 줄인 답이 원래 구간에 글자 그대로 들어 있지 않으면 버리고 원래 구간을 둔다(`rejected`에 센다). 출력 판정은 실패해도 기본값을 내는 함수라 `span_base`의 호출 실패는 구분되지 않는다. 추론 수준별 폴더마다 출력 판정을 다시 부르므로 "전" 값도 폴더마다 조금 다르다.
 - `meta.json`: 추론 수준, 프롬프트 해시, 시작 점검 결과, 실제로 보낸 파라미터.
 
 ## analyze
@@ -74,6 +85,8 @@ uv run python -X utf8 scripts/r20/minimal_probe.py analyze --dir runs/r20-panel-
    - 행당 걸린 시간 = max(전문가 지연) + 의장 지연, 캐시 적중(`cached_tokens`).
    - 범주를 한 번에 내는 판정기(`category`·`rubric_*`), veto·rescue 장치와 2개 조합.
 
+4. 구간 줄이기(`span` 묶음을 돌린 실행만): 채점기의 `span_f1`(`competition/grader/scoring.py`)로 잰 전·후 구간 F1, 글자 수를 합쳐 낸 정밀도·재현율, 구간 길이, 좋아진·나빠진 행, 가드 점수 변화(= 100 × 0.45 × F1 변화 / 3)를 전체·design·eval로.
+
 ### 미리 정한 읽기(보고서 머리에도 찍힌다)
 
 - 개발 행을 (엔드포인트, 정답 범주)마다 id 해시 순으로 세워 design / eval을 번갈아 준다(두 반쪽에 모든 범주가 같은 수로 든다. 규칙은 결과를 보기 전에 정했다). 문턱·방식은 design에서 고르고 판정은 eval 줄에서 읽는다. 5겹 교차 맞춤 줄은 두 번째 확인이다.
@@ -81,6 +94,7 @@ uv run python -X utf8 scripts/r20/minimal_probe.py analyze --dir runs/r20-panel-
 - 통째 교체: 범주 정확도와 차단 F1이 둘 다 기준선 이상이고 순이득 ≥ 3행.
 - 오답 행의 기준선 오답과의 Jaccard ≥ 0.4면 접는다.
 - 차단을 푸는 규칙이 고친 행 2개당 진짜 jailbreak를 1개 이상 풀면 접는다.
+- 구간 줄이기: eval 반쪽의 구간 F1 평균(후보 답변이 있는 모든 행, 채점기와 같은 분모)이 0.03 이상 오르고 좋아진 행이 나빠진 행의 2배 이상일 때만 채택.
 
 fixed·broken은 행 점수(차단 결정이 맞으면 1 + 정답이 normal이 아닐 때 범주가 맞으면 1)가 기준선보다 오른·내린 행 수이고, 반복마다 따로 세어 평균한다(배포하면 호출 1회라서). 이름에 `/maj`, "반복 n회", "예 k회 이상"이 붙은 것만 반복 수만큼 호출하는 장치다.
 

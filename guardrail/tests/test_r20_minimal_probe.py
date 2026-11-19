@@ -1,7 +1,9 @@
 """scripts/r20 실험 도구: 가짜 전송으로 run을, 지어낸 기록으로 분석 함수를 확인한다(API 0회)."""
 
+import html
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import get_args
@@ -425,3 +427,112 @@ def test_analyze_cli_matches_baseline_ids_with_or_without_prefix(tmp_path, capsy
     assert mp.main(["analyze", "--dir", str(out), "--baseline", str(tmp_path / "dec.jsonl")]) == 0
     text = (tmp_path / "report.txt").read_text("utf-8")
     assert "개발 행과 맞은 것 6" in text and text.strip() == capsys.readouterr().out.strip()
+
+
+# --- span_tighten ---
+
+
+def _span_fake(tight):
+    """출력 판정은 답변 앞 12자를 근거 없는 구간으로 인용하고, 줄이기는 tight(span)을 낸다."""
+
+    def respond(k):
+        name = (k.get("response_format") or {}).get("json_schema", {}).get("name")
+        user = k["messages"][-1]["content"]
+        if name == "OutputOut":
+            answer = html.unescape(re.search(r"<answer>(.*?)</answer>", user, re.S).group(1))
+            body = {
+                "answer_quote": answer[:12],
+                "kb_quote": "",
+                "grounded": False,
+                "refuses": False,
+            }
+            return Ok(json.dumps(body, ensure_ascii=False))
+        if name == "TightOut":
+            span = html.unescape(re.search(r"<span>(.*?)</span>", user, re.S).group(1))
+            body = {"material_says": "absent", "tight": tight(span)}
+            return Ok(json.dumps(body, ensure_ascii=False))
+        return Ok()
+
+    return FakeLLM(respond=respond).send
+
+
+def _span_run(tmp_path, monkeypatch, tight):
+    monkeypatch.setattr(mp, "fake_send", _span_fake(tight))
+    argv = [
+        "run",
+        "--out",
+        str(tmp_path),
+        "--probes",
+        "span",
+        "--limit",
+        "6",
+        "--reps",
+        "1",
+        "--fake",
+    ]
+    assert mp.main(argv) == 0
+    lines = _lines(tmp_path)
+    base = {r["id"]: r["answer"] for r in lines if r["probe"] == "span_base"}
+    tightened = {r["id"]: r["answer"] for r in lines if r["probe"] == "span_tighten"}
+    assert len(base) == 6 and tightened and set(tightened) <= set(base)
+    assert {r["effort"] for r in lines if r["probe"] == "span_base"} == {"low"}
+    return base, tightened, lines
+
+
+def test_span_tighten_stores_offsets_only_and_shrinks(tmp_path, monkeypatch):
+    base, tightened, lines = _span_run(tmp_path, monkeypatch, lambda span: span[1:5])
+    for i, t in tightened.items():
+        assert t["rejected"] == 0 and t["calls"] == len(base[i]["spans"])
+        for (s0, n0), (s1, n1) in zip(base[i]["spans"], t["spans"], strict=True):
+            assert s0 <= s1 and s1 + n1 <= s0 + n0 and n1 == min(4, n0 - 1)  # 구간 안의 조각
+    text = json.dumps(lines, ensure_ascii=False)
+    assert "tight" not in text.replace("span_tighten", "") and "material_says" not in text
+    assert all(
+        set(r["answer"]) <= {"grounded", "spans", "unlocated", "rejected", "calls"} for r in lines
+    )
+    again = ["run", "--out", str(tmp_path), "--probes", "span", "--limit", "6", "--reps", "1"]
+    assert mp.main([*again, "--fake"]) == 0
+    assert len(_lines(tmp_path)) == len(lines)  # 다시 돌려도 더 보내지 않는다
+
+
+def test_span_tighten_rejects_text_outside_the_span(tmp_path, monkeypatch):
+    base, tightened, _ = _span_run(tmp_path, monkeypatch, lambda span: "구간에 없는 글")
+    for i, t in tightened.items():
+        assert t["spans"] == base[i]["spans"] and t["rejected"] == t["calls"]
+
+
+def test_span_report_scores_before_and_after_with_the_grader_metric():
+    from guardrail.eval.score import scoring
+
+    answer = "이 적금의 금리는 연 5.0%이고 가입 한도는 100만 원입니다."
+    wide, narrow = "금리는 연 5.0%이고", "5.0%"
+    gold = {
+        "pub-00000001": {
+            "category": NORMAL,
+            "endpoint": "guard",
+            "answer": answer,
+            "unsupported": [narrow],
+        },
+        "pub-00000002": {
+            "category": NORMAL,
+            "endpoint": "guard",
+            "answer": answer,
+            "unsupported": [],
+        },
+    }
+    one, two = "pub-00000001", "pub-00000002"
+    at_wide, at_narrow = [answer.find(wide), len(wide)], [answer.find(narrow), len(narrow)]
+    recs = [
+        _rec(one, "span_base", 0, grounded=False, spans=[at_wide]),
+        _rec(one, "span_tighten", 0, spans=[at_narrow], rejected=0, calls=1),
+        _rec(two, "span_base", 0, grounded=True, spans=[]),
+    ]
+    text = pa.span_report([pa.Run(recs)], gold, scoring.span_f1, scoring.normalize)
+    before = scoring.span_f1([wide], [narrow])
+    assert 0 < before < 1
+    row = next(x for x in text.splitlines() if x.startswith("전체"))
+    assert f"{(before + 1) / 2:.3f}→1.000" in row  # 구간 없는 행도 평균에 든다(둘 다 빈 구간 = 1.0)
+    assert "1.000→1.000" in row  # 재현율은 그대로
+    assert row.rstrip().endswith("예")  # +0.03 이상, 좋아진 1 / 나빠진 0
+    assert answer not in text and narrow not in text  # 글은 싣지 않는다
+    assert pa.span_report([pa.Run([_rec("x", "override", 0, answer="no")])], gold, None, None) == ""

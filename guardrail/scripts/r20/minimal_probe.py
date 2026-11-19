@@ -33,6 +33,8 @@ from guardrail.config import GuardConfig, load_config  # noqa: E402
 from guardrail.data import PublicRow  # noqa: E402
 from guardrail.eval.cv import load_splits  # noqa: E402
 from guardrail.eval.load import guard_rows, tutor_rows  # noqa: E402
+from guardrail.eval.score import scoring  # noqa: E402
+from guardrail.guard import Guard  # noqa: E402
 from guardrail.judges.input_judge import _conversation, _data, build_window  # noqa: E402
 from guardrail.judges.output_judge import output_context  # noqa: E402
 from guardrail.judges.schemas import _Out  # noqa: E402
@@ -90,14 +92,19 @@ class SpecOut(_Out):
     confidence: Literal[1, 2, 3, 4, 5]
 
 
+class TightOut(_Out):
+    material_says: str  # 자료가 대신 주는 것(한 구절)
+    tight: str  # 구간에서 글자 그대로 옮긴 가장 짧은 조각
+
+
 @dataclass(frozen=True)
 class Probe:
     name: str
-    group: str  # battery | output | rubric | panel | chair
+    group: str  # battery | output | rubric | panel | chair | span
     system: str
     schema: type[_Out]
     task: str = ""  # user 메시지 맨 앞의 역할 블록
-    needs: tuple[str, ...] = ()  # kb | answer | panel
+    needs: tuple[str, ...] = ()  # kb | answer | panel | span
     effort: str | None = None  # None = --effort. 의장만 따로 정한다
 
 
@@ -121,6 +128,8 @@ def _probes() -> dict[str, Probe]:
         Probe(f"chair_{e}", "chair", pp.GUIDE, FinalOut, pp.CHAIR, ("panel",), e)
         for e in ("low", "medium")
     ]
+    needs = ("kb", "answer", "span")
+    out.append(Probe("span_tighten", "span", pp.SPAN_SYSTEM, TightOut, needs=needs))
     return {p.name: p for p in out}
 
 
@@ -174,8 +183,10 @@ def context(row: PublicRow, cfg: GuardConfig, kb: KbIndex) -> Ctx | None:
     return Ctx(row, users[-1], tuple(hits), tuple(hits_answer))
 
 
-def build_messages(p: Probe, c: Ctx, cfg: GuardConfig, panel: dict | None = None) -> list[dict]:
-    """[system(질문마다 고정), user(역할 블록 → 자료 → 전문가 보고 → 대화 → 대상 발화)]."""
+def build_messages(
+    p: Probe, c: Ctx, cfg: GuardConfig, panel: dict | None = None, span: str = ""
+) -> list[dict]:
+    """[system(질문마다 고정), user(역할 블록 → 자료 → 전문가 보고 → 대화 → 대상 발화 → 답변 → 구간)]."""
     parts = [p.task] if p.task else []
     if "kb" in p.needs:
         hits = c.kb_answer if "answer" in p.needs else c.kb
@@ -190,6 +201,8 @@ def build_messages(p: Probe, c: Ctx, cfg: GuardConfig, panel: dict | None = None
     if "answer" in p.needs:
         answer = (c.row.candidate_answer or "")[: cfg.input.max_answer_chars]
         parts.append(f"<answer>{html.escape(answer, quote=False)}</answer>")
+    if "span" in p.needs:
+        parts.append(f"<span>{html.escape(span, quote=False)}</span>")
     return [
         {"role": "system", "content": p.system},
         {"role": "user", "content": "\n\n".join(parts)},
@@ -222,6 +235,8 @@ def _fake_value(node: dict, defs: dict, rnd: random.Random) -> Any:
         node = defs[node["$ref"].rsplit("/", 1)[-1]]
     if "enum" in node:
         return rnd.choice(node["enum"])
+    if node.get("type") == "boolean":
+        return rnd.choice([True, False])
     if "const" in node:
         return node["const"]
     return "fake"
@@ -283,6 +298,7 @@ class Runner:
         self.results: dict[tuple[str, str, int], dict] = {}  # 성공한 답(의장 입력용)
         self.streak, self.stop, self.seq, self.t0 = 0, None, 0, time.monotonic()
         self.errors: Counter[str] = Counter()
+        self.guard: Guard | None = None  # span_tighten일 때만 만든다
 
     def load_done(self) -> None:
         if not self.path.is_file():
@@ -292,16 +308,11 @@ class Runner:
             if r.get("error") is None and r.get("answer") is not None:
                 self.results[(r["id"], r["probe"], r["rep"])] = r["answer"]
 
-    async def one(self, c: Ctx, rep: int, p: Probe) -> None:
-        effort = p.effort or self.args.effort
-        llm = self.llms[effort]
-        panel = None
-        if "panel" in p.needs:
-            panel = {s: self.results.get((c.row.id, s, rep)) for s in pp.SPECIALISTS}
-        messages = build_messages(p, c, self.cfg, panel)
+    async def _call(self, llm: LLM, messages: list[dict], schema: type[_Out]) -> tuple | None:
+        """호출 한 번(동시 수 제한 안에서). 멈춘 뒤면 None. (결과, usage 상자, 시작 시각)."""
         async with self.sem:
             if self.stop:
-                return
+                return None
             box: dict = {}
             USAGE.set(box)
             started = time.monotonic()
@@ -309,38 +320,109 @@ class Runner:
             r = await llm.complete(
                 "input_judge",
                 messages,
-                p.schema,
+                schema,
                 deadline=started + llm.cfg.timeout_s.read + 10,
                 retries=0,
             )
-        answer = r.parsed.model_dump() if r.parsed is not None else None
+        return r, box, started
+
+    def _write(
+        self, row_id: str, probe: str, rep: int, effort: str, answer: dict | None, **more: Any
+    ):
         self.seq += 1
-        rec = {
-            "id": c.row.id, "probe": p.name, "rep": rep, "effort": effort, "answer": answer,
+        rec = {"id": row_id, "probe": probe, "rep": rep, "effort": effort, "answer": answer, **more,
+               "seq": self.seq}  # fmt: skip
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        error = more.get("error")
+        if error is None:
+            if answer is not None:
+                self.results[(row_id, probe, rep)] = answer
+            self.streak = 0
+            return
+        self.errors[error] += 1
+        if error != "bad_json":  # 형식 오류는 모델 쪽이라 멈출 이유가 아니다
+            self.streak += 1
+        if error == "auth":
+            self.stop = "인증 오류(401·403)가 나서 멈췄다"
+        elif self.streak >= STREAK:
+            self.stop = f"호출 실패가 {STREAK}회 이어져 멈췄다(마지막: {error})"
+
+    def _fields(self, r: Any, box: dict, started: float) -> dict:
+        return {
             "error": r.error, "finish_reason": r.finish_reason, "latency_ms": round(r.latency_ms, 1),
             "attempts": r.attempts, "completion_tokens": r.completion_tokens,
             "prompt_tokens": box.get("prompt_tokens"), "cached_tokens": box.get("cached_tokens"),
-            "seq": self.seq, "t_s": round(started - self.t0, 3),
+            "t_s": round(started - self.t0, 3),
         }  # fmt: skip
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        if r.error is None:
-            self.results[(c.row.id, p.name, rep)] = answer
-            self.streak = 0
-            return
-        self.errors[r.error] += 1
-        if r.error != "bad_json":  # 형식 오류는 모델 쪽이라 멈출 이유가 아니다
-            self.streak += 1
-        if r.error == "auth":
-            self.stop = "인증 오류(401·403)가 나서 멈췄다"
-        elif self.streak >= STREAK:
-            self.stop = f"호출 실패가 {STREAK}회 이어져 멈췄다(마지막: {r.error})"
 
-    async def stage(self, jobs: list[tuple[Ctx, int, Probe]]) -> None:
+    async def one(self, c: Ctx, rep: int, p: Probe) -> None:
+        effort = p.effort or self.args.effort
+        panel = None
+        if "panel" in p.needs:
+            panel = {s: self.results.get((c.row.id, s, rep)) for s in pp.SPECIALISTS}
+        got = await self._call(self.llms[effort], build_messages(p, c, self.cfg, panel), p.schema)
+        if got is None:
+            return
+        r, box, started = got
+        answer = r.parsed.model_dump() if r.parsed is not None else None
+        self._write(c.row.id, p.name, rep, effort, answer, **self._fields(r, box, started))
+
+    async def span_row(self, c: Ctx, rep: int, p: Probe) -> None:
+        """출력 판정(low)으로 구간을 얻고, 구간마다 줄이는 호출을 한다. 글은 쓰지 않고 위치만 남긴다.
+
+        `span_base` 줄: 저장소의 `Guard.judge_output`(정답 범주를 넘겨 입력 호출 없이, medium 병렬 끔)
+        이 낸 구간의 [시작, 길이](후보 답변 안). 실패해도 기본값을 내는 함수라 오류는 구분되지 않는다.
+        `span_tighten` 줄: 줄인 뒤의 [시작, 길이]. 구간의 부분 문자열이 아닌 답은 버리고 원래 구간을 둔다.
+        """
+        answer = c.row.candidate_answer or ""
+        base = self.results.get((c.row.id, "span_base", rep))
+        if base is None:
+            async with self.sem:
+                if self.stop:
+                    return
+                started = time.monotonic()
+                v = await self.guard.judge_output(c.row.messages, answer, c.row.labels["category"])
+            found = [[answer.find(s), len(s)] for s in v.unsupported]
+            base = {
+                "grounded": v.grounded,
+                "spans": [s for s in found if s[0] >= 0],
+                "unlocated": sum(s[0] < 0 for s in found),  # 답변에서 글자 그대로 못 찾은 구간
+            }
+            self._write(
+                c.row.id, "span_base", rep, "low", base, error=None,
+                latency_ms=round((time.monotonic() - started) * 1000, 1),
+                t_s=round(started - self.t0, 3),
+            )  # fmt: skip
+        if not base["spans"]:
+            return
+        texts = [answer[s : s + n] for s, n in base["spans"]]
+        llm = self.llms[self.args.effort]
+        got = await asyncio.gather(
+            *(self._call(llm, build_messages(p, c, self.cfg, span=t), p.schema) for t in texts)
+        )
+        if any(g is None for g in got):
+            return
+        spans, rejected = [], 0
+        for (start, n), text, (r, _box, _t) in zip(base["spans"], texts, got, strict=True):
+            tight = html.unescape(r.parsed.tight) if r.parsed is not None else ""
+            if tight and tight in text:
+                spans.append([start + text.find(tight), len(tight)])
+            else:  # 실패했거나 구간에 글자 그대로 없는 답: 원래 구간
+                spans.append([start, n])
+                rejected += r.parsed is not None
+        r, box, started = max(got, key=lambda g: g[0].latency_ms)
+        error = next((g[0].error for g in got if g[0].error), None)
+        out = {"spans": spans, "rejected": rejected, "calls": len(got)}
+        fields = {**self._fields(r, box, started), "error": error}
+        self._write(c.row.id, p.name, rep, self.args.effort, None if error else out, **fields)
+
+    async def stage(self, jobs: list[tuple[Ctx, int, Probe]], fn: Any = None) -> None:
         """첫 호출은 혼자 보내 접두 캐시를 덥힌 뒤 나머지를 동시에 보낸다."""
+        fn = fn or self.one
         if jobs and not self.stop:
-            await self.one(*jobs[0])
-            await asyncio.gather(*(self.one(*j) for j in jobs[1:]))
+            await fn(*jobs[0])
+            await asyncio.gather(*(fn(*j) for j in jobs[1:]))
 
 
 def say(text: str) -> None:
@@ -391,13 +473,30 @@ async def run(args: argparse.Namespace) -> int:
             for c in ctxs
             for rep in range(args.reps)
             for p in probes
-            if (p.group == "chair") == chair
+            if p.group != "span"
+            and (p.group == "chair") == chair
             and ("answer" not in p.needs or c.row.candidate_answer is not None)
             and (c.row.id, p.name, rep) not in runner.results
         ]
 
+    def no_span(row_id: str, rep: int) -> bool:  # 이미 판정했고 구간이 없던 칸
+        base = runner.results.get((row_id, "span_base", rep))
+        return base is not None and not base["spans"]
+
     first, second = jobs(False), jobs(True)
-    efforts = sorted({args.effort} | {p.effort for p in probes if p.effort})
+    span = [
+        (c, rep, p)
+        for p in probes
+        if p.group == "span"
+        for c in ctxs
+        for rep in range(args.reps)
+        if c.row.candidate_answer
+        and (c.row.id, p.name, rep) not in runner.results
+        and not no_span(c.row.id, rep)
+    ]
+    efforts = sorted(
+        {args.effort} | {p.effort for p in probes if p.effort} | ({"low"} if span else set())
+    )
     say(
         f"행 {len(ctxs)}, 질문 {len(probes)}개({', '.join(p.name for p in probes)}), 반복 {args.reps}, "
         f"추론 수준 {args.effort}" + (f", 의장 {args.chair_efforts}" if second else "")
@@ -406,7 +505,12 @@ async def run(args: argparse.Namespace) -> int:
         f"보낼 호출 {len(first) + len(second)}회(이미 끝난 칸 {len(runner.results)}개는 건너뜀) "
         f"+ 시작 점검 약 {5 * len(efforts)}회, 동시 {args.concurrency}"
     )
-    if not first and not second:
+    if span:
+        say(
+            f"span_tighten: 후보 답변 칸 {len(span)}개. 칸마다 출력 판정(low) 1회 + 구간이 나온 "
+            f"칸만 구간당 1회 → 최소 {len(span)}회, 구간이 칸마다 하나면 최대 {2 * len(span)}회"
+        )
+    if not first and not second and not span:
         say("보낼 칸이 없다(모두 끝났다)")
         return 0
     if not (args.yes or args.fake):
@@ -426,6 +530,10 @@ async def run(args: argparse.Namespace) -> int:
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
     await runner.stage(first)
     await runner.stage(jobs(True))  # 전문가 답이 생긴 뒤에 의장 입력을 만든다
+    if span:  # 지금 판의 출력 판정을 low로만(medium 병렬은 끈다) 불러 구간을 얻는다
+        gcfg = load_config(overrides={"output.medium_parallel": False})
+        runner.guard = await Guard.build(gcfg, llm=runner.llms["low"])
+        await runner.stage(span, runner.span_row)
     say(f"쓴 줄 {runner.seq}, 오류 {dict(runner.errors) or '없음'} → {runner.path}")
     if runner.stop:
         say(f"중단: {runner.stop}. 같은 명령으로 다시 돌리면 남은 칸만 보낸다")
@@ -445,6 +553,9 @@ def load_gold() -> tuple[dict[str, dict], frozenset[str]]:
             "fold": split.fold[split.cluster[r.id]],
             "grounded": r.labels.get("grounded"),
             "endpoint": r.endpoint,
+            # 구간 채점용(메모리에서만 쓰고 보고서에 싣지 않는다)
+            "answer": r.candidate_answer,
+            "unsupported": r.labels.get("unsupported") or [],
         }
         for r in dev_rows("all")
     }
@@ -492,6 +603,7 @@ def analyze(args: argparse.Namespace) -> int:
           f"fake={r.meta.get('fake', '?')}" for r in runs),
     ]  # fmt: skip
     text = pa.report(runs, gold, base, block, notes)
+    text += pa.span_report(runs, gold, scoring.span_f1, scoring.normalize)
     if args.out:
         Path(args.out).write_text(text, "utf-8")
     say(text)
@@ -505,7 +617,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--out", required=True, help="실행 폴더(추론 수준마다 따로)")
     r.add_argument("--effort", choices=list(EFFORTS), default="minimal")
     r.add_argument(
-        "--probes", default="battery,output", help="이름·묶음(battery,output,rubric,panel,all)"
+        "--probes", default="battery,output", help="이름·묶음(battery,output,rubric,panel,span,all)"
     )
     r.add_argument("--chair-efforts", default="low", help="panel 의장의 추론 수준(쉼표)")
     r.add_argument("--rows", choices=["guard", "tutor", "all"], default="guard")

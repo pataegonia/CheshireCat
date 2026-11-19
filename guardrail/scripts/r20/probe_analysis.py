@@ -1051,6 +1051,119 @@ def persistent_raw(
     return "\n".join(out)
 
 
+def span_prf(pred: Sequence[str], gold: Sequence[str], normalize: Callable[[str], str]) -> tuple:
+    """채점기 span_f1과 같은 글자 다중집합 겹침의 (겹침, 예측 글자 수, 정답 글자 수)."""
+    p, g = Counter(normalize("".join(pred))), Counter(normalize("".join(gold)))
+    return sum((p & g).values()), sum(p.values()), sum(g.values())
+
+
+def span_report(
+    runs: Sequence[Run],
+    gold: Mapping[str, Mapping],
+    span_f1: Callable[[Sequence[str], Sequence[str]], float],
+    normalize: Callable[[str], str],
+) -> str:
+    """span_tighten: 줄이기 전·후의 구간 F1(채점기 함수), 정밀도·재현율, 좋아진·나빠진 행.
+
+    전 = `span_base` 구간, 후 = `span_tighten` 구간(줄이는 호출이 없거나 실패한 칸은 전과 같다).
+    F1 평균은 채점기처럼 후보 답변이 있는 모든 행에서 낸다(구간이 없던 행은 전후가 같다).
+    가드 점수 변화 = 100 x 0.45 x (구간 F1 변화) / 3. 판정: eval에서 F1 +0.03 이상이고 좋아진 행이
+    나빠진 행의 2배 이상.
+    """
+    halves = stratified_halves(gold)
+    out = []
+    for run in runs:
+        base = run.ans.get("span_base")
+        if not base:
+            continue
+        rows = []
+        for part in ("전체", "design", "eval"):
+            keys = [
+                (i, r)
+                for i, per in base.items()
+                for r in per
+                if i in gold and gold[i].get("answer") and (part == "전체" or halves.get(i) == part)
+            ]
+            if not keys:
+                continue
+            f_b, f_a, has, better, worse, lens_b, lens_a = [], [], 0, 0, 0, [], []
+            agg_b, agg_a = [0, 0, 0], [0, 0, 0]
+            for i, r in keys:
+                text, want = gold[i]["answer"], gold[i]["unsupported"]
+                before = [text[s : s + n] for s, n in base[i][r]["spans"]]
+                tight = run.ans.get("span_tighten", {}).get(i, {}).get(r)
+                after = [text[s : s + n] for s, n in tight["spans"]] if tight else before
+                b, a = span_f1(before, want), span_f1(after, want)
+                f_b.append(b)
+                f_a.append(a)
+                agg_b = [
+                    x + y for x, y in zip(agg_b, span_prf(before, want, normalize), strict=True)
+                ]
+                agg_a = [
+                    x + y for x, y in zip(agg_a, span_prf(after, want, normalize), strict=True)
+                ]
+                if before:
+                    has += 1
+                    better += a > b
+                    worse += a < b
+                    lens_b.append(sum(len(normalize(x)) for x in before))
+                    lens_a.append(sum(len(normalize(x)) for x in after))
+            n_rep = len(run.reps) or 1
+            d = statistics.fmean(f_a) - statistics.fmean(f_b)
+
+            def ratio(agg: list[int], k: int) -> float:
+                return agg[0] / agg[k] if agg[k] else 0.0
+
+            rows.append([
+                part, len({i for i, _ in keys}), has / n_rep,
+                f"{statistics.fmean(f_b):.3f}→{statistics.fmean(f_a):.3f}", d,
+                f"{ratio(agg_b, 1):.3f}→{ratio(agg_a, 1):.3f}",
+                f"{ratio(agg_b, 2):.3f}→{ratio(agg_a, 2):.3f}",
+                f"{statistics.fmean(lens_b) if lens_b else 0:.1f}→"
+                f"{statistics.fmean(lens_a) if lens_a else 0:.1f}",
+                better / n_rep, worse / n_rep, 15 * d,
+                d >= 0.03 and better >= 2 * worse and better > 0,
+            ])  # fmt: skip
+        tight = [a[r] for a in run.ans.get("span_tighten", {}).values() for r in a]
+        calls = sum(t.get("calls", 0) for t in tight)
+        s = _rates(run.lines.get("span_tighten", []))
+        out.append(
+            f"### span_tighten [{run.label}]\n"
+            + table(
+                [
+                    "부분",
+                    "후보행",
+                    "구간 있는 행",
+                    "구간F1 전→후",
+                    "F1 변화",
+                    "정밀도 전→후",
+                    "재현율 전→후",
+                    "구간 길이 전→후",
+                    "좋아짐",
+                    "나빠짐",
+                    "가드 점수 변화",
+                    "채택",
+                ],
+                rows,
+            )  # fmt: skip
+            + f"\n줄이는 호출 {calls}: 구간 밖의 답이라 버린 것 "
+            f"{sum(t.get('rejected', 0) for t in tight)}, 칸 오류 {s['err']:.3f}, 시간 초과 "
+            f"{s['timeout']:.3f}, 잘림 {s['trunc']:.3f}, 지연 p50/p90/max "
+            f"{s['p50']:.0f}/{s['p90']:.0f}/{s['max']:.0f}ms. 답변에서 못 찾아 뺀 기준 구간 "
+            f"{sum(a[r].get('unlocated', 0) for a in base.values() for r in a)}"
+        )
+    if not out:
+        return ""
+    return (
+        "\n## 4. 근거 없는 구간 줄이기(span_tighten)\n"
+        "미리 정한 읽기: eval 반쪽의 구간 F1 평균(후보 답변이 있는 모든 행)이 0.03 이상 오르고 좋아진 "
+        "행이 나빠진 행의 2배 이상일 때만 채택. 좋아짐·나빠짐·구간 길이·정밀도·재현율은 반복 평균"
+        "(정밀도·재현율은 글자 수를 합쳐 낸 값), 구간 길이는 채점 정규화 뒤 글자 수.\n\n"
+        + "\n\n".join(out)
+        + "\n"
+    )
+
+
 def report(
     runs: Sequence[Run],
     gold: Mapping[str, Mapping],

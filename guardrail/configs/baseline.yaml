@@ -17,7 +17,7 @@ llm:                               # 파라미터는 모두 null 가능(null = �
   retries: 1
   retry_jitter_s: [0.2, 0.5]
   gate: 64
-  per_role: {}                     # S3.9 실험: 호출별 값. 예 {jb_check: {reasoning_effort: medium}}. 비우면 모든 호출이 위 공통 값
+  per_role: {output_judge_medium: {reasoning_effort: medium, max_completion_tokens: 2000, read_s: 16}}   # default와 같은 값(medium_parallel이 꺼져 있어 쓰지 않는다)
 toggles:                           # GR-11. 모두 false + output.mode: baseline = "nano 단독" 베이스라인(configs/baseline.yaml)
   knn_fewshot: false                # GR-05 few-shot 예시만 끈다(kNN 다수결은 knn_vote)
   knn_vote: false                   # GR-05 kNN 다수결(실패 기본값·3번째 호출 투표). PRD GR-09 "kNN이 꺼져 있으면"은 이 키
@@ -63,5 +63,6 @@ output:
   span_tidy: true                  # S3.10 구간 다듬기(인용·목록 기호, 숫자 구간 끝의 이에요·예요·이므로)
   judge_mode: quote                # S3.13 실험, 기본 끔(quote | sentences)
   quote_repair: false              # S3.13 실험, 기본 끔
+  medium_parallel: false           # baseline 모드는 출력 호출이 하나다
 embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 때만
 eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)

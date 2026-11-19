@@ -15,7 +15,7 @@ from guardrail.config import GuardConfig, load_prompt
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut
 from guardrail.judges.schemas_exp import OutputSentOut, SentCheck
 from guardrail.kb import Hit, KbIndex, Ranking, normalize
-from guardrail.llm import LLM
+from guardrail.llm import LLM, Role
 from guardrail.preprocess import clip, decode_tags, reveal_hidden, strip_tags
 from guardrail.rules import sentences
 
@@ -167,15 +167,15 @@ async def ask_grounded(
     deadline: float,
     baseline: bool = False,
     retries: int | None = None,
+    role: Role = "output_judge",
 ) -> OutputOut | OutputSentOut | OutputBaselineOut | None:
     """후보 답변의 근거 판정. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
 
-    retries가 None이면 `llm.retries`.
+    retries가 None이면 `llm.retries`. role은 호출별 값(`llm.per_role`)과 호출 기록의 이름이다
+    (프롬프트·스키마는 같다).
     """
     by_sentence = not baseline and cfg.output.judge_mode == "sentences"
     schema = OutputBaselineOut if baseline else OutputSentOut if by_sentence else OutputOut
     messages = build_messages(target, answer_revealed, hits, cfg, baseline, by_sentence)
-    result = await llm.complete(
-        "output_judge", messages, schema, deadline=deadline, retries=retries
-    )
+    result = await llm.complete(role, messages, schema, deadline=deadline, retries=retries)
     return result.parsed if isinstance(result.parsed, schema) else None

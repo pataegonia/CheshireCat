@@ -54,6 +54,7 @@ class RoleParams(_Strict):
     reasoning_effort: str | None = None
     verbosity: str | None = None
     max_completion_tokens: int | None = None
+    read_s: PositiveFloat | None = None  # 이 호출만 다른 read 한도(초). None = llm.timeout_s.read
 
 
 class Llm(_Strict):
@@ -68,7 +69,15 @@ class Llm(_Strict):
     gate: PositiveInt  # 0이면 세마포어가 영영 안 열린다
     # 공통 값이 null이거나 probe()가 끈 파라미터는 여기 적어도 보내지 않는다
     per_role: dict[
-        Literal["input_judge", "output_judge", "jb_check", "oom_check", "request_check"], RoleParams
+        Literal[
+            "input_judge",
+            "output_judge",
+            "output_judge_medium",
+            "jb_check",
+            "oom_check",
+            "request_check",
+        ],
+        RoleParams,
     ]
 
 
@@ -166,6 +175,9 @@ class OutputCfg(_Strict):
     # quote_repair = 검증에 실패한 인용을 답변에서 가장 비슷한 구간으로 고쳐 쓴다
     judge_mode: Literal["quote", "sentences"]
     quote_repair: bool
+    # 출력 판정을 low와 medium(llm.per_role.output_judge_medium)으로 함께 보내고 medium이 성공하면
+    # medium, 아니면 low를 쓴다(`/guard`의 judge만, baseline 모드 제외)
+    medium_parallel: bool
 
 
 class EmbeddingCfg(_Strict):

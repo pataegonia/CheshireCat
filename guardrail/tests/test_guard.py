@@ -122,6 +122,8 @@ async def make(respond=None, config=DEFAULT, indexes=None, **overrides):
     # 요청 점검(S3.13)도 기본이 켜졌으니 끈다: 켠 동작은 test_s313이 본다.
     overrides.setdefault("toggles__request_check", False)
     overrides.setdefault("toggles__block_recheck", False)
+    # 출력 medium 병렬(실험)도 끈다: 켠 동작은 test_medium_parallel이 본다.
+    overrides.setdefault("output__medium_parallel", False)
     cfg = load_config(config, overrides={k.replace("__", "."): v for k, v in overrides.items()})
     fake = FakeLLM(respond=respond or responder())
     llm = LLM(cfg.llm, send=fake.send, sleep=_nosleep)
@@ -516,7 +518,10 @@ async def test_build_with_injected_llm_does_not_probe_again():
     before = len(fake.requests)
     guard = await Guard.build(cfg, llm=llm, rows=labeled_rows(_public()))
     assert len(fake.requests) == before == probe_calls(cfg.llm)
-    assert (await guard.judge(req())).calls == 2 + cfg.toggles.oom_check  # + 자료 밖 확인
+    # + 자료 밖 확인 + medium 출력 판정
+    assert (
+        await guard.judge(req())
+    ).calls == 2 + cfg.toggles.oom_check + cfg.output.medium_parallel
 
 
 async def test_build_without_llm_creates_one_and_probes_once(monkeypatch):

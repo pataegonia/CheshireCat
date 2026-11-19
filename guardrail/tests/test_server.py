@@ -702,14 +702,16 @@ def test_call_field_lists_each_nano_call_without_text(monkeypatch, caplog):
         assert _post(c, body).status_code == 200
     fields = _access_lines(caplog)[-1].split(" ")
     assert len(fields) == 8 and fields[6] == "request_check"
-    assert re.fullmatch(r"calls=3;prep=\d+;llm=\d+;.*", fields[7])
-    calls = fields[7].split(";")[3:]
+    # 가짜는 medium 출력 판정에도 맞는 답을 준다: 쓴 쪽은 med, nano는 4회
+    assert re.fullmatch(r"calls=4;prep=\d+;llm=\d+;out=med;.*", fields[7])
+    calls = fields[7].split(";")[4:]
     # 역할=걸린 ms/보낸 횟수/오류 코드/게이트 대기 ms, 끝난 순서
     assert all(re.fullmatch(r"[a-z_]+=\d+/\d+/(-|[a-z_]+)/\d+", call) for call in calls)
     by_role = {call.split("=")[0]: call.split("=")[1].split("/")[1:3] for call in calls}
+    by_role.pop("output_judge", None)  # 가짜 medium이 바로 끝나면 low는 취소돼 기록이 없다
     assert by_role == {
         "input_judge": ["1", "-"],
-        "output_judge": ["1", "-"],
+        "output_judge_medium": ["1", "-"],
         "request_check": ["2", "bad_json"],
     }
     _assert_logs_clean(caplog)

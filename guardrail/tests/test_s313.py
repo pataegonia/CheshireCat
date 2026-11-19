@@ -682,6 +682,7 @@ async def test_repair_runs_before_the_sentence_fallback(no_rule, sent):
 def test_calls_per_row_counts_at_most_one_extra_input_call():
     off = {"toggles.request_check": False, "toggles.block_recheck": False}
     base = {"toggles.jb_check": False, "toggles.oom_check": False, **off}
+    base["output.medium_parallel"] = False  # medium 출력 판정(+1)은 아래 마지막 줄에서 본다
     assert run.calls_per_row(load_config(overrides=base), True) == 2
     for key in ("toggles.request_check", "toggles.block_recheck"):
         cfg = load_config(overrides={**base, key: True})
@@ -690,7 +691,7 @@ def test_calls_per_row_counts_at_most_one_extra_input_call():
         overrides={**base, "toggles.request_check": True, "toggles.block_recheck": True}
     )
     assert run.calls_per_row(both, True) == 3
-    assert run.calls_per_row(load_config(), True) <= 3  # 기본 설정은 요청당 nano 최대 3회
+    assert run.calls_per_row(load_config(), True) == 4  # 실험: 기본 설정은 medium 출력 판정 +1
 
 
 async def test_default_config_keeps_oom_rule_with_request_check_on(no_rule):
@@ -744,7 +745,7 @@ async def test_fake_run_drives_all_new_toggles_end_to_end(tmp_path, monkeypatch,
     recs = [json.loads(x) for x in (out / "responses.jsonl").read_text("utf-8").splitlines()]
     score = summary["configs"]["t"]["scores"][0]
     assert score["errors"] == {} and "request_check" in score["llm_by_role"]
-    assert all("quote_repaired" in r for r in recs) and max(r["calls"] for r in recs) <= 3
+    assert all("quote_repaired" in r for r in recs) and max(r["calls"] for r in recs) <= 4
 
 
 def test_default_min_quote_length_accepts_a_short_literal_quote():

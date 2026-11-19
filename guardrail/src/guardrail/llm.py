@@ -29,7 +29,9 @@ from pydantic import BaseModel, ValidationError
 from guardrail.config import Llm
 from guardrail.judges.schemas import OutputOut, strict_schema
 
-Role = Literal["input_judge", "output_judge", "jb_check", "oom_check", "request_check"]
+Role = Literal[
+    "input_judge", "output_judge", "output_judge_medium", "jb_check", "oom_check", "request_check"
+]
 ErrorCode = Literal["timeout", "rate_limit", "server", "bad_json", "auth", "bad_request", "budget"]
 Send = Callable[[dict[str, Any]], Awaitable[Any]]  # chat.completions.create(**kwargs)와 같은 모양
 
@@ -299,6 +301,11 @@ class LLM:
                 o = getattr(over, k, None)
                 kwargs[k] = v if o is None else o
         kwargs["response_format"] = self._response_format(schema)
+        if over is not None and over.read_s is not None:  # 이 호출만 다른 read 한도
+            t = self.cfg.timeout_s
+            kwargs["timeout"] = openai.Timeout(
+                connect=t.connect, read=over.read_s, write=t.write, pool=t.pool
+            )
         return kwargs
 
     async def _attempt(

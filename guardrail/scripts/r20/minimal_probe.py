@@ -39,7 +39,7 @@ from guardrail.judges.input_judge import _conversation, _data, build_window  # n
 from guardrail.judges.output_judge import output_context  # noqa: E402
 from guardrail.judges.schemas import _Out  # noqa: E402
 from guardrail.kb import Hit, KbIndex  # noqa: E402
-from guardrail.llm import LLM  # noqa: E402
+from guardrail.llm import CALL_LOG, LLM  # noqa: E402
 from guardrail.preprocess import normalize  # noqa: E402
 from guardrail.schema import Category  # noqa: E402
 
@@ -134,7 +134,12 @@ def _probes() -> dict[str, Probe]:
 
 
 PROBES = _probes()
-PROMPT_HASH = hashlib.sha256(json.dumps(pp.ALL, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def prompt_hash(probes: list[Probe]) -> str:
+    """고른 질문의 프롬프트만 해시한다(다른 묶음의 프롬프트가 바뀌어도 이 폴더는 이어 돌릴 수 있게)."""
+    text = json.dumps(sorted((p.name, p.system, p.task) for p in probes), ensure_ascii=False)
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def select_probes(spec: str, chair_efforts: str) -> list[Probe]:
@@ -372,7 +377,7 @@ class Runner:
         """출력 판정(low)으로 구간을 얻고, 구간마다 줄이는 호출을 한다. 글은 쓰지 않고 위치만 남긴다.
 
         `span_base` 줄: 저장소의 `Guard.judge_output`(정답 범주를 넘겨 입력 호출 없이, medium 병렬 끔)
-        이 낸 구간의 [시작, 길이](후보 답변 안). 실패해도 기본값을 내는 함수라 오류는 구분되지 않는다.
+        이 낸 구간의 [시작, 길이](후보 답변 안). 실패해도 기본값을 내는 함수라 `CALL_LOG`의 오류 코드로 실패를 가려 답 없이 남긴다.
         `span_tighten` 줄: 줄인 뒤의 [시작, 길이]. 구간의 부분 문자열이 아닌 답은 버리고 원래 구간을 둔다.
         """
         answer = c.row.candidate_answer or ""
@@ -382,18 +387,28 @@ class Runner:
                 if self.stop:
                     return
                 started = time.monotonic()
+                log: list = []
+                CALL_LOG.set(
+                    log
+                )  # judge_output은 실패해도 기본값을 낸다. 호출 기록으로 실패를 본다
                 v = await self.guard.judge_output(c.row.messages, answer, c.row.labels["category"])
+            times = {
+                "latency_ms": round((time.monotonic() - started) * 1000, 1),
+                "t_s": round(started - self.t0, 3),
+            }
+            failed = next((error for _role, error, *_ in log if error), None)
+            if (
+                failed
+            ):  # 기본값을 구간으로 믿지 않는다. 답 없이 남겨 연속 실패에 세고 다시 돌릴 때 채운다
+                self._write(c.row.id, "span_base", rep, "low", None, error=failed, **times)
+                return
             found = [[answer.find(s), len(s)] for s in v.unsupported]
             base = {
                 "grounded": v.grounded,
                 "spans": [s for s in found if s[0] >= 0],
                 "unlocated": sum(s[0] < 0 for s in found),  # 답변에서 글자 그대로 못 찾은 구간
             }
-            self._write(
-                c.row.id, "span_base", rep, "low", base, error=None,
-                latency_ms=round((time.monotonic() - started) * 1000, 1),
-                t_s=round(started - self.t0, 3),
-            )  # fmt: skip
+            self._write(c.row.id, "span_base", rep, "low", base, error=None, **times)
         if not base["spans"]:
             return
         texts = [answer[s : s + n] for s, n in base["spans"]]
@@ -455,7 +470,7 @@ async def run(args: argparse.Namespace) -> int:
     out = Path(args.out)
     meta_path = out / "meta.json"
     meta = {
-        "effort": args.effort, "fake": args.fake, "prompt_hash": PROMPT_HASH, "rows": args.rows,
+        "effort": args.effort, "fake": args.fake, "prompt_hash": prompt_hash(probes), "rows": args.rows,
         "reps": args.reps, "chair_efforts": args.chair_efforts,
     }  # fmt: skip
     if meta_path.is_file():
@@ -574,11 +589,13 @@ def analyze(args: argparse.Namespace) -> int:
         meta = json.loads(meta_path.read_text("utf-8")) if meta_path.is_file() else {}
         runs.append(pa.Run(records, meta, label=f"{meta.get('effort', '?')}:{Path(d).name}"))
     gold, block = load_gold()
-    names = ", ".join(Path(b).name for b in args.baseline)
-    lines = [x for b in args.baseline for x in Path(b).read_text("utf-8").splitlines()]
+    names = ", ".join(Path(b).name for b in args.baseline or [])
+    lines = [x for b in args.baseline or [] for x in Path(b).read_text("utf-8").splitlines()]
     by_short, info = pa.read_baseline(lines, get_args(Category))
     base = {i: by_short[pa.short(i)] for i in gold if pa.short(i) in by_short}
-    if not base:
+    if not args.baseline:
+        say("기준선 없음: 3절 모의는 건너뛴다(질문별 통계와 구간 줄이기만)")
+    elif not base:
         say(
             f"사용법 오류: 기준선 {names}의 {info['lines']}줄 중 개발 행과 맞는 것이 없다"
             f"(범주·결정을 읽은 줄 {info['used']}). 파일에서 본 키: {info['keys']}. "
@@ -631,8 +648,8 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument(
         "--baseline",
         action="append",
-        required=True,
-        help="현재 판의 행별 판정 JSONL(README 참고). 여러 번 주면 행마다 다수결",
+        help="현재 판의 행별 판정 JSONL(README 참고). 여러 번 주면 행마다 다수결. "
+        "없으면 모의(3절)는 건너뛴다",
     )
     a.add_argument("--out", help="보고서를 쓸 파일")
     args = ap.parse_args(argv)

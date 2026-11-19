@@ -57,8 +57,8 @@ uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-span-med -
 - 호출 실패가 20회 이어지거나 인증 오류가 나면 멈춘다(종료 코드 6). `bad_json`은 세지 않는다.
 - 첫 호출은 혼자 보내 접두 캐시를 덥힌 뒤 나머지를 `--concurrency`(기본 32)로 보낸다.
 - `probes.jsonl` 한 줄 = (행 id, 질문, 반복): `answer`, `error`, `finish_reason`(`length` = 잘림), `latency_ms`, `attempts`, `completion_tokens`, `prompt_tokens`, `cached_tokens`, `seq`, `t_s`. 학습자 발화는 쓰지 않는다. `reason`·`reasoning` 칸에 모델이 쓴 짧은 글은 남는다(보고서에는 싣지 않는다).
-- `span` 묶음은 `Guard.judge_output`(이 브랜치의 기본 설정에서 `output.medium_parallel`만 끔, 입력 호출 없이 정답 범주를 넘김)을 low로 불러 구간을 얻는다. `span_base` 줄에는 그 구간의 [시작, 길이](후보 답변 안의 위치)만, `span_tighten` 줄에는 줄인 뒤의 [시작, 길이]만 남긴다(구간 글·모델이 쓴 글은 쓰지 않는다). 줄인 답이 원래 구간에 글자 그대로 들어 있지 않으면 버리고 원래 구간을 둔다(`rejected`에 센다). 출력 판정은 실패해도 기본값을 내는 함수라 `span_base`의 호출 실패는 구분되지 않는다. 추론 수준별 폴더마다 출력 판정을 다시 부르므로 "전" 값도 폴더마다 조금 다르다.
-- `meta.json`: 추론 수준, 프롬프트 해시, 시작 점검 결과, 실제로 보낸 파라미터.
+- `span` 묶음은 `Guard.judge_output`(이 브랜치의 기본 설정에서 `output.medium_parallel`만 끔, 입력 호출 없이 정답 범주를 넘김)을 low로 불러 구간을 얻는다. `span_base` 줄에는 그 구간의 [시작, 길이](후보 답변 안의 위치)만, `span_tighten` 줄에는 줄인 뒤의 [시작, 길이]만 남긴다(구간 글·모델이 쓴 글은 쓰지 않는다). 줄인 답이 원래 구간에 글자 그대로 들어 있지 않으면 버리고 원래 구간을 둔다(`rejected`에 센다). 출력 판정은 실패해도 기본값을 내는 함수라, 호출 기록(`CALL_LOG`)에 오류가 있으면 답 없이 오류 줄로 남긴다(연속 실패에 세고, 다시 돌릴 때 채운다). 추론 수준별 폴더마다 출력 판정을 다시 부르므로 "전" 값도 폴더마다 조금 다르다.
+- `meta.json`: 추론 수준, 고른 질문의 프롬프트 해시(같은 폴더를 다른 프롬프트로 이어 돌리면 거부한다. 커밋 `7fe41a7` 이전에 만든 폴더는 해시 방식이 달라 새 `--out`으로 다시 시작한다), 시작 점검 결과, 실제로 보낸 파라미터.
 
 ## analyze
 
@@ -66,7 +66,7 @@ uv run python -X utf8 scripts/r20/minimal_probe.py run --out runs/r20-span-med -
 uv run python -X utf8 scripts/r20/minimal_probe.py analyze --dir runs/r20-panel-min --dir runs/r20-panel-low --baseline dec.jsonl --out runs/r20-panel-report.txt
 ```
 
-`--baseline`은 지금 판의 행별 입력 판정 JSONL이다. 여러 번 주면 이어 붙여 행마다 다수결한다. 줄마다 필요한 것:
+`--baseline`은 지금 판의 행별 입력 판정 JSONL이다. 없으면 모의(3절)를 건너뛰고 질문별 통계와 구간 줄이기만 낸다(`span` 폴더만 볼 때). 여러 번 주면 이어 붙여 행마다 다수결한다. 줄마다 필요한 것:
 
 - 행 id: `id`(또는 `row_id`·`item_id`). `pub-4bdbbc40` 전체든 앞 8자 `4bdbbc40`이든 된다.
 - 예측 범주: `pred_category`, `category`, `pred`, `pred_cat`, `predicted_category`, `input.category`, `response.input.category`(= `eval/run.py`의 `responses.jsonl`), `resp.input.category`, `output.input.category`, `guard.input.category` 중 처음 나오는 것. 10개 범주 이름 중 하나여야 한다.

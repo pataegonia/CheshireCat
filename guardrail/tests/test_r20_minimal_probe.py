@@ -536,3 +536,34 @@ def test_span_report_scores_before_and_after_with_the_grader_metric():
     assert row.rstrip().endswith("예")  # +0.03 이상, 좋아진 1 / 나빠진 0
     assert answer not in text and narrow not in text  # 글은 싣지 않는다
     assert pa.span_report([pa.Run([_rec("x", "override", 0, answer="no")])], gold, None, None) == ""
+
+
+def test_span_base_failure_is_an_error_line_and_counts_toward_the_stop_rule(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def respond(_kwargs):
+        calls["n"] += 1
+        return Ok() if calls["n"] <= 10 else RateLimited()  # 시작 점검(minimal·low)만 통과
+
+    monkeypatch.setattr(mp, "fake_send", FakeLLM(respond=respond).send)
+    argv = ["run", "--out", str(tmp_path), "--probes", "span", "--fake", "--concurrency", "1"]
+    assert mp.main(argv) == mp.EXIT_STOPPED
+    lines = _lines(tmp_path)
+    assert len(lines) == mp.STREAK
+    assert {(r["probe"], r["error"], r["answer"]) for r in lines} == {
+        ("span_base", "rate_limit", None)
+    }
+
+
+def test_prompt_hash_covers_only_the_selected_probes():
+    panel, span = mp.select_probes("panel", "low"), mp.select_probes("span", "low")
+    assert mp.prompt_hash(panel) != mp.prompt_hash(span)
+    assert mp.prompt_hash(panel) == mp.prompt_hash(list(reversed(panel)))
+
+
+def test_analyze_without_baseline_still_reports_span(tmp_path, monkeypatch, capsys):
+    _span_run(tmp_path, monkeypatch, lambda span: span[:3])
+    capsys.readouterr()
+    assert mp.main(["analyze", "--dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "span_tighten [minimal:" in out and "기준선 없음" in out

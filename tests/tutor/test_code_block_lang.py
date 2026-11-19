@@ -67,11 +67,33 @@ def test_toggle_on_keeps_the_embedding_for_a_code_only_question():
 
 
 def test_toggle_on_leaves_plain_korean_unchanged():
-    fake, search = built_search()
     query = "체크카드 사용 규칙이 뭐예요"
-    found = run(retrieve(query, k=5, embedding=search, code_block_lang=True))
-    plain = run(retrieve(query, k=5))
-    assert [s.id for s in found] == [s.id for s in plain] and fake.calls == []
+    found = {}
+    for on in (False, True):
+        fake, search = built_search()
+        got = run(
+            retrieve(query, k=5, embedding=search, english_only_embedding=True, code_block_lang=on)
+        )
+        found[on] = ([s.id for s in got], fake.calls)
+    assert found[True] == found[False] and found[True][1] == []
+
+
+def test_toggle_on_also_drops_the_embedding_in_rrf_mode():
+    # toggles.embedding(RRF)만 켠 조합에서도 코드 때문에 영어로 보인 한국어 질문은 한국어로 다룬다
+    fake, search = built_search()
+    found = run(retrieve(KO_CODE, k=5, embedding=search, code_block_lang=True))
+    plain = run(retrieve(strip_code_blocks(KO_CODE), k=5))
+    assert fake.calls == [] and [s.id for s in found] == [s.id for s in plain]
+
+
+def test_unclosed_fence_before_the_korean_question_keeps_the_english_path():
+    # 닫히지 않은 울타리는 끝까지 코드로 보므로 뒤의 한국어도 빠진다
+    # → 남는 글이 없어 지금 동작 그대로
+    query = "```\nfor item in items:\n    print(item, total)\n이 코드가 왜 안 되나요"
+    assert emb.is_english(query) and strip_code_blocks(query).strip() == ""
+    fake, search = built_search()
+    run(retrieve(query, k=5, embedding=search, english_only_embedding=True, code_block_lang=True))
+    assert fake.calls
 
 
 DIALOG = [
@@ -92,6 +114,17 @@ def test_flow_passes_the_toggle_to_every_search(monkeypatch):
     ask(state, *DIALOG, roles=ROLES)
     assert len(calls) == 3  # E 근거 묶음, 주 호출 묶음, 규칙 A 재검색
     assert all(kw.get("code_block_lang") is True for _q, _h, kw in calls)
+
+
+def test_korean_with_code_utterance_never_embeds_or_takes_the_english_gate_path():
+    calls = []
+    state = with_embedding(
+        state_with(FakeLLM(out()), **ON, **RULE_A, **{"toggles.code_block_lang": True}),
+        fake_search(lambda text: "PY-01-01", calls),
+    )
+    ask(state, KO_CODE)
+    assert calls == []  # 근거 묶음·규칙 A 모두 코드 뺀 질의로 BM25
+    assert "english_called" not in (getattr(state, "oom_gate_counts", None) or {})  # 한글이 있다
 
 
 def test_flow_passes_no_flag_when_the_toggle_is_off(monkeypatch):

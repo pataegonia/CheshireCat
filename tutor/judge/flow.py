@@ -84,6 +84,17 @@ from tutor.judge.oom_gate import GateCounts, GateJob, english_only, material_abs
 from tutor.judge.oom_gate import build_messages as build_gate_messages
 from tutor.judge.oom_gate import load_system as load_gate_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
+from tutor.judge.specialists import (
+    RQ_ABSTAIN,
+    RQ_CODE,
+    SJ_ROLE,
+    RqPrompts,
+    StageRec,
+    bounded,
+    has_mention_marker,
+    reverse_question,
+    sj_messages,
+)
 from tutor.judge.unknown_terms import kb_blob, missing_terms
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
@@ -119,6 +130,8 @@ def prepare_judge(app_state: Any) -> None:
     app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
     named = toggles.oom_gate == "named_term"  # KB 전체 글(비교용)도 기동 때 한 번
     app_state.tutor_kb_blob = kb_blob(app_state.tutor_kb.sections) if named else None
+    rq_on = toggles.reverse_question != "off"  # 실험 rq 프롬프트 둘: 기동 때 한 번
+    app_state.tutor_rq_prompts = RqPrompts.load() if rq_on else None
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -453,6 +466,7 @@ def _pick_draft(state: Any, draft: Draft, runs: Sequence[MainCallOut | None]) ->
     if shadow is not None:
         actions = {o.action for o in runs if o is not None}
         shadow.valid = sum(o is not None for o in runs)
+        shadow.actions = [None if o is None else o.action for o in runs]
         shadow.split = len(actions) > 1
         shadow.chosen = chosen
         shadow.a_action = runs[0].action if runs and runs[0] is not None else None
@@ -533,6 +547,13 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     시작부터 센 값 그대로 두고(호출 순서만 바뀐다), after_intent_fresh는 E 시작부터 센다.
     """
     toggles = state.tutor_cfg.toggles
+    for key, mode in (
+        ("rq", toggles.reverse_question),
+        ("sj", toggles.soft_jailbreak_draft),
+        ("mm", toggles.mention_marker),
+    ):
+        if mode != "off":
+            _stage(key)  # 켠 단계는 돌지 않아도 기록 칸이 있다(trig 0)
     jobs: list[GateJob] = []  # 이 요청이 띄운 E(많아야 하나). finally에서 취소한다
 
     async def begin(gate_deadline: float) -> None:
@@ -573,6 +594,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             and await material_absent(gate, counts)
         ):
             return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
+        replaced = await _reverse_question(req, state, body, deadline)
+        if replaced is not None:
+            return replaced
         return append_quote(req, state, body)
     finally:
         for job in jobs:
@@ -739,6 +763,7 @@ async def _answer_v2(
     if direct_clarify(conv):
         return tutor_post(fixed_body(Fixed.CLARIFY))  # TU-05: 빈 발화, 앞 대화 뒤의 자모·기호만
     cfg = state.tutor_cfg
+    seen: dict[str, Any] = {}  # sj가 쓸 주 호출 메시지·스키마(요청 안에서만)
     signals = detect(conv)  # 기본값 선택에는 토글과 상관없이 쓴다(TU-12)
     guard = getattr(state, "guard", None)
     skips: GuardSkips | None = getattr(state, "guard_skips", None)
@@ -793,10 +818,13 @@ async def _answer_v2(
             await begin_gate()  # 직렬 T가 고정 문장으로 끝내지 않은 요청만 여기에 온다
         multi = cfg.llm.multi_draft.enabled  # 실험: 주 호출 초안 여러 개 + 고르기
         runs: list[MainCallOut | None] = []
+        complete = _multi_complete(state, runs) if multi else _complete(state)
+        if cfg.toggles.soft_jailbreak_draft != "off":
+            complete = _capture(complete, seen)  # sj 초안이 같은 메시지를 쓴다
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,
-            complete=_multi_complete(state, runs) if multi else _complete(state),
+            complete=complete,
             deadline=deadline,
             k=cfg.retrieval.k,
             signals=labels(signals) if cfg.toggles.signals else (),
@@ -856,6 +884,7 @@ async def _answer_v2(
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
     # T 덮기(대행 보정 뒤, 합치기 앞). classify가 위기·공격이면 T는 비키고 합치기가 정한다
     decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    decided = _mention_marker(cfg, conv, intent_label, decided, action)
     if decided is not None:
         kind = template_for(decided.category, decided.action)
         if kind is not None:
@@ -867,7 +896,8 @@ async def _answer_v2(
     merged = merge_category(out.category, action, trusted)
     if merged.fixed is not None:
         # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다
-        return tutor_post(fixed_body(merged.fixed), merged.category)
+        soft = await _soft_jailbreak(state, merged.fixed, signals, seen, draft.sections, deadline)
+        return soft or tutor_post(fixed_body(merged.fixed), merged.category)
     verdict = None
     # 주 호출 문장이 그대로 나가는 경로만 검증한다(고정 문장에는 판정할 주장이 없다, TU-09)
     if cfg.toggles.verify == "guard" and template_for(merged.category, action) is None:
@@ -905,6 +935,11 @@ async def _answer_v2(
             )
         except Exception:  # 메시지는 남기지 않는다
             top_sections = None
+    kind = template_for(merged.category, action)
+    if kind is not None:  # 주 호출이 고른 고정 문장(탈옥 거절이면 sj가 볼 수 있다)
+        soft = await _soft_jailbreak(state, kind, signals, seen, draft.sections, deadline)
+        if soft is not None:
+            return soft
     body = assemble(
         out,
         draft.sections,
@@ -915,3 +950,161 @@ async def _answer_v2(
         top_sections=top_sections,
     )
     return tutor_post(body, merged.category)
+
+
+# --- 실험 단계(tutor.judge.specialists). shadow는 기록만, on은 응답을 바꾼다 ---
+
+
+def _stage(key: str) -> StageRec:
+    """이 요청의 단계 기록. 기록 칸(라우터·측정 도구의 Shadow)이 없으면 버리는 기록."""
+    shadow = multi_draft.SHADOW.get()
+    if shadow is None:
+        return StageRec()
+    return shadow.stages.setdefault(key, StageRec())
+
+
+def _capture(complete: Any, seen: dict[str, Any]) -> Any:
+    """주 호출 어댑터를 감싸 보낸 메시지·스키마를 `seen`에 둔다(sj 초안이 같은 메시지를 쓴다)."""
+
+    async def wrapped(messages, schema, *, deadline: float) -> CompleteResult:
+        seen["messages"], seen["schema"] = messages, schema
+        return await complete(messages, schema, deadline=deadline)
+
+    return wrapped
+
+
+HARMFUL_DEMEANING = "유해-비하"  # T 이름표(tutor.judge.intent.TARGET)
+
+
+def _mention_marker(
+    cfg: Any, conv: Conversation, label: str | None, decided: Any, action: Action
+) -> Any:
+    """mm: T가 유해-비하로 덮으려 하는데 판단 대상에 언급 표지가 있으면, on에서 덮기를 버리고
+    주 호출 action을 둔다. shadow는 기록만. 주 호출이 없는 경로(실패)는 여기에 오지 않는다."""
+    mode = cfg.toggles.mention_marker
+    if mode == "off" or label != HARMFUL_DEMEANING or decided is None:
+        return decided
+    rec = _stage("mm")
+    marked = has_mention_marker(conv.target_raw)
+    rec.trig, rec.verdict = True, str(int(marked))
+    rec.before, rec.after = decided.action, action if marked else decided.action
+    if marked and mode == "on":
+        rec.changed = True
+        return None
+    return decided
+
+
+async def _soft_jailbreak(
+    state: Any,
+    kind: Fixed,
+    signals: Sequence[Signal],
+    seen: dict[str, Any],
+    sections: Sequence[RetrievedSection],
+    deadline: float,
+) -> dict[str, Any] | None:
+    """sj: 지시 무력화 신호 없는 탈옥 거절이면 "정상으로 보고 개념 설명" low 초안을 하나 더 부른다.
+
+    초안이 answer이고 결정적 수정 뒤에도 인용 있는 answer(빈 답 안내 아님)면 used. on에서만 그 답을
+    낸다(None이면 거절 그대로). 예외·실패·시간 부족은 kept, 초안이 왔지만 쓸 수 없으면 invalid."""
+    cfg = state.tutor_cfg
+    mode = cfg.toggles.soft_jailbreak_draft
+    if (
+        mode == "off"
+        or kind != Fixed.REFUSE_JAILBREAK
+        or Signal.OVERRIDE in signals
+        or "messages" not in seen
+    ):
+        return None
+    rec = _stage("sj")
+    rec.trig, rec.before, rec.after, rec.verdict = True, "refuse", "refuse", "kept"
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    body = None
+    try:
+        parsed = await bounded(
+            state.tutor_llm,
+            SJ_ROLE,
+            sj_messages(seen["messages"]),
+            seen["schema"],
+            until=deadline - cfg.llm.soft_jailbreak_draft.margin_s,
+            timeout_s=cfg.llm.timeout_s.main,
+            effort="low",
+        )
+        if parsed is not None:
+            rec.verdict = "invalid"
+            out = main_call.clean(parsed)
+            if out.action == "answer":
+                candidate = assemble(
+                    out.model_copy(update={"category": "normal"}),
+                    sections,
+                    action="answer",
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                )
+                answer = candidate.get("answer") or ""
+                if (
+                    candidate.get("action") == "answer"
+                    and candidate.get("citations")
+                    and NOT_IN_MATERIAL_NOTE not in answer
+                ):
+                    body = candidate
+    except Exception:  # noqa: BLE001 - 단계 실패는 거절을 그대로 둔다(메시지는 남기지 않는다)
+        body = None
+    rec.ms = (loop.time() - t0) * 1000
+    if body is None:
+        return None
+    rec.verdict, rec.after = "used", "answer"
+    if mode != "on":
+        return None
+    rec.changed = True
+    return tutor_post(body, "normal")
+
+
+CODE_FENCE = "`" * 3  # 판단 대상에 코드 블록이 있으면 rq를 돌리지 않는다
+
+
+async def _reverse_question(
+    req: TutorRequest, state: Any, body: dict[str, Any], deadline: float
+) -> dict[str, Any] | None:
+    """rq: 최종 answer(자료 문장 덧붙이기 전)의 문장만으로 되살린 질문을 학습자 질문과 견준다.
+
+    다른 속성·다른 대상(신뢰도 `min_confidence` 이상)이면 on에서 자료 밖 고정 문장(E와 같은 길).
+    판단 대상에 코드 블록이 있거나, 빈 답 안내가 든 답이거나, sj가 낸 answer면 돌지 않는다.
+    예외·실패·시간 부족은 fail이고 응답을 바꾸지 않는다."""
+    cfg = state.tutor_cfg
+    mode = cfg.toggles.reverse_question
+    prompts = getattr(state, "tutor_rq_prompts", None)
+    if mode == "off" or prompts is None or body.get("action") != "answer":
+        return None
+    answer = body.get("answer") or ""
+    shadow = multi_draft.SHADOW.get()
+    sj_used = shadow is not None and "sj" in shadow.stages and shadow.stages["sj"].changed
+    if not answer or NOT_IN_MATERIAL_NOTE in answer or sj_used:
+        return None
+    conv = tidy(_messages(req))
+    if CODE_FENCE in conv.target_raw:
+        return None
+    rec = _stage("rq")
+    rec.trig, rec.before, rec.after = True, "answer", "answer"
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    try:
+        code, conf = await reverse_question(
+            state.tutor_llm,
+            prompts,
+            cfg.llm.reverse_question,
+            answer=answer,
+            question=conv.target_raw,
+            deadline=deadline,
+        )
+    except Exception:  # noqa: BLE001 - 단계 실패는 답을 그대로 둔다
+        code, conf = "fail", 0
+    rec.ms = (loop.time() - t0) * 1000
+    rec.verdict, rec.conf = RQ_CODE.get(code, "fail"), conf
+    if code not in RQ_ABSTAIN or conf < cfg.llm.reverse_question.min_confidence:
+        return None
+    rec.after = "abstain"
+    if mode != "on":
+        return None
+    rec.changed = True
+    return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")

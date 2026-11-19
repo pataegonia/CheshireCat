@@ -744,6 +744,8 @@ def row_records(
     초안 기록(`llm.multi_draft`): 보낸 초안 수·유효한 수·고른 번호·갈림·초안 A 혼자의 action
     (초안 A가 무효면 None)·고른 초안의 action(뒤 단계 T·E가 바꾸기 전, 없으면 None)·초안별 코드.
     `action`은 뒤 단계를 지난 최종 action이다. 끄면 md_n이 0이다. --responses면 md_*가 없다.
+    md_actions는 초안별 action(무효 None). stages는 실험 단계 기록(tutor.judge.specialists.StageRec,
+    키 rq·sj·mm, 토글 off인 단계는 없다): trig·verdict·conf·before·after·changed·ms.
     """
     out = []
     for run, rows in enumerate(scored):
@@ -774,6 +776,8 @@ def row_records(
                     md_a_action=shadow.a_action,
                     md_pick_action=shadow.chosen_action,
                     md_codes=[d.code for d in shadow.drafts],
+                    md_actions=list(shadow.actions),
+                    stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )
             out.append(rec)
     return out

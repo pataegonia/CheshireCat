@@ -23,6 +23,7 @@ CONFIG_ENV = "TUTOR_CONFIG"
 PROXY_MAX_COMPLETION_TOKENS = 2000
 # multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다)
 MULTI_DRAFT_MAX_CALLS = 8
+Stage = Literal["off", "shadow", "on"]  # 실험 단계(tutor.judge.specialists). shadow는 기록만
 
 
 class _Strict(BaseModel):
@@ -80,6 +81,10 @@ class Toggles(_Strict):
     # 보낸다. E 마감은 요청 시작부터 llm.timeout_s.oom_gate로 같다(호출 순서만 바꾼다).
     # after_intent_fresh는 같은 순서에 E 마감만 E 시작부터 센다(요청 마감보다 늦지 않게)
     oom_schedule: Literal["with_request", "after_intent", "after_intent_fresh"]
+    # 실험 단계 셋(exp/tutor-specialists, tutor.judge.specialists). off | shadow | on
+    reverse_question: Stage  # 최종 answer → 답이 답하는 질문 되살리기 → 다른 속성·대상이면 abstain
+    soft_jailbreak_draft: Stage  # 신호 없는 탈옥 거절이면 "정상으로 보고 개념 설명" 초안의 답
+    mention_marker: Stage  # T 유해-비하 + 언급 표지면 T 고정 문장 대신 주 호출(호출 0회)
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -176,12 +181,30 @@ class MultiDraft(_Strict):
         return self
 
 
+class ReverseQuestion(_Strict):
+    """`toggles.reverse_question` 호출 둘(A 되살리기·B 견주기). minimal은 이 단계에만 허용한다
+    (TD-06: 튜터 다른 호출은 minimal 금지)."""
+
+    effort: Literal["minimal", "low"]
+    timeout_s: PositiveFloat  # 호출 하나의 상한
+    margin_s: PositiveFloat  # 두 호출 모두 요청 마감 − 이 값 안에서 끝난다
+    min_confidence: Annotated[int, Field(ge=1, le=5)]  # B 신뢰도가 이 값 이상일 때만 abstain
+
+
+class SoftJailbreak(_Strict):
+    """`toggles.soft_jailbreak_draft` 추가 low 초안. 시간 상한은 `timeout_s.main`."""
+
+    margin_s: PositiveFloat  # 초안은 요청 마감 − 이 값 안에서 끝난다
+
+
 class Llm(_Strict):
     reasoning_effort: Literal["low", "medium"]  # minimal 금지(TU-13)
     # 튜터 주 호출 상한(가드 판정 호출과 따로). 프록시 상한을 넘으면 로드에서 실패한다
     max_completion_tokens: Annotated[int, Field(ge=1, le=PROXY_MAX_COMPLETION_TOKENS)]
     timeout_s: Timeouts
     multi_draft: MultiDraft
+    reverse_question: ReverseQuestion
+    soft_jailbreak_draft: SoftJailbreak
 
 
 class EvalCfg(_Strict):
@@ -204,18 +227,24 @@ class TutorConfig(_Strict):
     @model_validator(mode="after")
     def _multi_draft_calls(self) -> "TutorConfig":
         md, t = self.llm.multi_draft, self.toggles
-        if not md.enabled:
+        # 실험 단계가 더하는 호출: rq는 answer에만(2), sj는 탈옥 거절에만(1)이라 한 요청에서 둘 중
+        # 하나만 돈다(flow.answer_v2). 그래서 둘의 큰 쪽만 더한다
+        stages = max(2 * (t.reverse_question != "off"), int(t.soft_jailbreak_draft != "off"))
+        if not md.enabled and not stages:
             return self
-        if self.llm.reasoning_effort != "low":
+        if md.enabled and self.llm.reasoning_effort != "low":
             # 요청 전체 medium은 시간 초과로 무너진다(64–68 대 90). medium은 초안 하나에만 쓴다
             raise ValueError("multi_draft를 켜면 llm.reasoning_effort는 low여야 한다")
-        # 초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E.
-        # 실험 브랜치 한정 상한 8(low 초안 5개까지): TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
-        calls = 2 + (len(md.drafts) - 1) + (t.intent_override != "off")
+        # 초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E + 실험 단계.
+        # 실험 브랜치 한정 상한 8: TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
+        calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
         calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
+        calls += stages
         if calls > MULTI_DRAFT_MAX_CALLS:
             cap = MULTI_DRAFT_MAX_CALLS
-            raise ValueError(f"multi_draft: 요청당 nano {calls}회라 쓸 수 없다(실험 상한 {cap})")
+            raise ValueError(
+                f"multi_draft·실험 단계: 요청당 nano {calls}회라 쓸 수 없다(실험 상한 {cap})"
+            )
         return self
 
 

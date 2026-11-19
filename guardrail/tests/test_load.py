@@ -111,13 +111,21 @@ def test_log_failures_counts_roles_once_per_request():
     lines = [
         "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 -",
         "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 output_judge:TimeoutError",
-        "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 input_judge,output_judge",
+        # 호출 기록 칸(8번째)이 붙은 줄도 같은 칸에서 읽는다
+        "2026-11-13T00:00:00.0Z /guard 10 20 200 1.0 input_judge,output_judge "
+        "calls=2;prep=3;llm=9;input_judge=9/1/timeout/0;output_judge=9/2/bad_json/1",
         "2026-11-13T00:00:00.0Z /tutor 10 20 200 1.0 ValueError",
         "2026-11-13T00:00:00.0Z /guard 0 24 401 1.0 HTTPException",
         "INFO: uvicorn started",
     ]
     rep = load.log_failures(lines, requests=4, with_candidate=2)
     assert rep["guard_lines"] == 3
+    assert load.log_latency(lines)["/guard"]["n"] == 3
+    assert load.log_errors(lines, "/guard")["by_code"] == {
+        "output_judge:TimeoutError": 1,
+        "input_judge": 1,
+        "output_judge": 1,
+    }
     assert rep["by_role"] == {"output_judge": 2, "input_judge": 1}
     assert rep["rate"] == {"output_judge": 1.0, "input_judge": 0.25}
 

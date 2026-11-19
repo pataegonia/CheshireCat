@@ -19,6 +19,7 @@ import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -50,6 +51,11 @@ class LLMResult:
     finish_reason: str | None  # 마지막 시도의. 응답이 없으면 None
     completion_tokens: int | None  # 마지막 시도의 usage.completion_tokens. 없으면 None
 
+
+# 요청 하나의 호출 기록(역할, 오류 코드, 보낸 횟수, 걸린 ms, 게이트 대기 ms). 본문은 담지 않는다.
+# 서버가 요청마다 빈 목록을 걸어 두면 `complete`가 끝날 때 한 줄씩 더한다(안쪽 태스크도 같은 목록)
+CallStat = tuple[str, str | None, int, float, float]
+CALL_LOG: ContextVar[list[CallStat] | None] = ContextVar("guard_call_log", default=None)
 
 API_ENV = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")
 
@@ -211,29 +217,40 @@ class LLM:
         max_retries = self.cfg.retries if retries is None else retries
         t0 = self._clock()
         kwargs = self._request(role, messages, schema)
-        attempts, last = 0, _Attempt()
+        attempts, last, gate_s = 0, _Attempt(), 0.0
+
+        def done(a: _Attempt, error: ErrorCode | None) -> LLMResult:
+            result = self._result(a, error, attempts, t0)
+            log = CALL_LOG.get()
+            if log is not None:
+                log.append((role, error, attempts, result.latency_ms, gate_s * 1000))
+            return result
+
         while True:
-            remaining = deadline - self._clock()
-            if remaining <= 0 or not await self._acquire(remaining):
-                return self._result(last, last.error if attempts else "timeout", attempts, t0)
+            waiting = self._clock()
+            remaining = deadline - waiting
+            acquired = remaining > 0 and await self._acquire(remaining)
+            gate_s += self._clock() - waiting
+            if not acquired:
+                return done(last, last.error if attempts else "timeout")
             try:
                 # 허가를 쥔 뒤 await 없이 확인·증가: 대기열이 있어도 예산을 넘지 않는다
                 if self.max_calls is not None and sum(self.calls.values()) >= self.max_calls:
-                    return self._result(last, "budget", attempts, t0)
+                    return done(last, "budget")
                 if attempts and self._clock() + self.cfg.timeout_s.read > deadline:
-                    return self._result(last, last.error, attempts, t0)  # 게이트 대기로 마감을 썼다
+                    return done(last, last.error)  # 게이트 대기로 마감을 썼다
                 attempts += 1
                 self.calls[role] += 1
                 last = await self._attempt(kwargs, schema, deadline)
             finally:
                 self._gate.release()
             if last.error is None:
-                return self._result(last, None, attempts, t0)
+                return done(last, None)
             if not last.retry or attempts > max_retries:
-                return self._result(last, last.error, attempts, t0)
+                return done(last, last.error)
             wait = self._retry_wait(last.headers or {})
             if wait is None or self._clock() + wait + self.cfg.timeout_s.read > deadline:
-                return self._result(last, last.error, attempts, t0)
+                return done(last, last.error)
             await self._sleep(wait)
 
     # --- 내부 ---

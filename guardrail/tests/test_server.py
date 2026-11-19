@@ -5,6 +5,7 @@ import contextlib
 import dataclasses
 import json
 import logging
+import re
 
 import hypothesis.strategies as st
 import jsonschema
@@ -459,15 +460,16 @@ def test_uvicorn_error_filter_strips_plain_traceback_text(caplog):
     _assert_logs_clean(caplog)
 
 
-def test_access_log_line_has_seven_fields(client, caplog):
+def test_access_log_line_has_seven_fields_and_the_call_field(client, caplog):
     caplog.set_level(logging.INFO, logger="guardrail.access")
     data = json.dumps({"messages": [{"role": "user", "content": MARK}]}).encode()
     _post(client, data)
     lines = _access_lines(caplog)
     assert len(lines) == 1
     fields = lines[0].split(" ")
-    assert len(fields) == 7
-    _ts, path, req_b, resp_b, status, ms, err = fields
+    assert len(fields) == 8  # 판정이 끝난 /guard 줄은 앞 7칸 뒤에 호출 기록 칸이 붙는다
+    _ts, path, req_b, resp_b, status, ms, err, detail = fields
+    assert detail == "calls=0"  # 상수 판정기는 nano를 부르지 않는다
     assert (path, req_b, status, err) == ("/guard", str(len(data)), "200", "-")
     assert int(resp_b) > 0 and float(ms) >= 0
     assert MARK not in lines[0]
@@ -691,6 +693,38 @@ def test_standalone_app_serves_the_real_guard(monkeypatch):
     assert len(fake.requests) > 2  # probe + 입력·출력 판정
 
 
+def test_call_field_lists_each_nano_call_without_text(monkeypatch, caplog):
+    # 요청 점검은 가짜가 다른 스키마의 답을 줘서 bad_json으로 한 번 재시도하고 실패한다
+    _fake_guard_llm(monkeypatch)
+    caplog.set_level(logging.INFO, logger="guardrail.access")
+    body = {"messages": [{"role": "user", "content": MARK}], "candidate_answer": MARK}
+    with TestClient(server.app) as c:
+        assert _post(c, body).status_code == 200
+    fields = _access_lines(caplog)[-1].split(" ")
+    assert len(fields) == 8 and fields[6] == "request_check"
+    assert re.fullmatch(r"calls=3;prep=\d+;llm=\d+;.*", fields[7])
+    calls = fields[7].split(";")[3:]
+    # 역할=걸린 ms/보낸 횟수/오류 코드/게이트 대기 ms, 끝난 순서
+    assert all(re.fullmatch(r"[a-z_]+=\d+/\d+/(-|[a-z_]+)/\d+", call) for call in calls)
+    by_role = {call.split("=")[0]: call.split("=")[1].split("/")[1:3] for call in calls}
+    assert by_role == {
+        "input_judge": ["1", "-"],
+        "output_judge": ["1", "-"],
+        "request_check": ["2", "bad_json"],
+    }
+    _assert_logs_clean(caplog)
+
+
+def test_backstop_line_keeps_seven_fields(monkeypatch, tmp_path, caplog):
+    # 판정이 돌아오지 못한 줄(안전망·예외)에는 호출 기록 칸이 없다
+    caplog.set_level(logging.INFO, logger="guardrail.access")
+    _config_file(tmp_path, monkeypatch, "budget_s: 24", "budget_s: 0.05")
+    monkeypatch.setattr(server, "BACKSTOP_MARGIN_S", 0.0)
+    with TestClient(create_app(_factory(_SlowGuard()))) as c:
+        _post(c, b'{"candidate_answer": "x"}')
+    assert len(_access_lines(caplog)[-1].split(" ")) == 7
+
+
 def test_standalone_app_does_not_start_without_llm_env(monkeypatch):
     # 키가 없으면 상수 판정으로 조용히 뜨지 않고 기동에서 실패한다
     for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"):
@@ -790,7 +824,7 @@ def test_judgement_error_codes_reach_access_log(caplog):
         r = _post(c, {"messages": [{"role": "user", "content": MARK}], "candidate_answer": MARK})
     assert r.status_code == 200
     fields = _access_lines(caplog)[-1].split(" ")
-    assert len(fields) == 7 and fields[-1] == "input_judge,output_judge:TimeoutError"
+    assert len(fields) == 8 and fields[6] == "input_judge,output_judge:TimeoutError"
     _assert_logs_clean(caplog)
 
 

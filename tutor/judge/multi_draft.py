@@ -146,6 +146,14 @@ def select(
     return max((i for i in valid if outs[i].action == action), key=rank)  # type: ignore[union-attr]
 
 
+def abstain_override(outs: Sequence[MainCallOut | None], chosen: int | None) -> int | None:
+    """`abstain_if_any`: 고른 초안의 action이 answer인데 유효한 초안 가운데 abstain이 있으면 그 첫
+    초안의 번호, 아니면 None. 고른 action이 answer 밖(scaffold·clarify…)이면 바꾸지 않는다."""
+    if chosen is None or outs[chosen].action != "answer":  # type: ignore[union-attr]
+        return None
+    return next((i for i, o in enumerate(outs) if o is not None and o.action == "abstain"), None)
+
+
 async def wait_drafts(
     tasks: Sequence["asyncio.Future[Any]"],
     *,

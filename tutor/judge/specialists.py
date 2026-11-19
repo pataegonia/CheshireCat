@@ -70,6 +70,8 @@ class StageRec:
         """접근 로그 칸 둘: `키=돌았나/신뢰도/판정 코드/ms`와 `키_ch=바꿨나`. 가드 호출 기록 칸
         (`이름=숫자/숫자/코드/숫자`)과 같은 모양이라 판정 코드는 글자만 쓴다(mm 1·0 → mark·none).
         action 값은 넣지 않는다(TU-15)."""
+        if key == "aa":  # 호출 없는 단계: 돌았나·바꿨나 둘뿐
+            return [f"aa={int(self.trig)}", f"aa_ch={int(self.changed)}"]
         code = {"1": "mark", "0": "none"}.get(self.verdict, self.verdict)
         return [
             f"{key}={int(self.trig)}/{self.conf}/{code}/{self.ms:.0f}",

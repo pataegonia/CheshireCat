@@ -462,6 +462,15 @@ def _pick_draft(state: Any, draft: Draft, runs: Sequence[MainCallOut | None]) ->
     efforts = [d.effort for d in state.tutor_cfg.llm.multi_draft.drafts]
     sections = multi_draft.contract_sections(draft.sections)
     chosen = multi_draft.select(runs, efforts, sections)
+    aa_mode = state.tutor_cfg.llm.multi_draft.abstain_if_any
+    if aa_mode != "off":
+        rec = _stage("aa")
+        alt = multi_draft.abstain_override(runs, chosen)
+        rec.before = None if chosen is None else runs[chosen].action  # type: ignore[union-attr]
+        rec.trig = alt is not None
+        rec.after = rec.before if alt is None else runs[alt].action  # type: ignore[union-attr]
+        if alt is not None and aa_mode == "on":
+            rec.changed, chosen = True, alt
     shadow = multi_draft.SHADOW.get()
     if shadow is not None:
         actions = {o.action for o in runs if o is not None}

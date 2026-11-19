@@ -77,11 +77,12 @@ def test_minimal_is_allowed_only_for_reverse_question():
         load_config(overrides={"llm.multi_draft.drafts": drafts})
 
 
-def test_repo_config_runs_every_stage_in_shadow_within_the_call_cap(monkeypatch):
+def test_repo_config_stage_modes_within_the_call_cap(monkeypatch):
     monkeypatch.delenv("TUTOR_CONFIG", raising=False)
-    cfg = load_config()  # 저장소 설정: 초안 3 + T + E + 단계(rq 2) = 8
+    cfg = load_config()  # 저장소 설정: 초안 3 + T + E + 단계(sj 1)
     t = cfg.toggles
-    assert (t.reverse_question, t.soft_jailbreak_draft, t.mention_marker) == ("shadow",) * 3
+    assert (t.reverse_question, t.soft_jailbreak_draft, t.mention_marker) == ("off", "on", "off")
+    assert cfg.llm.multi_draft.abstain_if_any == "on"
 
 
 def test_stage_calls_count_toward_the_cap():

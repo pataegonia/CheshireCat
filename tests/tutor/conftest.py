@@ -63,6 +63,7 @@ def _baseline_config(tmp_path_factory):
     # 실험 multi_draft(주 호출 초안 여러 개)도 끈다(켠 동작은 test_multi_draft가 본다)
     if "multi_draft" in raw["llm"]:
         raw["llm"]["multi_draft"]["enabled"] = False
+        raw["llm"]["multi_draft"]["abstain_if_any"] = "off"  # 켠 동작은 test_multi_draft가 본다
     path = tmp_path_factory.mktemp("tutor_config") / "tutor_baseline.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path

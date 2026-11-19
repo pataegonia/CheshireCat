@@ -77,6 +77,7 @@ from tutor.eval import case_set, gate, metrics
 from tutor.eval.grader import KB_DIR, PUBLIC_DIR, judge_from_env, score_local, scoring
 from tutor.eval.recall import (
     CountedEmbed,
+    embedding_sites,
     english_queries,
     expected_embedding_calls,
     missing_embedding_env,
@@ -868,8 +869,8 @@ def _tutor_state(
 class EmbeddingUse:
     """측정 중 임베딩 사용. 기동 빌드와 그 뒤 질의를 나눠 센다.
 
-    queries는 영어 질의 × 실행, 곧 임베딩을 쓸 것으로 예상한 질의 수다. 검색 전에 끝나는 행이
-    있을 수 있어 정확한 값은 아니다.
+    queries는 영어 질의 × 실행 × 부르는 곳, 곧 임베딩을 쓸 것으로 예상한 질의 수다.
+    검색 전에 끝나는 행이 있을 수 있어 정확한 값은 아니다.
     """
 
     build: int  # 기동 때 KB 묶음 호출
@@ -884,12 +885,17 @@ class EmbeddingUse:
 
 
 def _embedding_use(
-    counted: CountedEmbed | None, built: tuple[int, int], rows: Sequence[Any], runs: int
+    counted: CountedEmbed | None,
+    built: tuple[int, int],
+    rows: Sequence[Any],
+    runs: int,
+    sites: int = 1,
 ) -> EmbeddingUse | None:
+    """`sites`는 영어 질의 하나가 한 요청에서 임베딩을 부르는 곳 수(`embedding_sites`)다."""
     if counted is None:
         return None
     calls, failures = counted.calls - built[0], counted.failures - built[1]
-    return EmbeddingUse(built[0], calls, failures, english_queries(rows) * runs)
+    return EmbeddingUse(built[0], calls, failures, english_queries(rows) * runs * sites)
 
 
 def embedding_summary(use: EmbeddingUse, out: TextIO) -> None:
@@ -1019,8 +1025,10 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         missing = missing_embedding_env()
         if missing:  # 주소가 비면 SDK 기본 주소(공개 OpenAI)로 나간다
             ap.error(f"임베딩을 켜면 {'·'.join(missing)}이 필요하다(런박스)")
-        embedding = expected_embedding_calls(rows, runs=args.runs)
-        sys.stdout.write(f"임베딩 예상 호출 {embedding}회(기동 KB 묶음 + 실행마다 영어 질의)\n")
+        sites = embedding_sites(cfg.toggles)
+        embedding = expected_embedding_calls(rows, runs=args.runs, sites=sites)
+        sys.stdout.write(f"임베딩 예상 호출 {embedding}회")
+        sys.stdout.write(f"(기동 KB 묶음 + 실행마다 영어 질의 × 부르는 곳 {sites})\n")
     if calls + embedding > args.max_calls:
         ap.error(f"예상 호출 {calls + embedding}회가 상한 {args.max_calls}회를 넘는다")
     return rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard
@@ -1104,7 +1112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     by_axis = case_set.axis_scores(scored, rows, judged=judge is not None) if team else None
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
-    use = _embedding_use(counted, built, rows, args.runs)
+    use = _embedding_use(counted, built, rows, args.runs, embedding_sites(cfg.toggles))
     guard_run = _guard_run(guard_llm, getattr(state, "guard_skips", None))
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
     # 가드 단계를 건너뛰었거나 가드 호출이 오류로 끝난 행은 튜터 단독·가드 기본값 결과다(#165 리뷰)

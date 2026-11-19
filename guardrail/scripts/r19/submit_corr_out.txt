@@ -1,0 +1,78 @@
+== all17
+raw gd vs g12                                           n=17 rho=-0.31 p=0.23
+raw gd vs gp95                                          n=17 rho=-0.31 p=0.23
+raw tut vs tlate                                        n=17 rho=+0.44 p=0.08
+raw tut vs tp95                                         n=17 rho=+0.45 p=0.07
+raw tot vs g12                                          n=17 rho=+0.10 p=0.69
+raw tot vs tlate                                        n=17 rho=+0.10 p=0.69
+raw gd vs tlate                                         n=17 rho=-0.38 p=0.13
+raw tut vs g12                                          n=17 rho=+0.34 p=0.18
+raw g12 vs tlate                                        n=17 rho=+0.59 p=0.01
+resid gd vs g12                                         n=16 rho=-0.52 p=0.04
+resid gd vs gp95                                        n=16 rho=-0.39 p=0.13
+resid tut vs tlate                                      n=16 rho=+0.25 p=0.36
+resid tut vs tp95                                       n=16 rho=+0.21 p=0.44
+resid tot vs g12                                        n=16 rho=-0.58 p=0.02
+resid tot vs tlate                                      n=16 rho=-0.49 p=0.05
+resid gd vs tlate                                       n=16 rho=-0.56 p=0.02
+resid tut vs g12                                        n=16 rho=-0.09 p=0.74
+resid g12 vs tlate                                      n=16 rho=+0.58 p=0.02
+== no26(16)
+raw gd vs g12                                           n=16 rho=-0.27 p=0.30
+raw gd vs gp95                                          n=16 rho=-0.28 p=0.29
+raw tut vs tlate                                        n=16 rho=+0.60 p=0.02
+raw tut vs tp95                                         n=16 rho=+0.61 p=0.01
+raw tot vs g12                                          n=16 rho=+0.16 p=0.53
+raw tot vs tlate                                        n=16 rho=+0.19 p=0.47
+raw gd vs tlate                                         n=16 rho=-0.35 p=0.19
+raw tut vs g12                                          n=16 rho=+0.42 p=0.11
+raw g12 vs tlate                                        n=16 rho=+0.56 p=0.02
+resid gd vs g12                                         n=16 rho=-0.52 p=0.04
+resid gd vs gp95                                        n=16 rho=-0.39 p=0.13
+resid tut vs tlate                                      n=16 rho=+0.25 p=0.36
+resid tut vs tp95                                       n=16 rho=+0.21 p=0.44
+resid tot vs g12                                        n=16 rho=-0.58 p=0.02
+resid tot vs tlate                                      n=16 rho=-0.49 p=0.05
+resid gd vs tlate                                       n=16 rho=-0.56 p=0.02
+resid tut vs g12                                        n=16 rho=-0.09 p=0.74
+resid g12 vs tlate                                      n=16 rho=+0.58 p=0.02
+== E only(10)
+raw gd vs g12                                           n=10 rho=-0.70 p=0.03
+raw gd vs gp95                                          n=10 rho=-0.66 p=0.04
+raw tut vs tlate                                        n=10 rho=+0.26 p=0.46
+raw tut vs tp95                                         n=10 rho=+0.25 p=0.50
+raw tot vs g12                                          n=10 rho=-0.76 p=0.01
+raw tot vs tlate                                        n=10 rho=-0.45 p=0.20
+raw gd vs tlate                                         n=10 rho=-0.56 p=0.10
+raw tut vs g12                                          n=10 rho=-0.05 p=0.90
+raw g12 vs tlate                                        n=10 rho=+0.71 p=0.03
+resid gd vs g12                                         n=10 rho=-0.65 p=0.04
+resid gd vs gp95                                        n=10 rho=-0.62 p=0.06
+resid tut vs tlate                                      n=10 rho=+0.22 p=0.53
+resid tut vs tp95                                       n=10 rho=+0.14 p=0.71
+resid tot vs g12                                        n=10 rho=-0.67 p=0.04
+resid tot vs tlate                                      n=10 rho=-0.49 p=0.16
+resid gd vs tlate                                       n=10 rho=-0.58 p=0.08
+resid tut vs g12                                        n=10 rho=+0.07 p=0.85
+resid g12 vs tlate                                      n=10 rho=+0.74 p=0.02
+== A only(6)
+raw gd vs g12                                           n= 6 rho=+0.26 p=0.66
+raw gd vs gp95                                          n= 6 rho=+0.26 p=0.66
+raw tut vs tlate                                        n= 6 rho=+0.94 p=0.02
+raw tut vs tp95                                         n= 6 rho=+1.00 p=0.00
+raw tot vs g12                                          n= 6 rho=+0.60 p=0.24
+raw tot vs tlate                                        n= 6 rho=+0.70 p=0.17
+raw gd vs tlate                                         n= 6 rho=-0.15 p=0.83
+raw tut vs g12                                          n= 6 rho=+0.43 p=0.42
+raw g12 vs tlate                                        n= 6 rho=+0.52 p=0.33
+resid gd vs g12                                         n= 6 rho=+0.26 p=0.66
+resid gd vs gp95                                        n= 6 rho=+0.26 p=0.66
+resid tut vs tlate                                      n= 6 rho=+0.51 p=0.40
+resid tut vs tp95                                       n= 6 rho=+0.77 p=0.10
+resid tot vs g12                                        n= 6 rho=+0.20 p=0.72
+resid tot vs tlate                                      n= 6 rho=-0.85 p=0.07
+resid gd vs tlate                                       n= 6 rho=-0.68 p=0.20
+resid tut vs g12                                        n= 6 rho=-0.14 p=0.80
+resid g12 vs tlate                                      n= 6 rho=+0.34 p=0.66
+8000 g12 (0.4616902584383194, 0.4297)
+8000 p95 (0.07142857142857142, 0.8768)

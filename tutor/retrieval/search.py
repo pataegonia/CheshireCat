@@ -1,5 +1,6 @@
 """공개 검색 함수 `retrieve`(TU-03). 통합 하네스(IN-02)도 이 함수로 recall을 잰다."""
 
+import re
 from collections.abc import Sequence
 from functools import cache
 
@@ -10,6 +11,13 @@ from tutor.retrieval.index import KbIndex
 from tutor.retrieval.kb import Section, bigrams
 
 DEFAULT_K = 5
+# ``` 울타리 코드 블록. 닫히지 않았으면 글 끝까지 코드로 본다
+_CODE_BLOCK = re.compile(r"```.*?(?:```|\Z)", re.S)
+
+
+def strip_code_blocks(text: str) -> str:
+    """코드 블록(``` 울타리)을 빈칸으로 바꾼 글. 코드 블록이 없으면 그대로다."""
+    return _CODE_BLOCK.sub(" ", text)
 
 
 def build_index(cfg: GuardConfig) -> KbIndex:
@@ -55,6 +63,7 @@ async def retrieve(
     k: int = DEFAULT_K,
     embedding: EmbeddingSearch | None = None,
     english_only_embedding: bool = False,
+    code_block_lang: bool = False,
     index: KbIndex | None = None,
 ) -> list[Section]:
     """KB 섹션을 점수 높은 순으로 0개 이상 k개 이하 돌려준다.
@@ -70,12 +79,19 @@ async def retrieve(
     순위와 RRF로 섞는다(TU-11). 2-gram이 없는 질의는 임베딩도 부르지 않는다.
     english_only_embedding(`toggles.english_embedding`)이면 그 영어 질의는 BM25와 섞지 않고
     임베딩 순위만 쓴다(임베딩을 못 쓰면 BM25 순위). 한국어 질의에는 영향이 없다.
+    code_block_lang(`toggles.code_block_lang`)이면 임베딩을 쓸 질의라도 코드 블록을 뺀 글이 영어가
+    아니면(코드의 라틴 글자 때문에 영어로 보인 한국어 질문) 임베딩을 부르지 않고, 코드 블록을 뺀
+    질의로 BM25만 쓴다. 코드 블록을 빼고 남는 2-gram이 없으면 지금 동작 그대로다.
     index는 기동 때 만든 색인이다(서버는 `app.state.tutor_kb`). 없으면 `default_index()`를 쓴다.
     """
     if k <= 0:
         return []
     if index is None:
         index = default_index()
+    if code_block_lang and embedding is not None and is_english(query):
+        plain = strip_code_blocks(query)
+        if bigrams(plain) and not is_english(plain):
+            query, embedding = plain, None
     text = "\n".join([*history, query])[-index.max_query_chars :]
     ranked = [sid for sid, _score in index.search(text, subject=subject)]
     if embedding is not None and is_english(query) and bigrams(query):

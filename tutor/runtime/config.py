@@ -42,6 +42,9 @@ class Toggles(_Strict):
     # 쓴다. toggles.embedding이 꺼져 있어도 이 토글이 켜지면 기동 때 KB 임베딩을 만든다.
     # 측정 전이라 끔
     english_embedding: bool
+    # 임베딩을 쓸 영어 질의라도 코드 블록을 뺀 글이 영어가 아니면(코드의 라틴 글자 때문에 영어로
+    # 보인 한국어 질문) 코드 블록을 뺀 질의로 BM25만 쓴다. 임베딩 검색이 있을 때만 영향. 기본 끔
+    code_block_lang: bool
     rerank: bool
     vote: bool
     scaffold_state_rule: bool

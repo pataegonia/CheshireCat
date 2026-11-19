@@ -109,6 +109,8 @@ def write_tutor_config(path: Path, *, mode: str | None = None, **toggles: str) -
     raw = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
     off = {k: v for k, v in FREEZE_TOGGLES_OFF.items() if k in raw["toggles"]}
     raw["toggles"] = {**raw["toggles"], **off, **toggles}
+    if "multi_draft" in raw["llm"]:  # 실험 브랜치: 주 호출 초안 여러 개도 기준 설정에서 끈다
+        raw["llm"]["multi_draft"]["enabled"] = False
     if mode is not None:
         raw["mode"] = mode
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")  # "off"는 따옴표로

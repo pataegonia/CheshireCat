@@ -253,7 +253,7 @@ def test_team_app_with_own_lifespan_calls_setup_guard():
 
 
 def test_create_app_reads_guard_config(monkeypatch, tmp_path):
-    _config_file(tmp_path, monkeypatch, "budget_s: 20", "budget_s: 7")
+    _config_file(tmp_path, monkeypatch, "budget_s: 24", "budget_s: 7")
     seen = []
 
     async def factory(cfg):
@@ -403,7 +403,7 @@ def test_failure_default_ungrounded_is_used(monkeypatch, tmp_path):
 
 def test_slow_judge_hits_server_backstop(monkeypatch, tmp_path, caplog):
     caplog.set_level(logging.INFO, logger="guardrail.access")
-    _config_file(tmp_path, monkeypatch, "budget_s: 20", "budget_s: 0.05")
+    _config_file(tmp_path, monkeypatch, "budget_s: 24", "budget_s: 0.05")
     monkeypatch.setattr(server, "BACKSTOP_MARGIN_S", 0.0)
     with TestClient(create_app(_factory(_SlowGuard()))) as c:
         r = _post(c, b'{"candidate_answer": "x"}')

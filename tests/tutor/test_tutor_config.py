@@ -70,18 +70,18 @@ def test_main_call_timeout_uses_the_budget_headroom():
     assert backstop_s(budget) < 30  # 안전망까지 SPEC §3 요청당 30초 안
 
 
-def test_repo_config_scales_the_guard_budget_to_24s():
+def test_repo_config_keeps_the_tutor_budget_at_24s():
     from guardrail.config import load_config as load_guard_config
 
     from tutor.runtime.budget import budget_s
 
     cfg = config.load_config(config.ROOT / config.DEFAULT_CONFIG)
-    assert cfg.budget_scale == 1.2  # 11/19 켬(실제 제출 판과 맞춤)
+    assert cfg.budget_scale == 1.0  # 실험: 가드 budget_s 24 × 1.0
     guard = load_guard_config()
-    assert guard.budget_s == 20  # 가드 예산은 그대로
+    assert guard.budget_s == 24
     assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(24)
-    unscaled = config.load_config(overrides={"budget_scale": 1.0})
-    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=unscaled)) == pytest.approx(20)
+    scaled = config.load_config(overrides={"budget_scale": 1.2})  # 26초에서 자른다
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=scaled)) == pytest.approx(26)
 
 
 @pytest.mark.parametrize(

@@ -36,7 +36,7 @@ startup_log = logging.getLogger("guardrail.access.startup")  # 같은 핸들러�
 LOGGED_PATHS = frozenset({"/guard", "/tutor"})  # 그 밖의 경로는 "other"(경로도 요청이 정한다)
 UNAUTHORIZED = {"error": "unauthorized"}
 MAX_BODY_BYTES = 4 * 1024 * 1024  # 요청 본문 상한. 넘으면 읽기를 멈추고 기본값(GR-09)
-BACKSTOP_MARGIN_S = 5.0  # 판정기 마감(budget_s) 위의 서버 안전망. 20 + 5 < 규격 30초
+BACKSTOP_MARGIN_S = 5.0  # 판정기 마감(budget_s) 위의 서버 안전망. 24 + 5 = 29 < 규격 30초
 SAFE_DEFAULT = {  # 기본 응답을 만들다 실패해도 내는 마지막 값(output은 넣는 쪽)
     "input": {"decision": "allow", "category": "normal"},
     "output": {"grounded": True, "unsupported": [], "safe": True, "category": "normal"},

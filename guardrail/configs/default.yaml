@@ -1,17 +1,17 @@
 # 가드 기본 설정. master-plan §4.4 블록을 그대로 옮겼다. 바꾸려면 §4.4를 먼저 고친다.
 # 키·주소는 여기에 쓰지 않는다(환경변수, §4.4 끝).
-version: "6.0.10"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.11"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
 prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en_v2.md, output_judge_baseline: output_judge_baseline.md, jb_check: jb_check_en.md, oom_check: oom_check_en.md, request_check: request_check_en.md, output_judge_sent: output_judge_en_sent.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
-budget_s: 20                       # 요청 예산(GR-09). 규격은 30초
+budget_s: 24                       # 요청 예산(GR-09). 규격은 30초. 서버 안전망은 +5초 = 29초(server.py). 실험(exp/guard-budget-24): 20 → 24초. 튜터 예산은 config/tutor.yaml budget_scale 1.0으로 24초 그대로
 block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, off_topic]   # 범주 → decision 표(ADR-0012)
 llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다
   reasoning_effort: low
   verbosity: low
-  max_completion_tokens: 1600      # 800이면 출력 판정 호출의 6–9%가 잘렸다(finish_reason=length). 1600에서 잘림 0/192(S2.9, results/2026-11-13-v1.md). 대신 read 12초 시간 초과가 유효 6회에서 8/384(2.1%)다(약 1,390토큰부터, 조치는 ADR-0014 S2.9 수정). 입력 판정은 800에서도 잘림이 없었다
+  max_completion_tokens: 1600      # 800이면 출력 판정 호출의 6–9%가 잘렸다(finish_reason=length). 1600에서 잘림 0/192(S2.9, results/2026-11-13-v1.md). 대신 read 12초(그때 값, 지금은 11초) 시간 초과가 유효 6회에서 8/384(2.1%)다(약 1,390토큰부터, 조치는 ADR-0014 S2.9 수정). 입력 판정은 800에서도 잘림이 없었다
   structured_output: json_schema   # json_schema | json_object. probe()가 내린다
-  # read 12초 시간 초과는 재시도되지 않는다: llm.py가 지금 + 대기 + read > 마감이면 재시도하지 않고(budget_s 20), 대기는 0.2–0.5초(retry-after가 있으면 그만큼)라 첫 시도가 약 7.5–7.8초 안에 끝나야 재시도할 수 있다
-  timeout_s: {connect: 3, read: 12, write: 5, pool: 5}
+  # read 11초 시간 초과는 호출이 요청 시작 뒤 약 1.5–1.8초 안에 나갔을 때만 재시도된다: llm.py가 지금 + 대기 + read > 마감이면 재시도하지 않고(budget_s 24), 대기는 0.2–0.5초(retry-after가 있으면 그만큼)라 첫 시도가 약 12.5–12.8초 안에 끝나야 재시도할 수 있다(11 + 0.5 + 11 = 22.5초). 1차 판정 뒤에 이어 부르는 호출(요청 점검 등)은 1차가 그 안에 끝났을 때만 해당한다. 실험(exp/guard-budget-24): 12 → 11초
+  timeout_s: {connect: 3, read: 11, write: 5, pool: 5}
   retries: 1
   retry_jitter_s: [0.2, 0.5]
   gate: 64

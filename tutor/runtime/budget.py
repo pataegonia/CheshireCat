@@ -3,7 +3,7 @@
 import math
 from typing import Any
 
-DEFAULT_BUDGET_S = 20.0  # 가드 설정의 budget_s를 못 읽었을 때. 가드 v6 기본값과 같다
+DEFAULT_BUDGET_S = 24.0  # 가드 설정의 budget_s를 못 읽었을 때. 가드 기본값과 같다
 BACKSTOP_MARGIN_S = 3.0  # 요청 예산 위의 안전망
 DEADLINE_CAP_S = 29.0  # 최악 응답(예산 + 안전망)의 전체 상한. 규격 30초보다 1초 아래
 

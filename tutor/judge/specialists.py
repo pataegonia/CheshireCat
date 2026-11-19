@@ -33,6 +33,7 @@ from tutor.judge.intent import load_system
 
 PROMPTS = Path(__file__).resolve().parents[1] / "prompts"
 RQ_A_ROLE, RQ_B_ROLE, SJ_ROLE = "rq_a", "rq_b", "sj"
+STAGE_ROLES = frozenset({RQ_A_ROLE, RQ_B_ROLE, SJ_ROLE})  # 실패해도 응답을 바꾸지 않는 호출
 Mode = Literal["off", "shadow", "on"]
 Verdict = Literal["same", "different_attribute", "different_object", "scope_only"]
 # 로그·행 기록 코드(본문 없음)

@@ -17,6 +17,10 @@ _CLEARED_ENV = (
     "TUTOR_CONFIG",
     "OPENAI_API_KEY",  # 없으면 실제 전송 함수는 보내기 전에 실패한다(실제 API를 부를 수 없다)
     "OPENAI_BASE_URL",
+    # 저장소 설정 그대로의 앱(영어 장치 켬)이 기동 때 실제 임베딩 API를 부르지 않게 한다
+    "EMBEDDING_API_KEY",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_BASE_URL",
 )
 LLM_MODES = ("v2", "baseline")
 # 가드 LLM이 기동 때 읽는 API 설정의 가짜 값. 패치된 `guardrail.llm.openai_env`만 이 값을 돌려주고,

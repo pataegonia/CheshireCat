@@ -105,7 +105,7 @@ async def test_toggle_off_sends_one_output_call(no_rule):
     assert (j.output_source, j.nano_grounded, j.calls) == (None, True, 2)
 
 
-async def test_no_candidate_or_baseline_mode_sends_no_medium_call(no_rule):
+async def test_no_candidate_sends_no_medium_call(no_rule):
     guard, fake = await make(pair(), output__medium_parallel=True)
     j = await guard.judge(req(answer=None, has=False))
     assert calls(fake, "output") == [] and (j.output_source, j.calls) == (None, 1)

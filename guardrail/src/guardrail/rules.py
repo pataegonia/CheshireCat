@@ -147,9 +147,28 @@ def _eojeol_of(answer: str):
 
 # 문장 끝: . ! ? 뒤에 공백·끝·인용 괄호(1.5 같은 소수는 아님), 또는 줄바꿈
 _SENT_END_RX = re.compile(r"[.!?]+(?=\s|$|\[|\()|\n")
+
+
 # 절 경계가 되는 연결 어미(어절 끝)
 # shortcut: 형태소 분석 없이 어절 끝 글자만 본다("화면"·"에서"도 자른다).
 # 오탐이 점수에 보이면 목록을 줄인다
+def sentences(a: str) -> list[tuple[int, int]]:
+    """답변을 문장 구간 [시작, 끝)으로 자른다(앞 공백 뗌). r16/span_replay.py와 같은 규칙."""
+    cuts, i = [], 0
+    for m in _SENT_END_RX.finditer(a):
+        cuts.append((i, m.end()))
+        i = m.end()
+    if i < len(a):
+        cuts.append((i, len(a)))
+    res = []
+    for s, e in cuts:
+        while s < e and a[s].isspace():
+            s += 1
+        if s < e:
+            res.append((s, e))
+    return res
+
+
 _CONN_RX = re.compile(r"(?:고|며|면|지만|는데|은데|서|니까|므로)$")
 
 

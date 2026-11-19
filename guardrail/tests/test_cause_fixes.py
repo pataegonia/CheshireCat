@@ -197,7 +197,14 @@ async def test_oom_check_request_carries_conversation_target_and_kb(no_rule):
 
 def test_calls_per_row_counts_one_extra_call_at_most():
     on = load_config(overrides={"toggles.oom_check": True})
-    neither = load_config(overrides={"toggles.oom_check": False, "toggles.jb_check": False})
+    neither = load_config(
+        overrides={
+            "toggles.oom_check": False,
+            "toggles.jb_check": False,
+            "toggles.request_check": False,
+            "toggles.block_recheck": False,
+        }
+    )
     assert calls_per_row(on, True) == 3 and calls_per_row(on, False) == 2
     assert calls_per_row(neither, True) == 2 and calls_per_row(neither, False) == 1
 

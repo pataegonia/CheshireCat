@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from tests.tutor.test_flow import QUESTION, FakeLLM, out, state_with
+from tests.tutor.test_flow import QUESTION, RANK2_CLAIM, FakeLLM, out, state_with
 from tutor.answer.quote import quote_sentences
 from tutor.answer.templates import NOT_IN_MATERIAL_NOTE, QUOTE_APPEND_LEAD
 from tutor.judge import flow
@@ -82,13 +82,75 @@ def test_answer_limit_boundary(room):
 
 
 def test_only_the_first_citation_is_quoted():
-    # cite_top1이 검색 1위를 뒤에 더해도 모델이 쓴 첫 인용 섹션에서만 고른다
+    # cite_top1이 검색 1위를 뒤에 더해도 모델이 쓴 첫 인용 섹션에서만 고른다(quote_from_top1 끔)
     state = state_with(FakeLLM(out()), **ON)
     other = next(s for s in state.tutor_kb.sections if s != "PY-01-01" and _picked(state, s))
     body = {"answer": "답", "action": "answer", "citations": ["PY-01-01", other]}
     joined = flow.append_quote(request(), state, body)["answer"]
     assert all(s in joined for s in _picked(state))
     assert not any(s in joined for s in _picked(state, other) if s not in _picked(state))
+
+
+TOP1 = {**ON, "toggles.quote_from_top1": True}
+
+
+def _only(state, sid, other):
+    return [s for s in _picked(state, sid) if s not in _picked(state, other)]
+
+
+def _other(state):
+    # PY-01-01에 없는 자료 문장이 골라지는 다른 섹션
+    sections = state.tutor_kb.sections
+    return next(s for s in sections if s != "PY-01-01" and _only(state, s, "PY-01-01"))
+
+
+def test_top1_source_quotes_the_section_cite_top1_added():
+    # max_citations 1인데 인용이 둘이면 뒤의 것이 cite_top1이 더한 1위다. 그 섹션에서 고른다
+    state = state_with(FakeLLM(out()), **TOP1)
+    assert state.tutor_cfg.toggles.max_citations == 1
+    other = _other(state)
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01", other]}
+    joined = flow.append_quote(request(), state, body)["answer"]
+    assert all(s in joined for s in _picked(state, other))
+    assert not any(s in joined for s in _only(state, "PY-01-01", other))
+
+
+def test_top1_source_keeps_the_first_when_nothing_was_added():
+    # 인용이 max_citations개 이하면 더한 1위가 없으므로 지금처럼 첫 인용에서 고른다
+    on = state_with(FakeLLM(out()), **TOP1)
+    off = state_with(FakeLLM(out()), **ON)
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01"]}
+    assert flow.append_quote(request(), on, body) == flow.append_quote(request(), off, body)
+
+
+def test_top1_source_follows_max_citations():
+    # max_citations 2면 인용 둘이 max_citations를 넘지 않아 더한 1위인지 알 수 없으므로 첫 인용에서
+    # 고른다
+    state = state_with(FakeLLM(out()), **TOP1, **{"toggles.max_citations": 2})
+    other = _other(state)
+    body = {"answer": "답", "action": "answer", "citations": ["PY-01-01", other]}
+    joined = flow.append_quote(request(), state, body)["answer"]
+    assert all(s in joined for s in _picked(state))
+    assert not any(s in joined for s in _only(state, other, "PY-01-01"))
+
+
+@pytest.mark.parametrize(
+    "top1, quoted, other",
+    [(False, "PY-03-04", "PY-01-01"), (True, "PY-01-01", "PY-03-04")],
+    ids=["off", "on"],
+)
+def test_top1_source_through_the_flow(top1, quoted, other):
+    # 흐름 전체: 모델이 2위(PY-03-04)만 인용하면 cite_top1이 1위(PY-01-01)를 뒤에 더하고,
+    # 켜면 자료 문장을 그 1위에서 고른다
+    state = state_with(
+        FakeLLM(out(sentences=[RANK2_CLAIM])), **ON, **{"toggles.quote_from_top1": top1}
+    )
+    resp = ask(state)
+    assert (resp["action"], resp["citations"]) == ("answer", ["PY-03-04", "PY-01-01"])
+    assert resp["answer"].startswith(f"중간 실력 확인은 4문제예요. {QUOTE_APPEND_LEAD} ")
+    assert _only(state, quoted, other)  # 두 섹션에서 골라지는 문장이 다르다(전제)
+    assert all(s in resp["answer"] for s in _only(state, quoted, other))
+    assert not any(s in resp["answer"] for s in _only(state, other, quoted))
 
 
 def test_empty_answer_note_is_untouched():

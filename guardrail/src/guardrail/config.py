@@ -67,7 +67,9 @@ class Llm(_Strict):
     retry_jitter_s: tuple[float, float]
     gate: PositiveInt  # 0이면 세마포어가 영영 안 열린다
     # 공통 값이 null이거나 probe()가 끈 파라미터는 여기 적어도 보내지 않는다
-    per_role: dict[Literal["input_judge", "output_judge", "jb_check", "oom_check"], RoleParams]
+    per_role: dict[
+        Literal["input_judge", "output_judge", "jb_check", "oom_check", "request_check"], RoleParams
+    ]
 
 
 class Toggles(_Strict):
@@ -88,6 +90,12 @@ class Toggles(_Strict):
     # S3.10: nano가 normal이라 한 발화에 KB를 붙여 한 번 더 묻는다(수업 자료에 없는 값을 묻는가).
     # `/guard` 응답의 범주만 out_of_material로 바꾼다. 탈옥 2차 뒤에는 안 부른다(호출 3회 상한)
     oom_check: bool
+    # S3.13 실험(기본 끔). request_check: 1차가 normal·answer_seeking일 때 요청을 나열해 다시 확인
+    # (oom_check 칸을 대신 쓴다. offcourse_output만 off_topic으로 바꾼다). block_recheck: 1차가
+    # off_topic일 때 다시 확인(learn만 있으면 normal).
+    # 둘 다 `/guard` 응답만 바꾸고 입력 쪽 추가 호출은 jb_check·oom_check와 합쳐 최대 1회다
+    request_check: bool
+    block_recheck: bool
 
 
 class Vectorizer(_Strict):
@@ -154,6 +162,10 @@ class OutputCfg(_Strict):
     context_max_chars: PositiveInt
     # S3.10: 구간에서 섹션 인용·목록 기호를 떼고, 숫자가 든 구간 끝의 서술격 조사를 뗀다
     span_tidy: bool
+    # S3.13 실험(기본 끔): quote = 인용 하나, sentences = 문장별 확인(prompts.output_judge_sent).
+    # quote_repair = 검증에 실패한 인용을 답변에서 가장 비슷한 구간으로 고쳐 쓴다
+    judge_mode: Literal["quote", "sentences"]
+    quote_repair: bool
 
 
 class EmbeddingCfg(_Strict):

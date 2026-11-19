@@ -80,7 +80,7 @@ def user(content: str) -> dict[str, Any]:
 TUTOR_GUARD_STAGES_ON = {"guard_classify": "parallel", "verify": "guard"}
 
 
-# 튜터 동결 설정(11/18, 튜터 #220 · #225 · #232 · #236)이 켜는 토글 여섯 개를 끈 값. 통합
+# 튜터 동결 설정(11/18, 튜터 #220 · #225 · #232 · #236)이 켜는 토글 일곱 개를 끈 값. 통합
 # 테스트는 이 토글들을 끈 기준 설정에서 돈다(튜터 테스트 tests/tutor/conftest.py와 같은 방식).
 # 저장소 설정 그대로의 앱은 test_freeze_config.py가 본다. 저장소 설정에 아직 없는 키는 건드리지
 # 않는다(동결 설정 전 main)
@@ -89,6 +89,7 @@ FREEZE_TOGGLES_OFF = {
     "fallback_quote": False,
     "intent_override": "off",
     "quote_append": False,  # 튜터 #225: 최종 answer에 자료 문장 덧붙이기
+    "quote_from_top1": False,  # 튜터: 덧붙일 자료 문장을 cite_top1이 더한 1위 섹션에서 고르기
     "top1_dialog_query": False,  # 튜터 #236: 인용에 더할 검색 1위를 대화 질의로 고르기
     "oom_gate": "off",  # 튜터 #232: 자료 밖 확인 E(OomOut, 주 호출과 동시에 nano 1회)
     # 튜터 oom_schedule: E를 보내는 때(동결 설정 after_intent_fresh, 기준은 요청 시작 때)

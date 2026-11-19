@@ -9,16 +9,23 @@
 import html
 import re
 from collections.abc import Sequence
+from difflib import SequenceMatcher
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.judges.schemas import OutputBaselineOut, OutputOut
+from guardrail.judges.schemas_exp import OutputSentOut, SentCheck
 from guardrail.kb import Hit, KbIndex, Ranking, normalize
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags, reveal_hidden, strip_tags
+from guardrail.rules import sentences
 
 # 프로세스당 한 번 읽는다. 키 = (프롬프트 폴더, 파일 이름)
 _SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
 _MARK = re.compile(r"<U\+[0-9A-F]{4,6}>", re.I)  # reveal_hidden이 숨긴 문자를 드러낸 표기
+MAX_SENTENCES = 20  # output.judge_mode: sentences에서 nano에 주는 문장 수 상한
+REPAIR_MAX_QUOTE = 200  # 프롬프트 상한(80자)의 여유분. 넘으면 고치지 않는다
+REPAIR_MIN_RATIO = 0.85  # repair_quote: 인용 글자 중 답변과 겹친 비율의 하한
+REPAIR_MAX_STRETCH = 1.3  # repair_quote: 고친 구간 길이 / 인용 길이의 상한
 
 
 def _system_prompt(cfg: GuardConfig, name: str) -> str:
@@ -65,14 +72,61 @@ def quote_ok(quote: str, text: str, min_chars: int) -> bool:
     return bool(q) and len(q) >= min_chars and any(q in normalize(_MARK.sub("", v)) for v in views)
 
 
+def repair_quote(quote: str, answer: str, min_chars: int) -> str | None:
+    """검증에 실패한 인용을 답변에서 가장 비슷한 구간(answer의 부분 문자열)으로 고친다. 없으면 None.
+
+    일치 블록이 덮은 [첫 블록 시작, 마지막 블록 끝) 구간을 잡고, 인용 글자의 85% 이상이 겹치고
+    구간이 인용의 1.3배 이하이며 정규화한 구간이 min_chars자 이상일 때만 돌려준다.
+    """
+    q = html.unescape(quote)
+    if not q or len(q) > REPAIR_MAX_QUOTE:  # 긴 인용은 대조 비용이 답변 길이 × 인용 길이로 는다
+        return None
+    # 마지막 블록은 크기 0 표지라 뺀다(남기면 구간이 답변 끝까지 늘어난다)
+    blocks = [
+        b for b in SequenceMatcher(None, answer, q, autojunk=False).get_matching_blocks() if b.size
+    ]
+    if not blocks:
+        return None
+    start, end = blocks[0].a, blocks[-1].a + blocks[-1].size
+    if sum(b.size for b in blocks) / len(q) < REPAIR_MIN_RATIO:
+        return None
+    if end - start > REPAIR_MAX_STRETCH * len(q):
+        return None
+    span = answer[start:end]
+    return span if len(normalize(span)) >= min_chars else None
+
+
+def sentence_texts(answer_revealed: str) -> list[str]:
+    """nano에 보여 줄 문장들(앞 `MAX_SENTENCES`개). 문장 끝 줄바꿈·공백은 뗀다."""
+    return [answer_revealed[s:e].strip() for s, e in sentences(answer_revealed)[:MAX_SENTENCES]]
+
+
+def flagged_sentences(checks: Sequence[SentCheck], count: int) -> list[int]:
+    """conflicts·not_in_material인 문장 번호(1..count, 중복 없이 오름차순)."""
+    bad = {c.n for c in checks if c.verdict in ("conflicts", "not_in_material")}
+    return sorted(n for n in bad if 1 <= n <= count)
+
+
+def sentence_span(answer: str, revealed: str, flagged: Sequence[int]) -> str | None:
+    """첫 flagged 문장을 원문 답변에서 글자 그대로. 두 글의 문장 수가 다르면 None."""
+    if not flagged:
+        return None
+    cuts, shown = sentences(answer), sentences(revealed)
+    if len(cuts) != len(shown) or flagged[0] > len(cuts):
+        return None
+    s, e = cuts[flagged[0] - 1]
+    return answer[s:e].strip() or None
+
+
 def build_messages(
     target: str,
     answer_revealed: str,
     hits: Sequence[Hit],
     cfg: GuardConfig,
     baseline: bool = False,
+    by_sentence: bool = False,
 ) -> list[dict[str, str]]:
-    """[system(고정 프롬프트), user(요청별 블록)].
+    """[system(고정 프롬프트), user(요청별 블록)]. by_sentence면 `<answer>` 뒤에 `<sentences>`.
 
     target은 마지막 학습자 발화 원문(여기서 자르고 정규화한다). answer_revealed는 호출하는 쪽이
     `input.max_answer_chars`로 자르고 `reveal_hidden`으로 숨긴 문자를 드러낸 답변이다.
@@ -82,11 +136,21 @@ def build_messages(
         f"<question>{question}</question>",
         f"<answer>{html.escape(answer_revealed, quote=False)}</answer>",
     ]
+    if by_sentence:
+        texts = sentence_texts(answer_revealed)
+        lines = [f"[{i}] {html.escape(t, quote=False)}" for i, t in enumerate(texts, 1)]
+        parts.append("<sentences>\n" + "\n".join(lines) + "\n</sentences>")
     parts += [
         f'<kb id="{html.escape(h.section_id)}">{html.escape(h.text, quote=False)}</kb>'
         for h in hits
     ]
-    name = "output_judge_baseline" if baseline else "output_judge"
+    name = (
+        "output_judge_baseline"
+        if baseline
+        else "output_judge_sent"
+        if by_sentence
+        else "output_judge"
+    )
     return [
         {"role": "system", "content": _system_prompt(cfg, name)},
         {"role": "user", "content": "\n\n".join(parts)},
@@ -103,13 +167,14 @@ async def ask_grounded(
     deadline: float,
     baseline: bool = False,
     retries: int | None = None,
-) -> OutputOut | OutputBaselineOut | None:
+) -> OutputOut | OutputSentOut | OutputBaselineOut | None:
     """후보 답변의 근거 판정. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
 
     retries가 None이면 `llm.retries`.
     """
-    schema = OutputBaselineOut if baseline else OutputOut
-    messages = build_messages(target, answer_revealed, hits, cfg, baseline)
+    by_sentence = not baseline and cfg.output.judge_mode == "sentences"
+    schema = OutputBaselineOut if baseline else OutputSentOut if by_sentence else OutputOut
+    messages = build_messages(target, answer_revealed, hits, cfg, baseline, by_sentence)
     result = await llm.complete(
         "output_judge", messages, schema, deadline=deadline, retries=retries
     )

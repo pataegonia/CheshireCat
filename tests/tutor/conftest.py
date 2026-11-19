@@ -56,6 +56,9 @@ def _baseline_config(tmp_path_factory):
     # 겹쳐 보내기·직렬 T 단축 대기도 끈 값으로 둔다(켠 동작은 test_main_hedge·test_intent가 본다)
     timeouts = raw["llm"]["timeout_s"]
     timeouts.update(main_hedge=timeouts["main"], intent_wait=timeouts["intent"])
+    # 실험 multi_draft(주 호출 초안 여러 개)도 끈다(켠 동작은 test_multi_draft가 본다)
+    if "multi_draft" in raw["llm"]:
+        raw["llm"]["multi_draft"]["enabled"] = False
     path = tmp_path_factory.mktemp("tutor_config") / "tutor_baseline.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path

@@ -51,5 +51,13 @@ llm:
     intent: 8                  # T 의도 판정 호출(toggles.intent_override). 11/16·17 런박스 동시 8에서 p50 2.0~2.4·p95 3.3~4.4초. 11/17 저녁 5초로 줄인 판정 포함 측정에서 T 시간 초과가 0 → 1~5회/160행으로 늘어 8초로 둔다(리더 결정). serial은 주 호출 앞에서 이 제한까지 기다리고, parallel은 주 호출이 먼저 끝나도 이 제한까지는 기다린다
     intent_wait: 8             # 직렬 T가 주 호출을 붙잡는 최대 시간. 그 안에 T가 안 오면 T를 취소하지 않고 주 호출을 먼저 보내 parallel 규칙으로 정한다. intent 이상이면 지금처럼 T 제한까지 기다린다(끔). 3초는 마감을 넘는 요청을 더 줄이지만(약 33 → 21) 모의 혼합 부하에서 /guard p95가 0.9~2.4초 늘어 끈 채로 둔다(11/18)
     oom_gate: 9                # 자료 밖 확인 E. E 시작(검색 직후)부터 센다(#213 B2: 마감 없을 때 동시 64에서 20초 넘김 6.9%, 9초 마감으로 실제 제출 시간 초과 0). 넘으면 흐름 결과 그대로
+  multi_draft:                 # 실험(exp/tutor-multidraft): 주 호출 초안 여러 개를 같은 근거 묶음으로 동시에 보내고 모델 호출 없이 고른다(tutor.judge.multi_draft). 켜면 main_hedge는 쓰지 않는다. 초안 A = 지금의 주 호출(low, 재시도 그대로), 나머지 재시도 0. 요청당 nano 최대 6회(A 2 + B 1 + C 1 + T 1 + E 1): 팀 규칙 TU-13(4회)을 넘어 main에 넣으려면 튜터 담당 동의가 필요하다. false면 지금과 같다
+    enabled: true
+    drafts:                    # 첫 번째는 low여야 하고 medium은 하나까지. timeout_s가 없으면 timeout_s.main
+      - {effort: low}
+      - {effort: low}
+      - {effort: medium, timeout_s: 17}
+    wait_s: 17                 # 초안 시작부터 이만큼 지나거나 요청 마감 − margin_s가 되면 유효한 초안으로 고른다(유효한 것이 없으면 하나가 올 때까지 마감 안에서 기다린다)
+    margin_s: 3                # medium 초안의 마감 = 요청 마감 − 이 값. 기다리기 끝도 같다(뒤 단계·E 기다림 몫)
 eval:
   max_calls: 5000              # 개발 실행 운영진 API 호출 상한(TU-14, 가드 GR-11과 같음)

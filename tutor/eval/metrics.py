@@ -118,7 +118,7 @@ def _mean(values: Iterable[float | None]) -> float | None:
     return sum(present) / len(present) if present else None
 
 
-def _citation_f1(result: Mapping[str, Any]) -> float | None:
+def citation_f1(result: Mapping[str, Any]) -> float | None:
     p, r = result["citation_p"], result["citation_r"]
     if p is None or r is None:
         return None
@@ -128,7 +128,7 @@ def _citation_f1(result: Mapping[str, Any]) -> float | None:
 def _components(results: Sequence[Mapping[str, Any]]) -> dict[str, float | None]:
     return {
         "action": _mean(float(r["action_correct"]) for r in results),
-        "citation": _mean(_citation_f1(r) for r in results),
+        "citation": _mean(citation_f1(r) for r in results),
         "facts": _mean(r["facts"] for r in results),
         "faithful": _mean(None if r["faithful"] is None else float(r["faithful"]) for r in results),
     }

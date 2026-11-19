@@ -10,9 +10,11 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from tutor.judge.multi_draft import SHADOW, Shadow
 from tutor.pipeline import respond
 from tutor.request import load_json
 from tutor.runtime.budget import backstop_s, budget_s
+from tutor.runtime.llm import SENT
 from tutor.runtime.response import default_response, ensure_contract
 
 MAX_BODY_BYTES = 4 * 1024 * 1024  # 가드와 같은 본문 상한(#92). 넘으면 읽기를 멈추고 기본값
@@ -56,6 +58,8 @@ async def tutor_route(request: Request) -> JSONResponse:
     """
     budget = budget_s(request.app.state)
     deadline = asyncio.get_running_loop().time() + budget
+    shadow = Shadow()  # 이 요청의 주 호출 초안 기록(multi_draft를 켰을 때만 채워진다)
+    tokens = (SHADOW.set(shadow), SENT.set(shadow.sent))
     try:
         async with asyncio.timeout(backstop_s(budget)):
             body = await parse_body(await read_body(request))
@@ -64,4 +68,10 @@ async def tutor_route(request: Request) -> JSONResponse:
     except Exception as exc:  # 클래스 이름만 로그에 남긴다. 메시지는 남기지 않는다(TU-15)
         request.state.error = type(exc).__name__
         resp = default_response()
+    finally:
+        SENT.reset(tokens[1])
+        SHADOW.reset(tokens[0])
+    detail = shadow.log_field()  # 접근 로그 끝 칸(숫자·코드·키 이름뿐). 초안이 없으면 칸 없음
+    if detail is not None:
+        request.state.detail = detail
     return JSONResponse(resp)

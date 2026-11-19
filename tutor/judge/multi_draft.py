@@ -33,6 +33,7 @@ from typing import Any
 from integration.actions import FinalizeConfig, _verified_sids
 from integration.contracts import Section, Sentence
 from tutor.judge.main_call import MainCallOut
+from tutor.judge.specialists import StageRec
 
 LETTERS = "abcdefgh"  # 초안 번호 → 로그 키 글자(로그 키에는 숫자를 쓰지 않는다)
 MEDIUM = "medium"
@@ -61,6 +62,9 @@ class Shadow:
     split: bool = False  # 유효한 초안끼리 action이 갈렸나
     a_action: str | None = None  # 측정 전용(로그에 내지 않는다)
     chosen_action: str | None = None  # 측정 전용(로그에 내지 않는다)
+    actions: list[str | None] = field(default_factory=list)  # 초안별 action(측정 전용, 무효 None)
+    # 실험 단계 기록(tutor.judge.specialists). 키 rq·sj·mm, 토글이 off인 단계는 없다
+    stages: dict[str, StageRec] = field(default_factory=dict)
     drafts: list[DraftStat] = field(default_factory=list)
     sent: Counter[str] = field(default_factory=Counter)  # 이 요청의 튜터 LLM 시도 수(역할별)
 
@@ -69,20 +73,25 @@ class Shadow:
 
         `calls=튜터 nano 시도 수;md_n=시작;md_ok=유효;md_split=0|1[;md_pick=번호;md_a_same=0|1]`
         뒤에 초안마다 `;effort_글자=ms/보낸 횟수/코드/게이트 대기 ms`. 가드 /guard 칸과 같은 모양.
+        실험 단계 토글이 off가 아니면 끝에 `;rq=돌았나/신뢰도/판정 코드/ms;rq_ch=바꿨나`
+        (sj·mm도 같은 모양)를 더한다. 초안도 단계 기록도 없으면 None.
         """
-        if not self.started:
+        if not self.started and not self.stages:
             return None
-        parts = [
-            f"calls={sum(self.sent.values())}",
-            f"md_n={self.started}",
-            f"md_ok={self.valid}",
-            f"md_split={int(self.split)}",
-        ]
+        parts = [f"calls={sum(self.sent.values())}"]
+        if self.started:
+            parts += [
+                f"md_n={self.started}",
+                f"md_ok={self.valid}",
+                f"md_split={int(self.split)}",
+            ]
         if self.chosen is not None:
             parts.append(f"md_pick={self.chosen}")
             if self.a_action is not None:
                 parts.append(f"md_a_same={int(self.a_action == self.chosen_action)}")
         parts += [f"{d.key}={d.ms:.0f}/{d.attempts}/{d.code}/{d.gate_ms:.0f}" for d in self.drafts]
+        for key, rec in self.stages.items():
+            parts += rec.log_parts(key)
         return ";".join(parts)
 
 

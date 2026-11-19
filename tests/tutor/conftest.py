@@ -44,6 +44,10 @@ FREEZE_TOGGLES = {
     "oom_gate": "off",
     "oom_schedule": "with_request",
     "english_embedding": False,  # E(oom_gate)를 끈 기준에서는 켤 수 없다(로드에서 거부)
+    # 실험 단계(exp/tutor-specialists): 켠 동작은 test_specialists가 본다
+    "reverse_question": "off",
+    "soft_jailbreak_draft": "off",
+    "mention_marker": "off",
 }
 
 

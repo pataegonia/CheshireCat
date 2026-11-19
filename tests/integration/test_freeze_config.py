@@ -62,6 +62,22 @@ def extra_drafts(client) -> int:
     return len(md.drafts) - 1 if md is not None and md.enabled else 0
 
 
+RQ = ["RqQuestion", "RqCompare"]  # 실험 rq 호출 둘(answer일 때만)
+
+
+def rq_calls(client) -> list[str]:
+    """실험 reverse_question이 켜졌으면(off 밖) answer 요청 뒤에 붙는 호출 이름, 아니면 []."""
+    mode = getattr(client.app.state.tutor_cfg.toggles, "reverse_question", "off")
+    return RQ if mode != "off" else []
+
+
+def stage_calls(client) -> int:
+    """실험 단계가 한 요청에 더할 수 있는 호출 수(rq 2, sj 1 가운데 한쪽만 돈다)."""
+    t = client.app.state.tutor_cfg.toggles
+    rq = 2 * (getattr(t, "reverse_question", "off") != "off")
+    return max(rq, int(getattr(t, "soft_jailbreak_draft", "off") != "off"))
+
+
 def ask(client, fake_send, body: dict) -> tuple[dict, list[str]]:
     """요청 하나를 보내고 (응답 본문, 이번 요청의 튜터 LLM 호출 스키마 이름)을 돌려준다."""
     before = len(fake_send.names)
@@ -111,12 +127,13 @@ def test_normal_question_calls_intent_then_main_as_the_repo_config_says(
     assert_tutor_contract(body)
     assert ANSWER_WORD in body["answer"], seen  # 가짜 LLM(주 호출)의 답이 실제로 나간다
     mains = [MAIN] * (1 + extra_drafts(client))  # 실험 multi_draft: 주 호출 초안 K개
+    rq = rq_calls(client)  # 실험 rq: answer 뒤에 A·B 순서로
     if mode == "off":
-        assert names == mains, seen
+        assert names == [*mains, *rq], seen
     elif mode == "serial":
-        assert names == [INTENT, *mains], seen
+        assert names == [INTENT, *mains, *rq], seen
     else:
-        assert sorted(names) == sorted([INTENT, *mains]), seen
+        assert sorted(names) == sorted([INTENT, *mains, *rq]), seen
 
 
 def test_serial_intent_label_with_a_fixed_sentence_skips_the_main_call(
@@ -149,7 +166,7 @@ def test_a_failed_intent_call_still_sends_the_main_call_answer(repo_config_clien
 def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fake_send):
     client = repo_config_client
     mode = intent_mode(client)
-    base = (1 if mode == "off" else 2) + extra_drafts(client)
+    base = (1 if mode == "off" else 2) + extra_drafts(client) + stage_calls(client)
     fake_send.vary = True
     over = []
     for row in TUTOR_ROWS:
@@ -183,5 +200,8 @@ def test_repo_config_with_multi_draft_off_calls_one_main_like_before(
         mode = intent_mode(client)
         body, names = ask(client, fake_send, user(QUESTION))
     assert_tutor_contract(body)
-    expected = {"off": [MAIN], "serial": [INTENT, MAIN]}.get(mode, sorted([INTENT, MAIN]))
+    rq = rq_calls(client)
+    expected = {"off": [MAIN, *rq], "serial": [INTENT, MAIN, *rq]}.get(
+        mode, sorted([INTENT, MAIN, *rq])
+    )
     assert (names if mode in ("off", "serial") else sorted(names)) == expected, names

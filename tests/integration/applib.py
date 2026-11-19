@@ -97,6 +97,10 @@ FREEZE_TOGGLES_OFF = {
     # 튜터 #242 english_embedding: 영어 발화는 임베딩 순위만 + 영어에도 E. E를 끈 기준에서는
     # 켤 수 없다(튜터 설정 로드에서 거부)
     "english_embedding": False,
+    # 실험 단계(exp/tutor-specialists, tutor.judge.specialists): 저장소 설정은 shadow
+    "reverse_question": "off",
+    "soft_jailbreak_draft": "off",
+    "mention_marker": "off",
 }
 
 
@@ -265,6 +269,10 @@ class FakeSend:
             reply = {"label": self.intent_label, "self_info": False}
         elif name == OOM_GATE:  # 자료 밖 확인 E(tutor.judge.oom_gate)
             reply = {"asked": answer, "quote": "", "found": self.oom_found}
+        elif name == "RqQuestion":  # 실험 rq 호출 A(tutor.judge.specialists)
+            reply = {"question": answer}
+        elif name == "RqCompare":  # 실험 rq 호출 B: 같은 질문(답을 바꾸지 않는다)
+            reply = {"verdict": "same", "confidence": 5}
         elif name == "MainCallOut":  # v2 주 호출(tutor.judge.main_call)
             user_part = messages[-1]["content"] if messages else ""
             if self.vary:

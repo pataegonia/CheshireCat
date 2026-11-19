@@ -573,6 +573,8 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     # 영어 장치는 끈다: 켜면 E 근거 묶음·규칙 A 다시 찾기도 질의 임베딩을 불러 아래 1:1이 깨진다
     # (켠 경로는 test_english_embedding이 본다)
     off = ("--tutor-set", "toggles.english_embedding=false")
+    # 실험 rq(저장소 설정 shadow)는 끈다: 가짜 전송이 rq 스키마에 주 호출 JSON을 줘 실패로 센다
+    off += ("--tutor-set", 'toggles.reverse_question="off"')
     code = run_local.main(["--preset", "tutor", *ON, *off, "--out", str(tmp_path)])
     assert sent  # v2 주 호출까지 갔다(가짜 전송)
     english = [used for is_english, used in searched if is_english]

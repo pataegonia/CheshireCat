@@ -38,7 +38,7 @@ ACCESS_LINE = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z (/guard|/tutor|other) \d+ \d+ \d{3} \d+\.\d "
     r"(-|[A-Za-z_]\w*(?:[:,][A-Za-z_]\w*)*)"
     # 판정이 끝난 /guard 줄에만 붙는 호출 기록 칸: calls=수, 그 뒤 이름=숫자 또는 역할=ms/횟수/코드/ms
-    r"( calls=\d+(;out=(med|low|default)|;[a-z_]+=\d+(/\d+/(-|[a-z_]+)/\d+)?)*)?"
+    r"( calls=\d+(;out=(med|low|or|default)|;[a-z_]+=\d+(/\d+/(-|[a-z_]+)/\d+)?)*)?"
 )
 HEADER_MARKER = "HeaderMarkQX7"  # 헤더 값은 ASCII만 실을 수 있다
 
@@ -62,7 +62,8 @@ _LINE_HEAD = "2026-11-14T00:00:00.000000Z /guard 10 20 200 3.5 "
     ["-", "RuntimeError", "input_judge,output_judge", "output:KeyError",
      "input_judge,output_judge:TimeoutError", "- calls=0",
      "request_check calls=3;prep=4;llm=11020;input_judge=900/1/-/0;request_check=11004/1/timeout/2",
-     "- calls=3;prep=4;llm=9000;out=low;output_judge=900/1/-/0;output_judge_medium=9000/1/timeout/2"],
+     "- calls=3;prep=4;llm=9000;out=low;output_judge=900/1/-/0;output_judge_medium=9000/1/timeout/2",
+     "- calls=3;prep=4;llm=9000;out=or;output_judge=900/1/-/0;output_judge_medium=9000/1/-/0"],
 )  # fmt: skip
 def test_access_line_accepts_the_guards_error_field(error):
     # 가드 #150부터 오류 칸은 고정 문자열 · 예외 클래스 이름을 쉼표 · 콜론으로 잇는다

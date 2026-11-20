@@ -238,9 +238,9 @@ def _int_header(value: str) -> int:
 
 
 def _call_field(judgement: Judgement, stats: Sequence[CallStat]) -> str:
-    """로그 8번째 칸: `calls=시작한 nano 수;prep=ms;llm=ms[;out=med|low|default]` 뒤에 끝난 호출마다
-    (끝난 순서) `;역할=걸린 ms/보낸 횟수/오류 코드(없으면 -)/게이트 대기 ms`. 공백이 없고
-    숫자·역할·코드뿐이다.
+    """로그 8번째 칸: `calls=시작한 nano 수;prep=ms;llm=ms[;out=med|low|or|default]` 뒤에
+    끝난 호출마다(끝난 순서) `;역할=걸린 ms/보낸 횟수/오류 코드(없으면 -)/게이트 대기 ms`.
+    공백이 없고 숫자·역할·코드뿐이다.
     """
     stage = judgement.latency_ms
     parts = [f"calls={judgement.calls}"]
@@ -249,7 +249,7 @@ def _call_field(judgement: Judgement, stats: Sequence[CallStat]) -> str:
         for name, key in (("prep", "prepare"), ("llm", "llm"))
         if key in stage
     ]
-    if judgement.output_source:  # output.medium_parallel: 쓴 출력 판정(med·low·default)
+    if judgement.output_source:  # output.medium_parallel: 쓴 출력 판정(med·low·or·default)
         parts.append(f"out={judgement.output_source}")
     parts += [
         f"{role}={ms:.0f}/{n}/{error or '-'}/{gate:.0f}" for role, error, n, ms, gate in stats

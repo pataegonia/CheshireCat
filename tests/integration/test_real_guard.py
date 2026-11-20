@@ -142,6 +142,16 @@ def second_check_on(client) -> bool:
     return oom_check_on(client) or request_check_on(client)
 
 
+def output_calls(client) -> int:
+    """후보 답변 하나의 출력 판정 호출 수. 가드 medium 병렬(output.medium_parallel)에서 OR 규칙
+    (output.pair_rule: or_ungrounded)이면 medium이 근거 있음일 때 low 답도 기다려 low가 꼭 나간다
+    (가짜 출력 판정은 grounded true라 2회). medium_first면 가짜 medium이 바로 끝나 low는 나가기 전에
+    취소된다(1회). 토글이 없는 main도 1회다."""
+    out = client.app.state.cfg.output
+    pair = getattr(out, "pair_rule", "medium_first")
+    return 2 if getattr(out, "medium_parallel", False) and pair == "or_ungrounded" else 1
+
+
 # 1차 normal 뒤 확인 호출의 스키마: 자료 밖 확인은 OomCheckOut, #229(요청 점검)를 켜면 그 자리에
 # RequestCheckOut
 SECOND_CHECKS = ("OomCheckOut", "RequestCheckOut")
@@ -178,7 +188,7 @@ def test_guard_calls_nano_once_per_judge_plus_the_oom_check_when_it_is_on(
     RequestCheckOut. main은 토글이 없어 0회)."""
     client = real_guard_client
     oom = int(second_check_on(client))
-    for candidate, judges in ((None, 1), (CANDIDATE, 2)):
+    for candidate, judges in ((None, 1), (CANDIDATE, 1 + output_calls(client))):
         before = collections.Counter(fake_guard_send.by_schema)
         r, calls = sent(
             client, fake_guard_send, "/guard", guard_body(QUESTION, candidate=candidate)
@@ -223,7 +233,7 @@ def test_first_judge_jailbreak_calls_the_second_check_when_it_is_on(
         force = dict(JAILBREAK) if verdict is None else {**JAILBREAK, "verdict": verdict}
         used = verdict or "study"  # 가짜 기본값
         fake_guard_send.force = force
-        for candidate, judges in ((None, 1), (CANDIDATE, 2)):
+        for candidate, judges in ((None, 1), (CANDIDATE, 1 + output_calls(client))):
             jb_before = fake_guard_send.by_schema["JbCheckOut"]
             before = collections.Counter(fake_guard_send.by_schema)
             body = guard_body(QUESTION, candidate=candidate)
@@ -244,8 +254,11 @@ def test_first_judge_jailbreak_calls_the_second_check_when_it_is_on(
                 assert fake_guard_send.by_schema["JbCheckOut"] - jb_before == 1, seen
                 counts[(used, candidate is not None)] += calls
     if jb:  # 2차 판정이 apply · study 어느 쪽이어도 호출 수가 같다(study는 기본값 + 명시 두 번)
-        assert counts[("apply", False)] == 2 and counts[("apply", True)] == 3, counts
-        assert counts[("study", False)] == 4 and counts[("study", True)] == 6, counts
+        with_candidate = 2 + output_calls(client)  # 입력 + 탈옥 2차 + 출력 판정
+        assert counts[("apply", False)] == 2 and counts[("apply", True)] == with_candidate, counts
+        assert counts[("study", False)] == 4 and counts[("study", True)] == 2 * with_candidate, (
+            counts
+        )
 
 
 OOM_VERDICTS = ("not_asked", "stated", "not_stated")  # 가드 #215 OomCheckOut.verdict

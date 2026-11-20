@@ -88,6 +88,7 @@ class Judgement:
         None  # S3.13 인용을 근사 일치로 고쳐 썼는가(nano 결과가 없으면 None)
     )
     # output.medium_parallel로 두 호출을 보냈을 때 쓴 쪽: med | low | default(둘 다 실패)
+    # | or(output.pair_rule or_ungrounded에서 medium은 근거 있음, low는 근거 없음이라 low)
     output_source: str | None = None
 
 
@@ -160,6 +161,29 @@ def _consume(task: asyncio.Task) -> None:
     """태스크의 예외를 회수한 것으로 표시한다(GR-12: 예외 메시지가 로그로 새지 않게)."""
     if not task.cancelled():
         task.exception()
+
+
+def _says(out: object, *, grounded: bool) -> bool:
+    """출력 판정 답(OutputOut)이 그 grounded 값을 냈나.
+
+    다른 꼴(문장별·baseline)이나 None이면 False."""
+    return isinstance(out, OutputOut) and out.grounded is grounded
+
+
+async def _result_by(fut: asyncio.Future, until: float) -> Any:
+    """fut의 결과. until(time.monotonic)까지 끝나지 않았거나 실패·취소면 None.
+
+    fut은 취소하지 않는다(부르는 쪽의 finally가 정리한다)."""
+    if not fut.done():
+        left = until - time.monotonic()
+        if left <= 0:
+            return None
+        await asyncio.wait({fut}, timeout=left)
+        if not fut.done():
+            return None
+    if fut.cancelled() or fut.exception() is not None:
+        return None
+    return fut.result()
 
 
 @dataclass(frozen=True)
@@ -458,6 +482,8 @@ class Guard:
         이른 쪽에서 끊긴다). medium이 스키마에 맞는 답을 냈으면 그것을 쓰고 low는 버린다(아직 돌고
         있으면 취소). 아니면 low를 끝까지 기다려 쓴다(low는 요청 마감 안에 끝난다). 둘 다 실패면
         None이고 기존 실패 기본값 경로로 간다. 쓴 쪽을 trace["out"]에 적는다(med·low·default).
+        output.pair_rule이 or_ungrounded면 medium이 근거 있음일 때 low를 마감 − MEDIUM_MARGIN_S까지
+        기다려 low가 근거 없음이면 low를 쓴다(trace["out"] = "or").
         """
         low = asyncio.ensure_future(low_call)
         low.add_done_callback(_consume)
@@ -472,6 +498,11 @@ class Guard:
                 best = None
             if best is not None:
                 trace["out"] = "med"
+                if self.cfg.output.pair_rule == "or_ungrounded" and _says(best, grounded=True):
+                    other = await _result_by(low, deadline - MEDIUM_MARGIN_S)
+                    if _says(other, grounded=False):
+                        trace["out"] = "or"
+                        return other
                 return best
             out = await low
             if out is not None:

@@ -571,8 +571,15 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
     fake = FakeEmbed()
     monkeypatch.setattr(run_local, "openai_embed", lambda: fake)
     # 영어 장치는 끈다: 켜면 E 근거 묶음·규칙 A 다시 찾기도 질의 임베딩을 불러 아래 1:1이 깨진다
-    # (켠 경로는 test_english_embedding이 본다)
-    off = ("--tutor-set", "toggles.english_embedding=false")
+    # (켠 경로는 test_english_embedding이 본다). code_block_lang도 끈다: 켜면 코드 블록 때문에
+    # 영어로 보인 한국어 질문은 retrieve 안에서 임베딩을 건너뛰어 아래 1:1이 깨진다
+    # (켠 경로는 test_code_block_lang이 본다)
+    off = (
+        "--tutor-set",
+        "toggles.english_embedding=false",
+        "--tutor-set",
+        "toggles.code_block_lang=false",
+    )
     # 실험 rq(저장소 설정 shadow)는 끈다: 가짜 전송이 rq 스키마에 주 호출 JSON을 줘 실패로 센다
     off += ("--tutor-set", 'toggles.reverse_question="off"')
     code = run_local.main(["--preset", "tutor", *ON, *off, "--out", str(tmp_path)])

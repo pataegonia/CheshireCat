@@ -123,3 +123,85 @@ async def test_tutor_shared_judge_output_sends_no_medium_call(no_rule):
 async def test_toggle_needs_the_per_role_entry():
     with pytest.raises(ValueError, match="output_judge_medium"):
         await make(output__medium_parallel=True, llm__per_role={})
+
+
+# output.pair_rule: or_ungrounded = 둘 중 하나라도 "근거 없음"이면 근거 없음(둘 다면 medium).
+# medium이 근거 있음이면 low 답을 마감 − MEDIUM_MARGIN_S까지 기다려 low가 근거 없음일 때 low를 쓴다.
+LOW_UNGROUNDED = Ok(json.dumps(UNGROUNDED, ensure_ascii=False))
+MEDIUM_GROUNDED = Ok(json.dumps(GROUNDED))
+
+
+async def test_or_rule_uses_low_when_only_low_finds_no_grounding(no_rule):
+    guard, fake = await make(
+        pair(low=LOW_UNGROUNDED, medium=MEDIUM_GROUNDED),
+        output__medium_parallel=True,
+        output__pair_rule="or_ungrounded",
+    )
+    j = await guard.judge(req())
+    assert (j.output_source, j.nano_grounded, j.errors) == ("or", False, ())
+    assert j.response.output.grounded is False and j.calls == 3
+    low, medium = _sent(fake)
+    assert (len(low), len(medium)) == (1, 1)
+
+
+async def test_or_rule_keeps_medium_when_medium_finds_no_grounding(no_rule):
+    guard, _ = await make(pair(), output__medium_parallel=True, output__pair_rule="or_ungrounded")
+    j = await guard.judge(req())  # pair(): low 근거 있음, medium 근거 없음
+    assert (j.output_source, j.nano_grounded, j.errors) == ("med", False, ())
+    assert j.response.output.grounded is False
+
+
+async def test_or_rule_keeps_medium_when_both_find_grounding(no_rule):
+    guard, _ = await make(
+        pair(medium=MEDIUM_GROUNDED),
+        output__medium_parallel=True,
+        output__pair_rule="or_ungrounded",
+    )
+    j = await guard.judge(req())
+    assert (j.output_source, j.nano_grounded, j.errors) == ("med", True, ())
+    assert j.response.output.grounded is True
+
+
+async def test_medium_first_ignores_low_when_medium_succeeds(no_rule):
+    guard, _ = await make(
+        pair(low=LOW_UNGROUNDED, medium=MEDIUM_GROUNDED),
+        output__medium_parallel=True,
+        output__pair_rule="medium_first",
+    )
+    j = await guard.judge(req())
+    assert (j.output_source, j.nano_grounded, j.errors) == ("med", True, ())
+    assert j.response.output.grounded is True
+
+
+async def test_or_rule_waits_for_low_only_until_the_medium_margin(no_rule):
+    # low가 끝나지 않으면 마감 0.5초 전(MEDIUM_MARGIN_S)까지만 기다리고 medium 답을 쓴다.
+    # 예산 0.7초면 약 0.2초를 기다린다: 기다리지 않거나(medium_first) 마감까지 기다리면 틀린다
+    guard, _ = await make(
+        pair(low=Hang(), medium=MEDIUM_GROUNDED),
+        output__medium_parallel=True,
+        output__pair_rule="or_ungrounded",
+        budget_s=0.7,
+    )
+    t0 = time.monotonic()
+    j = await guard.judge(req())
+    waited = time.monotonic() - t0
+    assert 0.15 <= waited < guard.cfg.budget_s - guard_module.MEDIUM_MARGIN_S + 0.2
+    assert (j.output_source, j.nano_grounded, j.errors) == ("med", True, ())
+
+
+@pytest.mark.parametrize("failure", [Malformed(), HttpStatus(500)])
+async def test_or_rule_keeps_medium_when_low_fails(no_rule, failure):
+    guard, _ = await make(
+        pair(low=failure, medium=MEDIUM_GROUNDED),
+        output__medium_parallel=True,
+        output__pair_rule="or_ungrounded",
+    )
+    j = await guard.judge(req())
+    assert (j.output_source, j.nano_grounded, j.errors) == ("med", True, ())
+    assert j.response.output.grounded is True
+
+
+def test_repo_default_turns_the_or_rule_on():
+    from guardrail.config import load_config
+
+    assert load_config().output.pair_rule == "or_ungrounded"

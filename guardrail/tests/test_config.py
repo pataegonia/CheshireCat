@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.12"
+    assert cfg.version == "6.0.13"
     assert cfg.budget_s == 24
     assert cfg.block_categories == [
         "jailbreak_injection",
@@ -143,6 +143,7 @@ def test_baseline_differs_only_in_toggles_and_mode():
     assert base.output.mode == "baseline"
     expected = {f"toggles.{t}" for t, on in load_config(DEFAULT).toggles if on} | {"output.mode"}
     expected.add("output.medium_parallel")  # baseline 모드는 출력 호출이 하나다
+    expected.add("output.pair_rule")  # medium_parallel의 두 답 합치기 규칙도 기본 설정에서만 켠다
     expected.add("version")  # 6.0.9부터 기본만 올리고 baseline은 6.0.8로 둔다(대조군 고정)
     assert _diff(base, load_config(DEFAULT)) == expected
 

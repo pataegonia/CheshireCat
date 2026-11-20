@@ -1,6 +1,6 @@
 # 가드 기본 설정. master-plan §4.4 블록을 그대로 옮겼다. 바꾸려면 §4.4를 먼저 고친다.
 # 키·주소는 여기에 쓰지 않는다(환경변수, §4.4 끝).
-version: "6.0.12"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+version: "6.0.13"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
 paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
 prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en_v2.md, output_judge_baseline: output_judge_baseline.md, jb_check: jb_check_en.md, oom_check: oom_check_en.md, request_check: request_check_en.md, output_judge_sent: output_judge_en_sent.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
 budget_s: 24                       # 요청 예산(GR-09). 규격은 30초. 서버 안전망은 +5초 = 29초(server.py). 실험(exp/guard-budget-24): 20 → 24초. 튜터 예산은 config/tutor.yaml budget_scale 1.0으로 24초 그대로
@@ -62,5 +62,6 @@ output:
   judge_mode: quote                # S3.13 실험, 기본 끔(quote | sentences)
   quote_repair: false              # S3.13 실험, 기본 끔
   medium_parallel: true            # 실험(exp/guard-out-medium): 출력 판정을 low와 medium(llm.per_role.output_judge_medium)으로 함께 보낸다. medium이 마감 0.5초 전까지 맞는 답을 내면 medium, 아니면 low, 둘 다 실패면 failure_default. /guard당 nano 최대 4회. 재생에서 가드 +0.71(짝 18개 중 17개가 0 이상, results/2026-11-16-score-probes.md 2·6절), 실제 실행은 재지 않았다
+  pair_rule: or_ungrounded          # 실험(tutor/t2.41-guard-or): medium_first | or_ungrounded. medium이 "근거 있음"이면 low 답을 마감 0.5초 전까지 기다려 low가 "근거 없음"이면 low를 쓴다(둘 중 하나라도 근거 없음이면 근거 없음). 호출 추가 0. 재생(11/20 런박스 가드 평가 2회, 83ffd71, 개발 출력 64행): 가드 환산 +0.47·+0.44, 바뀐 행 회당 1개(d495·300f)·나빠진 행 0. low만 쓰기는 나빠진 행이 많아 탈락
 embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 때만
 eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)

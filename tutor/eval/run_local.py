@@ -757,6 +757,7 @@ def row_records(
     호출 시간.
     used면 최종 응답은 그 초안이고 md_cites는 고른 초안 기준이다. md_redraft_action은 유효한 1위
     초안의 action(없으면 None), used_abstain은 top1_redraft_abstain이 그 abstain 초안을 낸 것.
+    md_bundle은 주 호출 근거 묶음 섹션 ID(검색 순위 순, 초안을 고른 요청만).
     """
     out = []
     for run, rows in enumerate(scored):
@@ -796,6 +797,7 @@ def row_records(
                     md_redraft=shadow.redraft,
                     md_redraft_ms=round(shadow.redraft_ms),
                     md_redraft_action=shadow.redraft_action,
+                    md_bundle=shadow.bundle,
                     md_cite_path=shadow.cite_path,
                     stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )

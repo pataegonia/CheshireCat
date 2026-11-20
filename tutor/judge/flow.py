@@ -481,6 +481,7 @@ def _pick_draft(state: Any, draft: Draft, runs: Sequence[MainCallOut | None]) ->
         shadow.chosen = chosen
         shadow.a_action = runs[0].action if runs and runs[0] is not None else None
         shadow.chosen_action = None if chosen is None else runs[chosen].action  # type: ignore[union-attr]
+        shadow.bundle = [s.id for s in draft.sections]  # 측정 전용: 근거 묶음 섹션(검색 순위 순)
     out = None if chosen is None else runs[chosen]
     return Draft(sections=draft.sections, out=out)
 

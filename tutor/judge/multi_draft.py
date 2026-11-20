@@ -79,6 +79,9 @@ class Shadow:
     redraft: str | None = None
     redraft_ms: float = 0.0  # 그 초안 호출에 걸린 시간(부르지 않았으면 0)
     redraft_action: str | None = None  # 측정 전용(로그에 내지 않는다): 유효한 1위 초안의 action
+    bundle: list[str] | None = (
+        None  # 측정 전용(로그에 내지 않는다): 근거 묶음 섹션 ID, 검색 순위 순
+    )
     # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
     cite_path: bool = False
 

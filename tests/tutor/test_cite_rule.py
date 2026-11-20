@@ -129,6 +129,8 @@ def test_pick_records_per_draft_cites_and_keeps_the_response():
     assert shadow.md_cites[shadow.chosen] == sorted(body["citations"])
     # 모델 인용은 cite_top1 추가를 뺀 것, 1위는 따로
     assert shadow.md_model_cites == [[TOP], [OTHER], [OTHER]] and shadow.top1 == TOP
+    assert shadow.bundle[0] == TOP and OTHER in shadow.bundle  # 근거 묶음(검색 순위 순)
+    assert "PY-" not in shadow.log_field()
     assert "PY-" not in shadow.log_field()  # 섹션 ID는 로그 칸에 내지 않는다
 
 
@@ -534,7 +536,7 @@ def test_run_local_rows_have_cites_and_draft_cites(tmp_path, monkeypatch):
     assert all("cites" in r and "md_cites" in r and "md_cite_path" in r for r in recs)
     assert all(r["md_pick_top1_switch"] is False for r in recs if r["md_n"])
     assert all(
-        "md_redraft" in r and "md_redraft_ms" in r and "md_redraft_action" in r
+        "md_redraft" in r and "md_redraft_ms" in r and "md_redraft_action" in r and r["md_bundle"]
         for r in recs
         if r["md_n"]
     )
@@ -668,3 +670,47 @@ def test_replay_on_a_tiny_synthetic_file(tmp_path):
         assert cite_replay.main([str(rows), str(rows)], out=fh) == 0
     text = out.read_text(encoding="utf-8")
     assert "합침" in text and "vote" in text
+
+
+def test_diagnose_lists_f1_zero_rows_with_ids_and_numbers_only(tmp_path):
+    gold = cite_replay.gold_rows()
+    row = _gold_row(gold)
+    e = row["labels"]["evidence"][0]
+    x = next(s for s in ("PY-01-01", "PR-01-01", "FIN-01-01") if s != e)
+    zero = {
+        "run": 0,
+        "id": row["id"],
+        "gold_action": "answer",
+        "action": "answer",
+        "cites": [x],
+        "citation_f1": 0.0,
+        "md_top1": x,
+        "md_model_cites": [[x], [e], None],
+        "md_bundle": [x, "PY-02-03", e],
+        "md_redraft": "rejected:cite",
+    }
+    ok_row = {**zero, "run": 1, "cites": [e], "citation_f1": 1.0}
+    old = {**zero, "run": 2, "md_model_cites": None, "md_bundle": None, "md_redraft": None}
+    rows = tmp_path / "rows.jsonl"
+    rows.write_text("".join(json.dumps(r) + "\n" for r in (zero, ok_row, old)))
+    d = cite_replay.diagnose_row(zero, {e})
+    assert d == {
+        "id": row["id"][:8],
+        "gold_action": "answer",
+        "action": "answer",
+        "redraft": "rejected:cite",
+        "top1_gold": False,
+        "model_hit": 1,
+        "cites_hit": False,
+        "n_cites": 1,
+        "gold_rank": 3,
+    }
+    assert cite_replay.diagnose_row(old, {e})["gold_rank"] is None
+    out = tmp_path / "diag.txt"
+    with out.open("w", encoding="utf-8") as fh:
+        assert cite_replay.main([str(rows), "--diagnose"], out=fh) == 0
+    text = out.read_text(encoding="utf-8")
+    assert "F1 0 행 2" in text and f"{row['id'][:8]} 2/3" in text
+    assert "1 answer->answer|cites=1|top1_gold=False|model_hit=1|rd=rejected:cite" in text
+    assert "model_hit=-|rd=-" in text  # 옛 파일은 기록 없음
+    assert row["id"] not in text or len(row["id"]) <= 8  # id는 앞 8자만

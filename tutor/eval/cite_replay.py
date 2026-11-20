@@ -20,6 +20,10 @@
   그 초안의 뒤 단계가 같은 action·범주를 내는지도 보지 않는다. 옛 파일은 pick 그대로.
 - 손익분기: pick이 2개를 인용해 정답 하나만 맞힌 행에서 규칙이 하나만 남겼을 때 맞은 비율.
 
+`--diagnose`: 기록된 인용 F1이 0인 행(정답 근거 ≥1)마다 정답·낸 action, md_redraft, 1위가 정답인가,
+정답을 확인된 근거로 쓴 초안 수, 인용 수, 근거 묶음 안 정답 순위(md_bundle이 있는 파일)를 내고
+갈래별·id별(F1 0 실행 수 / 잰 실행 수)로 합친다.
+
 튜터 점수 변화: 문항 점수 = 그 문항에 해당하는 항목의 평균(`scoring.tutor_points`)이라, 인용 F1이
 ΔF1_i 바뀌면 문항 점수는 ΔF1_i / n_i 바뀐다. n_i = 1(action) + 1(정답 근거) + [정답 사실 있음] +
 [정답 action ∈ answer·scaffold·abstain]으로 정답 표에서 정한다(판정 없이 잰 파일도 판정 포함 점수로
@@ -31,6 +35,7 @@
 import argparse
 import json
 import sys
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TextIO
@@ -311,11 +316,77 @@ def pool(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def diagnose_row(rec: Mapping[str, Any], gold_ids: set[str]) -> dict[str, Any]:
+    """인용 F1 0인 행 하나의 갈래(id 앞 8자·숫자·이름표만). None은 그 기록이 없는 파일."""
+    model = rec.get("md_model_cites")
+    bundle = rec.get("md_bundle")
+    cites = rec.get("cites") or []
+    top1 = rec.get("md_top1")
+    return {
+        "id": rec["id"][:8],
+        "gold_action": rec.get("gold_action"),
+        "action": rec.get("action"),
+        "redraft": rec.get("md_redraft") or "-",
+        "top1_gold": None if top1 is None else top1 in gold_ids,
+        "model_hit": None if model is None else sum(bool(gold_ids & set(m or [])) for m in model),
+        "cites_hit": bool(gold_ids & set(cites)),
+        "n_cites": len(cites),
+        # 근거 묶음 안 정답 섹션의 가장 높은 순위(1부터), 묶음에 없으면 0, 기록이 없으면 None
+        "gold_rank": None
+        if bundle is None
+        else min((i + 1 for i, s in enumerate(bundle) if s in gold_ids), default=0),
+    }
+
+
+def _pattern(d: Mapping[str, Any]) -> str:
+    """갈래 이름표: 정답→낸 action|인용 수|1위가 정답|정답을 근거로 쓴 초안 있음|다시 쓰기."""
+    hit = d["model_hit"]
+    return (
+        f"{d['gold_action']}->{d['action']}|cites={d['n_cites']}|top1_gold={d['top1_gold']}"
+        f"|model_hit={'-' if hit is None else int(hit > 0)}|rd={d['redraft']}"
+    )
+
+
+def diagnose(
+    runs: Sequence[tuple[str, Sequence[Mapping[str, Any]]]],
+    gold: Mapping[str, Mapping[str, Any]],
+    out: TextIO,
+) -> dict[str, Any]:
+    """`--diagnose`: 기록된 인용 F1이 0인 행(정답 근거 ≥1)을 행마다, 그리고 합쳐서 낸다."""
+    patterns: Counter[str] = Counter()
+    per_id: Counter[str] = Counter()
+    seen_runs: Counter[str] = Counter()
+    for name, recs in runs:
+        for rec in recs:
+            row = gold.get(rec["id"])
+            if row is None or not row["labels"].get("evidence"):
+                continue
+            seen_runs[rec["id"][:8]] += 1
+            if rec.get("citation_f1") != 0:
+                continue
+            d = diagnose_row(rec, set(row["labels"]["evidence"]))
+            patterns[_pattern(d)] += 1
+            per_id[d["id"]] += 1
+            out.write(f"[{name}] " + " ".join(f"{k}={v}" for k, v in d.items()) + "\n")
+    out.write(f"F1 0 행 {sum(per_id.values())} · 갈래별:\n")
+    for pat, n in patterns.most_common():
+        out.write(f"  {n} {pat}\n")
+    out.write("id별(F1 0 실행 수 / 잰 실행 수): ")
+    out.write(", ".join(f"{i} {n}/{seen_runs[i]}" for i, n in per_id.most_common()) + "\n")
+    return {"patterns": dict(patterns), "per_id": dict(per_id)}
+
+
 def main(argv: Sequence[str] | None = None, out: TextIO = sys.stdout) -> int:
     ap = argparse.ArgumentParser(description="인용 규칙 오프라인 재생(API 0회)")
     ap.add_argument("rows", nargs="+", type=Path, help="run_local --rows-jsonl 파일")
+    ap.add_argument(
+        "--diagnose", action="store_true", help="기록된 인용 F1이 0인 행의 갈래만 낸다(id·숫자만)"
+    )
     args = ap.parse_args(argv)
     gold = gold_rows()
+    if args.diagnose:
+        diagnose(load_runs(args.rows), gold, out)
+        return 0
     kb = score_local.load_kb_dir(KB_DIR)
     results = []
     for name, recs in load_runs(args.rows):

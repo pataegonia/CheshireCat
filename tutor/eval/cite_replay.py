@@ -9,9 +9,11 @@
 행마다 인용 F1을 채점기 그대로 잰다(`metrics.score_one` → `scoring.score_tutor`, 판정 없음):
 정답 근거가 있는 행만 채점하고, 근거가 있는데 인용이 비면 0이다. 비교하는 것:
 - recorded: 기록된 최종 인용(`cites`)
-- 규칙마다(pick·vote·pick_drop_lone·pick_add_vote): `md_cite_path`인 행은 `md_cites`·`md_actions`·
-  `md_pick`으로 `multi_draft.compose_cites`를 다시 돌린 인용, 아닌 행(T·E·고정 문장이 바꾼 응답,
-  초안 없음)은 기록된 인용 그대로.
+- 규칙마다(`multi_draft.CITE_RULES`): `md_cite_path`인 행은 `md_cites`·`md_actions`·`md_pick`
+  (single_*는 `md_model_cites`도, 없는 옛 파일은 `model_cites`로 되살림)으로
+  `multi_draft.compose_cites`를 다시 돌린 인용, 아닌 행(T·E·고정 문장이 바꾼 응답, 초안 없음)은
+  기록된 인용 그대로.
+- 손익분기: pick이 2개를 인용해 정답 하나만 맞힌 행에서 규칙이 하나만 남겼을 때 맞은 비율.
 
 튜터 점수 변화: 문항 점수 = 그 문항에 해당하는 항목의 평균(`scoring.tutor_points`)이라, 인용 F1이
 ΔF1_i 바뀌면 문항 점수는 ΔF1_i / n_i 바뀐다. n_i = 1(action) + 1(정답 근거) + [정답 사실 있음] +
@@ -42,12 +44,31 @@ def gold_rows() -> dict[str, dict[str, Any]]:
     return {r["id"]: r for r in public_tutor_rows() if r["id"] not in held}
 
 
+def model_cites(rec: Mapping[str, Any]) -> tuple[list[list[str] | None], bool]:
+    """(초안별 모델 인용, 기록에서 읽었나). `md_model_cites`가 없는 파일(421cb9f 형식)은 기록된
+    최종 인용으로 되살린다: cite_top1은 비지 않은 목록 끝에 1위를 하나 더하고(이미 있으면 그대로),
+    결정적 수정은 인용을 1개(max_citations)만 내므로, pick으로 잰 행의 1위 = `cites`의 마지막,
+    초안마다 모델 인용 = 목록에서 1위를 뺀 것(목록이 1위 하나뿐이면 그 1위). 한계: 확인된 claim이
+    없어 검색 1위로 채운 인용도 모델 인용으로 센다(기록만으로는 가를 수 없다)."""
+    if rec.get("md_model_cites") is not None:
+        return rec["md_model_cites"], True
+    cites = rec.get("cites") or []
+    top1 = rec.get("md_top1") or (cites[-1] if cites else None)
+    out: list[list[str] | None] = []
+    for c in rec["md_cites"]:
+        out.append(None if c is None else ([s for s in c if s != top1] or list(c)))
+    return out, False
+
+
 def rule_cites(rec: Mapping[str, Any], rule: str) -> list[str] | None:
-    """그 규칙이 냈을 인용. 규칙이 적용되지 않는 행은 기록된 인용 그대로."""
+    """그 규칙이 냈을 인용. 규칙이 적용되지 않는 행은 기록된 인용 그대로. pick은 응답에 나간
+    순서(`cites`)를 쓴다(md_cites는 정렬이라 순서가 없다)."""
     md, chosen = rec.get("md_cites"), rec.get("md_pick")
     if not rec.get("md_cite_path") or md is None or chosen is None or md[chosen] is None:
         return rec.get("cites")
-    return compose_cites(rule, md[chosen], md, rec["md_actions"], chosen)
+    pick = rec["cites"] if set(rec.get("cites") or []) == set(md[chosen]) else md[chosen]
+    model = model_cites(rec)[0] if rule.startswith("single_") else None
+    return compose_cites(rule, pick, md, rec["md_actions"], chosen, model)
 
 
 def prf(row: Mapping[str, Any], action: str, cites: Sequence[str], kb: Mapping[str, str]):
@@ -88,7 +109,10 @@ def replay_run(
     broken: dict[str, list[str]] = {n: [] for n in CITE_RULES}
     loss = {"p_only": 0.0, "r_only": 0.0, "both": 0.0}
     loss_n = dict.fromkeys(loss, 0)
-    n_scored = mismatch_f1 = mismatch_pick = path = 0
+    n_scored = mismatch_f1 = mismatch_pick = path = derived = 0
+    # 손익분기: pick이 2개 인용에 정답 하나(F1 2/3)인 행에서 규칙이 남긴 것. 하나만 남겨 맞으면
+    # +1/3, 틀리면 −2/3이라 하나 남긴 행 중 맞은 비율이 2/3을 넘어야 이득이다
+    even = {n: dict.fromkeys(("right", "wrong", "same", "other"), 0) for n in CITE_RULES}
     for rec in recs:
         row = gold.get(rec["id"])
         if row is None or rec.get("points") is None:
@@ -97,7 +121,9 @@ def replay_run(
         action, cites = rec.get("action"), rec.get("cites")
         if action is None or cites is None or not row["labels"].get("evidence"):
             continue  # 형식 오류(0점)·정답 근거 없는 행: 인용 F1이 채점되지 않는다
-        path += bool(rec.get("md_cite_path"))
+        on_path = bool(rec.get("md_cite_path")) and rec.get("md_cites") is not None
+        path += on_path
+        derived += on_path and not model_cites(rec)[1]
         pr = {"recorded": prf(row, action, cites, kb)}
         for rule in CITE_RULES:
             pr[rule] = prf(row, action, rule_cites(rec, rule) or [], kb)
@@ -115,6 +141,15 @@ def replay_run(
                 fixed[rule].append(rec["id"])
             elif f1s[rule][-1] < f1s["pick"][-1]:
                 broken[rule].append(rec["id"])
+        gold_ids = set(row["labels"]["evidence"])
+        pick = rule_cites(rec, "pick") or []
+        if len(set(pick)) == 2 and len(gold_ids & set(pick)) == 1:
+            for rule in CITE_RULES:
+                kept = set(rule_cites(rec, rule) or [])
+                kind = "same" if kept == set(pick) else "other"
+                if len(kept) == 1:
+                    kind = "right" if kept <= gold_ids else "wrong"
+                even[rule][kind] += 1
         p, r = pr["pick"]
         if p < 1 or r < 1:
             kind = "both" if p < 1 and r < 1 else ("p_only" if p < 1 else "r_only")
@@ -124,6 +159,8 @@ def replay_run(
         "scored_rows": n_scored,
         "cited_rows": len(f1s["pick"]),
         "rule_rows": path,
+        "derived_model_rows": derived,
+        "break_even": even,
         "mean_f1": {n: (sum(v) / len(v) if v else None) for n, v in f1s.items()},
         "delta_tutor": {k: 100 * v / n_scored if n_scored else 0.0 for k, v in delta.items()},
         "delta_sum": delta,
@@ -153,7 +190,8 @@ def write_report(name: str, res: Mapping[str, Any], out: TextIO) -> None:
     fmt = lambda v: "-" if v is None else f"{v:.4f}"  # noqa: E731
     out.write(
         f"[{name}] 채점 행 {res['scored_rows']} · 인용 채점 행 {res['cited_rows']} · "
-        f"규칙 적용 행(인용 채점 중) {res['rule_rows']}\n"
+        f"규칙 적용 행(인용 채점 중) {res['rule_rows']} · "
+        f"그중 모델 인용을 기록에서 되살린 행 {res['derived_model_rows']}\n"
     )
     out.write("  인용 F1 평균: ")
     out.write(" · ".join(f"{n} {fmt(v)}" for n, v in res["mean_f1"].items()) + "\n")
@@ -163,6 +201,17 @@ def write_report(name: str, res: Mapping[str, Any], out: TextIO) -> None:
         fx, br = res["fixed"][rule], res["broken"][rule]
         out.write(f"  {rule}: 고침 {len(fx)} · 망침 {len(br)}")
         out.write(f" | 고침 {','.join(fx[:SHOW_IDS])} | 망침 {','.join(br[:SHOW_IDS])}\n")
+    out.write("  손익분기(pick 2개 중 정답 1개인 행, 하나만 남겨 맞은 비율 > 2/3이면 이득): ")
+    parts = []
+    for rule in CITE_RULES[1:]:
+        e = res["break_even"][rule]
+        one = e["right"] + e["wrong"]
+        rate = f"{e['right'] / one:.2f}" if one else "-"
+        parts.append(
+            f"{rule} 맞음 {e['right']}·틀림 {e['wrong']}·그대로 {e['same']}·기타 {e['other']}"
+            f"(맞은 비율 {rate})"
+        )
+    out.write(" | ".join(parts) + "\n")
     loss, n = res["pick_loss"], res["pick_loss_rows"]
     out.write(
         "  pick 손실 Σ(1−F1): 정밀도만 "
@@ -194,6 +243,11 @@ def pool(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "scored_rows": n,
         "cited_rows": cited,
         "rule_rows": sum(r["rule_rows"] for r in results),
+        "derived_model_rows": sum(r["derived_model_rows"] for r in results),
+        "break_even": {
+            k: {c: sum(r["break_even"][k][c] for r in results) for c in results[0]["break_even"][k]}
+            for k in CITE_RULES
+        },
         "mean_f1": mean_f1,
         "delta_tutor": {k: 100 * v / n if n else 0.0 for k, v in delta.items()},
         "delta_sum": delta,

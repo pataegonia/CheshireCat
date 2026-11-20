@@ -750,7 +750,8 @@ def row_records(
     `cites`는 응답이 낸 인용(KB 섹션 ID만, 낸 순서, 형식 오류면 None). md_cites는 초안별로 그
     초안이 골라졌다면 같은 결정적 인용 경로가 냈을 인용(정렬, 무효 초안 None, 고른 초안의 assemble
     경로까지 오지 않은 요청은 None). md_cite_path는 최종 응답이 그 경로에서 그대로 나갔나
-    (cite_rule 적용 대상, 재생 tutor.eval.cite_replay가 쓴다).
+    (cite_rule 적용 대상, 재생 tutor.eval.cite_replay가 쓴다). md_model_cites는 그중 모델이 인용한
+    섹션(확인된 인용, 검색 1위 채우기·cite_top1 추가 제외), md_top1은 cite_top1이 더하는 섹션.
     """
     out = []
     for run, rows in enumerate(scored):
@@ -784,6 +785,8 @@ def row_records(
                     md_codes=[d.code for d in shadow.drafts],
                     md_actions=list(shadow.actions),
                     md_cites=shadow.md_cites,
+                    md_model_cites=shadow.md_model_cites,
+                    md_top1=shadow.top1,
                     md_cite_path=shadow.cite_path,
                     stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )

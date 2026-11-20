@@ -965,19 +965,24 @@ async def _answer_v2(
     final = tutor_post(body, merged.category)
     if runs and kind is None:  # 고른 초안의 문장이 나가는 경로: 초안별 인용(호출 0회)
         chosen = next((i for i, o in enumerate(runs) if o is draft.out), None)
-        md_cites = [
+        both = [
             None
             if o is None
-            else sorted(final["citations"])
-            if i == chosen
             else _draft_cites(cfg, o, signals, trusted, intent_label, draft.sections, top_sections)
             for i, o in enumerate(runs)
         ]
-        seen["md"] = (md_cites, [None if o is None else o.action for o in runs], chosen)
+        md_cites = [None if b is None else b[0] for b in both]
+        md_model = [None if b is None else b[1] for b in both]
+        if chosen is not None:
+            md_cites[chosen] = sorted(final["citations"])  # 고른 초안은 실제로 나간 인용
+        actions = [None if o is None else o.action for o in runs]
+        seen["md"] = (md_cites, actions, chosen, md_model)
         seen["pick_body"] = final
         shadow = multi_draft.SHADOW.get()
         if shadow is not None:
-            shadow.md_cites = md_cites
+            shadow.md_cites, shadow.md_model_cites = md_cites, md_model
+            top = draft.sections if top_sections is None else top_sections
+            shadow.top1 = top[0].id if cfg.toggles.cite_top1 and top else None
     return final
 
 
@@ -989,12 +994,13 @@ def _draft_cites(
     intent_label: str | None,
     sections: Sequence[RetrievedSection],
     top_sections: Sequence[RetrievedSection] | None,
-) -> list[str]:
-    """고르지 않은 초안이 골라졌다면 `_answer_v2`의 결정적 단계(대행 보정 → T 덮기 → 합치기 →
-    assemble → 후처리)가 냈을 인용(정렬). 호출 0회라 호출이 드는 부분은 뺀다: 가드 판정
-    (`toggles.verify`)은 None으로 보고, sj 초안은 부르지 않으며(고정 문장이면 []), mm은 기록하지
-    않는다(기록 칸을 쓰기 때문, 이 브랜치 설정에서 끔). 규칙 A 1위(`top_sections`)는 고른 초안이 쓴
-    것을 그대로 쓴다(같은 질의라 같은 결과)."""
+) -> tuple[list[str], list[str]]:
+    """초안이 골라졌다면 `_answer_v2`의 결정적 단계(대행 보정 → T 덮기 → 합치기 → assemble →
+    후처리)가 냈을 (인용, 모델 인용), 둘 다 정렬. 모델 인용은 결정적 수정(IN-04)이 고른 인용 가운데
+    그 초안의 claim 인용 문구가 원문에서 확인된 섹션이다(검색 1위 채우기·cite_top1 추가는 빠진다).
+    호출 0회라 호출이 드는 부분은 뺀다: 가드 판정(`toggles.verify`)은 None으로 보고, sj 초안은
+    부르지 않으며(고정 문장이면 []), mm은 기록하지 않는다(기록 칸을 쓰기 때문, 이 브랜치 설정에서
+    끔). 규칙 A 1위(`top_sections`)는 고른 초안이 쓴 것을 그대로 쓴다(같은 질의라 같은 결과)."""
     toggles = cfg.toggles
     out = delegation_guard(
         out,
@@ -1007,20 +1013,17 @@ def _draft_cites(
     decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
     if decided is not None:
         if template_for(decided.category, decided.action) is not None:
-            return []
+            return [], []
         out, action = out.model_copy(update={"category": decided.category}), decided.action
     merged = merge_category(out.category, action, trusted)
     if merged.fixed is not None or template_for(merged.category, action) is not None:
-        return []
-    body = assemble(
-        out,
-        sections,
-        action=action,
-        max_citations=toggles.max_citations,
-        cite_top1=toggles.cite_top1,
-        top_sections=top_sections,
-    )
-    return sorted(tutor_post(body, merged.category)["citations"])
+        return [], []
+    body = assemble(out, sections, action=action, max_citations=toggles.max_citations)
+    verified = multi_draft.verified_sids(out, multi_draft.contract_sections(sections))
+    model = [c for c in tutor_post(body, merged.category)["citations"] if c in verified]
+    if toggles.cite_top1:  # assemble(cite_top1=True)와 같은 추가
+        body = add_top_citation(body, sections if top_sections is None else top_sections)
+    return sorted(tutor_post(body, merged.category)["citations"]), sorted(model)
 
 
 def apply_cite_rule(

@@ -88,6 +88,24 @@ def test_empty_pick_is_left_empty_and_unknown_rule_raises():
         compose_cites("majority", ["X"], [["X"]], ["answer"], 0)
 
 
+def test_single_rules_need_model_cites_and_fall_back_to_pick():
+    md = [["T", "X"], ["T", "Y"], ["T", "Y"]]
+    model = [["X"], ["Y"], ["Y"]]
+    assert compose_cites("single_model", ["X", "T"], md, ANS3, 0, model) == ["X"]
+    assert compose_cites("single_model", ["X", "T"], md, ANS3, 0, [[], ["Y"], ["Y"]]) == ["X", "T"]
+    assert compose_cites("single_support", ["X", "T"], md, ANS3, 0, model) == ["T"]
+    assert compose_cites("single_support_model", ["X", "T"], md, ANS3, 0, model) == ["X"]
+    assert compose_cites("single_agree", ["X", "T"], md, ANS3, 0, model) == ["X", "T"]
+    same = [["X"], ["X"], ["X"]]
+    assert compose_cites("single_agree", ["X", "T"], md, ANS3, 0, same) == ["X"]
+    # 다른 action 초안은 동의·지지에 세지 않는다
+    acts = ["answer", "abstain", "abstain"]
+    assert compose_cites("single_agree", ["X", "T"], md, acts, 0, model) == ["X"]
+    assert compose_cites("single_support", ["X"], [["X"]], ["answer"], 0, [["X"]]) == ["X"]
+    with pytest.raises(ValueError):
+        compose_cites("single_model", ["X", "T"], md, ANS3, 0)
+
+
 # --- 흐름: 기록과 규칙 ---
 
 
@@ -98,12 +116,26 @@ def test_pick_records_per_draft_cites_and_keeps_the_response():
     assert shadow.md_cites == [[TOP], sorted([TOP, OTHER]), sorted([TOP, OTHER])]
     assert shadow.cite_path is True
     assert shadow.md_cites[shadow.chosen] == sorted(body["citations"])
+    # 모델 인용은 cite_top1 추가를 뺀 것, 1위는 따로
+    assert shadow.md_model_cites == [[TOP], [OTHER], [OTHER]] and shadow.top1 == TOP
     assert "PY-" not in shadow.log_field()  # 섹션 ID는 로그 칸에 내지 않는다
 
 
 def test_invalid_draft_has_no_cites():
     _body, shadow = flow([ONE, None, TWO])
     assert shadow.md_cites[1] is None and shadow.md_cites[2] == sorted([TOP, OTHER])
+    assert shadow.md_model_cites[1] is None
+
+
+UNVERIFIED = answer(OTHER, "원문에 없는 지어낸 문구입니다", "지어낸 문장이에요.")
+
+
+def test_unverified_claim_has_no_model_cite():
+    # 확인된 claim이 없으면 결정적 수정이 검색 1위로 채운다: 모델 인용이 아니다
+    body, shadow = flow([UNVERIFIED, UNVERIFIED, UNVERIFIED])
+    assert body["citations"] == [TOP] and shadow.md_model_cites == [[], [], []]
+    single, _ = flow([UNVERIFIED, UNVERIFIED, UNVERIFIED], "single_model")
+    assert single == body
 
 
 @pytest.mark.parametrize(
@@ -115,6 +147,14 @@ def test_invalid_draft_has_no_cites():
         ([TWO, ONE, ONE], "vote", {TOP}),
         ([TWO, ONE, ONE], "pick_drop_lone", {TOP}),
         ([TWO, ONE, ONE], "pick_add_vote", {TOP, OTHER}),
+        ([TWO, ONE, ONE], "single_model", {OTHER}),
+        ([TWO, ONE, ONE], "single_support", {TOP}),
+        ([TWO, ONE, ONE], "single_support_model", {TOP}),
+        ([TWO, ONE, ONE], "single_agree", {TOP, OTHER}),
+        ([TWO, TWO, TWO], "single_agree", {OTHER}),
+        ([TWO, TWO, TWO], "single_support", {TOP, OTHER}),  # 모두 둘 다 인용: 동률 → pick
+        ([TWO, TWO, TWO], "single_support_model", {OTHER}),
+        ([ONE, TWO, TWO], "single_model", {TOP}),  # 1개 인용은 그대로
     ],
 )
 def test_rules_change_only_the_citations(outs, rule, cites):
@@ -260,6 +300,23 @@ def test_replay_on_a_tiny_synthetic_file(tmp_path):
     assert res["fixed"]["vote"] == [row["id"]] and res["broken"]["vote"] == []
     assert res["pick_loss_rows"] == {"p_only": 2, "r_only": 0, "both": 0}
     assert res["mismatch_pick_vs_recorded"] == 0 and res["mismatch_recorded_f1"] == 0
+    # 421cb9f 형식(md_model_cites 없음): 1위 = cites 끝(e), 모델 인용 = 목록에서 1위를 뺀 것
+    assert res["derived_model_rows"] == 1
+    assert f1["single_model"] == pytest.approx((0 + 2 / 3) / 2)  # x만 남긴다(틀림)
+    assert f1["single_support"] == pytest.approx((1 + 2 / 3) / 2)  # e는 세 목록 모두에 있다
+    assert f1["single_support_model"] == pytest.approx((1 + 2 / 3) / 2)  # 모델 인용 e 2 > x 1
+    assert f1["single_agree"] == pytest.approx(2 / 3)  # 모델 인용이 갈린다 → pick
+    even = res["break_even"]  # 규칙이 적용되지 않는 행(off_path)은 "그대로"로 센다
+    assert even["single_model"] == {"right": 0, "wrong": 1, "same": 1, "other": 0}
+    assert even["single_support"] == {"right": 1, "wrong": 0, "same": 1, "other": 0}
+    assert even["single_agree"]["same"] == 2 and even["pick_add_vote"]["same"] == 2
+    assert res["broken"]["single_model"] == [row["id"]]
+    # 기록된 모델 인용이 있으면 그것을 쓴다(다른 초안은 1위 채우기라 모델 인용 없음)
+    new = {**path_rec, "md_model_cites": [[x], [], []], "md_top1": e}
+    res2 = cite_replay.replay_run([new], gold, _kb())
+    assert res2["derived_model_rows"] == 0
+    assert res2["mean_f1"]["single_support_model"] == pytest.approx(0.0)  # x 1 > e 0
+    assert res2["mean_f1"]["single_agree"] == pytest.approx(2 / 3)
     out = tmp_path / "out.txt"
     with out.open("w", encoding="utf-8") as fh:
         assert cite_replay.main([str(rows), str(rows)], out=fh) == 0

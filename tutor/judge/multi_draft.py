@@ -70,6 +70,9 @@ class Shadow:
     # 측정 전용(로그에 내지 않는다, 섹션 ID). 초안별로 그 초안이 골라졌다면 같은 결정적 인용 경로가
     # 냈을 인용(정렬, 무효 초안 None). 응답이 고른 초안의 assemble 경로까지 온 요청에만 있다
     md_cites: list[list[str] | None] | None = None
+    # 그중 모델이 인용한 섹션(결정적 수정이 고른 확인된 인용, 1위 채우기·cite_top1 추가 제외)
+    md_model_cites: list[list[str] | None] | None = None
+    top1: str | None = None  # cite_top1이 더하는 섹션(모든 초안에 같다). 끔이면 None
     # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
     cite_path: bool = False
 
@@ -118,6 +121,18 @@ def contract_sections(sections: Sequence[Any]) -> list[Section]:
     ]
 
 
+def verified_sids(out: MainCallOut, sections: Sequence[Section]) -> set[str]:
+    """claim 문장의 인용 문구가 그 섹션 원문에 실제로 있는 섹션(결정적 수정과 같은 검사)."""
+    return {
+        sid
+        for s in out.sentences
+        if s.kind == "claim"
+        for sid in _verified_sids(
+            Sentence.model_validate(s.model_dump()), sections, MIN_QUOTE_CHARS
+        )
+    }
+
+
 def evidence_score(out: MainCallOut, sections: Sequence[Section]) -> tuple[float, int]:
     """(근거가 확인된 claim 문장 비율, 확인된 인용 수). claim이 없으면 (0, 0)."""
     claims = [s for s in out.sentences if s.kind == "claim"]
@@ -159,7 +174,16 @@ def abstain_override(outs: Sequence[MainCallOut | None], chosen: int | None) -> 
     return next((i for i, o in enumerate(outs) if o is not None and o.action == "abstain"), None)
 
 
-CITE_RULES = ("pick", "vote", "pick_drop_lone", "pick_add_vote")
+CITE_RULES = (
+    "pick",
+    "vote",
+    "pick_drop_lone",
+    "pick_add_vote",
+    "single_model",
+    "single_support",
+    "single_support_model",
+    "single_agree",
+)
 
 
 def compose_cites(
@@ -168,16 +192,41 @@ def compose_cites(
     md_cites: Sequence[Sequence[str] | None],
     actions: Sequence[str | None],
     chosen: int,
+    md_model: Sequence[Sequence[str] | None] | None = None,
 ) -> list[str]:
     """`llm.multi_draft.cite_rule`: 고른 초안의 인용(`pick`, 응답에 나간 순서)을 같은 action
     초안들의 인용(`md_cites`, 초안 번호 순)으로 고친다. 호출 0회. pick이 비면 그대로 둔다
-    (인용 없는 action).
+    (인용 없는 action). 같은 action 초안 = 유효하고 action이 고른 초안과 같은 초안(고른 초안 포함).
 
-    vote: 고른 초안 포함, action이 고른 초안과 같은 유효한 초안 2개 이상이 인용한 섹션(비면 pick).
+    vote: 같은 action 초안 2개 이상이 인용한 섹션(비면 pick).
     pick_drop_lone: pick에서 같은 action의 다른 초안이 하나도 인용하지 않은 섹션을 뺀다(비면 pick).
-    pick_add_vote: pick ∪ vote. 순서는 pick 먼저, 그다음 초안 번호 순."""
+    pick_add_vote: pick ∪ vote. 순서는 pick 먼저, 그다음 초안 번호 순.
+    single_*는 초안별 모델 인용(`md_model`, cite_top1 추가·1위 채우기 제외)이 있어야 한다:
+    single_model: pick의 모델 인용만(없으면 pick).
+    single_support: pick이 2개 이상이면 같은 action 초안 가운데 그 섹션을 인용 목록에 가진 수가
+    가장 많은 섹션 하나(동률이면 pick). single_support_model: 같은 계산을 모델 인용으로.
+    single_agree: 같은 action 초안의 모델 인용이 모두 같으면 그것만(아니면 pick)."""
     if rule == "pick" or not pick:
         return list(pick)
+    if rule.startswith("single_"):
+        if md_model is None:
+            raise ValueError(f"{rule}에는 초안별 모델 인용(md_model)이 있어야 한다")
+        same = [
+            i for i, c in enumerate(md_cites) if c is not None and actions[i] == actions[chosen]
+        ]
+        mine = set(md_model[chosen] or [])
+        pm = [s for s in pick if s in mine]
+        if rule == "single_model":
+            return pm or list(pick)
+        if rule == "single_agree":
+            agree = all(set(md_model[i] or []) == mine for i in same)
+            return pm if pm and agree else list(pick)
+        if rule in ("single_support", "single_support_model"):
+            lists = md_cites if rule == "single_support" else md_model
+            support = {s: sum(s in (lists[i] or []) for i in same) for s in pick}
+            best = [s for s in pick if support[s] == max(support.values())]
+            return best if len(pick) >= 2 and len(best) == 1 else list(pick)
+        raise ValueError(f"모르는 cite_rule: {rule}")
     others = [
         c
         for i, c in enumerate(md_cites)

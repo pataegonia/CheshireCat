@@ -175,7 +175,16 @@ class MultiDraft(_Strict):
     # shadow는 기록만
     abstain_if_any: Stage = "off"
     # 응답이 고른 초안에서 나갈 때 인용 목록만 초안끼리 합치는 규칙(multi_draft.compose_cites)
-    cite_rule: Literal["pick", "vote", "pick_drop_lone", "pick_add_vote"] = "pick"
+    cite_rule: Literal[
+        "pick",
+        "vote",
+        "pick_drop_lone",
+        "pick_add_vote",
+        "single_model",
+        "single_support",
+        "single_support_model",
+        "single_agree",
+    ] = "pick"
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":

@@ -3,12 +3,14 @@
 규칙은 응답이 고른 초안의 assemble 경로에서 그대로 나갈 때 인용 목록만 바꾼다(답·action 그대로).
 """
 
+import asyncio
 import json
 
 import pytest
 
 from tests.tutor.test_multi_draft import ScriptLLM, ok, result, run_flow
 from tutor.eval import cite_replay, run_local
+from tutor.judge import flow as flow_mod
 from tutor.judge import multi_draft, oom_gate
 from tutor.judge.main_call import EvidenceOut, MainCallOut, SentenceOut
 from tutor.judge.multi_draft import compose_cites
@@ -355,6 +357,93 @@ def test_redraft_is_not_triggered(outs, over):
     _body, shadow, llm = redraft_flow(outs, None, **over)
     assert len(llm.calls) == 3 and shadow.redraft is None
     assert ";rd=" not in (shadow.log_field() or "")
+
+
+class RoleLLM:
+    """역할마다 (지연, 결과)를 준다(동시에 띄우는 1위 초안은 부르는 순서가 정해지지 않는다)."""
+
+    def __init__(self, by_role):
+        self.by_role = by_role
+        self.roles: list[str] = []
+        self.messages: dict[str, list] = {}
+        self.cancelled: list[str] = []
+
+    async def complete(self, role, messages, schema, **kw):
+        self.roles.append(role)
+        self.messages[role] = messages
+        delay, res = self.by_role[role]
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            self.cancelled.append(role)
+            raise
+        return res(schema) if callable(res) else res
+
+
+def parallel_flow(drafts, redraft, *, delay=0.0, left=1e6, **over):
+    roles = {
+        r: (0.0, d if callable(d) else ok(d)) for r, d in zip(DRAFT_ROLES, drafts, strict=True)
+    }
+    roles["main_r"] = (delay, redraft if callable(redraft) else ok(redraft))
+    llm = RoleLLM(roles)
+    body, _took, shadow = run_flow(llm, left=left, **{**LOW3, RD: "parallel", **over})
+    return body, shadow, llm
+
+
+DRAFT_ROLES = ("main", "main_b", "main_c")
+
+
+def test_parallel_redraft_is_sent_with_the_drafts_and_used_after_selection():
+    off, _ = flow([TWO, TWO, TWO])
+    body, shadow, llm = parallel_flow([TWO, TWO, TWO], ONE)
+    assert sorted(llm.roles) == sorted([*DRAFT_ROLES, "main_r"])
+    redo = llm.messages["main_r"][1]["content"]
+    assert f'<섹션 id="{TOP}">' in redo and OTHER not in redo
+    assert body["citations"] == [TOP] and "3회까지" in body["answer"]
+    assert body["answer"] != off["answer"] and shadow.redraft == "used"
+    assert shadow.chosen == 0 and shadow.valid == 3  # 고르기·다수결에는 들어가지 않는다
+    assert ";rd=1/0/used/" in shadow.log_field()
+
+
+def test_parallel_redraft_not_needed_keeps_the_pick():
+    off, _ = flow([ONE, TWO, TWO])
+    body, shadow, llm = parallel_flow([ONE, TWO, TWO], ONE)
+    assert "main_r" in llm.roles and body == off and shadow.redraft == "not_needed"
+
+
+def test_parallel_redraft_rejection_uses_the_same_rules():
+    off, _ = flow([TWO, TWO, TWO])
+    body, shadow, _llm = parallel_flow([TWO, TWO, TWO], TWO)
+    assert body == off and shadow.redraft == "rejected:cite"
+
+
+def test_parallel_redraft_that_is_late_is_not_waited_for(monkeypatch):
+    # 마감(요청 마감 − margin_s)까지만 기다린다: 늦은 1위 초안은 취소하고 고른 초안을 낸다
+    monkeypatch.setattr(flow_mod, "HEDGE_MIN_LEFT_S", 0.1)
+    off, _ = flow([TWO, TWO, TWO])
+    body, shadow, llm = parallel_flow([TWO, TWO, TWO], ONE, delay=5.0, left=0.6)
+    assert body == off and shadow.redraft == "late"
+    assert shadow.cite_path is True
+
+
+def test_parallel_redraft_is_not_sent_without_time():
+    body, shadow, llm = parallel_flow([TWO, TWO, TWO], ONE, left=3.0)
+    assert "main_r" not in llm.roles and shadow.redraft == "skip_time"
+    assert body["citations"] == [OTHER, TOP]
+
+
+def test_parallel_redraft_is_cancelled_when_the_main_call_fails():
+    fail = lambda schema: result(error="timeout")  # noqa: E731
+    body, shadow, llm = parallel_flow([fail, fail, fail], ONE, delay=1.0)
+    assert body["action"] == "clarify" and shadow.redraft == "not_needed"
+    assert llm.cancelled == ["main_r"]
+
+
+def test_parallel_needs_the_rule_a_top1():
+    md = {"llm.multi_draft.enabled": True, RD: "parallel"}
+    assert load_config(overrides=md).llm.multi_draft.top1_redraft == "parallel"
+    with pytest.raises(ValueError):
+        load_config(overrides={**md, "toggles.top1_dialog_query": False})
 
 
 def test_redraft_call_counts_toward_the_cap(monkeypatch):

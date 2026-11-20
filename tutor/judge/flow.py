@@ -614,6 +614,9 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     finally:
         for job in jobs:
             job.cancel()
+        task = seen.get("redraft_task")
+        if task is not None and not task.done():
+            task.cancel()  # 쓰지 않은 1위 초안(요청이 끝난 뒤 남는 작업이 없게, TU-18)
 
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
@@ -835,6 +838,13 @@ async def _answer_v2(
         complete = _multi_complete(state, runs) if multi else _complete(state)
         if cfg.toggles.soft_jailbreak_draft != "off":
             complete = _capture(complete, seen)  # sj 초안이 같은 메시지를 쓴다
+        if multi and cfg.llm.multi_draft.top1_redraft == "parallel":
+            # 1위 섹션 하나만 근거로 둔 초안을 정규 초안과 함께 띄운다(고르기·다수결 밖)
+            seen["rule_a"] = await _rule_a_top(state, conv)
+            if seen["rule_a"]:
+                seen["redraft_task"] = _start_redraft(
+                    state, conv, signals, seen["rule_a"][0], deadline
+                )
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,
@@ -935,20 +945,8 @@ async def _answer_v2(
         and cfg.toggles.top1_dialog_query
         and template_for(merged.category, action) is None  # 고정 문장은 인용이 없다
     ):  # 규칙 A: 튜터 발화까지 넣은 질의로 한 번 더 찾아 1위만 쓴다(LLM 0회, BM25만)
-        query, history = conv.search_query(all_roles=True)
-        try:  # 더할 인용 하나를 고르는 일이라, 실패하거나 비면 끔일 때의 1위로 돌아간다
-            top_sections = (
-                await retrieve(
-                    query,
-                    history,
-                    k=cfg.retrieval.k,
-                    index=state.tutor_kb,
-                    **_english_embedding(state),
-                )
-                or None
-            )
-        except Exception:  # 메시지는 남기지 않는다
-            top_sections = None
+        # top1_redraft parallel이 주 호출 앞에서 이미 찾았으면 그 결과(같은 질의)를 쓴다
+        top_sections = seen.get("rule_a") or await _rule_a_top(state, conv)
     kind = template_for(merged.category, action)
     if kind is not None:  # 주 호출이 고른 고정 문장(탈옥 거절이면 sj가 볼 수 있다)
         soft = await _soft_jailbreak(state, kind, signals, seen, draft.sections, deadline)
@@ -1005,8 +1003,9 @@ async def _answer_v2(
             if switched:
                 shadow.chosen = chosen
         picked = None if chosen is None else runs[chosen]
+        rd_mode = cfg.llm.multi_draft.top1_redraft
         if (
-            cfg.llm.multi_draft.top1_redraft == "on"
+            rd_mode != "off"
             and verdict is None  # 가드 판정은 고른 초안의 문장에 대한 것이다
             and picked is not None
             and picked.action == action == "answer"
@@ -1016,7 +1015,10 @@ async def _answer_v2(
                 for i, o in enumerate(runs)
             )
         ):
-            redone = await _top1_redraft(state, conv, signals, top[0], picked, deadline, shadow)
+            if rd_mode == "on":
+                redone = await _top1_redraft(state, conv, signals, top[0], picked, deadline, shadow)
+            else:
+                redone = await _parallel_redraft(state, seen, top[0], picked, deadline, shadow)
             path = (
                 None if redone is None else _draft_path(cfg, redone, signals, trusted, intent_label)
             )
@@ -1039,6 +1041,20 @@ async def _answer_v2(
     return final
 
 
+async def _rule_a_top(state: Any, conv: Conversation) -> list[RetrievedSection] | None:
+    """규칙 A(`top1_dialog_query`): 튜터 발화까지 넣은 질의의 검색 결과. 실패하거나 비면 None
+    (더할 인용 하나를 고르는 일이라 끔일 때의 1위로 돌아간다)."""
+    cfg = state.tutor_cfg
+    query, history = conv.search_query(all_roles=True)
+    try:
+        found = await retrieve(
+            query, history, k=cfg.retrieval.k, index=state.tutor_kb, **_english_embedding(state)
+        )
+    except Exception:  # 메시지는 남기지 않는다
+        return None
+    return list(found) or None
+
+
 def _redraft_mark(shadow: multi_draft.Shadow | None, code: str) -> None:
     if shadow is not None:
         shadow.redraft = code
@@ -1058,13 +1074,26 @@ async def _top1_redraft(
     마감은 요청 마감 − `multi_draft.margin_s`(medium 초안·기다리기 끝과 같다)이고, 그때까지
     `HEDGE_MIN_LEFT_S`보다 덜 남았으면 부르지 않는다(skip_time). 유효하고 answer이며 고른 초안과
     범주가 같고, 그 섹션을 확인된 근거로 쓴 초안만 돌려준다(아니면 rejected:<사유>, None)."""
+    until = deadline - state.tutor_cfg.llm.multi_draft.margin_s
+    if until - asyncio.get_running_loop().time() < HEDGE_MIN_LEFT_S:
+        _redraft_mark(shadow, "skip_time")
+        return None
+    parsed, ms, _late = await _redraft_run(state, conv, signals, top, until)
+    if shadow is not None:
+        shadow.redraft_ms = ms
+    return _accept_redraft(parsed, top, picked, shadow)
+
+
+LATE_EPS_S = 0.01  # 마감에 걸려 끝난 호출로 보는 여유(bounded가 until에 끊는다)
+
+
+async def _redraft_run(
+    state: Any, conv: Conversation, signals: Sequence[Signal], top: RetrievedSection, until: float
+) -> tuple[Any, float, bool]:
+    """1위 섹션 하나만 근거로 둔 low 초안 호출 하나 → (결과 또는 None, ms, 마감에 걸렸나)."""
     cfg = state.tutor_cfg
     loop = asyncio.get_running_loop()
     t0 = loop.time()
-    until = deadline - cfg.llm.multi_draft.margin_s
-    if until - t0 < HEDGE_MIN_LEFT_S:
-        _redraft_mark(shadow, "skip_time")
-        return None
     messages = main_call.build_messages(
         state.tutor_prompt,
         conv,
@@ -1072,18 +1101,73 @@ async def _top1_redraft(
         labels(signals) if cfg.toggles.signals else (),
         examples_block(state, conv),
     )
-    schema = state.tutor_prompt.schema
     parsed = await bounded(
         state.tutor_llm,
         REDRAFT_ROLE,
         messages,
-        schema,
+        state.tutor_prompt.schema,
         until=until,
         timeout_s=cfg.llm.timeout_s.main,
         effort="low",
     )
+    now = loop.time()
+    return parsed, (now - t0) * 1000, parsed is None and now >= until - LATE_EPS_S
+
+
+def _start_redraft(
+    state: Any,
+    conv: Conversation,
+    signals: Sequence[Signal],
+    top: RetrievedSection,
+    deadline: float,
+) -> "asyncio.Future[tuple[Any, float, bool]] | None":
+    """`top1_redraft: parallel`: 정규 초안과 함께 1위 초안을 띄운다. 마감은 "on"과 같은 요청 마감 −
+    `multi_draft.margin_s`이고, 그때까지 `HEDGE_MIN_LEFT_S`보다 덜 남았으면 띄우지 않는다."""
+    until = deadline - state.tutor_cfg.llm.multi_draft.margin_s
+    shadow = multi_draft.SHADOW.get()
+    if until - asyncio.get_running_loop().time() < HEDGE_MIN_LEFT_S:
+        _redraft_mark(shadow, "skip_time")
+        return None
+    _redraft_mark(shadow, "not_needed")  # 고른 뒤 조건이 맞으면 바뀐다
+    return asyncio.ensure_future(_redraft_run(state, conv, signals, top, until))
+
+
+async def _parallel_redraft(
+    state: Any,
+    seen: dict[str, Any],
+    top: RetrievedSection,
+    picked: MainCallOut,
+    deadline: float,
+    shadow: multi_draft.Shadow | None,
+) -> MainCallOut | None:
+    """띄워 둔 1위 초안을 받는다. 아직 돌면 "on"과 같은 마감(요청 마감 − margin_s)까지만 기다리고,
+    그때도 안 끝났거나 마감에 걸려 끝났으면 late. 받는 규칙은 "on"과 같다(`_accept_redraft`).
+    띄우지 않은 요청(1위 없음·시간 부족)은 띄울 때 남긴 기록 그대로 None."""
+    task = seen.get("redraft_task")
+    if task is None:
+        return None
+    until = deadline - state.tutor_cfg.llm.multi_draft.margin_s
+    left = until - asyncio.get_running_loop().time()
+    if not task.done():
+        await asyncio.wait({task}, timeout=max(left, 0.0) + LATE_EPS_S)
+    if not task.done():
+        task.cancel()
+        _redraft_mark(shadow, "late")
+        return None
+    parsed, ms, late = task.result()
     if shadow is not None:
-        shadow.redraft_ms = (loop.time() - t0) * 1000
+        shadow.redraft_ms = ms
+    if late:
+        _redraft_mark(shadow, "late")
+        return None
+    return _accept_redraft(parsed, top, picked, shadow)
+
+
+def _accept_redraft(
+    parsed: Any, top: RetrievedSection, picked: MainCallOut, shadow: multi_draft.Shadow | None
+) -> MainCallOut | None:
+    """유효하고 answer이며 고른 초안과 범주가 같고 1위 섹션을 확인된 근거로 쓴 초안만 돌려준다
+    (아니면 rejected:<사유>, None)."""
     out = None if parsed is None else main_call.clean(parsed)
     verified = (
         set()

@@ -191,7 +191,8 @@ class MultiDraft(_Strict):
     prefer_top1: Literal["off", "on"] = "off"
     # 고른 answer 초안도 같은 action 초안도 cite_top1 섹션을 확인된 근거로 쓰지 않으면, 근거 묶음을
     # 그 섹션 하나로 줄인 low 초안을 한 번 더 부른다(nano +1, flow._top1_redraft)
-    top1_redraft: Literal["off", "on"] = "off"
+    # parallel: 정규 초안과 함께 띄우고(요청마다 nano +1) 고른 뒤 같은 조건·규칙으로 쓴다
+    top1_redraft: Literal["off", "on", "parallel"] = "off"
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":
@@ -261,6 +262,12 @@ class TutorConfig(_Strict):
         calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
         calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
         calls += stages + (md.enabled and md.top1_redraft != "off")
+        early = md.enabled and md.top1_redraft == "parallel"
+        if early and not (t.cite_top1 and t.top1_dialog_query):
+            # 1위를 주 호출 앞에서 알아야 한다: 규칙 A 검색(top1_dialog_query)으로만 미리 찾는다
+            raise ValueError(
+                "top1_redraft: parallel은 toggles.cite_top1·top1_dialog_query가 필요하다"
+            )
         if calls > MULTI_DRAFT_MAX_CALLS:
             cap = MULTI_DRAFT_MAX_CALLS
             raise ValueError(

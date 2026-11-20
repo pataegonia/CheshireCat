@@ -81,8 +81,8 @@ def test_repo_config_stage_modes_within_the_call_cap(monkeypatch):
     monkeypatch.delenv("TUTOR_CONFIG", raising=False)
     cfg = load_config()  # 저장소 설정: 초안 3 + T + E + 단계(sj 1)
     t = cfg.toggles
-    assert (t.reverse_question, t.soft_jailbreak_draft, t.mention_marker) == ("off", "on", "off")
-    assert cfg.llm.multi_draft.abstain_if_any == "on"
+    assert (t.reverse_question, t.soft_jailbreak_draft, t.mention_marker) == ("off", "off", "off")
+    assert cfg.llm.multi_draft.abstain_if_any == "off"
 
 
 def test_stage_calls_count_toward_the_cap():

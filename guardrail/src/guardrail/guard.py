@@ -164,12 +164,16 @@ def _consume(task: asyncio.Task) -> None:
 
 
 def _says(out: object, *, grounded: bool) -> bool:
-    """출력 판정 답(OutputOut)이 그 grounded 값을 냈나. 다른 꼴(문장별·baseline)이나 None이면 False."""
+    """출력 판정 답(OutputOut)이 그 grounded 값을 냈나.
+
+    다른 꼴(문장별·baseline)이나 None이면 False."""
     return isinstance(out, OutputOut) and out.grounded is grounded
 
 
 async def _result_by(fut: asyncio.Future, until: float) -> Any:
-    """fut의 결과. until(time.monotonic)까지 끝나지 않았거나 실패·취소면 None. fut은 취소하지 않는다."""
+    """fut의 결과. until(time.monotonic)까지 끝나지 않았거나 실패·취소면 None.
+
+    fut은 취소하지 않는다(부르는 쪽의 finally가 정리한다)."""
     if not fut.done():
         left = until - time.monotonic()
         if left <= 0:

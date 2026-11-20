@@ -181,7 +181,7 @@ class OutputCfg(_Strict):
     # medium_parallel에서 두 답을 합치는 규칙. medium_first = medium이 성공하면 medium(low는 버림).
     # or_ungrounded = medium이 "근거 있음"이면 low 답을 마감 − MEDIUM_MARGIN_S까지 기다려, low가
     # "근거 없음"이면 low를 쓴다(둘 중 하나라도 근거 없음이면 근거 없음, 둘 다면 medium)
-    pair_rule: Literal["medium_first", "or_ungrounded"] = "medium_first"
+    pair_rule: Literal["medium_first", "or_ungrounded"]
 
 
 class EmbeddingCfg(_Strict):

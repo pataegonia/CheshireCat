@@ -152,7 +152,9 @@ async def test_or_rule_keeps_medium_when_medium_finds_no_grounding(no_rule):
 
 async def test_or_rule_keeps_medium_when_both_find_grounding(no_rule):
     guard, _ = await make(
-        pair(medium=MEDIUM_GROUNDED), output__medium_parallel=True, output__pair_rule="or_ungrounded"
+        pair(medium=MEDIUM_GROUNDED),
+        output__medium_parallel=True,
+        output__pair_rule="or_ungrounded",
     )
     j = await guard.judge(req())
     assert (j.output_source, j.nano_grounded, j.errors) == ("med", True, ())

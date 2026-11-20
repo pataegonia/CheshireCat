@@ -752,6 +752,7 @@ def row_records(
     경로까지 오지 않은 요청은 None). md_cite_path는 최종 응답이 그 경로에서 그대로 나갔나
     (cite_rule 적용 대상, 재생 tutor.eval.cite_replay가 쓴다). md_model_cites는 그중 모델이 인용한
     섹션(확인된 인용, 검색 1위 채우기·cite_top1 추가 제외), md_top1은 cite_top1이 더하는 섹션.
+    md_pick_top1_switch는 prefer_top1이 고른 초안을 바꿨나(그러면 md_pick은 바꾼 초안).
     """
     out = []
     for run, rows in enumerate(scored):
@@ -787,6 +788,7 @@ def row_records(
                     md_cites=shadow.md_cites,
                     md_model_cites=shadow.md_model_cites,
                     md_top1=shadow.top1,
+                    md_pick_top1_switch=shadow.top1_switch,
                     md_cite_path=shadow.cite_path,
                     stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )

@@ -973,17 +973,92 @@ async def _answer_v2(
         ]
         md_cites = [None if b is None else b[0] for b in both]
         md_model = [None if b is None else b[1] for b in both]
+        top = draft.sections if top_sections is None else top_sections
+        top1 = top[0].id if cfg.toggles.cite_top1 and top else None
+        switched = False
+        if cfg.llm.multi_draft.prefer_top1 == "on" and verdict is None and chosen is not None:
+            alt = _top1_draft(state, draft, runs, md_model, chosen, top1)
+            path = (
+                None if alt is None else _draft_path(cfg, runs[alt], signals, trusted, intent_label)
+            )
+            if path is not None and path[1] == action and path[2] == merged.category:
+                # 1위 섹션을 확인된 근거로 쓴 같은 action 초안의 문장·인용으로 바꾼다(호출 0회)
+                body = assemble(
+                    path[0],
+                    draft.sections,
+                    action=action,
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                    top_sections=top_sections,
+                )
+                final, chosen, switched = tutor_post(body, merged.category), alt, True
         if chosen is not None:
             md_cites[chosen] = sorted(final["citations"])  # 고른 초안은 실제로 나간 인용
         actions = [None if o is None else o.action for o in runs]
-        top = draft.sections if top_sections is None else top_sections
-        top1 = top[0].id if cfg.toggles.cite_top1 and top else None
         seen["md"] = (md_cites, actions, chosen, md_model, top1)
         seen["pick_body"] = final
         shadow = multi_draft.SHADOW.get()
         if shadow is not None:
             shadow.md_cites, shadow.md_model_cites, shadow.top1 = md_cites, md_model, top1
+            shadow.top1_switch = switched
+            if switched:
+                shadow.chosen = chosen
     return final
+
+
+def _top1_draft(
+    state: Any,
+    draft: Draft,
+    runs: Sequence[MainCallOut | None],
+    md_model: Sequence[Sequence[str] | None],
+    chosen: int,
+    top1: str | None,
+) -> int | None:
+    """`llm.multi_draft.prefer_top1`: 고른 초안의 모델 인용에 1위(`top1`)가 없고, action이 같은
+    다른 유효한 초안의 모델 인용(확인된 근거)에 있으면 그 초안 번호. 여럿이면 고르기와 같은 순서
+    (근거 비율 → 확인된 인용 수 → medium → A → 번호). 없으면 None."""
+    if top1 is None or top1 in (md_model[chosen] or []):
+        return None
+    action = runs[chosen].action  # type: ignore[union-attr]
+    keep = [
+        o
+        if o is not None and i != chosen and o.action == action and top1 in (md_model[i] or [])
+        else None
+        for i, o in enumerate(runs)
+    ]
+    if not any(keep):
+        return None
+    efforts = [d.effort for d in state.tutor_cfg.llm.multi_draft.drafts]
+    return multi_draft.select(keep, efforts, multi_draft.contract_sections(draft.sections))
+
+
+def _draft_path(
+    cfg: Any,
+    out: MainCallOut,
+    signals: Sequence[Signal],
+    trusted: str | None,
+    intent_label: str | None,
+) -> tuple[MainCallOut, Action, str] | None:
+    """초안 하나를 `_answer_v2`의 결정적 단계(대행 보정 → T 덮기 → 합치기)에 통과시킨 (결과, action,
+    범주). 고정 문장이 되면 None. 호출이 드는 단계(가드 판정·sj)와 mm 기록은 뺀다."""
+    toggles = cfg.toggles
+    out = delegation_guard(
+        out,
+        signals,
+        state_rule=toggles.scaffold_state_rule,
+        override=toggles.delegation_override,
+        classified=trusted,
+    )
+    action = choose_action(out, from_category=toggles.action_from_category)
+    decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    if decided is not None:
+        if template_for(decided.category, decided.action) is not None:
+            return None
+        out, action = out.model_copy(update={"category": decided.category}), decided.action
+    merged = merge_category(out.category, action, trusted)
+    if merged.fixed is not None or template_for(merged.category, action) is not None:
+        return None
+    return out, action, merged.category
 
 
 def _draft_cites(
@@ -1002,28 +1077,16 @@ def _draft_cites(
     부르지 않으며(고정 문장이면 []), mm은 기록하지 않는다(기록 칸을 쓰기 때문, 이 브랜치 설정에서
     끔). 규칙 A 1위(`top_sections`)는 고른 초안이 쓴 것을 그대로 쓴다(같은 질의라 같은 결과)."""
     toggles = cfg.toggles
-    out = delegation_guard(
-        out,
-        signals,
-        state_rule=toggles.scaffold_state_rule,
-        override=toggles.delegation_override,
-        classified=trusted,
-    )
-    action = choose_action(out, from_category=toggles.action_from_category)
-    decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
-    if decided is not None:
-        if template_for(decided.category, decided.action) is not None:
-            return [], []
-        out, action = out.model_copy(update={"category": decided.category}), decided.action
-    merged = merge_category(out.category, action, trusted)
-    if merged.fixed is not None or template_for(merged.category, action) is not None:
+    path = _draft_path(cfg, out, signals, trusted, intent_label)
+    if path is None:
         return [], []
+    out, action, category = path
     body = assemble(out, sections, action=action, max_citations=toggles.max_citations)
     verified = multi_draft.verified_sids(out, multi_draft.contract_sections(sections))
-    model = [c for c in tutor_post(body, merged.category)["citations"] if c in verified]
+    model = [c for c in tutor_post(body, category)["citations"] if c in verified]
     if toggles.cite_top1:  # assemble(cite_top1=True)와 같은 추가
         body = add_top_citation(body, sections if top_sections is None else top_sections)
-    return sorted(tutor_post(body, merged.category)["citations"]), sorted(model)
+    return sorted(tutor_post(body, category)["citations"]), sorted(model)
 
 
 def apply_cite_rule(

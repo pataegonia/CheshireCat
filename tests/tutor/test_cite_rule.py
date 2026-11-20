@@ -225,6 +225,44 @@ def test_apply_cite_rule_needs_the_pick_body_itself():
     assert apply_cite_rule(state, seen, other, other) is other
 
 
+# --- prefer_top1: 1위를 확인된 근거로 쓴 같은 action 초안으로 바꾼다 ---
+
+PT = "llm.multi_draft.prefer_top1"
+
+
+def test_prefer_top1_switches_to_the_draft_that_cites_the_top1():
+    off, off_shadow = flow([TWO, ONE, ONE])
+    body, shadow = flow([TWO, ONE, ONE], **{PT: "on"})
+    assert off_shadow.chosen == 0 and off["citations"] == [OTHER, TOP]
+    assert shadow.top1_switch and shadow.chosen == 1
+    assert body["citations"] == [TOP] and body["action"] == "answer"
+    assert body["answer"] != off["answer"] and "3회까지" in body["answer"]  # 문장도 그 초안 것
+    assert shadow.md_cites[1] == [TOP] and shadow.cite_path
+
+
+def test_prefer_top1_keeps_a_pick_that_already_cites_the_top1():
+    body, shadow = flow([ONE, TWO, TWO], **{PT: "on"})
+    assert not shadow.top1_switch and shadow.chosen == 0 and body["citations"] == [TOP]
+
+
+def test_prefer_top1_needs_a_same_action_verified_draft():
+    abstain_top = MainCallOut(
+        category="out_of_material",
+        action="abstain",
+        sentences=[SentenceOut(text="자료 문장", kind="claim", evidence=ONE.sentences[0].evidence)],
+    )
+    _body, shadow = flow([TWO, TWO, abstain_top], **{PT: "on"})
+    assert not shadow.top1_switch and shadow.chosen == 0
+    _body, shadow = flow([TWO, UNVERIFIED, UNVERIFIED], **{PT: "on"})  # 1위는 채우기일 뿐
+    assert not shadow.top1_switch
+
+
+def test_prefer_top1_off_is_the_default():
+    assert load_config().llm.multi_draft.prefer_top1 == "off"
+    _body, shadow = flow([TWO, ONE, ONE])
+    assert not shadow.top1_switch
+
+
 # --- 설정 ---
 
 
@@ -234,6 +272,9 @@ def test_cite_rule_config_accepts_the_rules_and_rejects_others():
     for bad in ("majority", True, None):
         with pytest.raises(ValueError):
             load_config(overrides={RULE: bad})
+    for bad in ("shadow", True):
+        with pytest.raises(ValueError):
+            load_config(overrides={PT: bad})
 
 
 # --- 행별 기록 · 재생 ---
@@ -249,6 +290,7 @@ def test_run_local_rows_have_cites_and_draft_cites(tmp_path, monkeypatch):
     assert run_local.main(argv) == 0
     recs = [json.loads(x) for x in rows.read_text(encoding="utf-8").splitlines()]
     assert all("cites" in r and "md_cites" in r and "md_cite_path" in r for r in recs)
+    assert all(r["md_pick_top1_switch"] is False for r in recs if r["md_n"])
     path = [r for r in recs if r["md_cite_path"]]
     assert path
     for r in path:
@@ -276,6 +318,21 @@ def test_run_local_top1_only_flag_cites_only_the_top1(tmp_path, monkeypatch):
         two = len(pick) >= 2 and r["md_top1"] in pick
         assert r["cites"] == [r["md_top1"]] if two else set(r["cites"]) == set(pick)
     assert any(len(r["md_cites"][r["md_pick"]]) >= 2 for r in path)  # 2개 인용 행이 있다
+
+
+def test_run_local_prefer_top1_flag_needs_the_quoted_on(tmp_path, monkeypatch):
+    from tests.tutor import tutor_testlib
+
+    tutor_testlib.answer_openai(monkeypatch)
+    rows = tmp_path / "rows.jsonl"
+    argv = ["--preset", "tutor", "--out", str(tmp_path), "--rows-jsonl", str(rows)]
+    argv += ["--tutor-set", "llm.multi_draft.enabled=true"]
+    # YAML에서 맨 on은 true라 로드에서 거부된다: 따옴표째 넘긴다(다른 off·on 토글과 같다)
+    assert run_local.main([*argv, "--tutor-set", 'llm.multi_draft.prefer_top1="on"']) == 0
+    recs = [json.loads(x) for x in rows.read_text(encoding="utf-8").splitlines()]
+    assert recs and all("md_pick_top1_switch" in r for r in recs if r["md_n"])
+    with pytest.raises((ValueError, SystemExit)):
+        run_local.main([*argv, "--tutor-set", "llm.multi_draft.prefer_top1=on"])
 
 
 def _kb():
@@ -351,6 +408,14 @@ def test_replay_on_a_tiny_synthetic_file(tmp_path):
     assert res2["mean_f1"]["top1_only"] == pytest.approx(1.0)  # 기록된 md_top1 = e
     res3 = cite_replay.replay_run([{**new, "md_top1": x}], gold, _kb())
     assert res3["mean_f1"]["top1_only"] == pytest.approx(0.0)  # 기록을 되살리기보다 먼저 쓴다
+    # prefer_top1: 새 형식에서만. 고른 초안 모델 인용 [x]에 1위 e가 없고 초안 1의 모델 인용에 있다
+    assert res["mean_f1"]["prefer_top1"] == pytest.approx(2 / 3)  # 옛 형식은 pick 그대로
+    sw = {**new, "md_model_cites": [[x], [e], [e]]}
+    res4 = cite_replay.replay_run([sw], gold, _kb())
+    assert res4["prefer_top1"] == {"new_format": 1, "two": 1, "switch": 1, "switch_two": 1}
+    assert res4["mean_f1"]["prefer_top1"] == pytest.approx(1.0)
+    assert res4["fixed"]["prefer_top1"] == [row["id"]]
+    assert res2["prefer_top1"]["switch"] == 0  # 다른 초안 모델 인용이 비면 바꾸지 않는다
     out = tmp_path / "out.txt"
     with out.open("w", encoding="utf-8") as fh:
         assert cite_replay.main([str(rows), str(rows)], out=fh) == 0

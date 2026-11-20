@@ -73,6 +73,7 @@ class Shadow:
     # 그중 모델이 인용한 섹션(결정적 수정이 고른 확인된 인용, 1위 채우기·cite_top1 추가 제외)
     md_model_cites: list[list[str] | None] | None = None
     top1: str | None = None  # cite_top1이 더하는 섹션(모든 초안에 같다). 끔이면 None
+    top1_switch: bool = False  # prefer_top1이 고른 초안을 바꿨나(그러면 chosen은 바꾼 초안)
     # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
     cite_path: bool = False
 

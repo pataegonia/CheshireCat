@@ -13,6 +13,11 @@
   (single_*는 `md_model_cites`도, 없는 옛 파일은 `model_cites`로 되살림)으로
   `multi_draft.compose_cites`를 다시 돌린 인용, 아닌 행(T·E·고정 문장이 바꾼 응답, 초안 없음)은
   기록된 인용 그대로.
+- prefer_top1(`llm.multi_draft.prefer_top1`, 초안 바꾸기): 새 형식 파일(`md_model_cites`·`md_top1`)
+  에서 고른 초안의 모델 인용에 1위가 없고 같은 action의 다른 초안 모델 인용에 있으면 그 초안의
+  인용(`md_cites`)으로 바꾼 인용. 재생은 인용만 본다(답·사실·충실이 그 초안 것으로 바뀌는 것은
+  재지 않는다). 후보가 여럿이면 초안 번호가 가장 작은 것(실제는 근거 비율 순이지만 기록에 없다),
+  그 초안의 뒤 단계가 같은 action·범주를 내는지도 보지 않는다. 옛 파일은 pick 그대로.
 - 손익분기: pick이 2개를 인용해 정답 하나만 맞힌 행에서 규칙이 하나만 남겼을 때 맞은 비율.
 
 튜터 점수 변화: 문항 점수 = 그 문항에 해당하는 항목의 평균(`scoring.tutor_points`)이라, 인용 F1이
@@ -36,6 +41,7 @@ from tutor.eval.run_local import holdout_ids, public_tutor_rows
 from tutor.judge.multi_draft import CITE_RULES, compose_cites
 
 SHOW_IDS = 20
+RULES = (*CITE_RULES, "prefer_top1")  # 재생하는 것: 인용 규칙 + 초안 바꾸기(prefer_top1)
 
 
 def gold_rows() -> dict[str, dict[str, Any]]:
@@ -65,12 +71,33 @@ def model_cites(rec: Mapping[str, Any]) -> tuple[list[list[str] | None], bool]:
     return out, False
 
 
+def switch_target(rec: Mapping[str, Any]) -> int | None:
+    """prefer_top1이 바꿀 초안 번호(새 형식 파일, 규칙 적용 행만). 없으면 None."""
+    model, md, chosen = rec.get("md_model_cites"), rec.get("md_cites"), rec.get("md_pick")
+    top1, actions = rec.get("md_top1"), rec.get("md_actions")
+    if not rec.get("md_cite_path") or model is None or md is None or chosen is None or not top1:
+        return None
+    if model[chosen] is None or top1 in model[chosen]:
+        return None
+    return next(
+        (
+            j
+            for j, m in enumerate(model)
+            if j != chosen and m is not None and actions[j] == actions[chosen] and top1 in m
+        ),
+        None,
+    )
+
+
 def rule_cites(rec: Mapping[str, Any], rule: str) -> list[str] | None:
     """그 규칙이 냈을 인용. 규칙이 적용되지 않는 행은 기록된 인용 그대로. pick은 응답에 나간
     순서(`cites`)를 쓴다(md_cites는 정렬이라 순서가 없다)."""
     md, chosen = rec.get("md_cites"), rec.get("md_pick")
     if not rec.get("md_cite_path") or md is None or chosen is None or md[chosen] is None:
         return rec.get("cites")
+    if rule == "prefer_top1":
+        j = switch_target(rec)
+        return rec.get("cites") if j is None else md[j]
     pick = rec["cites"] if set(rec.get("cites") or []) == set(md[chosen]) else md[chosen]
     model = model_cites(rec)[0] if rule.startswith("single_") else None
     return compose_cites(rule, pick, md, rec["md_actions"], chosen, model, top1_of(rec))
@@ -107,17 +134,19 @@ def replay_run(
     recs: Sequence[Mapping[str, Any]], gold: Mapping[str, Mapping[str, Any]], kb: Mapping[str, str]
 ) -> dict[str, Any]:
     """실행 하나(같은 run의 행들)의 규칙별 인용 F1·Δ튜터·고침/망침·pick 손실 갈래."""
-    names = ["recorded", *CITE_RULES]
+    names = ["recorded", *RULES]
     f1s: dict[str, list[float]] = {n: [] for n in names}
-    delta = dict.fromkeys(CITE_RULES, 0.0)
-    fixed: dict[str, list[str]] = {n: [] for n in CITE_RULES}
-    broken: dict[str, list[str]] = {n: [] for n in CITE_RULES}
+    delta = dict.fromkeys(RULES, 0.0)
+    fixed: dict[str, list[str]] = {n: [] for n in RULES}
+    broken: dict[str, list[str]] = {n: [] for n in RULES}
     loss = {"p_only": 0.0, "r_only": 0.0, "both": 0.0}
     loss_n = dict.fromkeys(loss, 0)
     n_scored = mismatch_f1 = mismatch_pick = path = derived = 0
     # 손익분기: pick이 2개 인용에 정답 하나(F1 2/3)인 행에서 규칙이 남긴 것. 하나만 남겨 맞으면
     # +1/3, 틀리면 −2/3이라 하나 남긴 행 중 맞은 비율이 2/3을 넘어야 이득이다
-    even = {n: dict.fromkeys(("right", "wrong", "same", "other"), 0) for n in CITE_RULES}
+    even = {n: dict.fromkeys(("right", "wrong", "same", "other"), 0) for n in RULES}
+    # prefer_top1: 새 형식 행 · pick 인용 2개 이상 · 바꿀 행 · 그중 2개 이상
+    sw = dict.fromkeys(("new_format", "two", "switch", "switch_two"), 0)
     for rec in recs:
         row = gold.get(rec["id"])
         if row is None or rec.get("points") is None:
@@ -129,8 +158,15 @@ def replay_run(
         on_path = bool(rec.get("md_cite_path")) and rec.get("md_cites") is not None
         path += on_path
         derived += on_path and not model_cites(rec)[1]
+        if on_path and rec.get("md_model_cites") is not None:
+            two = len(rec["md_cites"][rec["md_pick"]] or []) >= 2
+            switch = switch_target(rec) is not None
+            sw["new_format"] += 1
+            sw["two"] += two
+            sw["switch"] += switch
+            sw["switch_two"] += switch and two
         pr = {"recorded": prf(row, action, cites, kb)}
-        for rule in CITE_RULES:
+        for rule in RULES:
             pr[rule] = prf(row, action, rule_cites(rec, rule) or [], kb)
         for n in names:
             f1s[n].append(f1(*pr[n]))
@@ -140,7 +176,7 @@ def replay_run(
         if rec.get("md_cite_path") and set(rule_cites(rec, "pick") or []) != set(cites):
             mismatch_pick += 1  # pick 판으로 잰 파일이면 0이어야 한다
         base = item_points(row, rec, *pr["pick"])
-        for rule in CITE_RULES:
+        for rule in RULES:
             delta[rule] += item_points(row, rec, *pr[rule]) - base
             if f1s[rule][-1] > f1s["pick"][-1]:
                 fixed[rule].append(rec["id"])
@@ -149,7 +185,7 @@ def replay_run(
         gold_ids = set(row["labels"]["evidence"])
         pick = rule_cites(rec, "pick") or []
         if len(set(pick)) == 2 and len(gold_ids & set(pick)) == 1:
-            for rule in CITE_RULES:
+            for rule in RULES:
                 kept = set(rule_cites(rec, rule) or [])
                 kind = "same" if kept == set(pick) else "other"
                 if len(kept) == 1:
@@ -166,6 +202,7 @@ def replay_run(
         "rule_rows": path,
         "derived_model_rows": derived,
         "break_even": even,
+        "prefer_top1": sw,
         "mean_f1": {n: (sum(v) / len(v) if v else None) for n, v in f1s.items()},
         "delta_tutor": {k: 100 * v / n_scored if n_scored else 0.0 for k, v in delta.items()},
         "delta_sum": delta,
@@ -202,13 +239,13 @@ def write_report(name: str, res: Mapping[str, Any], out: TextIO) -> None:
     out.write(" · ".join(f"{n} {fmt(v)}" for n, v in res["mean_f1"].items()) + "\n")
     out.write("  Δ튜터(점, pick 대비): ")
     out.write(" · ".join(f"{k} {v:+.3f}" for k, v in res["delta_tutor"].items()) + "\n")
-    for rule in CITE_RULES[1:]:
+    for rule in RULES[1:]:
         fx, br = res["fixed"][rule], res["broken"][rule]
         out.write(f"  {rule}: 고침 {len(fx)} · 망침 {len(br)}")
         out.write(f" | 고침 {','.join(fx[:SHOW_IDS])} | 망침 {','.join(br[:SHOW_IDS])}\n")
     out.write("  손익분기(pick 2개 중 정답 1개인 행, 하나만 남겨 맞은 비율 > 2/3이면 이득): ")
     parts = []
-    for rule in CITE_RULES[1:]:
+    for rule in RULES[1:]:
         e = res["break_even"][rule]
         one = e["right"] + e["wrong"]
         rate = f"{e['right'] / one:.2f}" if one else "-"
@@ -217,6 +254,12 @@ def write_report(name: str, res: Mapping[str, Any], out: TextIO) -> None:
             f"(맞은 비율 {rate})"
         )
     out.write(" | ".join(parts) + "\n")
+    sw = res["prefer_top1"]
+    out.write(
+        f"  prefer_top1(새 형식 규칙 적용 행 {sw['new_format']}): pick 인용 2개 이상 {sw['two']}"
+        f" · 바꿀 행 {sw['switch']}(그중 2개 이상 {sw['switch_two']}) · 인용 F1·Δ튜터는 위 줄,"
+        " 인용만 잰 값\n"
+    )
     loss, n = res["pick_loss"], res["pick_loss_rows"]
     out.write(
         "  pick 손실 Σ(1−F1): 정밀도만 "
@@ -242,7 +285,7 @@ def pool(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         )
         for k in names
     }
-    delta = {k: sum(r["delta_sum"][k] for r in results) for k in CITE_RULES}
+    delta = {k: sum(r["delta_sum"][k] for r in results) for k in RULES}
     keys = ("p_only", "r_only", "both")
     return {
         "scored_rows": n,
@@ -251,13 +294,16 @@ def pool(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "derived_model_rows": sum(r["derived_model_rows"] for r in results),
         "break_even": {
             k: {c: sum(r["break_even"][k][c] for r in results) for c in results[0]["break_even"][k]}
-            for k in CITE_RULES
+            for k in RULES
+        },
+        "prefer_top1": {
+            c: sum(r["prefer_top1"][c] for r in results) for c in results[0]["prefer_top1"]
         },
         "mean_f1": mean_f1,
         "delta_tutor": {k: 100 * v / n if n else 0.0 for k, v in delta.items()},
         "delta_sum": delta,
-        "fixed": {k: [i for r in results for i in r["fixed"][k]] for k in CITE_RULES},
-        "broken": {k: [i for r in results for i in r["broken"][k]] for k in CITE_RULES},
+        "fixed": {k: [i for r in results for i in r["fixed"][k]] for k in RULES},
+        "broken": {k: [i for r in results for i in r["broken"][k]] for k in RULES},
         "pick_loss": {k: sum(r["pick_loss"][k] for r in results) for k in keys},
         "pick_loss_rows": {k: sum(r["pick_loss_rows"][k] for r in results) for k in keys},
         "mismatch_recorded_f1": sum(r["mismatch_recorded_f1"] for r in results),

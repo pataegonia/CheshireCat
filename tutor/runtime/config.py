@@ -186,6 +186,9 @@ class MultiDraft(_Strict):
         "single_agree",
         "top1_only",
     ] = "pick"
+    # 고른 초안의 모델 인용에 cite_top1 섹션이 없고 같은 action의 다른 초안 모델 인용에 있으면
+    # 그 초안으로 바꾼다(답·인용 모두 그 초안, 호출 0회, flow._top1_draft)
+    prefer_top1: Literal["off", "on"] = "off"
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":

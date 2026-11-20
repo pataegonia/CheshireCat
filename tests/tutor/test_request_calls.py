@@ -181,7 +181,7 @@ def test_pipeline_gives_each_request_its_own_quota(monkeypatch):
 
 
 def test_hedged_and_retried_main_call_is_counted_by_the_real_llm():
-    """겹쳐 보낸 주 호출과 처음 주 호출의 재시도가 함께 나가도 예약 수 = 보낸 시도 수 ≤ 최악 계산."""
+    """겹쳐 보낸 주 호출과 처음 주 호출의 재시도가 함께 나가도 예약 수 = 보낸 시도 수 ≤ 최악."""
     import httpx
     import openai
 

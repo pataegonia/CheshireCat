@@ -86,6 +86,10 @@ class Toggles(_Strict):
     # 한 요청 안에서 같은 질의 문자열의 임베딩(E·주 호출·규칙 A)을 한 번만 부르고 결과를 나눠 쓴다.
     # 요청 사이에는 나누지 않는다(요청이 끝나면 버린다). 실패한 결과는 나누지 않는다. 기본 끔
     share_query_embedding: bool
+    # 두 초안 중 고르기 J(후보 J, tutor.judge.draft_select): 주 호출(A)과 같은 근거로 작성 보충
+    # 지시를 덧붙인 두 번째 초안 B를 동시에 만들고, 둘 다 answer·같은 범주·다른 문장이면 nano
+    # 선택기 1회가 고른다. B·J 실패·시간 부족이면 A. 요청당 nano 최대 2회 더. 실험 토글, 기본 끔
+    draft_select: bool
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -131,6 +135,7 @@ class Timeouts(_Strict):
     embedding: PositiveFloat
     intent: PositiveFloat  # T 의도 판정 호출(toggles.intent_override)
     oom_gate: PositiveFloat  # 자료 밖 확인 E(toggles.oom_gate). E 시작(검색 직후)부터 센다
+    select_draft: PositiveFloat  # 두 초안 선택기 J(toggles.draft_select) 호출 상한
 
 
 class Llm(_Strict):
@@ -175,9 +180,10 @@ class TutorConfig(_Strict):
 def request_calls(cfg: "TutorConfig") -> tuple[int, int]:
     """(정상 경로, 최악) 요청당 nano 시도 수. 설정·검증·측정 예상 호출이 모두 이 값을 쓴다.
 
-    정상 = 주 호출 1 + T + classify 1 + judge_output + E(켠 것만, 재시도·겹쳐 보내기 없이).
+    정상 = 주 호출 1 + T + classify 1 + judge_output + E + B·J(켠 것만, 재시도·겹쳐 보내기 없이).
     최악 = 주 호출 1 + 재시도(MAIN_RETRIES, T와 classify를 함께 켜면 0) + 겹쳐 보낸 주 호출 1
-    (main_hedge < main일 때, 재시도 없이) + T + classify 2(1차 탈옥이면 2차) + judge_output + E.
+    (main_hedge < main일 때, 재시도 없이) + T + classify 2(1차 탈옥이면 2차) + judge_output + E
+    + 두 번째 초안 B 1·선택기 J 1(`draft_select`, 둘 다 재시도 없음).
     겹쳐 보낸 주 호출이 나가도 처음 주 호출은 재시도할 수 있어 둘을 함께 센다. 베이스라인은 1·2.
     E는 named_term이면 일부 요청에만 나가지만 상한 쪽으로 센다. 임베딩은 세지 않는다.
     """
@@ -187,6 +193,7 @@ def request_calls(cfg: "TutorConfig") -> tuple[int, int]:
     t_on = t.intent_override != "off" and t.guard_classify != "serial"
     classify = t.guard_classify != "off"
     extra = int(t_on) + int(t.verify == "guard") + int(t.oom_gate != "off")
+    extra += 2 * int(t.draft_select)  # B + J
     retries = 0 if (t_on and classify) else MAIN_RETRIES
     hedge = int(cfg.llm.timeout_s.main_hedge < cfg.llm.timeout_s.main)
     return 1 + int(classify) + extra, 1 + retries + hedge + 2 * int(classify) + extra

@@ -16,6 +16,7 @@
 import asyncio
 import contextlib
 import json
+import logging
 import math
 import os
 import random
@@ -42,6 +43,8 @@ Outcome = Literal["sent", "budget", "request_cap", "gate", "no_time"]
 OPTIONAL_PARAMS = ("reasoning_effort", "verbosity", "max_completion_tokens")
 RETRY_JITTER_S = (0.2, 0.5)  # 가드 기본 설정(llm.retry_jitter_s)과 같다
 TOKEN_BUCKET = 100  # 성공한 시도의 completion_tokens 분포 구간 폭
+# 가드 접근 로그(guardrail.access, INFO)의 하위 로거. 요청당 시도 상한에 막힌 역할 이름만 남긴다
+cap_log = logging.getLogger("guardrail.access.request_cap")
 
 
 class RequestQuota:
@@ -237,6 +240,7 @@ class TutorLLM:
                 return self._result(_Attempt(error="budget"), attempts, t0)
             if outcome == "request_cap":  # 앞 시도의 오류가 있으면 그것을, 없으면 budget
                 self.capped[role] += 1
+                cap_log.info("request_cap %s", role)  # 역할 이름만(0이어야 하는 일)
                 return self._result(last if attempts else _Attempt(error="budget"), attempts, t0)
             if a is None:  # 게이트 대기로 마감이나 다시 보낼 시간을 다 썼다(앞 오류를 그대로)
                 return self._result(last, attempts, t0)

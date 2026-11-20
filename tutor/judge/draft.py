@@ -9,13 +9,27 @@
 - 요청 내용은 이 함수의 지역 변수로만 쓰고 남기지 않는다(TU-18).
 """
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from tutor.judge.conversation import Conversation
+from tutor.judge.draft_select import two_drafts
 from tutor.judge.main_call import Complete, MainCallOut, MainCallPrompt, run_main_call
 from tutor.retrieval import KbIndex, Section, retrieve
+
+
+@dataclass(frozen=True)
+class SecondDraft:
+    """두 번째 초안 B와 고르기(후보 J). 흐름(`flow._second_draft`)이 요청마다 만든다."""
+
+    prompt: MainCallPrompt  # B 프롬프트(주 호출 system + 작성 보충)
+    complete: Complete  # B 호출(재시도·겹쳐 보내기 없음)
+    # (근거 묶음, A, B) → 쓸 초안(`draft_select.choose`)
+    choose: Callable[
+        [Sequence[Section], MainCallOut | None, MainCallOut | None],
+        Awaitable[MainCallOut | None],
+    ]
 
 
 @dataclass(frozen=True)
@@ -36,8 +50,12 @@ async def draft_answer(
     english_only_embedding: bool = False,
     examples: str = "",
     index: KbIndex | None = None,
+    second: SecondDraft | None = None,
 ) -> Draft:
     """검색 상위 k개를 근거 묶음으로 주 호출을 한 번 부른다.
+
+    `second`(후보 J, `toggles.draft_select`)가 있으면 같은 근거 묶음으로 두 번째 초안 B를 동시에
+    만들고 `second.choose`가 고른 초안을 낸다(`tutor.judge.draft_select`). 없으면 지금과 같다.
 
     `embedding`은 기동 때 만든 임베딩 검색(TU-11, `state.tutor_emb`, #124)이다. 있을 때만
     `retrieve(…, embedding=)`로 넘기고, 없으면(토글 끔·기동 실패) BM25만 쓴다.
@@ -54,7 +72,19 @@ async def draft_answer(
     if english_only_embedding:
         extra["english_only_embedding"] = True
     sections = tuple(await retrieve(query, history, k=k, **extra))
-    out = await run_main_call(
+    run_a = run_main_call(
         complete, prompt, conv, sections, signals, deadline=deadline, examples=examples
     )
-    return Draft(sections=sections, out=out)
+    if second is None:
+        return Draft(sections=sections, out=await run_a)
+    run_b = run_main_call(
+        second.complete,
+        second.prompt,
+        conv,
+        sections,
+        signals,
+        deadline=deadline,
+        examples=examples,
+    )
+    out_a, out_b = await two_drafts(run_a, run_b, deadline=deadline)
+    return Draft(sections=sections, out=await second.choose(sections, out_a, out_b))

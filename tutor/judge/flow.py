@@ -49,8 +49,9 @@ from tutor.answer.templates import (
     fixed_body,
     template_for,
 )
+from tutor.judge import draft_select
 from tutor.judge.conversation import Conversation, normalize_fast, tidy
-from tutor.judge.draft import draft_answer
+from tutor.judge.draft import SecondDraft, draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
     ATTACK_CATEGORIES,
@@ -117,6 +118,15 @@ def prepare_judge(app_state: Any) -> None:
     app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
     named = toggles.oom_gate == "named_term"  # KB 전체 글(비교용)도 기동 때 한 번
     app_state.tutor_kb_blob = kb_blob(app_state.tutor_kb.sections) if named else None
+    select_on = toggles.draft_select  # 두 초안 중 고르기 J: B 프롬프트·J 프롬프트는 기동 때 한 번
+    addendum = draft_select.load_prompt(draft_select.B_PROMPT_PATH) if select_on else None
+    app_state.tutor_prompt_b = (
+        draft_select.prompt_b(app_state.tutor_prompt, addendum) if addendum is not None else None
+    )
+    app_state.tutor_select_system = (
+        draft_select.load_prompt(draft_select.J_PROMPT_PATH) if select_on else None
+    )
+    app_state.draft_select_counts = draft_select.DraftCounts()  # 갈래 → 횟수(본문 없음)
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -365,6 +375,43 @@ def _complete(state: Any):
                     task.cancel()  # 요청이 끝난 뒤 남는 작업이 없게(TU-18). 취소는 삼키지 않는다
 
     return complete
+
+
+def _second_draft(state: Any, conv: Conversation, deadline: float) -> SecondDraft | None:
+    """두 초안 중 고르기 J(`toggles.draft_select`). 끔이거나 프롬프트가 없으면 None.
+
+    B는 주 호출과 같은 시간 제한으로 한 번만 보낸다(재시도·겹쳐 보내기 없음)."""
+    cfg = state.tutor_cfg
+    prompt = getattr(state, "tutor_prompt_b", None)
+    system = getattr(state, "tutor_select_system", None)
+    if not cfg.toggles.draft_select or prompt is None or system is None:
+        return None
+    llm = state.tutor_llm
+
+    async def complete_b(messages, schema, *, deadline: float):
+        return await llm.complete(
+            draft_select.ROLE_B,
+            messages,
+            schema,
+            deadline=deadline,
+            timeout_s=cfg.llm.timeout_s.main,
+            retries=0,
+        )
+
+    async def choose(sections, out_a, out_b):
+        return await draft_select.choose(
+            llm,
+            system,
+            sections,
+            conv,
+            out_a,
+            out_b,
+            timeout_s=cfg.llm.timeout_s.select_draft,
+            deadline=deadline,
+            counts=getattr(state, "draft_select_counts", None),
+        )
+
+    return SecondDraft(prompt=prompt, complete=complete_b, choose=choose)
 
 
 def _start_intent(
@@ -720,6 +767,7 @@ async def _answer_v2(
             english_only_embedding=cfg.toggles.english_embedding,
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
+            second=_second_draft(state, conv, deadline),  # 후보 J(끄면 None)
         )
         if deferred is not None and draft.out is None:
             # 주 호출이 실패했으면 T 고정 문장. 성공했으면 아래 T 덮기(decide)가 parallel과 같은

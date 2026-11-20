@@ -316,11 +316,13 @@ def expected_calls(
     runs: int,
     judge: bool,
     tutor_calls: int = TUTOR_CALLS,
+    judge_repeat: int = 1,
 ) -> int:
-    """실행 전에 세는 운영진 API 예상 호출 수(TU-16 호출 예산). 재시도 여유로 1.1배 한다."""
+    """실행 전에 세는 운영진 API 예상 호출 수(TU-16 호출 예산). 재시도 여유로 1.1배 한다.
+    `judge_repeat`(--judge-repeat)이면 판정 몫을 그만큼 곱한다."""
     per_run = tutor_calls * len(rows) if preset == "tutor" else 0
     if judge:
-        per_run += sum(_judge_calls(row) for row in rows)
+        per_run += judge_repeat * sum(_judge_calls(row) for row in rows)
     return (per_run * runs * 11 + 9) // 10  # 정수로 1.1배 올림(가드 하네스와 같음)
 
 
@@ -439,6 +441,7 @@ def _write(
     team: Mapping[str, Any] | None = None,
     gate_summary: Mapping[str, Any] | None = None,
     tutor: Mapping[str, Any] | None = None,
+    judge_cfg: Mapping[str, Any] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
@@ -465,6 +468,8 @@ def _write(
         data["gate"] = dict(gate_summary)
     if invalid is not None:
         data["invalid"] = invalid
+    if judge_cfg is not None:  # --judge-effort 등: 판정 설정과 시도·잘림 수(숫자만)
+        data["judge_config"] = dict(judge_cfg)
     if checks is not None:
         data["evidence_check"] = {
             "by_run": [dict(sorted(seen.items())) for seen in checks],
@@ -704,10 +709,38 @@ def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="튜터 세부 지표 로컬 측정(TU-16·T1.5)")
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--preset", choices=PRESETS)
-    source.add_argument("--responses", type=Path, help="JSONL: 줄마다 {id, response}")
+    source.add_argument(
+        "--responses",
+        type=Path,
+        nargs="+",
+        help="JSONL: 줄마다 {id, response}. 여러 개면 파일 하나가 실행 하나(--save-responses 결과)",
+    )
     ap.add_argument("--cases", default="public", help="public(기본) | team | 점검 세트 JSONL 경로")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--judge", action="store_true", help="운영진 API로 사실·충실·응함 판정")
+    ap.add_argument(
+        "--judge-effort",
+        choices=("minimal", "low", "medium", "high"),
+        help="판정 호출의 reasoning_effort(기본: 보내지 않음 = 운영진 judge.py, 모델 기본값)",
+    )
+    ap.add_argument(
+        "--judge-max-tokens",
+        type=int,
+        help="판정 호출의 max_completion_tokens(기본: 운영진 judge.py와 같은 4000)",
+    )
+    ap.add_argument(
+        "--judge-repeat",
+        type=int,
+        default=1,
+        help="판정마다 N번 물어 다수결(참/거짓 과반, facts 중앙값). 판정 호출이 N배",
+    )
+    ap.add_argument(
+        "--save-responses",
+        type=Path,
+        metavar="PATH",
+        help="tutor 프리셋의 응답을 JSONL(줄마다 {id, response})로 남긴다(답변 본문이 든다, "
+        "git 밖 runs/에 둔다). 실행이 여럿이면 PATH 이름 뒤에 -r<실행 번호>",
+    )
     ap.add_argument(
         "--max-calls", type=int, help="운영진 API 호출 상한(기본: config/tutor.yaml eval.max_calls)"
     )
@@ -809,6 +842,37 @@ def answer_failures(failures: Mapping[tuple[str, str], int]) -> int:
     """답을 기본값으로 바꾼 최종 실패 수. 실험 단계 호출(rq·sj)의 실패는 응답을 바꾸지 않으므로
     (그대로 둔다) 결과를 tainted로 만들지 않는다. 그 수는 실패 줄과 행별 stages에 그대로 남는다."""
     return sum(n for (role, _), n in failures.items() if role not in STAGE_ROLES)
+
+
+def save_responses(path: Path, all_responses: Sequence[Mapping[str, Any]]) -> list[Path]:
+    """`--save-responses`: 실행마다 {id, response} JSONL(`--responses`가 읽는 꼴). 실행이 하나면
+    PATH 그대로, 여럿이면 PATH 이름 뒤에 -r<번호>. 답변 본문이 들어 있다(git 밖에 둔다)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out = []
+    for run, responses in enumerate(all_responses):
+        target = (
+            path if len(all_responses) == 1 else path.with_name(f"{path.stem}-r{run}{path.suffix}")
+        )
+        lines = (
+            json.dumps({"id": i, "response": r}, ensure_ascii=False) for i, r in responses.items()
+        )
+        target.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+        out.append(target)
+    return out
+
+
+def _judge_cfg(args: argparse.Namespace, judge: Any) -> dict[str, Any] | None:
+    """--judge-effort·--judge-max-tokens·--judge-repeat 설정과 시도·잘림 수. 기본 판정기면 None."""
+    stats = getattr(judge, "stats", None)
+    if judge is None or stats is None:
+        return None
+    return {
+        "effort": args.judge_effort,
+        "max_tokens": args.judge_max_tokens,
+        "repeat": args.judge_repeat,
+        "stats": dict(sorted(stats.items())),
+        "truncated": sum(n for k, n in stats.items() if k.startswith("length_")),
+    }
 
 
 def write_rows_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
@@ -1086,14 +1150,31 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
             sys.stdout.write(f"가드 설정 기본 아님: {' · '.join(changed)}\n")
     if args.max_calls is None:
         args.max_calls = cfg.eval.max_calls
-    judge = judge_from_env() if args.judge else None
+    tuned = args.judge_effort is not None or args.judge_max_tokens is not None
+    if (tuned or args.judge_repeat != 1) and not args.judge:
+        ap.error("--judge-effort·--judge-max-tokens·--judge-repeat는 --judge와 쓴다")
+    if args.judge_repeat < 1:
+        ap.error("--judge-repeat는 1 이상이어야 한다")
+    if args.save_responses is not None and args.preset != "tutor":
+        ap.error("--save-responses는 --preset tutor에서만 쓴다")
+    judge = None
+    if args.judge:  # 설정을 주지 않으면 운영진 판정기 그대로(인자 없이 부른다)
+        tuned_args = (args.judge_effort, args.judge_max_tokens, args.judge_repeat)
+        judge = judge_from_env(*tuned_args) if tuned or args.judge_repeat != 1 else judge_from_env()
     if args.judge and judge is None:
         ap.error("--judge에는 OPENAI_BASE_URL·OPENAI_MODEL·OPENAI_API_KEY가 모두 필요하다")
     kind = "public" if args.cases == "public" else "team"
     if kind == "team" and args.preset not in (None, "tutor"):  # reference는 정답 답변을 낸다
         ap.error("--cases는 --preset tutor나 --responses와 쓴다(점검 세트에는 정답 답변이 없다)")
     try:
-        fixed = load_responses(args.responses) if args.responses else None
+        args.fixed_all = [load_responses(p) for p in args.responses or ()]
+        fixed = args.fixed_all[0] if args.fixed_all else None
+        if len(args.fixed_all) > 1:  # 파일 하나 = 실행 하나
+            if any(set(f) != set(fixed) for f in args.fixed_all):
+                raise ValueError("응답 파일들의 id가 서로 다르다")
+            if args.runs != 1:
+                raise ValueError("응답 파일을 여럿 주면 --runs를 주지 않는다(파일 수가 실행 수)")
+            args.runs = len(args.fixed_all)
         previous = (
             load_previous(args.compare, judge=args.judge, cases=kind) if args.compare else None
         )
@@ -1122,6 +1203,7 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         runs=args.runs,
         judge=args.judge,
         tutor_calls=CALLS_PER_REQUEST[cfg.mode] + _extra_drafts(cfg),
+        judge_repeat=args.judge_repeat,
     )
     if args.guard:  # 가드 classify·judge_output은 TUTOR_CALLS 안에 이미 있다. probe만 더한다
         calls += guard_probe_calls(load_guard_config().llm)
@@ -1148,7 +1230,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
     rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard = _inputs(ap, args)
     team = args.cases != "public"
-    reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
+    reserve = expected_calls(  # 판정 몫
+        rows, preset=None, runs=args.runs, judge=args.judge, judge_repeat=args.judge_repeat
+    )
     tutor_cap = args.max_calls - reserve - embedding
     guard_cap, guard_probe = 0, 0
     if args.guard:  # 가드 몫(probe + 요청당 classify·judge_output)을 튜터 몫에서 떼어 준다
@@ -1217,7 +1301,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 **drafts,
             )
     else:
-        all_responses = [fixed] * args.runs
+        all_responses = args.fixed_all if len(args.fixed_all) > 1 else [fixed] * args.runs
+    if args.save_responses is not None:
+        save_responses(args.save_responses, all_responses)
     llm_stopped = stop.tripped  # 튜터 단계에서 멈췄나(판정 단계에서 멈춘 것과 가른다)
     stop.next_stage()
     kb = score_local.load_kb_dir(KB_DIR)
@@ -1237,7 +1323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # 가드 단계를 건너뛰었거나 가드 호출이 오류로 끝난 행은 튜터 단독·가드 기본값 결과다(#165 리뷰)
     tainted = tainted or (guard_run is not None and not guard_run["clean"])
     invalid = stop.reason()
-    name = (args.preset or args.responses.stem) + ("-team" if team else "")
+    name = (args.preset or args.responses[0].stem) + ("-team" if team else "")
     check_summary = (
         evidence_check_summary(rows, all_responses, checks) if checks is not None else None
     )
@@ -1271,8 +1357,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         checks=checks,
         check_summary=check_summary,
         team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
+        judge_cfg=_judge_cfg(args, judge),
     )
     _show(report, sys.stdout, judged=judge is not None)
+    jc = _judge_cfg(args, judge)
+    if jc is not None:
+        sys.stdout.write(
+            f"판정 설정: effort {jc['effort'] or '기본'} · 상한 {jc['max_tokens'] or 4000}"
+            f" · 반복 {jc['repeat']} · 판정 시도 {jc['stats'].get('attempts', 0)}"
+            f" · 잘림(length) {jc['truncated']}\n"
+        )
     if check_summary is not None:
         show_evidence_check(check_summary, sys.stdout)
     if by_axis is not None:

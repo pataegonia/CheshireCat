@@ -67,6 +67,7 @@ def _baseline_config(tmp_path_factory):
         # 초안 바꾸기·1위 다시 쓰기도 끈다(켠 동작은 test_cite_rule이 본다)
         raw["llm"]["multi_draft"]["prefer_top1"] = "off"
         raw["llm"]["multi_draft"]["top1_redraft"] = "off"
+        raw["llm"]["multi_draft"]["top1_redraft_abstain"] = "off"
     path = tmp_path_factory.mktemp("tutor_config") / "tutor_baseline.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path

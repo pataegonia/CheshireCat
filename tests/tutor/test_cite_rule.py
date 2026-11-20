@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -308,7 +309,7 @@ def test_redraft_with_only_the_top1_section_is_used():
     assert body["citations"] == [TOP] and body["action"] == "answer"
     assert body["answer"] != off["answer"] and "3회까지" in body["answer"]
     assert shadow.redraft == "used" and shadow.cite_path is False  # cite_rule은 걸지 않는다
-    assert ";rd=1/0/used/" in shadow.log_field()
+    assert ";rd=1/1/used/" in shadow.log_field()
 
 
 ABSTAIN_TOP = MainCallOut(
@@ -333,7 +334,7 @@ def test_redraft_rejections_keep_the_pick(redraft, code):
     body, shadow, llm = redraft_flow([TWO, TWO, TWO], redraft)
     assert len(llm.calls) == 4 and body == off
     assert shadow.redraft == code and shadow.cite_path is True
-    assert f";rd=1/0/{code.replace(':', '_')}/" in shadow.log_field()
+    assert re.search(f";rd=1/[012]/{code.replace(':', '_')}/", shadow.log_field())
 
 
 def test_redraft_is_skipped_when_too_little_time_is_left():
@@ -402,7 +403,7 @@ def test_parallel_redraft_is_sent_with_the_drafts_and_used_after_selection():
     assert body["citations"] == [TOP] and "3회까지" in body["answer"]
     assert body["answer"] != off["answer"] and shadow.redraft == "used"
     assert shadow.chosen == 0 and shadow.valid == 3  # 고르기·다수결에는 들어가지 않는다
-    assert ";rd=1/0/used/" in shadow.log_field()
+    assert ";rd=1/1/used/" in shadow.log_field()
 
 
 def test_parallel_redraft_not_needed_keeps_the_pick():
@@ -446,6 +447,51 @@ def test_parallel_needs_the_rule_a_top1():
         load_config(overrides={**md, "toggles.top1_dialog_query": False})
 
 
+# --- top1_redraft_abstain: 1위 초안이 abstain이면 그 abstain을 고른 초안처럼 낸다 ---
+
+RA = "llm.multi_draft.top1_redraft_abstain"
+CLARIFY = MainCallOut(category="low_signal_input", action="clarify", sentences=[])
+
+
+def test_redraft_action_is_recorded_and_the_log_has_only_a_same_flag():
+    _body, shadow, _llm = redraft_flow([TWO, TWO, TWO], ABSTAIN_TOP)
+    assert shadow.redraft == "rejected:action" and shadow.redraft_action == "abstain"
+    field = shadow.log_field()
+    assert ";rd=1/2/rejected_action/" in field and "abstain" not in field  # action 값은 로그 밖
+    _body, shadow, _llm = redraft_flow([TWO, TWO, TWO], lambda schema: result(error="timeout"))
+    assert shadow.redraft_action is None and ";rd=1/0/rejected_fail/" in shadow.log_field()
+
+
+@pytest.mark.parametrize("mode", ["on", "parallel"])
+def test_redraft_abstain_on_outputs_the_abstain_like_a_picked_abstain_draft(mode):
+    picked_abstain, _ = flow([ABSTAIN_TOP] * 3)  # abstain 초안을 골랐을 때의 응답
+    if mode == "on":
+        body, shadow, _llm = redraft_flow([TWO, TWO, TWO], ABSTAIN_TOP, **{RA: "on"})
+    else:
+        body, shadow, _llm = parallel_flow([TWO, TWO, TWO], ABSTAIN_TOP, **{RA: "on"})
+    assert body["action"] == "abstain" and body == picked_abstain
+    assert shadow.redraft == "used_abstain" and shadow.redraft_action == "abstain"
+    field = shadow.log_field()
+    assert ";rd=1/2/used_alt/" in field and "abstain" not in field
+    assert shadow.cite_path is False  # 고른 초안의 응답이 아니다
+
+
+def test_redraft_abstain_on_only_reacts_to_abstain():
+    off, _ = flow([TWO, TWO, TWO])
+    body, shadow, _llm = redraft_flow([TWO, TWO, TWO], CLARIFY, **{RA: "on"})
+    assert body == off and shadow.redraft == "rejected:action"
+    assert shadow.redraft_action == "clarify"
+    body, shadow, _llm = redraft_flow([TWO, TWO, TWO], ONE, **{RA: "on"})
+    assert shadow.redraft == "used" and body["action"] == "answer"
+
+
+def test_redraft_abstain_config():
+    assert load_config().llm.multi_draft.top1_redraft_abstain == "off"
+    assert load_config(overrides={RA: "on"}).llm.multi_draft.top1_redraft_abstain == "on"
+    with pytest.raises(ValueError):
+        load_config(overrides={RA: True})
+
+
 def test_redraft_call_counts_toward_the_cap(monkeypatch):
     on = {"toggles.intent_override": "serial", "toggles.oom_gate": "all", RD: "on"}
     four = {"llm.multi_draft.enabled": True, "llm.multi_draft.drafts": [{"effort": "low"}] * 4}
@@ -487,7 +533,11 @@ def test_run_local_rows_have_cites_and_draft_cites(tmp_path, monkeypatch):
     recs = [json.loads(x) for x in rows.read_text(encoding="utf-8").splitlines()]
     assert all("cites" in r and "md_cites" in r and "md_cite_path" in r for r in recs)
     assert all(r["md_pick_top1_switch"] is False for r in recs if r["md_n"])
-    assert all("md_redraft" in r and "md_redraft_ms" in r for r in recs if r["md_n"])
+    assert all(
+        "md_redraft" in r and "md_redraft_ms" in r and "md_redraft_action" in r
+        for r in recs
+        if r["md_n"]
+    )
     path = [r for r in recs if r["md_cite_path"]]
     assert path
     for r in path:

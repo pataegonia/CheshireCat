@@ -78,6 +78,7 @@ class Shadow:
     # | rejected:<fail·action·category·cite·path>
     redraft: str | None = None
     redraft_ms: float = 0.0  # 그 초안 호출에 걸린 시간(부르지 않았으면 0)
+    redraft_action: str | None = None  # 측정 전용(로그에 내지 않는다): 유효한 1위 초안의 action
     # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
     cite_path: bool = False
 
@@ -104,7 +105,12 @@ class Shadow:
                 parts.append(f"md_a_same={int(self.a_action == self.chosen_action)}")
         parts += [f"{d.key}={d.ms:.0f}/{d.attempts}/{d.code}/{d.gate_ms:.0f}" for d in self.drafts]
         if self.redraft is not None:  # 가드 호출 기록 칸과 같은 모양(코드는 글자·_만)
-            parts.append(f"rd=1/0/{self.redraft.replace(':', '_')}/{self.redraft_ms:.0f}")
+            # 둘째 칸: 유효한 1위 초안의 action이 고른 초안과 같으면 1, 다르면 2, 없으면 0
+            # (action 값은 로그에 내지 않는다, TU-15. md_a_same과 같은 방식). used_abstain은 alt로
+            act = self.redraft_action
+            same = 0 if act is None else 1 if act == self.chosen_action else 2
+            code = self.redraft.replace("used_abstain", "used_alt").replace(":", "_")
+            parts.append(f"rd=1/{same}/{code}/{self.redraft_ms:.0f}")
         for key, rec in self.stages.items():
             parts += rec.log_parts(key)
         return ";".join(parts)

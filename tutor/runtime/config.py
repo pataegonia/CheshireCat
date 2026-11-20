@@ -193,6 +193,8 @@ class MultiDraft(_Strict):
     # 그 섹션 하나로 줄인 low 초안을 한 번 더 부른다(nano +1, flow._top1_redraft)
     # parallel: 정규 초안과 함께 띄우고(요청마다 nano +1) 고른 뒤 같은 조건·규칙으로 쓴다
     top1_redraft: Literal["off", "on", "parallel"] = "off"
+    # 1위 초안이 유효한 abstain이면(고른 초안은 answer) 그 abstain 초안을 고른 것처럼 낸다
+    top1_redraft_abstain: Literal["off", "on"] = "off"
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":

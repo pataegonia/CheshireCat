@@ -755,7 +755,8 @@ def row_records(
     md_pick_top1_switch는 prefer_top1이 고른 초안을 바꿨나(그러면 md_pick은 바꾼 초안).
     md_redraft는 top1_redraft 결과(None·skip_time·used·rejected:<사유>), md_redraft_ms는 그
     호출 시간.
-    used면 최종 응답은 그 초안이고 md_cites는 고른 초안 기준이다.
+    used면 최종 응답은 그 초안이고 md_cites는 고른 초안 기준이다. md_redraft_action은 유효한 1위
+    초안의 action(없으면 None), used_abstain은 top1_redraft_abstain이 그 abstain 초안을 낸 것.
     """
     out = []
     for run, rows in enumerate(scored):
@@ -794,6 +795,7 @@ def row_records(
                     md_pick_top1_switch=shadow.top1_switch,
                     md_redraft=shadow.redraft,
                     md_redraft_ms=round(shadow.redraft_ms),
+                    md_redraft_action=shadow.redraft_action,
                     md_cite_path=shadow.cite_path,
                     stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )

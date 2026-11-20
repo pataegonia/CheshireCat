@@ -84,7 +84,7 @@ def test_repo_config_stage_modes_within_the_call_cap(monkeypatch):
     assert (t.reverse_question, t.soft_jailbreak_draft, t.mention_marker) == ("off", "off", "off")
     assert cfg.llm.multi_draft.abstain_if_any == "off"
     assert cfg.llm.multi_draft.cite_rule == "pick"
-    assert cfg.llm.multi_draft.prefer_top1 == "on" and cfg.llm.multi_draft.top1_redraft == "off"
+    assert cfg.llm.multi_draft.prefer_top1 == "on" and cfg.llm.multi_draft.top1_redraft == "on"
 
 
 def test_stage_calls_count_toward_the_cap():

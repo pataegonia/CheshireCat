@@ -1022,7 +1022,16 @@ async def _answer_v2(
             path = (
                 None if redone is None else _draft_path(cfg, redone, signals, trusted, intent_label)
             )
-            if redone is not None and (
+            if (
+                redone is not None and redone.action == "abstain"
+            ):  # top1_redraft_abstain(used_abstain)
+                # 고른 초안이 abstain이었을 때와 같은 뒤 단계를 지난다(대행 보정 → T → 합치기 →
+                # assemble·고정 문장 → 후처리, 근거 묶음은 그 초안이 본 1위 섹션 하나)
+                final = _downstream(
+                    cfg, redone, [top[0]], signals, trusted, intent_label, top_sections
+                )
+                seen.pop("pick_body")
+            elif redone is not None and (
                 path is None or path[1] != action or path[2] != merged.category
             ):
                 _redraft_mark(shadow, "rejected:path")
@@ -1039,6 +1048,46 @@ async def _answer_v2(
                 seen.pop("pick_body")  # 고른 초안의 응답이 아니다: cite_rule을 걸지 않는다
                 _redraft_mark(shadow, "used")
     return final
+
+
+def _downstream(
+    cfg: Any,
+    out: MainCallOut,
+    sections: Sequence[RetrievedSection],
+    signals: Sequence[Signal],
+    trusted: str | None,
+    intent_label: str | None,
+    top_sections: Sequence[RetrievedSection] | None,
+) -> dict[str, Any]:
+    """초안 하나를 고른 초안처럼 `_answer_v2`의 뒤 단계(대행 보정 → T 덮기 → 합치기 → assemble·
+    고정 문장 → 후처리)에 통과시킨 응답. 호출이 드는 가드 판정·sj와 mm 기록은 뺀다."""
+    toggles = cfg.toggles
+    out = delegation_guard(
+        out,
+        signals,
+        state_rule=toggles.scaffold_state_rule,
+        override=toggles.delegation_override,
+        classified=trusted,
+    )
+    action = choose_action(out, from_category=toggles.action_from_category)
+    decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    if decided is not None:
+        kind = template_for(decided.category, decided.action)
+        if kind is not None:
+            return tutor_post(fixed_body(kind), decided.category)
+        out, action = out.model_copy(update={"category": decided.category}), decided.action
+    merged = merge_category(out.category, action, trusted)
+    if merged.fixed is not None:
+        return tutor_post(fixed_body(merged.fixed), merged.category)
+    body = assemble(
+        out,
+        sections,
+        action=action,
+        max_citations=toggles.max_citations,
+        cite_top1=toggles.cite_top1,
+        top_sections=top_sections,
+    )
+    return tutor_post(body, merged.category)
 
 
 async def _rule_a_top(state: Any, conv: Conversation) -> list[RetrievedSection] | None:
@@ -1081,7 +1130,7 @@ async def _top1_redraft(
     parsed, ms, _late = await _redraft_run(state, conv, signals, top, until)
     if shadow is not None:
         shadow.redraft_ms = ms
-    return _accept_redraft(parsed, top, picked, shadow)
+    return _accept_redraft(state, parsed, top, picked, shadow)
 
 
 LATE_EPS_S = 0.01  # 마감에 걸려 끝난 호출로 보는 여유(bounded가 until에 끊는다)
@@ -1160,15 +1209,27 @@ async def _parallel_redraft(
     if late:
         _redraft_mark(shadow, "late")
         return None
-    return _accept_redraft(parsed, top, picked, shadow)
+    return _accept_redraft(state, parsed, top, picked, shadow)
 
 
 def _accept_redraft(
-    parsed: Any, top: RetrievedSection, picked: MainCallOut, shadow: multi_draft.Shadow | None
+    state: Any,
+    parsed: Any,
+    top: RetrievedSection,
+    picked: MainCallOut,
+    shadow: multi_draft.Shadow | None,
 ) -> MainCallOut | None:
     """유효하고 answer이며 고른 초안과 범주가 같고 1위 섹션을 확인된 근거로 쓴 초안만 돌려준다
-    (아니면 rejected:<사유>, None)."""
+    (아니면 rejected:<사유>, None). `top1_redraft_abstain`이 on이면 유효한 abstain 초안도
+    돌려준다(used_abstain, 고른 초안은 이 단계에 오는 조건상 answer다). 유효한 초안의 action은
+    `Shadow.redraft_action`에 남긴다(측정 전용)."""
     out = None if parsed is None else main_call.clean(parsed)
+    if out is not None and shadow is not None:
+        shadow.redraft_action = out.action
+    abstain_on = state.tutor_cfg.llm.multi_draft.top1_redraft_abstain == "on"
+    if out is not None and out.action == "abstain" and abstain_on:
+        _redraft_mark(shadow, "used_abstain")
+        return out
     verified = (
         set()
         if out is None

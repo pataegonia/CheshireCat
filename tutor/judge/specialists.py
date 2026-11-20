@@ -33,7 +33,9 @@ from tutor.judge.intent import load_system
 
 PROMPTS = Path(__file__).resolve().parents[1] / "prompts"
 RQ_A_ROLE, RQ_B_ROLE, SJ_ROLE = "rq_a", "rq_b", "sj"
-STAGE_ROLES = frozenset({RQ_A_ROLE, RQ_B_ROLE, SJ_ROLE})  # 실패해도 응답을 바꾸지 않는 호출
+REDRAFT_ROLE = "main_r"  # llm.multi_draft.top1_redraft 초안(flow._top1_redraft)
+# 실패해도 응답을 바꾸지 않는 호출
+STAGE_ROLES = frozenset({RQ_A_ROLE, RQ_B_ROLE, SJ_ROLE, REDRAFT_ROLE})
 Mode = Literal["off", "shadow", "on"]
 Verdict = Literal["same", "different_attribute", "different_object", "scope_only"]
 # 로그·행 기록 코드(본문 없음)

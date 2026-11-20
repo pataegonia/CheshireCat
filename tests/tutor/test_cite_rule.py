@@ -257,10 +257,117 @@ def test_prefer_top1_needs_a_same_action_verified_draft():
     assert not shadow.top1_switch
 
 
-def test_prefer_top1_off_is_the_default():
+def test_prefer_top1_off_in_the_test_baseline():
     assert load_config().llm.multi_draft.prefer_top1 == "off"
     _body, shadow = flow([TWO, ONE, ONE])
     assert not shadow.top1_switch
+
+
+# --- top1_redraft: 1위 섹션 하나로 근거를 줄인 low 초안 한 번 더 ---
+
+RD = "llm.multi_draft.top1_redraft"
+
+
+class MsgLLM(ScriptLLM):
+    """ScriptLLM + 보낸 메시지 기록."""
+
+    def __init__(self, *script):
+        super().__init__(*script)
+        self.messages: list = []
+
+    async def complete(self, role, messages, schema, **kw):
+        self.messages.append(messages)
+        return await super().complete(role, messages, schema, **kw)
+
+
+def redraft_flow(outs, redraft, *, left=1e6, **over):
+    script = [(0.0, ok(o)) for o in outs]
+    if redraft is not None:
+        script.append((0.0, redraft if callable(redraft) else ok(redraft)))
+    llm = MsgLLM(*script)
+    body, _took, shadow = run_flow(llm, left=left, **{**LOW3, RD: "on", **over})
+    return body, shadow, llm
+
+
+def test_redraft_with_only_the_top1_section_is_used():
+    off, _ = flow([TWO, TWO, TWO])
+    body, shadow, llm = redraft_flow([TWO, TWO, TWO], ONE)
+    assert [c["role"] for c in llm.calls] == ["main", "main_b", "main_c", "main_r"]
+    r = llm.calls[3]
+    assert r["effort"] == "low" and r["retries"] == 0 and r["schema"] is llm.calls[0]["schema"]
+    # 근거 묶음만 1위 섹션 하나로 바뀌고 시스템 프롬프트는 같다
+    first, redo = llm.messages[0], llm.messages[3]
+    assert redo[0] == first[0]
+    assert f'<섹션 id="{TOP}">' in redo[1]["content"] and OTHER not in redo[1]["content"]
+    assert f'<섹션 id="{OTHER}">' in first[1]["content"]
+    assert (
+        first[1]["content"].split("</근거 묶음>")[1] == redo[1]["content"].split("</근거 묶음>")[1]
+    )
+    assert body["citations"] == [TOP] and body["action"] == "answer"
+    assert body["answer"] != off["answer"] and "3회까지" in body["answer"]
+    assert shadow.redraft == "used" and shadow.cite_path is False  # cite_rule은 걸지 않는다
+    assert ";rd=1/0/used/" in shadow.log_field()
+
+
+ABSTAIN_TOP = MainCallOut(
+    category="out_of_material",
+    action="abstain",
+    sentences=[SentenceOut(text="자료 문장", kind="claim", evidence=ONE.sentences[0].evidence)],
+)
+SEEKING_TOP = ONE.model_copy(update={"category": "answer_seeking"})
+
+
+@pytest.mark.parametrize(
+    ("redraft", "code"),
+    [
+        (TWO, "rejected:cite"),  # 1위 섹션을 확인된 근거로 쓰지 않았다
+        (ABSTAIN_TOP, "rejected:action"),
+        (SEEKING_TOP, "rejected:category"),
+        (lambda schema: result(error="timeout"), "rejected:fail"),
+    ],
+)
+def test_redraft_rejections_keep_the_pick(redraft, code):
+    off, _ = flow([TWO, TWO, TWO])
+    body, shadow, llm = redraft_flow([TWO, TWO, TWO], redraft)
+    assert len(llm.calls) == 4 and body == off
+    assert shadow.redraft == code and shadow.cite_path is True
+    assert f";rd=1/0/{code.replace(':', '_')}/" in shadow.log_field()
+
+
+def test_redraft_is_skipped_when_too_little_time_is_left():
+    # 요청 마감까지 3초: 마감 − margin_s 까지 HEDGE_MIN_LEFT_S(4초)가 안 남아 부르지 않는다
+    body, shadow, llm = redraft_flow([TWO, TWO, TWO], ONE, left=3.0)
+    assert len(llm.calls) == 3 and shadow.redraft == "skip_time"
+    assert body["citations"] == [OTHER, TOP]
+
+
+@pytest.mark.parametrize(
+    ("outs", "over"),
+    [
+        ([ONE, TWO, TWO], {}),  # 고른 초안이 이미 1위를 근거로 쓴다
+        ([TWO, ONE, ONE], {PT: "on"}),  # prefer_top1이 바꾼다
+        ([TWO, TWO, ONE], {}),  # 같은 action 초안이 1위를 쓴다(prefer_top1 끔이어도 부르지 않는다)
+        ([ABSTAIN_TOP, ABSTAIN_TOP, TWO], {}),  # answer가 아니다
+        ([TWO, TWO, TWO], {RD: "off"}),
+    ],
+)
+def test_redraft_is_not_triggered(outs, over):
+    _body, shadow, llm = redraft_flow(outs, None, **over)
+    assert len(llm.calls) == 3 and shadow.redraft is None
+    assert ";rd=" not in (shadow.log_field() or "")
+
+
+def test_redraft_call_counts_toward_the_cap(monkeypatch):
+    on = {"toggles.intent_override": "serial", "toggles.oom_gate": "all", RD: "on"}
+    four = {"llm.multi_draft.enabled": True, "llm.multi_draft.drafts": [{"effort": "low"}] * 4}
+    assert load_config(overrides={**on, **four}).llm.multi_draft.top1_redraft == "on"  # 8회
+    with pytest.raises(ValueError):  # 초안 5개 + T + E + 다시 쓰기 = 9회
+        load_config(overrides={**on, **four, "llm.multi_draft.drafts": [{"effort": "low"}] * 5})
+    monkeypatch.delenv("TUTOR_CONFIG", raising=False)
+    assert load_config(overrides={RD: "on"}).llm.multi_draft.top1_redraft == "on"  # 저장소 설정
+    for bad in ("shadow", True):
+        with pytest.raises(ValueError):
+            load_config(overrides={RD: bad})
 
 
 # --- 설정 ---
@@ -291,6 +398,7 @@ def test_run_local_rows_have_cites_and_draft_cites(tmp_path, monkeypatch):
     recs = [json.loads(x) for x in rows.read_text(encoding="utf-8").splitlines()]
     assert all("cites" in r and "md_cites" in r and "md_cite_path" in r for r in recs)
     assert all(r["md_pick_top1_switch"] is False for r in recs if r["md_n"])
+    assert all("md_redraft" in r and "md_redraft_ms" in r for r in recs if r["md_n"])
     path = [r for r in recs if r["md_cite_path"]]
     assert path
     for r in path:

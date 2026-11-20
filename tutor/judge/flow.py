@@ -85,6 +85,7 @@ from tutor.judge.oom_gate import build_messages as build_gate_messages
 from tutor.judge.oom_gate import load_system as load_gate_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
 from tutor.judge.specialists import (
+    REDRAFT_ROLE,
     RQ_ABSTAIN,
     RQ_CODE,
     SJ_ROLE,
@@ -1003,7 +1004,107 @@ async def _answer_v2(
             shadow.top1_switch = switched
             if switched:
                 shadow.chosen = chosen
+        picked = None if chosen is None else runs[chosen]
+        if (
+            cfg.llm.multi_draft.top1_redraft == "on"
+            and verdict is None  # 가드 판정은 고른 초안의 문장에 대한 것이다
+            and picked is not None
+            and picked.action == action == "answer"
+            and top1 is not None
+            and not any(  # 같은 action의 어느 초안도 1위를 확인된 근거로 쓰지 않았다
+                o is not None and o.action == picked.action and top1 in (md_model[i] or [])
+                for i, o in enumerate(runs)
+            )
+        ):
+            redone = await _top1_redraft(state, conv, signals, top[0], picked, deadline, shadow)
+            path = (
+                None if redone is None else _draft_path(cfg, redone, signals, trusted, intent_label)
+            )
+            if redone is not None and (
+                path is None or path[1] != action or path[2] != merged.category
+            ):
+                _redraft_mark(shadow, "rejected:path")
+            elif path is not None:
+                body = assemble(
+                    path[0],
+                    [top[0]],
+                    action=action,
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                    top_sections=top_sections,
+                )
+                final = tutor_post(body, merged.category)
+                seen.pop("pick_body")  # 고른 초안의 응답이 아니다: cite_rule을 걸지 않는다
+                _redraft_mark(shadow, "used")
     return final
+
+
+def _redraft_mark(shadow: multi_draft.Shadow | None, code: str) -> None:
+    if shadow is not None:
+        shadow.redraft = code
+
+
+async def _top1_redraft(
+    state: Any,
+    conv: Conversation,
+    signals: Sequence[Signal],
+    top: RetrievedSection,
+    picked: MainCallOut,
+    deadline: float,
+    shadow: multi_draft.Shadow | None,
+) -> MainCallOut | None:
+    """`llm.multi_draft.top1_redraft`: 근거 묶음을 cite_top1 섹션 하나로 줄인 low 초안을 한 번 더
+    부른다(재시도 0). 다른 초안과 같은 프롬프트·스키마·신호·판단 예시, 근거 묶음만 다르다.
+    마감은 요청 마감 − `multi_draft.margin_s`(medium 초안·기다리기 끝과 같다)이고, 그때까지
+    `HEDGE_MIN_LEFT_S`보다 덜 남았으면 부르지 않는다(skip_time). 유효하고 answer이며 고른 초안과
+    범주가 같고, 그 섹션을 확인된 근거로 쓴 초안만 돌려준다(아니면 rejected:<사유>, None)."""
+    cfg = state.tutor_cfg
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    until = deadline - cfg.llm.multi_draft.margin_s
+    if until - t0 < HEDGE_MIN_LEFT_S:
+        _redraft_mark(shadow, "skip_time")
+        return None
+    messages = main_call.build_messages(
+        state.tutor_prompt,
+        conv,
+        [top],
+        labels(signals) if cfg.toggles.signals else (),
+        examples_block(state, conv),
+    )
+    schema = state.tutor_prompt.schema
+    parsed = await bounded(
+        state.tutor_llm,
+        REDRAFT_ROLE,
+        messages,
+        schema,
+        until=until,
+        timeout_s=cfg.llm.timeout_s.main,
+        effort="low",
+    )
+    if shadow is not None:
+        shadow.redraft_ms = (loop.time() - t0) * 1000
+    out = None if parsed is None else main_call.clean(parsed)
+    verified = (
+        set()
+        if out is None
+        else multi_draft.verified_sids(out, multi_draft.contract_sections([top]))
+    )
+    reason = (
+        "fail"
+        if out is None
+        else "action"
+        if out.action != "answer"
+        else "category"
+        if out.category != picked.category
+        else "cite"
+        if top.id not in verified
+        else None
+    )
+    if reason is not None:
+        _redraft_mark(shadow, f"rejected:{reason}")
+        return None
+    return out
 
 
 def _top1_draft(

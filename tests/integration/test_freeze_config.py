@@ -62,6 +62,13 @@ def extra_drafts(client) -> int:
     return len(md.drafts) - 1 if md is not None and md.enabled else 0
 
 
+def redraft_on(client) -> int:
+    """실험 `llm.multi_draft.top1_redraft`를 켰으면 1(answer 요청에 주 호출 초안이 하나 더 갈 수
+    있다), 아니면 0."""
+    md = getattr(client.app.state.tutor_cfg.llm, "multi_draft", None)
+    return int(md is not None and md.enabled and getattr(md, "top1_redraft", "off") != "off")
+
+
 RQ = ["RqQuestion", "RqCompare"]  # 실험 rq 호출 둘(answer일 때만)
 
 
@@ -126,7 +133,9 @@ def test_normal_question_calls_intent_then_main_as_the_repo_config_says(
     seen = f"intent_override={mode}, 호출={names}"
     assert_tutor_contract(body)
     assert ANSWER_WORD in body["answer"], seen  # 가짜 LLM(주 호출)의 답이 실제로 나간다
-    mains = [MAIN] * (1 + extra_drafts(client))  # 실험 multi_draft: 주 호출 초안 K개
+    k = 1 + extra_drafts(client)  # 실험 multi_draft: 주 호출 초안 K개
+    k += redraft_on(client) and names.count(MAIN) == k + 1  # 1위 다시 쓰기 초안(조건이 맞을 때)
+    mains = [MAIN] * k
     rq = rq_calls(client)  # 실험 rq: answer 뒤에 A·B 순서로
     if mode == "off":
         assert names == [*mains, *rq], seen
@@ -167,6 +176,7 @@ def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fak
     client = repo_config_client
     mode = intent_mode(client)
     base = (1 if mode == "off" else 2) + extra_drafts(client) + stage_calls(client)
+    base += redraft_on(client)
     fake_send.vary = True
     over = []
     for row in TUTOR_ROWS:

@@ -753,6 +753,9 @@ def row_records(
     (cite_rule 적용 대상, 재생 tutor.eval.cite_replay가 쓴다). md_model_cites는 그중 모델이 인용한
     섹션(확인된 인용, 검색 1위 채우기·cite_top1 추가 제외), md_top1은 cite_top1이 더하는 섹션.
     md_pick_top1_switch는 prefer_top1이 고른 초안을 바꿨나(그러면 md_pick은 바꾼 초안).
+    md_redraft는 top1_redraft 결과(None·skip_time·used·rejected:<사유>), md_redraft_ms는 그
+    호출 시간.
+    used면 최종 응답은 그 초안이고 md_cites는 고른 초안 기준이다.
     """
     out = []
     for run, rows in enumerate(scored):
@@ -789,6 +792,8 @@ def row_records(
                     md_model_cites=shadow.md_model_cites,
                     md_top1=shadow.top1,
                     md_pick_top1_switch=shadow.top1_switch,
+                    md_redraft=shadow.redraft,
+                    md_redraft_ms=round(shadow.redraft_ms),
                     md_cite_path=shadow.cite_path,
                     stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )

@@ -189,6 +189,9 @@ class MultiDraft(_Strict):
     # 고른 초안의 모델 인용에 cite_top1 섹션이 없고 같은 action의 다른 초안 모델 인용에 있으면
     # 그 초안으로 바꾼다(답·인용 모두 그 초안, 호출 0회, flow._top1_draft)
     prefer_top1: Literal["off", "on"] = "off"
+    # 고른 answer 초안도 같은 action 초안도 cite_top1 섹션을 확인된 근거로 쓰지 않으면, 근거 묶음을
+    # 그 섹션 하나로 줄인 low 초안을 한 번 더 부른다(nano +1, flow._top1_redraft)
+    top1_redraft: Literal["off", "on"] = "off"
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":
@@ -257,7 +260,7 @@ class TutorConfig(_Strict):
         # 실험 브랜치 한정 상한 8: TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
         calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
         calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
-        calls += stages
+        calls += stages + (md.enabled and md.top1_redraft != "off")
         if calls > MULTI_DRAFT_MAX_CALLS:
             cap = MULTI_DRAFT_MAX_CALLS
             raise ValueError(

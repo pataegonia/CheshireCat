@@ -74,6 +74,10 @@ class Shadow:
     md_model_cites: list[list[str] | None] | None = None
     top1: str | None = None  # cite_top1이 더하는 섹션(모든 초안에 같다). 끔이면 None
     top1_switch: bool = False  # prefer_top1이 고른 초안을 바꿨나(그러면 chosen은 바꾼 초안)
+    # top1_redraft: None(조건 안 맞음) | skip_time | used
+    # | rejected:<fail·action·category·cite·path>
+    redraft: str | None = None
+    redraft_ms: float = 0.0  # 그 초안 호출에 걸린 시간(부르지 않았으면 0)
     # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
     cite_path: bool = False
 
@@ -99,6 +103,8 @@ class Shadow:
             if self.a_action is not None:
                 parts.append(f"md_a_same={int(self.a_action == self.chosen_action)}")
         parts += [f"{d.key}={d.ms:.0f}/{d.attempts}/{d.code}/{d.gate_ms:.0f}" for d in self.drafts]
+        if self.redraft is not None:  # 가드 호출 기록 칸과 같은 모양(코드는 글자·_만)
+            parts.append(f"rd=1/0/{self.redraft.replace(':', '_')}/{self.redraft_ms:.0f}")
         for key, rec in self.stages.items():
             parts += rec.log_parts(key)
         return ";".join(parts)

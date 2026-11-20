@@ -117,8 +117,16 @@ def roles(llm) -> list[str]:
 # --- 설정 ---
 
 
-def test_repo_config_keeps_it_off_until_measured():
-    assert load_config().toggles.top1_redraft is False
+def test_repo_config_turns_it_on_for_the_submission_check():
+    # 측정 판(tutor/t2.38-top1-on): 실제 제출 5대5로 가리려고 저장소 설정에서 켠다
+    import yaml
+
+    from tutor.runtime import config as tutor_config
+
+    path = tutor_config.ROOT / tutor_config.DEFAULT_CONFIG
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert raw["toggles"]["top1_redraft"] is True
+    assert load_config().toggles.top1_redraft is False  # 단위 테스트 기준 설정에서는 끈다
 
 
 def test_needs_rule_a_to_load():

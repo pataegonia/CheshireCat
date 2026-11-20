@@ -45,6 +45,7 @@ FREEZE_TOGGLES = {
     "oom_schedule": "with_request",
     "english_embedding": False,  # E(oom_gate)를 끈 기준에서는 켤 수 없다(로드에서 거부)
     "code_block_lang": False,  # 켠 동작은 test_code_block_lang이 overrides로 본다
+    "top1_redraft": False,  # 켠 동작은 test_top1_redraft가 overrides로 본다
 }
 
 

@@ -79,10 +79,10 @@ def test_minimal_is_allowed_only_for_reverse_question():
 
 def test_repo_config_stage_modes_within_the_call_cap(monkeypatch):
     monkeypatch.delenv("TUTOR_CONFIG", raising=False)
-    cfg = load_config()  # 저장소 설정: 초안 3 + T + E, 단계는 모두 끔(제출 A 판)
+    cfg = load_config()  # 저장소 설정: 초안 3 + T + E, 단계는 모두 끔, abstain_if_any 켬(G2)
     t = cfg.toggles
     assert (t.reverse_question, t.soft_jailbreak_draft, t.mention_marker) == ("off", "off", "off")
-    assert cfg.llm.multi_draft.abstain_if_any == "off"
+    assert cfg.llm.multi_draft.abstain_if_any == "on"
     assert cfg.llm.multi_draft.cite_rule == "pick"
     assert cfg.llm.multi_draft.prefer_top1 == "on" and cfg.llm.multi_draft.top1_redraft == "on"
 

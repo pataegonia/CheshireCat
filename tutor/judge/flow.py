@@ -37,7 +37,13 @@ from typing import Any
 
 from guardrail.schema import OutputVerdict
 
-from integration.actions import FALLBACK_ACTION, FinalizeConfig, action_for, finalize
+from integration.actions import (
+    FALLBACK_ACTION,
+    FinalizeConfig,
+    _verified_sids,
+    action_for,
+    finalize,
+)
 from integration.contracts import SECTION_IDS, Action, Section, Sentence
 from tutor.answer import postprocess
 from tutor.answer.quote import material_quote, quote_sentences
@@ -79,7 +85,7 @@ from tutor.judge.intent import (
 from tutor.judge.intent import build_messages as build_intent_messages
 from tutor.judge.intent import decide as decide_intent
 from tutor.judge.intent import load_system as load_intent_system
-from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt
+from tutor.judge.main_call import CompleteResult, MainCallOut, MainCallPrompt, run_main_call
 from tutor.judge.oom_gate import GateCounts, GateJob, english_only, material_absent, start_gate
 from tutor.judge.oom_gate import build_messages as build_gate_messages
 from tutor.judge.oom_gate import load_system as load_gate_system
@@ -93,6 +99,9 @@ MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 �
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
 MAIN_HEDGE_ROLE = "main_hedge"  # 겹쳐 보낸 두 번째 주 호출(따로 센다)
 HEDGE_MIN_LEFT_S = 4.0  # 요청 마감까지 이보다 덜 남았으면 겹쳐 보내지 않는다(끝낼 수 없다)
+REDRAFT_ROLE = "main_r"  # 검색 1위로 다시 받은 주 호출(`toggles.top1_redraft`, 따로 센다)
+REDRAFT_MARGIN_S = 3.0  # 다시 받기는 요청 마감 − 이 값 안에서 끝낸다(뒤의 E 기다림·덧붙이기 몫)
+MIN_QUOTE_CHARS = FinalizeConfig.model_fields["min_quote_chars"].default  # 결정적 수정과 같은 값
 # safe=false일 때 답 전체를 대신하는 거절 문장(IN-04). 범주를 모르므로 일반 거절
 REFUSE_TEXT = TEXT[Fixed.REFUSE_JAILBREAK]
 
@@ -655,10 +664,16 @@ GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
 
 def _english_embedding(state: Any) -> dict[str, Any]:
     """`toggles.english_embedding`이 켜졌으면 retrieve에 넘길 인자(영어 질의는 임베딩 순위만).
-    기동 때 임베딩을 못 만들었으면 `embedding`이 None이라 BM25다. 꺼졌으면 빈 인자."""
-    if not state.tutor_cfg.toggles.english_embedding:
+    기동 때 임베딩을 못 만들었으면 `embedding`이 None이라 BM25다. 꺼졌으면 빈 인자.
+    `toggles.code_block_lang`이 켜졌으면 코드 블록 때문에 영어로 보인 한국어 질문을 가르는
+    인자도 넘긴다."""
+    toggles = state.tutor_cfg.toggles
+    if not toggles.english_embedding:
         return {}
-    return {"embedding": getattr(state, "tutor_emb", None), "english_only_embedding": True}
+    extra = {"embedding": getattr(state, "tutor_emb", None), "english_only_embedding": True}
+    if toggles.code_block_lang:
+        extra["code_block_lang"] = True
+    return extra
 
 
 async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
@@ -803,6 +818,7 @@ async def _answer_v2(
             signals=labels(signals) if cfg.toggles.signals else (),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
             english_only_embedding=cfg.toggles.english_embedding,
+            code_block_lang=cfg.toggles.code_block_lang,
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
@@ -906,6 +922,42 @@ async def _answer_v2(
             )
         except Exception:  # 메시지는 남기지 않는다
             top_sections = None
+    # 가드 판정(verify: guard)이 있으면 다시 받지 않는다(판정은 주 호출 문장에 대한 것이다).
+    # 판정을 건너뛰었거나 실패해 verdict가 None이면 다시 받은 답도 판정 없이 나간다(처음 답과 같다)
+    if (
+        cfg.toggles.top1_redraft
+        and top_sections
+        and verdict is None
+        and action == "answer"
+        and draft.out.action == "answer"
+    ):
+        try:  # 보조 단계라 실패하면 처음 답 그대로(메시지는 남기지 않는다). 취소는 그대로 올린다
+            redone = await _top1_redraft(
+                state,
+                conv,
+                signals,
+                draft.out,
+                draft.sections,
+                top_sections[0],
+                deadline,
+                path=(trusted, intent_label, action, merged.category),
+            )
+            redrafted = (
+                None
+                if redone is None
+                else assemble(
+                    redone,
+                    [top_sections[0]],
+                    action=action,
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                    top_sections=top_sections,
+                )
+            )
+        except Exception:
+            redrafted = None
+        if redrafted is not None:
+            return tutor_post(redrafted, merged.category)
     body = assemble(
         out,
         draft.sections,
@@ -970,3 +1022,102 @@ async def repair_body(
     if body.get("action") != "answer" or not body.get("citations"):
         return None
     return None if NOT_IN_MATERIAL_NOTE in answer else body
+
+
+def _verified(out: MainCallOut, sections: Sequence[RetrievedSection]) -> set[str]:
+    """claim 문장의 인용 문구가 그 섹션 원문에 실제로 있는 섹션(결정적 수정 IN-04와 같은 검사)."""
+    contract = [_contract_section(s) for s in sections]
+    return {
+        sid
+        for s in out.sentences
+        if s.kind == "claim"
+        for sid in _verified_sids(
+            Sentence.model_validate(s.model_dump()), contract, MIN_QUOTE_CHARS
+        )
+    }
+
+
+def _same_path(
+    cfg: Any,
+    out: MainCallOut,
+    signals: Sequence[Signal],
+    trusted: str | None,
+    intent_label: str | None,
+) -> tuple[MainCallOut, Action, str] | None:
+    """답 하나를 `_answer_v2`의 결정적 단계(대행 보정 → T 덮기 → 합치기)에 통과시킨
+    (결과, action, 범주). 고정 문장이 되면 None. 호출이 드는 단계(가드 판정)는 뺀다."""
+    toggles = cfg.toggles
+    out = delegation_guard(
+        out,
+        signals,
+        state_rule=toggles.scaffold_state_rule,
+        override=toggles.delegation_override,
+        classified=trusted,
+    )
+    action = choose_action(out, from_category=toggles.action_from_category)
+    decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    if decided is not None:
+        if template_for(decided.category, decided.action) is not None:
+            return None
+        out, action = out.model_copy(update={"category": decided.category}), decided.action
+    merged = merge_category(out.category, action, trusted)
+    if merged.fixed is not None or template_for(merged.category, action) is not None:
+        return None
+    return out, action, merged.category
+
+
+async def _top1_redraft(
+    state: Any,
+    conv: Conversation,
+    signals: Sequence[Signal],
+    first: MainCallOut,
+    sections: Sequence[RetrievedSection],
+    top: RetrievedSection,
+    deadline: float,
+    *,
+    path: tuple[str | None, str | None, Action, str],
+) -> MainCallOut | None:
+    """`toggles.top1_redraft`: 주 호출 답(`first`)이 규칙 A 1위(`top`)를 확인된 근거로 쓰지
+    않았으면 근거 묶음을 그 섹션 하나로 줄인 주 호출을 한 번 더 받는다(재시도 0, 겹쳐 보내기 없음).
+    같은 프롬프트·스키마·신호·판단 예시이고 근거 묶음만 다르다. 마감은 요청 마감 −
+    `REDRAFT_MARGIN_S`이고, 그때까지 `HEDGE_MIN_LEFT_S`보다 덜 남았으면 부르지 않는다.
+    유효한 answer이고 처음 답과 범주가 같고 그 섹션을 확인된 근거로 쓰며 결정적 단계(`path` =
+    classify 범주·T 이름표·최종 action·최종 범주)를 지나 같은 action·범주가 될 때만 돌려준다."""
+    if top.id in _verified(first, sections):
+        return None
+    until = deadline - REDRAFT_MARGIN_S
+    if until - asyncio.get_running_loop().time() < HEDGE_MIN_LEFT_S:
+        return None
+    cfg = state.tutor_cfg
+
+    async def complete(messages, schema, *, deadline: float) -> CompleteResult:
+        return await state.tutor_llm.complete(
+            REDRAFT_ROLE,
+            messages,
+            schema,
+            deadline=deadline,
+            timeout_s=cfg.llm.timeout_s.main,
+            retries=0,
+        )
+
+    redone = await run_main_call(
+        complete,
+        state.tutor_prompt,
+        conv,
+        [top],
+        labels(signals) if cfg.toggles.signals else (),
+        deadline=until,
+        examples=examples_block(state, conv),
+    )
+    if (
+        redone is None
+        or redone.action != "answer"
+        or redone.category != first.category
+        or top.id not in _verified(redone, [top])
+    ):
+        return None
+    trusted, intent_label, action, category = path
+    passed = _same_path(cfg, redone, signals, trusted, intent_label)
+    if passed is None or passed[1] != action or passed[2] != category:
+        return None
+    return passed[0]

@@ -44,6 +44,10 @@ class Toggles(_Strict):
     # 쓴다. toggles.embedding이 꺼져 있어도 이 토글이 켜지면 기동 때 KB 임베딩을 만든다.
     # 측정 전이라 끔
     english_embedding: bool
+    # 임베딩을 쓸 영어 질의라도 코드 블록을 뺀 글이 영어가 아니면(코드의 라틴 글자 때문에 영어로
+    # 보인 한국어 질문) 코드 블록을 뺀 질의로 BM25만 쓴다. 임베딩 검색이 있을 때만 영향.
+    # 저장소 설정은 켬(11/20)
+    code_block_lang: bool
     rerank: bool
     vote: bool
     scaffold_state_rule: bool
@@ -68,6 +72,12 @@ class Toggles(_Strict):
     # 묶음은 그대로. LLM 0회, 검색 1회 추가. cite_top1이 꺼져 있으면 아무것도 하지 않는다.
     # 동결 설정에서 켬(11/18)
     top1_dialog_query: bool
+    # 검색 1위로 다시 받기: 최종 answer인데 주 호출 답이 규칙 A 1위 섹션을 확인된 근거로
+    # 쓰지 않았으면, 근거 묶음을 그 섹션 하나로 줄인 주 호출을 한 번 더 받아(재시도 0)
+    # 같은 action·범주이고 그 섹션을 확인된 근거로 쓸 때만 그 답·인용을 쓴다.
+    # cite_top1·top1_dialog_query가 켜져야 한다. 요청당 nano +1(조건이 맞을 때만):
+    # TU-13 4회의 예외로 5회까지(리더 승인 11/20). 기본 끔
+    top1_redraft: bool
     # T 의도 판정(#209): nano 1회, 이름표로 action을 덮는다. parallel은 주 호출과 동시에,
     # serial은 T 먼저(refuse·위기 고정 문장 이름표면 주 호출 없이). 기본 끔(TU-06)
     intent_override: Literal["off", "parallel", "serial"]
@@ -107,6 +117,10 @@ class Toggles(_Strict):
                 "toggles.intent_override는 guard_classify와 verify: guard를 함께 켜면"
                 " 요청당 nano 5회라 쓸 수 없다(TU-13 절대 4회)"
             )
+        if self.top1_redraft and not (self.cite_top1 and self.top1_dialog_query):
+            raise ValueError(
+                "toggles.top1_redraft는 cite_top1과 top1_dialog_query를 켰을 때만 쓴다(규칙 A 1위)"
+            )
         if self.english_embedding and self.oom_gate == "off":
             # E 없이 영어에 임베딩만 켜면 영어 자료 밖 질문이 그대로 answer가 된다(11/18 측정)
             raise ValueError("toggles.english_embedding은 oom_gate가 off가 아닐 때만 켠다")
@@ -115,9 +129,12 @@ class Toggles(_Strict):
             # 겹쳐 보낸 주 호출(main_hedge)은 세지 않는다: 느린 요청에서만 1회 더 나간다
             calls = 2 + (self.intent_override != "off") + 2 * (self.guard_classify != "off")
             calls += (self.verify == "guard") + 1
-            if calls > 4:
+            # 검색 1위로 다시 받기는 1회만 TU-13의 예외로 센다(리더 승인 11/20)
+            cap = 4 + self.top1_redraft
+            calls += self.top1_redraft
+            if calls > cap:
                 raise ValueError(
-                    f"toggles.oom_gate: 요청당 nano {calls}회라 쓸 수 없다(TU-13 절대 4회)"
+                    f"toggles.oom_gate: 요청당 nano {calls}회라 쓸 수 없다(TU-13 절대 {cap}회)"
                 )
         return self
 

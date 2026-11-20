@@ -482,6 +482,8 @@ class Guard:
         이른 쪽에서 끊긴다). medium이 스키마에 맞는 답을 냈으면 그것을 쓰고 low는 버린다(아직 돌고
         있으면 취소). 아니면 low를 끝까지 기다려 쓴다(low는 요청 마감 안에 끝난다). 둘 다 실패면
         None이고 기존 실패 기본값 경로로 간다. 쓴 쪽을 trace["out"]에 적는다(med·low·default).
+        output.pair_rule이 or_ungrounded면 medium이 근거 있음일 때 low를 마감 − MEDIUM_MARGIN_S까지
+        기다려 low가 근거 없음이면 low를 쓴다(trace["out"] = "or").
         """
         low = asyncio.ensure_future(low_call)
         low.add_done_callback(_consume)

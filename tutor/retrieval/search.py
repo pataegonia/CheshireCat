@@ -81,7 +81,8 @@ async def retrieve(
     임베딩 순위만 쓴다(임베딩을 못 쓰면 BM25 순위). 한국어 질의에는 영향이 없다.
     code_block_lang(`toggles.code_block_lang`)이면 임베딩을 쓸 질의라도 코드 블록을 뺀 글이 영어가
     아니면(코드의 라틴 글자 때문에 영어로 보인 한국어 질문) 임베딩을 부르지 않고, 코드 블록을 뺀
-    질의로 BM25만 쓴다. 코드 블록을 빼고 남는 2-gram이 없으면 지금 동작 그대로다.
+    질의로 BM25만 쓴다. 코드 블록을 빼고 남는 2-gram이 없거나 글자 없이 숫자·기호만 남으면
+    지금 동작 그대로다.
     index는 기동 때 만든 색인이다(서버는 `app.state.tutor_kb`). 없으면 `default_index()`를 쓴다.
     """
     if k <= 0:
@@ -90,7 +91,8 @@ async def retrieve(
         index = default_index()
     if code_block_lang and embedding is not None and is_english(query):
         plain = strip_code_blocks(query)
-        if bigrams(plain) and not is_english(plain):
+        has_letter = any(ch.isalpha() for ch in plain)
+        if bigrams(plain) and has_letter and not is_english(plain):
             query, embedding = plain, None
     text = "\n".join([*history, query])[-index.max_query_chars :]
     ranked = [sid for sid, _score in index.search(text, subject=subject)]

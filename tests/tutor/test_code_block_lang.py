@@ -66,6 +66,16 @@ def test_toggle_on_keeps_the_embedding_for_a_code_only_question():
     assert fake.calls  # 코드를 빼면 남는 글이 없어 지금 동작 그대로
 
 
+def test_toggle_on_keeps_the_embedding_when_only_digits_or_symbols_remain():
+    # 코드를 빼고 숫자·기호만 남으면(글자 없음) 한국어라고 볼 근거가 없다 → 지금 동작 그대로
+    for tail in ("12", "1)", "??", "1. 2."):
+        fake, search = built_search()
+        query = f"{CODE}\n{tail}"
+        on = {"english_only_embedding": True, "code_block_lang": True}
+        run(retrieve(query, k=5, embedding=search, **on))
+        assert fake.calls, tail
+
+
 def test_toggle_on_leaves_plain_korean_unchanged():
     query = "체크카드 사용 규칙이 뭐예요"
     found = {}

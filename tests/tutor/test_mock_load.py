@@ -529,6 +529,32 @@ def test_refuses_overrides_that_turn_on_embedding():
         run(n_tutor=1, n_guard=0, scale=0.001, seed=22, tutor_overrides={"toggles.embedding": True})
 
 
+def test_refuses_english_embedding_like_embedding(monkeypatch):
+    """영어 임베딩 토글도 기동이 KB 임베딩을 만들어 운영진 임베딩 API를 부르게 된다."""
+    with pytest.raises(RuntimeError, match="임베딩"):
+        run(
+            n_tutor=1,
+            n_guard=0,
+            scale=0.001,
+            seed=22,
+            tutor_overrides={"toggles.english_embedding": True, "toggles.oom_gate": "named_term"},
+        )
+    real = mock_load.load_config
+
+    def file_on(overrides=None):
+        return real(
+            overrides={
+                **(overrides or {}),
+                "toggles.english_embedding": True,
+                "toggles.oom_gate": "named_term",
+            }
+        )
+
+    monkeypatch.setattr(mock_load, "load_config", file_on)
+    with pytest.raises(RuntimeError, match="임베딩"):
+        run(n_tutor=1, n_guard=0, scale=0.001, seed=22)
+
+
 def test_tutor_overrides_cannot_change_the_mode():
     report = run(
         n_tutor=5, n_guard=0, scale=0.001, seed=7, mode="baseline", tutor_overrides={"mode": "v2"}

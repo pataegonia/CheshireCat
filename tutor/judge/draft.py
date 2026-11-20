@@ -33,6 +33,7 @@ async def draft_answer(
     k: int,
     signals: Sequence[str] = (),
     embedding: Any = None,
+    english_only_embedding: bool = False,
     examples: str = "",
     index: KbIndex | None = None,
 ) -> Draft:
@@ -40,6 +41,7 @@ async def draft_answer(
 
     `embedding`은 기동 때 만든 임베딩 검색(TU-11, `state.tutor_emb`, #124)이다. 있을 때만
     `retrieve(…, embedding=)`로 넘기고, 없으면(토글 끔·기동 실패) BM25만 쓴다.
+    `english_only_embedding`이 True일 때만 `retrieve(…, english_only_embedding=True)`로 넘긴다.
     `examples`는 판단 예시 블록(TU-08)이다. 비었으면 넣지 않는다.
     `index`는 기동 때 만든 KB 색인(`state.tutor_kb`)이다. 있을 때만 `retrieve(…, index=)`로 넘긴다.
     """
@@ -49,6 +51,8 @@ async def draft_answer(
         for name, value in (("embedding", embedding), ("index", index))
         if value is not None
     }
+    if english_only_embedding:
+        extra["english_only_embedding"] = True
     sections = tuple(await retrieve(query, history, k=k, **extra))
     out = await run_main_call(
         complete, prompt, conv, sections, signals, deadline=deadline, examples=examples

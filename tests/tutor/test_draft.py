@@ -155,6 +155,27 @@ async def test_draft_passes_embedding_only_when_built(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_draft_passes_english_only_embedding_only_when_asked(monkeypatch):
+    seen = []
+
+    async def fake_retrieve(query, history=(), *, k=5, **kw):
+        seen.append(kw)
+        return []
+
+    monkeypatch.setattr(draft_mod, "retrieve", fake_retrieve)
+    conv = tidy([u("What is a list?")])
+    kwargs = {
+        "prompt": MainCallPrompt.load(TABLE),
+        "complete": FakeComplete(Result(OUT, None)),
+        "deadline": 1e9,
+        "k": 3,
+    }
+    await draft_answer(conv, **kwargs, english_only_embedding=False)
+    await draft_answer(conv, **kwargs, english_only_embedding=True)
+    assert seen == [{}, {"english_only_embedding": True}]
+
+
+@pytest.mark.anyio
 async def test_draft_without_embedding_works_with_current_retrieve():
     conv = tidy([u("What is a list?")])
     d = await draft_answer(

@@ -3,9 +3,9 @@
 운영진 API를 부르지 않는다. 루트 app.py(#126)와 같은 인자로 가드 create_app에 튜터를 붙인 앱을
 프로세스 안에서 띄운다. 가드 판정기만 가짜이고, create_app 호출 인자가 같은지는 테스트가 본다.
 튜터·가드 요청을 섞어 동시 64로 보낸다(SPEC §3 동시 최대 64). 네트워크도 쓰지 않는다.
-- 튜터 설정이 임베딩(toggles.embedding)을 켜면 돌지 않는다. 기동이 실제 임베딩 API로 KB 임베딩을
-  만들고 요청마다 질의를 임베딩하게 되는데, 가짜 임베딩은 아직 없다(켤 때 더한다). 덮어쓰기로
-  켜도 멈춘다(기동은 파일 설정만 읽어 임베딩 없이 재게 된다)
+- 튜터 설정이 임베딩(toggles.embedding·english_embedding)을 켜면 돌지 않는다. 기동이 실제
+  임베딩 API로 KB 임베딩을 만들고 요청마다 질의를 임베딩하게 되는데, 가짜 임베딩은 아직 없다
+  (켤 때 더한다). 덮어쓰기로 켜도 멈춘다(기동은 파일 설정만 읽어 임베딩 없이 재게 된다)
 - 튜터 LLM은 전송만 가짜로 바꾼다. 파라미터는 서버와 같은 build_llm 값이다. 가짜 전송은 응답
   스키마 이름(REPLIES)에 맞는 최소 정상 JSON을 내므로, v2는 검색 → 주 호출 → 결정적 수정까지
   실제 흐름을 탄다. 답을 모르는 스키마는 JSON이 아닌 답이라 LLM 실패로 드러난다
@@ -542,9 +542,11 @@ async def run_load(
     guard_calls는 후보 답이 있는 가드 요청의 가짜 판정 호출 수(없으면 1회), gate는 게이트 크기
     (없으면 가드 설정 llm.gate)다.
     """
-    if load_config().toggles.embedding:  # 기동은 덮어쓰기 없이 파일 설정(TUTOR_CONFIG)을 읽는다
+    base = load_config().toggles  # 기동은 덮어쓰기 없이 파일 설정(TUTOR_CONFIG)을 읽는다
+    if base.embedding or base.english_embedding:
         raise RuntimeError("임베딩이 켜진 튜터 설정이라 운영진 임베딩 API를 부르게 된다")
-    if load_config(overrides=tutor_overrides).toggles.embedding:
+    over = load_config(overrides=tutor_overrides).toggles
+    if over.embedding or over.english_embedding:
         raise RuntimeError("덮어쓰기로 켠 임베딩은 기동이 만들지 않아 임베딩 없이 재게 된다")
     rng = random.Random(seed)  # noqa: S311 - 모의 지연·순서, 암호용 아님
     fake = FakeLLM(

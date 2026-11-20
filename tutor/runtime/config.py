@@ -4,7 +4,8 @@
   "5" → 5)은 로드에서 잡힌다.
 - 순서: 파일(TUTOR_CONFIG, 없으면 config/tutor.yaml) → ablation 깊은 병합 → overrides → 검증.
 - 설정은 기동 때만 읽고(tutor.startup) 바꾸지 않는다(frozen). 요청 말고는 동작을 바꾸는 입력이 없다.
-- 키·주소는 설정에 두지 않는다(환경변수로만). 공유 키 budget_s는 가드 설정에서 읽는다.
+- 키·주소는 설정에 두지 않는다(환경변수로만). 요청 예산은 가드 설정
+  budget_s에 이 설정의 budget_scale을 곱한 값이다.
 """
 
 import copy
@@ -36,6 +37,11 @@ class Toggles(_Strict):
     # classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05)가 없으면 덮지 않는다(TU-10)
     jailbreak_needs_signal: bool
     embedding: bool
+    # 영어 발화(한글 없이 라틴만)에는 임베딩 순위만으로 검색하고(BM25와 섞지 않음), 자료 밖 확인 E를
+    # oom_gate 모드와 상관없이(off 제외) 임베딩 근거 묶음으로 부르며, 규칙 A 재검색에도 임베딩을
+    # 쓴다. toggles.embedding이 꺼져 있어도 이 토글이 켜지면 기동 때 KB 임베딩을 만든다.
+    # 측정 전이라 끔
+    english_embedding: bool
     rerank: bool
     vote: bool
     scaffold_state_rule: bool
@@ -95,8 +101,12 @@ class Toggles(_Strict):
                 "toggles.intent_override는 guard_classify와 verify: guard를 함께 켜면"
                 " 요청당 nano 5회라 쓸 수 없다(TU-13 절대 4회)"
             )
+        if self.english_embedding and self.oom_gate == "off":
+            # E 없이 영어에 임베딩만 켜면 영어 자료 밖 질문이 그대로 answer가 된다(11/18 측정)
+            raise ValueError("toggles.english_embedding은 oom_gate가 off가 아닐 때만 켠다")
         if self.oom_gate != "off":
-            # 주 호출 2(재시도) + T 1 + classify 최대 2 + judge_output 1 + E 1 ≤ TU-13 절대 4회
+            # 주 호출 2(재시도) + T 1 + classify 최대 2 + judge_output 1 + E 1 ≤ TU-13 절대 4회.
+            # 겹쳐 보낸 주 호출(main_hedge)은 세지 않는다: 느린 요청에서만 1회 더 나간다
             calls = 2 + (self.intent_override != "off") + 2 * (self.guard_classify != "off")
             calls += (self.verify == "guard") + 1
             if calls > 4:
@@ -126,6 +136,8 @@ class Answer(_Strict):
 
 class Timeouts(_Strict):
     main: PositiveFloat
+    main_hedge: PositiveFloat  # 주 호출을 겹쳐 보내기 시작하는 시간(main 이상이면 끔)
+    intent_wait: PositiveFloat  # 직렬 T가 주 호출을 붙잡는 최대 시간(intent 이상이면 T 제한까지)
     classify: PositiveFloat
     verify: PositiveFloat
     embedding: PositiveFloat
@@ -147,6 +159,9 @@ class EvalCfg(_Strict):
 class TutorConfig(_Strict):
     version: str
     mode: Literal["v2", "baseline"]
+    # 튜터 요청 예산 = 가드 설정 budget_s × 이 값(TU-13). 가드 값은 로드 때 모르므로
+    # 상한 26초 자르기는 tutor.runtime.budget이 한다
+    budget_scale: Annotated[float, Field(ge=1.0, le=1.5)]
     toggles: Toggles
     fewshot: Fewshot
     retrieval: Retrieval

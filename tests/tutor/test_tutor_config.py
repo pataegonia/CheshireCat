@@ -36,6 +36,7 @@ def test_repo_config_has_the_prd_defaults():
     # TU-10 합치기 신호 조건 기본 끔(3회 비교 뒤 정함)
     assert toggles.jailbreak_needs_signal is False
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
+    assert toggles.english_embedding is False  # 측정 전이라 끔(켤지는 측정 뒤 정한다)
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
@@ -55,17 +56,79 @@ def test_repo_config_has_the_prd_defaults():
 
 def test_main_call_timeout_uses_the_budget_headroom():
     # TU-13: 주 호출 18초(11/15 점검 세트 실측: 15초에서 비교·계산 질문 4/98이 시간 초과로 기본값
-    # clarify). 요청 예산(가드 설정 budget_s를 튜터가 실제로 쓰는 값) 안에서 검색·게이트 대기 몫
-    # 2초 이상을 남긴다. 가드가 budget_s를 20 아래로 내리면 이 테스트가 알려 준다
+    # clarify). 요청 예산(가드 설정 budget_s × 튜터 budget_scale) 안에서 검색·게이트 대기 몫
+    # 2초 이상을 남긴다. 가드가 budget_s를 15 아래로 내리면 이 테스트가 알려 준다
     from guardrail.config import load_config as load_guard_config
 
     from tutor.runtime.budget import backstop_s, budget_s
 
     main = config.load_config().llm.timeout_s.main
-    budget = budget_s(types.SimpleNamespace(cfg=load_guard_config()))
+    state = types.SimpleNamespace(cfg=load_guard_config(), tutor_cfg=config.load_config())
+    budget = budget_s(state)
     assert main == 18
     assert main + 2 <= budget
     assert backstop_s(budget) < 30  # 안전망까지 SPEC §3 요청당 30초 안
+
+
+def test_repo_config_keeps_the_guard_budget_and_scale_can_raise_it():
+    from guardrail.config import load_config as load_guard_config
+
+    from tutor.runtime.budget import budget_s
+
+    cfg = config.load_config(config.ROOT / config.DEFAULT_CONFIG)
+    assert cfg.budget_scale == 1.0  # 11/18 제출 5대5에서 1.2가 점수 차이를 내지 못해 끔
+    guard = load_guard_config()
+    assert guard.budget_s == 20  # 가드 예산은 그대로
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(20)
+    scaled = config.load_config(overrides={"budget_scale": 1.2})
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=scaled)) == pytest.approx(24)
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [(1.0, True), (1.5, True), (0.99, False), (1.51, False), (0, False), (-1, False)],
+)
+def test_budget_scale_must_be_in_range(value, ok):
+    if ok:
+        assert config.load_config(overrides={"budget_scale": value}).budget_scale == value
+    else:
+        with pytest.raises(ValidationError):
+            config.load_config(overrides={"budget_scale": value})
+
+
+@pytest.mark.parametrize("value", [True, "1.2"])
+def test_budget_scale_is_strict(value):
+    with pytest.raises(ValidationError):
+        config.load_config(overrides={"budget_scale": value})
+
+
+def test_budget_scale_key_is_required_and_budget_s_is_gone(tmp_path):
+    data = repo_raw()
+    del data["budget_scale"]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))
+    data["budget_scale"] = 1.2
+    data["budget_s"] = 24  # 튜터 전용 절대 예산 키는 없다(모르는 키)
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))
+
+
+def test_repo_config_has_the_hedge_and_intent_wait_limits():
+    timeouts = config.load_config(config.ROOT / config.DEFAULT_CONFIG).llm.timeout_s
+    assert (timeouts.main_hedge, timeouts.intent_wait) == (18, 8)
+    assert timeouts.main_hedge >= timeouts.main  # 겹쳐 보내기는 끔(11/18 제출 5대5: 점수 차이 없음)
+    assert timeouts.intent_wait >= timeouts.intent  # T 대기 상한은 끔(11/18 모의 부하: 가드 지연)
+
+
+@pytest.mark.parametrize("key", ["main_hedge", "intent_wait"])
+def test_hedge_and_intent_wait_are_required_and_positive(tmp_path, key):
+    data = repo_raw()
+    del data["llm"]["timeout_s"][key]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            config.load_config(overrides={f"llm.timeout_s.{key}": bad})
 
 
 @pytest.mark.parametrize(
@@ -107,6 +170,8 @@ def test_unknown_or_missing_keys_fail_at_load(tmp_path, change):
         ("toggles.signals", "yes"),
         ("toggles.cite_top1", "yes"),
         ("toggles.top1_dialog_query", "yes"),
+        ("toggles.english_embedding", "yes"),
+        ("toggles.english_embedding", 1),
         ("toggles.quote_from_top1", "yes"),
         ("toggles.delegation_override", "yes"),
         ("toggles.fallback_quote", "yes"),
@@ -127,6 +192,18 @@ def test_top1_dialog_query_key_is_required_and_loads_both_values(tmp_path):
         loaded = config.load_config(write(tmp_path, data))
         assert loaded.toggles.top1_dialog_query is value
     del data["toggles"]["top1_dialog_query"]
+    with pytest.raises(ValidationError):
+        config.load_config(write(tmp_path, data))
+
+
+def test_english_embedding_key_is_required_and_loads_both_values(tmp_path):
+    data = repo_raw()
+    data["toggles"]["oom_gate"] = "named_term"  # english_embedding은 E가 켜져 있어야 한다
+    for value in (True, False):
+        data["toggles"]["english_embedding"] = value
+        loaded = config.load_config(write(tmp_path, data))
+        assert loaded.toggles.english_embedding is value
+    del data["toggles"]["english_embedding"]
     with pytest.raises(ValidationError):
         config.load_config(write(tmp_path, data))
 
@@ -237,6 +314,14 @@ def test_local_run_cap_comes_from_the_config(capsys):
     run_local._inputs(ap, args)
     assert args.max_calls == config.load_config().eval.max_calls
     assert f"상한 {args.max_calls}회" in capsys.readouterr().out
+
+
+def test_english_embedding_needs_the_oom_gate():
+    on = {"toggles.english_embedding": True}
+    gated = config.load_config(overrides={**on, "toggles.oom_gate": "named_term"})
+    assert gated.toggles.english_embedding is True
+    with pytest.raises(ValueError, match="english_embedding"):
+        config.load_config(overrides={**on, "toggles.oom_gate": "off"})
 
 
 def test_oom_schedule_key_is_required_and_loads_all_values(tmp_path):

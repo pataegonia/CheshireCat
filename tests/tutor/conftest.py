@@ -33,7 +33,8 @@ def _no_guard_env():
 
 # 동결 설정(11/18)이 켠 토글. 튜터 단위 테스트는 이 토글들을 끈 기준 설정에서 돌고, 켠 동작은 각
 # 테스트가 overrides로 켜서 본다(저장소 기본값을 바꿀 때마다 테스트 기준이 흔들리지 않게).
-# 저장소 설정 파일 그대로의 값은 test_tutor_config가 파일을 직접 읽어 본다
+# 저장소 설정 파일 그대로의 값은 test_tutor_config가 파일을 직접 읽어 본다. 겹쳐 보내기
+# (`llm.timeout_s.main_hedge`)·직렬 T 단축 대기(`intent_wait`)도 아래 사본에서 끈다
 FREEZE_TOGGLES = {
     "delegation_override": False,
     "fallback_quote": False,
@@ -51,6 +52,9 @@ def _baseline_config(tmp_path_factory):
     repo = tutor_config.ROOT / tutor_config.DEFAULT_CONFIG
     raw = yaml.safe_load(repo.read_text(encoding="utf-8"))
     raw["toggles"].update(FREEZE_TOGGLES)
+    # 겹쳐 보내기·직렬 T 단축 대기도 끈 값으로 둔다(켠 동작은 test_main_hedge·test_intent가 본다)
+    timeouts = raw["llm"]["timeout_s"]
+    timeouts.update(main_hedge=timeouts["main"], intent_wait=timeouts["intent"])
     path = tmp_path_factory.mktemp("tutor_config") / "tutor_baseline.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path

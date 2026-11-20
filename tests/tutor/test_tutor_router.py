@@ -193,6 +193,43 @@ def test_budget_without_cfg_uses_the_default():
     assert budget.budget_s(object()) == budget.budget_s(None) == budget.DEFAULT_BUDGET_S
 
 
+def _scaled(guard, scale):
+    return types.SimpleNamespace(
+        cfg=types.SimpleNamespace(budget_s=guard),
+        tutor_cfg=types.SimpleNamespace(budget_scale=scale),
+    )
+
+
+def test_tutor_budget_is_the_guard_budget_times_the_scale():
+    assert budget.budget_s(_scaled(20, 1.2)) == pytest.approx(24)
+    assert budget.budget_s(_scaled(20, 1.0)) == 20
+
+
+def test_lowering_the_guard_budget_lowers_the_tutor_budget():
+    assert budget.budget_s(_scaled(10, 1.2)) == pytest.approx(12)
+    assert budget.budget_s(_scaled(0.05, 1.2)) == pytest.approx(0.06)
+
+
+def test_without_tutor_cfg_the_guard_value_is_used_as_is():
+    no_tutor = types.SimpleNamespace(cfg=types.SimpleNamespace(budget_s=12))
+    assert budget.budget_s(no_tutor) == 12
+    assert budget.budget_s(types.SimpleNamespace(tutor_cfg=None, cfg=no_tutor.cfg)) == 12
+    only_tutor = types.SimpleNamespace(tutor_cfg=types.SimpleNamespace(budget_scale=1.2))
+    assert budget.budget_s(only_tutor) == pytest.approx(budget.DEFAULT_BUDGET_S * 1.2)
+    assert budget.budget_s(types.SimpleNamespace()) == budget.DEFAULT_BUDGET_S == 20
+
+
+@pytest.mark.parametrize("scale", [None, True, 0, -1, float("nan"), float("inf"), "1.2"])
+def test_unusable_scale_counts_as_one(scale):
+    assert budget.budget_s(_scaled(15, scale)) == 15
+
+
+def test_large_guard_budget_is_cut_at_26_and_backstop_stays_under_30():
+    got = budget.budget_s(_scaled(100, 1.5))
+    assert got == budget.DEADLINE_CAP_S - budget.BACKSTOP_MARGIN_S == 26
+    assert budget.backstop_s(got) == 29 < 30
+
+
 def test_router_passes_the_request_deadline(client, monkeypatch):
     seen = []
 
@@ -204,7 +241,7 @@ def test_router_passes_the_request_deadline(client, monkeypatch):
     r = post(client, as_bytes({"messages": [{"role": "user", "content": "q"}]}))
     assert r.json() == {"answer": "a", "action": "answer", "citations": []}
     left, state = seen[0]
-    assert 0 < left <= budget.DEFAULT_BUDGET_S  # 기본 설정 budget_s = 20
+    assert 0 < left <= budget.DEFAULT_BUDGET_S * state.tutor_cfg.budget_scale  # 20 × 1.2
     assert state is client.app.state  # 기동 때 만든 설정·색인·LLM을 처리 단계에 넘긴다
     assert state.tutor_cfg is not None and state.tutor_llm is not None
 

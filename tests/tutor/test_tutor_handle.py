@@ -63,7 +63,7 @@ def test_handle_passes_a_request_deadline(monkeypatch):
     out = run(tutor.handle({"messages": []}))
     assert out == {"answer": "a", "action": "answer", "citations": []}
     left, state = seen[0]
-    assert 0 < left <= budget.DEFAULT_BUDGET_S
+    assert 0 < left <= budget.DEFAULT_BUDGET_S * state.tutor_cfg.budget_scale  # 20 × 배율
     assert state is pipeline.default_state()  # 프로세스 안 호출은 한 번 만든 기본 state
 
 

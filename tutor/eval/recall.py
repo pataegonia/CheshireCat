@@ -175,12 +175,26 @@ def kb_embedding_batches() -> int:
     return math.ceil(len(default_index().chunks) / BATCH)
 
 
-def expected_embedding_calls(rows: Sequence[dict[str, Any]], *, runs: int) -> int:
-    """임베딩을 켰을 때 운영진 임베딩 API 호출 수: 기동 때 KB 묶음 + 실행마다 영어 질의.
+def embedding_sites(toggles: Any) -> int:
+    """영어 질의 하나가 한 요청에서 임베딩을 부르는 곳 수(상한).
+
+    `toggles.english_embedding`을 켜면 주 호출 근거 묶음 말고도 E 근거 묶음(`oom_gate`가 off가
+    아닐 때)과 규칙 A 다시 찾기(`cite_top1` + `top1_dialog_query`)가 각각 질의를 임베딩한다
+    (#242 리뷰: 3회 측정에서 예상 48회, 실제 106회). 끄면 주 호출 한 곳이다.
+    """
+    if not toggles.english_embedding:
+        return 1
+    rule_a = toggles.cite_top1 and toggles.top1_dialog_query
+    return 1 + int(toggles.oom_gate != "off") + int(bool(rule_a))
+
+
+def expected_embedding_calls(rows: Sequence[dict[str, Any]], *, runs: int, sites: int = 1) -> int:
+    """임베딩을 켰을 때 운영진 임베딩 API 호출 수: 기동 때 KB 묶음 + 실행마다 영어 질의 × 부르는 곳.
 
     임베딩은 다시 보내지 않으므로(SDK 재시도 0, 수동 재시도 없음) 이 수가 최대값이다.
+    `sites`는 `embedding_sites`(영어 장치를 켰을 때 한 요청에서 부르는 곳 수)다.
     """
-    return kb_embedding_batches() + english_queries(rows) * runs
+    return kb_embedding_batches() + english_queries(rows) * runs * sites
 
 
 def missing_embedding_env() -> list[str]:

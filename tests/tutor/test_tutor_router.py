@@ -139,9 +139,9 @@ def test_handler_exception_gets_default_and_logs_class_only(client, caplog, monk
 
 def test_slow_handler_hits_the_deadline(monkeypatch, tmp_path, caplog):
     default_cfg = (REPO / "guardrail" / "configs" / "default.yaml").read_text("utf-8")
-    assert "budget_s: 20" in default_cfg
+    assert "budget_s: 24" in default_cfg
     cfg = tmp_path / "guard.yaml"
-    cfg.write_text(default_cfg.replace("budget_s: 20", "budget_s: 0.05"), "utf-8")
+    cfg.write_text(default_cfg.replace("budget_s: 24", "budget_s: 0.05"), "utf-8")
     monkeypatch.setenv("GUARD_CONFIG", str(cfg))
     monkeypatch.setattr(budget, "BACKSTOP_MARGIN_S", 0.0)
 
@@ -215,8 +215,8 @@ def test_without_tutor_cfg_the_guard_value_is_used_as_is():
     assert budget.budget_s(no_tutor) == 12
     assert budget.budget_s(types.SimpleNamespace(tutor_cfg=None, cfg=no_tutor.cfg)) == 12
     only_tutor = types.SimpleNamespace(tutor_cfg=types.SimpleNamespace(budget_scale=1.2))
-    assert budget.budget_s(only_tutor) == pytest.approx(budget.DEFAULT_BUDGET_S * 1.2)
-    assert budget.budget_s(types.SimpleNamespace()) == budget.DEFAULT_BUDGET_S == 20
+    assert budget.budget_s(only_tutor) == pytest.approx(26)  # 24 × 1.2 = 28.8은 26초에서 자른다
+    assert budget.budget_s(types.SimpleNamespace()) == budget.DEFAULT_BUDGET_S == 24
 
 
 @pytest.mark.parametrize("scale", [None, True, 0, -1, float("nan"), float("inf"), "1.2"])
@@ -241,7 +241,7 @@ def test_router_passes_the_request_deadline(client, monkeypatch):
     r = post(client, as_bytes({"messages": [{"role": "user", "content": "q"}]}))
     assert r.json() == {"answer": "a", "action": "answer", "citations": []}
     left, state = seen[0]
-    assert 0 < left <= budget.DEFAULT_BUDGET_S * state.tutor_cfg.budget_scale  # 20 × 1.2
+    assert 23 < left <= budget.budget_s(state) == 24  # 가드 budget_s 24 × 배율 1.0
     assert state is client.app.state  # 기동 때 만든 설정·색인·LLM을 처리 단계에 넘긴다
     assert state.tutor_cfg is not None and state.tutor_llm is not None
 

@@ -129,11 +129,13 @@ MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
 #   test_real_guard.py가 `real_guard=True`로 본다.
 # - `/guard` 3: 입력 판정 1 + 탈옥 2차 판정 1(1차가 jailbreak_injection일 때만, 가드 #183
 #   `toggles.jb_check`) + 출력 판정 1(후보 답변이 있을 때).
+#   실험 브랜치 exp/guard-out-medium: 가드 `output.medium_parallel`이 출력 판정을 low·medium 두
+#   호출로 보내 4다. 요청당 3회 규칙을 넘는다(main에 넣기 전에 pyr27 동의가 필요하다).
 # - `/tutor` 3: 가드가 튜터용 메서드를 올린 뒤(이슈 #119) classify 1(탈옥이면 2차로 +1) +
 #   judge_output 1. 튜터는 judge_output에 범주를 넘긴다(넘기지 않으면 가드가 classify를 한 번 더
 #   부른다, 가드 interface.md의 judge_output 설명).
 # - 가짜 전송은 실패를 내지 않아 재시도 몫은 넣지 않는다. 키 없이 뜬 상수 판정기 앱은 0이다.
-MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 3}
+MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 4}
 GUARD_BUDGET_HINT = (
     "가드 nano 호출이 상한을 넘었다. 판정기를 바꿨으면 "
     "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST · guard_call_budget을 고친다. "

@@ -52,8 +52,8 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.10"
-    assert cfg.budget_s == 20
+    assert cfg.version == "6.0.12"
+    assert cfg.budget_s == 24
     assert cfg.block_categories == [
         "jailbreak_injection",
         "harmful_content",
@@ -76,10 +76,16 @@ def test_default_loads_section_4_4_model():
 
 def test_model_keys_equal_yaml_keys():
     # 모델에 기본값이 없으므로 키 하나라도 빠지거나 더해지면 여기서 드러난다(§4.4 완전성)
-    assert _leaves(load_config(DEFAULT).model_dump(mode="json")).keys() == _leaves(_raw()).keys()
+    # llm.per_role 아래는 빼고 본다: 호출별 값은 적은 것만 쓰는 선택 키다(None = 공통 값)
+    model = _required(_leaves(load_config(DEFAULT).model_dump(mode="json")))
+    assert model == _required(_leaves(_raw()))
 
 
-@pytest.mark.parametrize("dotted", sorted(_leaves(_raw())))
+def _required(leaves: dict) -> set[str]:
+    return {k for k in leaves if not k.startswith("llm.per_role.")}
+
+
+@pytest.mark.parametrize("dotted", sorted(_required(_leaves(_raw()))))
 def test_every_key_is_required(tmp_path, dotted):
     # 기본값을 하나라도 두면 그 키를 지운 설정이 통과해 여기서 걸린다
     raw = _raw()
@@ -136,6 +142,7 @@ def test_baseline_differs_only_in_toggles_and_mode():
     assert len(base.toggles.model_dump()) == 16
     assert base.output.mode == "baseline"
     expected = {f"toggles.{t}" for t, on in load_config(DEFAULT).toggles if on} | {"output.mode"}
+    expected.add("output.medium_parallel")  # baseline 모드는 출력 호출이 하나다
     expected.add("version")  # 6.0.9부터 기본만 올리고 baseline은 6.0.8로 둔다(대조군 고정)
     assert _diff(base, load_config(DEFAULT)) == expected
 
@@ -363,8 +370,15 @@ def test_default_order_with_v1_prompt_loads():
 # --- S3.9 실험 손잡이: llm.per_role ---
 
 
-def test_per_role_is_empty_by_default():
-    assert load_config(DEFAULT).llm.per_role == {}
+def test_per_role_has_only_the_medium_output_call_by_default():
+    per_role = load_config(DEFAULT).llm.per_role
+    assert list(per_role) == ["output_judge_medium"]  # output.medium_parallel의 medium 호출
+    medium = per_role["output_judge_medium"]
+    assert (medium.reasoning_effort, medium.max_completion_tokens, medium.read_s) == (
+        "medium",
+        2000,
+        16,
+    )
 
 
 def test_per_role_rejects_unknown_roles_and_params():

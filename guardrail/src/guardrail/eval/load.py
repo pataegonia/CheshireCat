@@ -293,12 +293,18 @@ def probe_sender(url: str, timeout_s: float = 5.0) -> Callable[[], int]:
     return probe
 
 
+def _fields(line: str) -> list[str]:
+    """로그 줄을 칸으로 나눈다. /guard 줄 끝의 호출 기록 칸(`calls=...`)은 뗀다(끝에서 센다)."""
+    f = line.split(" ")
+    return f[:-1] if f[-1].startswith("calls=") else f
+
+
 def log_failures(lines: list[str], requests: int, with_candidate: int) -> dict:
     """접근 로그의 /guard 줄에서 오류 칸(`역할[:예외]`를 쉼표로 이음)을 역할별로 센다."""
     roles: Counter[str] = Counter()
     seen = 0
     for line in lines:
-        f = line.split(" ")
+        f = _fields(line)
         if len(f) < 7 or f[-6] != "/guard" or f[-3] != "200":  # 401 같은 거절은 판정이 아니다
             continue
         seen += 1
@@ -316,7 +322,7 @@ def log_latency(lines: list[str]) -> dict:
     """접근 로그에서 status 200인 /guard·/tutor 줄의 서버 처리 시간(ms)."""
     ms: dict[str, list[float]] = {"/guard": [], "/tutor": []}
     for line in lines:
-        f = line.split(" ")
+        f = _fields(line)
         if len(f) >= 7 and f[-6] in ms and f[-3] == "200":  # log_failures와 같이 끝에서 센다
             try:
                 ms[f[-6]].append(float(f[-2]))
@@ -330,7 +336,7 @@ def log_errors(lines: list[str], path: str) -> dict:
     codes: Counter[str] = Counter()
     seen = failed = 0
     for line in lines:
-        f = line.split(" ")
+        f = _fields(line)
         if len(f) < 7 or f[-6] != path or f[-3] != "200":
             continue
         seen += 1

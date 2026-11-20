@@ -559,3 +559,27 @@ async def test_per_role_does_not_revive_a_param_the_probe_turned_off():
     llm.params["reasoning_effort"] = None  # probe()가 거절로 끈 상태
     await call(llm, clock)
     assert "reasoning_effort" not in fake.requests[0]
+
+
+@pytest.mark.parametrize(
+    ("start", "attempts", "error"), [(0.0, 2, None), (1.0, 2, None), (3.0, 1, "timeout")]
+)
+async def test_read_timeout_is_retried_only_when_two_reads_fit_the_default_budget(
+    start, attempts, error
+):
+    # 기본 설정(budget_s 24, read 11): read 시간 초과 뒤 대기 0.5초 + read 11초가 마감 안에 들어야
+    # 재시도한다. 요청 시작 뒤 3초에 나간 호출(1차 판정 뒤의 요청 점검 등)은 재시도하지 못한다
+    cfg = load_config()
+    clock = FakeClock()
+    fake = FakeLLM(Timeout(), Ok(OK_IN))
+
+    async def send(kwargs):
+        if isinstance(fake.steps[0], Timeout):
+            clock.now += cfg.llm.timeout_s.read  # read 한도를 다 쓰고 시간 초과
+        return await fake.send(kwargs)
+
+    llm = LLM(cfg.llm, send=send, clock=clock, sleep=clock.sleep, rand=lambda: 1.0)
+    deadline = clock() + cfg.budget_s
+    clock.now += start
+    r = await llm.complete("request_check", MSGS, InputOut, deadline=deadline)
+    assert (r.attempts, r.error, len(fake.requests)) == (attempts, error, attempts)

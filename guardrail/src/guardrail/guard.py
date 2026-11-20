@@ -8,9 +8,9 @@ import asyncio
 import dataclasses
 import html
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast, get_args
+from typing import Any, Literal, cast, get_args
 
 from guardrail.classifier import LrClassifier
 from guardrail.config import GuardConfig, load_prompt
@@ -59,6 +59,8 @@ from guardrail.signals import (
 
 # nano 호출은 스스로 마감 안에 끝난다(llm.complete). 그 결과를 받을 여유만 둔다
 DEADLINE_GRACE_S = 0.2
+# 출력 medium 호출(output.medium_parallel)은 요청 마감보다 이만큼 먼저 끊는다(low 답을 낼 여유)
+MEDIUM_MARGIN_S = 0.5
 NO_SIGNALS = Signals(False, False, False)
 CATEGORIES: tuple[str, ...] = get_args(Category)  # 튜플: 해시할 수 없는 값도 TypeError 없이 비교
 
@@ -85,6 +87,8 @@ class Judgement:
     quote_repaired: bool | None = (
         None  # S3.13 인용을 근사 일치로 고쳐 썼는가(nano 결과가 없으면 None)
     )
+    # output.medium_parallel로 두 호출을 보냈을 때 쓴 쪽: med | low | default(둘 다 실패)
+    output_source: str | None = None
 
 
 class ConstantGuard:
@@ -237,6 +241,9 @@ class Guard:
             load_prompt(cfg, "request_check")
         if cfg.output.judge_mode == "sentences" and not baseline:
             load_prompt(cfg, "output_judge_sent")
+        if cfg.output.medium_parallel and "output_judge_medium" not in cfg.llm.per_role:
+            # 없으면 medium 호출이 low와 같은 값으로 나가 호출만 늘어난다
+            raise ValueError("output.medium_parallel은 llm.per_role.output_judge_medium이 필요하다")
         self.cfg, self.llm, self.kb, self.knn, self.lr = cfg, llm, kb, knn, lr
         self.block = frozenset(cfg.block_categories)
 
@@ -258,6 +265,7 @@ class Guard:
             oom_check=t.oom_check,
             request_check=t.request_check,
             block_recheck=t.block_recheck,
+            medium=self.cfg.output.medium_parallel,
         )
 
     async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
@@ -313,12 +321,14 @@ class Guard:
         oom_check: bool = False,
         request_check: bool = False,
         block_recheck: bool = False,
+        medium: bool = False,
     ) -> Judgement:
         t0 = time.monotonic()
         try:
             return await self._judge(
-                req, t0, category, retries, intro_rule, oom_check, request_check, block_recheck
-            )
+                req, t0, category, retries, intro_rule, oom_check, request_check, block_recheck,
+                medium,
+            )  # fmt: skip
         except Exception as exc:  # noqa: BLE001 - GR-09: 어떤 실패에도 규격 응답. 종류 이름만 남긴다
             out = (
                 _Output(self._default_output(req)) if category is None
@@ -338,6 +348,7 @@ class Guard:
         oom_check: bool = False,
         request_check: bool = False,
         block_recheck: bool = False,
+        medium: bool = False,
     ) -> Judgement:
         """given이 있으면 입력 nano 없이 그 범주를 쓴다. retries는 nano마다(None=설정값).
 
@@ -347,6 +358,9 @@ class Guard:
         request_check·block_recheck(S3.13)도 `judge`만 켠다. 입력 쪽 추가 호출은 탈옥 2차·자료 밖
         확인·요청 재확인 가운데 최대 하나라 `/guard`당 nano는 최대 3회다. 범주를 바꾸면 그 범주로
         decision·출력 단 ①·safe를 계산한다(응답 범주만 바꾸는 oom_check와 다르다).
+
+        medium(output.medium_parallel)도 `judge`만 켠다: 출력 판정을 low·medium 두 호출로 보낸다
+        (`_ask_pair`). 그때 `/guard`당 nano는 최대 4회다.
 
         intro_rule은 `judge`(`/guard` 응답)만 켠다: nano가 normal·answer_seeking이라 한 자기소개
         발화의 범주를 pii_disclosure로 낸다(S3.9). 출력은 nano 범주로 이미 계산한 값 그대로다.
@@ -387,6 +401,8 @@ class Guard:
                 p.target, p.revealed, p.hits, self.llm, cfg,
                 deadline=deadline, baseline=baseline, retries=retries,
             )  # fmt: skip
+            if medium and not baseline:
+                asking = self._ask_pair(asking, p, deadline, trace)
             tasks["output_judge"] = asyncio.create_task(asking)
         for task in tasks.values():  # 회수하지 못한 예외를 asyncio가 메시지째 로그에 찍지 않게 한다
             task.add_done_callback(_consume)
@@ -424,13 +440,46 @@ class Guard:
             errors.append("request_check")
         # 입력 쪽 추가 호출은 하나뿐이다. request_check가 oom_check 칸도 채우므로 한 번만 센다
         second = "oom_check" in trace or "request_check" in trace
-        calls = len(tasks) + ("jb_check" in trace) + second
+        calls = len(tasks) + ("jb_check" in trace) + second + ("out" in trace)
         intro = intro_rule and source == "nano" and category in ("normal", "answer_seeking")
         if intro and is_self_intro(p.target):  # 둘 다 허용 범주라 decision·출력 단·safe는 그대로다
             category = "pii_disclosure"  # 자기소개 + 학습 질문은 pii가 먼저다(입력 프롬프트)
         elif trace.get("oom_check") == "not_stated" and source == "nano" and category == "normal":
             category = "out_of_material"  # normal과 같은 허용 범주라 출력·safe는 그대로다
-        return self._result(category, source, out, p, t0, t1, calls, tuple(errors))
+        j = self._result(category, source, out, p, t0, t1, calls, tuple(errors))
+        return dataclasses.replace(j, output_source=trace.get("out"))
+
+    async def _ask_pair(
+        self, low_call: Awaitable[Any], p: _Prepared, deadline: float, trace: dict[str, str | None]
+    ) -> Any:
+        """출력 판정을 low(기존 호출)와 medium으로 함께 보낸다(output.medium_parallel).
+
+        medium이 끝날 때까지 기다린다(medium은 재시도 없이 read 한도와 `마감 - MEDIUM_MARGIN_S` 중
+        이른 쪽에서 끊긴다). medium이 스키마에 맞는 답을 냈으면 그것을 쓰고 low는 버린다(아직 돌고
+        있으면 취소). 아니면 low를 끝까지 기다려 쓴다(low는 요청 마감 안에 끝난다). 둘 다 실패면
+        None이고 기존 실패 기본값 경로로 간다. 쓴 쪽을 trace["out"]에 적는다(med·low·default).
+        """
+        low = asyncio.ensure_future(low_call)
+        low.add_done_callback(_consume)
+        trace["out"] = "default"
+        try:
+            try:
+                best = await ask_grounded(
+                    p.target, p.revealed, p.hits, self.llm, self.cfg,
+                    deadline=deadline - MEDIUM_MARGIN_S, retries=0, role="output_judge_medium",
+                )  # fmt: skip
+            except Exception:  # noqa: BLE001 - medium이 깨져도 low 답을 쓴다
+                best = None
+            if best is not None:
+                trace["out"] = "med"
+                return best
+            out = await low
+            if out is not None:
+                trace["out"] = "low"
+            return out
+        finally:
+            if not low.done():
+                low.cancel()
 
     async def _input(
         self,

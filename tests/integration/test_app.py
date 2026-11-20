@@ -37,6 +37,8 @@ GUARD_DEFAULT = {"input": {"decision": "allow", "category": "normal"}}
 ACCESS_LINE = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z (/guard|/tutor|other) \d+ \d+ \d{3} \d+\.\d "
     r"(-|[A-Za-z_]\w*(?:[:,][A-Za-z_]\w*)*)"
+    # 판정이 끝난 /guard 줄에만 붙는 호출 기록 칸: calls=수, 그 뒤 이름=숫자 또는 역할=ms/횟수/코드/ms
+    r"( calls=\d+(;out=(med|low|default)|;[a-z_]+=\d+(/\d+/(-|[a-z_]+)/\d+)?)*)?"
 )
 HEADER_MARKER = "HeaderMarkQX7"  # 헤더 값은 ASCII만 실을 수 있다
 
@@ -58,7 +60,9 @@ _LINE_HEAD = "2026-11-14T00:00:00.000000Z /guard 10 20 200 3.5 "
 @pytest.mark.parametrize(
     "error",
     ["-", "RuntimeError", "input_judge,output_judge", "output:KeyError",
-     "input_judge,output_judge:TimeoutError"],
+     "input_judge,output_judge:TimeoutError", "- calls=0",
+     "request_check calls=3;prep=4;llm=11020;input_judge=900/1/-/0;request_check=11004/1/timeout/2",
+     "- calls=3;prep=4;llm=9000;out=low;output_judge=900/1/-/0;output_judge_medium=9000/1/timeout/2"],
 )  # fmt: skip
 def test_access_line_accepts_the_guards_error_field(error):
     # 가드 #150부터 오류 칸은 고정 문자열 · 예외 클래스 이름을 쉼표 · 콜론으로 잇는다
@@ -68,7 +72,8 @@ def test_access_line_accepts_the_guards_error_field(error):
 @pytest.mark.parametrize(
     "error",
     ["input_judge, output_judge", "output:Key Error", '"KeyError"', "'x'", "출력:KeyError",
-     "a:", ",a", "a,,b", ""],
+     "a:", ",a", "a,,b", "", "- calls=1;input_judge=본문", "- calls=1;input_judge=9/1/Key Error/0",
+     "- calls=x"],
 )  # fmt: skip
 def test_access_line_rejects_other_text_in_the_error_field(error):
     # 공백 · 따옴표 · 한글 등 본문이 섞일 수 있는 값은 받지 않는다
@@ -451,7 +456,7 @@ def test_request_log_lines_have_seven_fields_and_no_body_words(llm_client, caplo
     assert len(lines) == 5
     for line in lines:
         assert ACCESS_LINE.fullmatch(line), line
-        assert len(line.split(" ")) == 7
+        assert len(line.split(" ")) == (8 if " /guard " in line else 7)  # /guard는 호출 기록 칸
     assert sorted(line.split(" ")[1] for line in lines) == [
         "/guard",
         "/tutor",

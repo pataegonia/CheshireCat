@@ -97,6 +97,9 @@ FREEZE_TOGGLES_OFF = {
     # 튜터 #242 english_embedding: 영어 발화는 임베딩 순위만 + 영어에도 E. E를 끈 기준에서는
     # 켤 수 없다(튜터 설정 로드에서 거부)
     "english_embedding": False,
+    # 튜터 code_block_lang: 코드 블록 때문에 영어로 보인 한국어 질문은 코드 뺀 BM25만
+    # (임베딩이 있을 때만 영향)
+    "code_block_lang": False,
 }
 
 

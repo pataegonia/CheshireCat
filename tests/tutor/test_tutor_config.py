@@ -37,7 +37,7 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.jailbreak_needs_signal is False
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
     assert toggles.english_embedding is True  # 11/19 켬(실제 제출 5대5, #242 결과 문서 11절)
-    assert toggles.code_block_lang is False  # 측정 전이라 끔
+    assert toggles.code_block_lang is True  # 11/20 켬(런박스 짝 측정 5행 × 6회)
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)

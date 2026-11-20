@@ -55,6 +55,9 @@ class RoleParams(_Strict):
     verbosity: str | None = None
     max_completion_tokens: int | None = None
     read_s: PositiveFloat | None = None  # 이 호출만 다른 read 한도(초). None = llm.timeout_s.read
+    # stream=true로 보낸다(운영진 프록시는 비스트림 요청의 토큰 상한을 2000까지만 받는다).
+    # 스트림이면 read 한도(read_s, 없으면 llm.timeout_s.read)를 스트림 전체에 건다
+    stream: bool = False
 
 
 class Llm(_Strict):

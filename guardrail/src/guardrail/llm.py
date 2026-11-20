@@ -105,6 +105,21 @@ def _parse_retry_after(headers: Mapping[str, str], wall_now: float) -> float | N
     return None
 
 
+async def _read_stream(stream: Any) -> tuple[str | None, str | None, Any]:
+    """스트림 조각 → (이어 붙인 내용, 마지막 finish_reason, 마지막 usage). 내용 조각이 하나도
+    없으면 내용은 None(빈 출력, 예: 추론에 토큰을 다 써 length로 끝남)."""
+    parts: list[str] = []
+    finish, usage = None, None
+    async for chunk in stream:
+        usage = getattr(chunk, "usage", None) or usage
+        for choice in getattr(chunk, "choices", None) or []:
+            text = getattr(getattr(choice, "delta", None), "content", None)
+            if isinstance(text, str):
+                parts.append(text)
+            finish = getattr(choice, "finish_reason", None) or finish
+    return ("".join(parts) if parts else None), finish, usage
+
+
 def _status_code(status: int) -> tuple[ErrorCode, bool]:
     """(오류 코드, 재시도 대상)."""
     if status == 408:
@@ -219,6 +234,9 @@ class LLM:
         max_retries = self.cfg.retries if retries is None else retries
         t0 = self._clock()
         kwargs = self._request(role, messages, schema)
+        over = self.cfg.per_role.get(role)
+        # 스트림 호출은 read 한도를 스트림 전체(보낸 때부터 마지막 조각까지)에 건다
+        whole_s = (over.read_s or self.cfg.timeout_s.read) if over and over.stream else None
         attempts, last, gate_s = 0, _Attempt(), 0.0
 
         def done(a: _Attempt, error: ErrorCode | None) -> LLMResult:
@@ -243,7 +261,7 @@ class LLM:
                     return done(last, last.error)  # 게이트 대기로 마감을 썼다
                 attempts += 1
                 self.calls[role] += 1
-                last = await self._attempt(kwargs, schema, deadline)
+                last = await self._attempt(kwargs, schema, deadline, whole_s)
             finally:
                 self._gate.release()
             if last.error is None:
@@ -306,24 +324,48 @@ class LLM:
             kwargs["timeout"] = openai.Timeout(
                 connect=t.connect, read=over.read_s, write=t.write, pool=t.pool
             )
+        if over is not None and over.stream:
+            kwargs["stream"] = True
         return kwargs
 
     async def _attempt(
-        self, kwargs: dict[str, Any], schema: type[BaseModel], deadline: float
+        self,
+        kwargs: dict[str, Any],
+        schema: type[BaseModel],
+        deadline: float,
+        whole_s: float | None = None,
     ) -> _Attempt:
+        """한 번 보낸다. `whole_s`가 있으면(스트림 호출) 보낸 때부터 그 초 안에 스트림이 끝나야
+        한다(마감이 더 이르면 마감). 스트림은 조각의 내용을 이어 붙이고 finish_reason·usage는 마지막
+        값을 쓴다. 그 뒤는 비스트림과 같다(빈 내용·스키마 불일치 → bad_json)."""
+        limit = max(deadline - self._clock(), 0)
+        if whole_s is not None:
+            limit = min(limit, whole_s)
+        a = _Attempt()
+        resp = None
         try:
-            async with asyncio.timeout(max(deadline - self._clock(), 0)):
+            async with asyncio.timeout(limit):
                 resp = await self._require_send()(kwargs)
+                if kwargs.get("stream") and not hasattr(resp, "choices"):
+                    content, a.finish_reason, usage = await _read_stream(resp)
+                else:
+                    content, usage = None, getattr(resp, "usage", None)
+                    try:
+                        choice = resp.choices[0]
+                        content = choice.message.content
+                        a.finish_reason = choice.finish_reason
+                    except (AttributeError, IndexError, TypeError):
+                        content = None
         except Exception as exc:  # noqa: BLE001 - 코드로만 돌려준다
             return self._fail(exc)
-        a = _Attempt()
-        try:
-            choice = resp.choices[0]
-            content = choice.message.content
-            a.finish_reason = choice.finish_reason
-        except (AttributeError, IndexError, TypeError):
-            content = None
-        tokens = getattr(getattr(resp, "usage", None), "completion_tokens", None)
+        finally:
+            close = getattr(resp, "close", None) if kwargs.get("stream") else None
+            if close is not None:
+                try:
+                    await close()
+                except Exception:  # noqa: BLE001, S110 - 닫기 실패는 결과와 상관없다
+                    pass
+        tokens = getattr(usage, "completion_tokens", None)
         a.completion_tokens = tokens if isinstance(tokens, int) else None
         try:
             if not isinstance(content, str):

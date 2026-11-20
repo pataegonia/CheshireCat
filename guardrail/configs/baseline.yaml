@@ -17,7 +17,7 @@ llm:                               # 파라미터는 모두 null 가능(null = �
   retries: 1
   retry_jitter_s: [0.2, 0.5]
   gate: 64
-  per_role: {output_judge_medium: {reasoning_effort: medium, max_completion_tokens: 2000, read_s: 16}}   # default와 같은 값(medium_parallel이 꺼져 있어 쓰지 않는다)
+  per_role: {output_judge_medium: {reasoning_effort: medium, max_completion_tokens: 6000, read_s: 16, stream: true}}   # default와 같은 값(medium_parallel이 꺼져 있어 쓰지 않는다)
 toggles:                           # GR-11. 모두 false + output.mode: baseline = "nano 단독" 베이스라인(configs/baseline.yaml)
   knn_fewshot: false                # GR-05 few-shot 예시만 끈다(kNN 다수결은 knn_vote)
   knn_vote: false                   # GR-05 kNN 다수결(실패 기본값·3번째 호출 투표). PRD GR-09 "kNN이 꺼져 있으면"은 이 키

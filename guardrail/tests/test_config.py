@@ -374,11 +374,9 @@ def test_per_role_has_only_the_medium_output_call_by_default():
     per_role = load_config(DEFAULT).llm.per_role
     assert list(per_role) == ["output_judge_medium"]  # output.medium_parallel의 medium 호출
     medium = per_role["output_judge_medium"]
-    assert (medium.reasoning_effort, medium.max_completion_tokens, medium.read_s) == (
-        "medium",
-        2000,
-        16,
-    )
+    got = (medium.reasoning_effort, medium.max_completion_tokens, medium.read_s, medium.stream)
+    # 비스트림은 프록시가 2000까지만 받아 medium이 잘렸다: 스트림으로 6000(read 16초는 스트림 전체)
+    assert got == ("medium", 6000, 16, True)
 
 
 def test_per_role_rejects_unknown_roles_and_params():

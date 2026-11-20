@@ -57,7 +57,8 @@ async def test_medium_answer_is_used_when_it_succeeds(no_rule):
     # 가짜 medium은 바로 끝나서 low는 나가기 전에 취소될 수 있다(실제로는 low가 먼저 끝난다)
     assert len(medium) == 1 and len(low) <= 1
     # medium 호출만 호출별 값(llm.per_role.output_judge_medium)으로 나간다
-    assert medium[0]["max_completion_tokens"] == 2000 and medium[0]["timeout"].read == 16
+    assert medium[0]["max_completion_tokens"] == 6000 and medium[0]["timeout"].read == 16
+    assert medium[0]["stream"] is True and all("stream" not in r for r in low)
     assert guard.llm.calls["output_judge_medium"] == 1
 
 

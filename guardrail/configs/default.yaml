@@ -15,7 +15,7 @@ llm:                               # 파라미터는 모두 null 가능(null = �
   retries: 1
   retry_jitter_s: [0.2, 0.5]
   gate: 64
-  per_role: {output_judge_medium: {reasoning_effort: medium, max_completion_tokens: 2000, read_s: 16}}   # 호출별 값(없는 호출은 위 공통 값). output_judge_medium은 output.medium_parallel의 medium 출력 판정: 토큰 2000(운영진 프록시 상한), read 16초(results/2026-11-16-score-probes.md 2·6절의 측정 설정)
+  per_role: {output_judge_medium: {reasoning_effort: medium, max_completion_tokens: 6000, read_s: 16, stream: true}}   # 호출별 값(없는 호출은 위 공통 값). output_judge_medium은 output.medium_parallel의 medium 출력 판정. 운영진 프록시는 비스트림 요청의 토큰을 2000까지만 받고(넘으면 400), 2000에서는 medium이 추론에 토큰을 다 써 11–19%가 length로 잘렸다(11/20) → stream: true로 6000. read 16초는 스트림 전체에 걸린다(마감 − 0.5초가 더 이르면 마감)
 toggles:                           # GR-11. 모두 false + output.mode: baseline = "nano 단독" 베이스라인(configs/baseline.yaml)
   knn_fewshot: true                # GR-05 few-shot 예시만 끈다(kNN 다수결은 knn_vote)
   knn_vote: true                   # GR-05 kNN 다수결(실패 기본값·3번째 호출 투표). PRD GR-09 "kNN이 꺼져 있으면"은 이 키

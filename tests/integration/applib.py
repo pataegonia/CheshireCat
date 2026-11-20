@@ -100,6 +100,8 @@ FREEZE_TOGGLES_OFF = {
     # 튜터 code_block_lang: 코드 블록 때문에 영어로 보인 한국어 질문은 코드 뺀 BM25만
     # (임베딩이 있을 때만 영향)
     "code_block_lang": False,
+    # 튜터 top1_redraft: 검색 1위로 다시 받기(nano +1, 조건이 맞을 때만)
+    "top1_redraft": False,
 }
 
 

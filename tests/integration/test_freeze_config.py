@@ -101,6 +101,13 @@ def test_repo_config_turns_on_only_freeze_toggles_and_the_baseline_list():
     assert stray == {}, f"켜졌는데 applib.FREEZE_TOGGLES_OFF에도 기준 목록에도 없는 토글: {stray}"
 
 
+def redraft_on() -> bool:
+    """저장소 설정이 검색 1위로 다시 받기(`toggles.top1_redraft`)를 켰나. 켜면 조건이 맞는 요청에
+    주 호출이 한 번 더 나간다(TU-13 예외 5회, 리더 승인 11/20)."""
+    repo = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
+    return bool(repo["toggles"].get("top1_redraft"))
+
+
 def test_normal_question_calls_intent_then_main_as_the_repo_config_says(
     repo_config_client, fake_send
 ):
@@ -111,6 +118,8 @@ def test_normal_question_calls_intent_then_main_as_the_repo_config_says(
     assert_tutor_contract(body)
     assert ANSWER_WORD in body["answer"], seen  # 가짜 LLM(주 호출)의 답이 실제로 나간다
     mains = [MAIN] * (1 + extra_drafts(client))  # 실험 multi_draft: 주 호출 초안 K개
+    if redraft_on() and names.count(MAIN) == len(mains) + 1 and names[-1] == MAIN:
+        names = names[:-1]  # 다시 받기가 주 호출을 한 번 더 보냈다
     if mode == "off":
         assert names == mains, seen
     elif mode == "serial":
@@ -149,7 +158,9 @@ def test_a_failed_intent_call_still_sends_the_main_call_answer(repo_config_clien
 def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fake_send):
     client = repo_config_client
     mode = intent_mode(client)
-    base = (1 if mode == "off" else 2) + extra_drafts(client)
+    drafts = extra_drafts(client)
+    base = (1 if mode == "off" else 2) + drafts
+    extra = 1 if redraft_on() else 0  # 다시 받기 주 호출 1회(조건이 맞을 때만)
     fake_send.vary = True
     over = []
     for row in TUTOR_ROWS:
@@ -159,11 +170,12 @@ def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fak
         assert r.status_code == 200, row["id"]
         assert_tutor_response(r.json())
         names = fake_send.names[before:]
-        budget = base + (OOM_GATE in names)  # E를 부른 요청은 E · T · 주 호출
-        if len(names) > budget:
+        budget = base + (OOM_GATE in names) + extra  # E를 부른 요청은 E · T · 주 호출
+        if len(names) > budget or names.count(MAIN) > 1 + drafts + extra:
             over.append((row["id"], names))
     assert over == [], (
-        f"intent_override={mode}, 요청당 튜터 LLM 상한 {base}회(E면 +1)를 넘은 행: {over}"
+        f"intent_override={mode}, 요청당 튜터 LLM 상한 {base}회(E면 +1, 다시 받기면 +1)를"
+        f" 넘은 행: {over}"
     )
 
 

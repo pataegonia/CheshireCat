@@ -823,33 +823,42 @@ async def _answer_v2(
             )
         except Exception:  # 메시지는 남기지 않는다
             top_sections = None
+    # 가드 판정(verify: guard)이 있으면 다시 받지 않는다(판정은 주 호출 문장에 대한 것이다).
+    # 판정을 건너뛰었거나 실패해 verdict가 None이면 다시 받은 답도 판정 없이 나간다(처음 답과 같다)
     if (
         cfg.toggles.top1_redraft
         and top_sections
-        and verdict is None  # 가드 판정은 주 호출 문장에 대한 것이다
+        and verdict is None
         and action == "answer"
         and draft.out.action == "answer"
     ):
-        redone = await _top1_redraft(
-            state,
-            conv,
-            signals,
-            draft.out,
-            draft.sections,
-            top_sections[0],
-            deadline,
-            path=(trusted, intent_label, action, merged.category),
-        )
-        if redone is not None:
-            body = assemble(
-                redone,
-                [top_sections[0]],
-                action=action,
-                max_citations=cfg.toggles.max_citations,
-                cite_top1=cfg.toggles.cite_top1,
-                top_sections=top_sections,
+        try:  # 보조 단계라 실패하면 처음 답 그대로(메시지는 남기지 않는다). 취소는 그대로 올린다
+            redone = await _top1_redraft(
+                state,
+                conv,
+                signals,
+                draft.out,
+                draft.sections,
+                top_sections[0],
+                deadline,
+                path=(trusted, intent_label, action, merged.category),
             )
-            return tutor_post(body, merged.category)
+            redrafted = (
+                None
+                if redone is None
+                else assemble(
+                    redone,
+                    [top_sections[0]],
+                    action=action,
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                    top_sections=top_sections,
+                )
+            )
+        except Exception:
+            redrafted = None
+        if redrafted is not None:
+            return tutor_post(redrafted, merged.category)
     body = assemble(
         out,
         draft.sections,

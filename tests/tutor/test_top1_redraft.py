@@ -74,7 +74,11 @@ def sections():
 
 @pytest.fixture
 def rule_a_returns(monkeypatch):
-    """규칙 A 검색(flow 모듈의 retrieve)만 정한 섹션을 1위로 돌려주게 한다."""
+    """규칙 A 검색(flow 모듈의 retrieve)만 정한 섹션을 1위로 돌려주게 한다.
+
+    주 호출 근거 묶음은 tutor.judge.draft의 retrieve라 바뀌지 않는다. E(oom_gate)의 근거 검색도
+    flow.retrieve를 쓰므로 E를 켠 테스트를 더하면 이 픽스처를 나눠야 한다(지금 기준 설정은 E 끔).
+    """
 
     def use(top):
         async def fake(query, history=(), **kw):
@@ -94,6 +98,16 @@ def run(state, *, deadline_left: float | None = None):
         return await flow.answer_v2(body, state, deadline=deadline)
 
     return asyncio.run(go())
+
+
+class RaisingRedraft(RoleLLM):
+    """다시 받는 호출(main_r)에서 프로그래밍 오류처럼 예외를 던진다."""
+
+    async def complete(self, role, messages, schema, **kw):
+        if role == flow.REDRAFT_ROLE:
+            self.calls.append({"role": role})
+            raise RuntimeError("redraft broke")
+        return await super().complete(role, messages, schema, **kw)
 
 
 def roles(llm) -> list[str]:
@@ -144,6 +158,7 @@ def test_redrafts_with_only_the_top_section_and_uses_it(sections, rule_a_returns
     assert roles(llm) == [flow.MAIN_ROLE, flow.REDRAFT_ROLE]
     sent = llm.calls[1]
     assert sent["retries"] == 0
+    assert sent["deadline"] == pytest.approx(1e12 - flow.REDRAFT_MARGIN_S)  # 요청 마감 − 3초
     user = sent["messages"][-1]["content"]
     assert other.id in user and bundle[0].id not in user  # 근거 묶음은 1위 섹션 하나
     assert "1위 섹션으로 다시 답한 문장이에요." in resp["answer"]
@@ -152,7 +167,7 @@ def test_redrafts_with_only_the_top_section_and_uses_it(sections, rule_a_returns
 
 
 def test_keeps_the_answer_that_already_uses_the_top_section(sections, rule_a_returns):
-    bundle, _other = sections
+    bundle = sections[0]
     rule_a_returns(bundle[0])
     llm = RoleLLM({flow.MAIN_ROLE: answer("묶음 1위로 답한 문장이에요.", bundle[0])})
     resp = run(state_with(llm, **ON))
@@ -189,6 +204,16 @@ def test_keeps_the_first_answer_when_the_redraft_does_not_qualify(
     resp = run(state_with(llm, **ON))
     assert roles(llm) == [flow.MAIN_ROLE, flow.REDRAFT_ROLE]
     assert "묶음 섹션으로 답한 문장이에요." in resp["answer"]
+
+
+def test_keeps_the_first_answer_when_the_redraft_raises(sections, rule_a_returns):
+    bundle, other = sections
+    rule_a_returns(other)
+    llm = RaisingRedraft({flow.MAIN_ROLE: answer("묶음 섹션으로 답한 문장이에요.", bundle[0])})
+    resp = run(state_with(llm, **ON))
+    assert roles(llm) == [flow.MAIN_ROLE, flow.REDRAFT_ROLE]
+    assert "묶음 섹션으로 답한 문장이에요." in resp["answer"]  # 기본값이 아니라 처음 답
+    assert resp["action"] == "answer"
 
 
 def test_skips_when_too_little_time_is_left(sections, rule_a_returns):

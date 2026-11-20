@@ -80,6 +80,10 @@ class Toggles(_Strict):
     # 보낸다. E 마감은 요청 시작부터 llm.timeout_s.oom_gate로 같다(호출 순서만 바꾼다).
     # after_intent_fresh는 같은 순서에 E 마감만 E 시작부터 센다(요청 마감보다 늦지 않게)
     oom_schedule: Literal["with_request", "after_intent", "after_intent_fresh"]
+    # 근거 불일치 답변 재작성(2026-11-18 후보 D, tutor.judge.repair): cite_top1이 모델 인용에 없던
+    # 1위를 더한 최종 answer만 nano 1회로 고쳐 쓴다(재시도 없음). 이 요청은 nano가 1회 더 들어
+    # TU-13 절대 4회를 넘을 수 있다(대회 규정에는 호출 한도 없음, SPEC §3). 실험 토글, 기본 끔
+    repair: Literal["off", "top1_mismatch"]
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":

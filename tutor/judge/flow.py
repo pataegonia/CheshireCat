@@ -50,7 +50,7 @@ from tutor.answer.templates import (
     fixed_body,
     template_for,
 )
-from tutor.judge import main_call, multi_draft
+from tutor.judge import main_call, multi_draft, repair
 from tutor.judge.conversation import Conversation, normalize_fast, tidy
 from tutor.judge.draft import Draft, draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
@@ -114,6 +114,7 @@ def prepare_judge(app_state: Any) -> None:
     sections = app_state.tutor_kb.sections if intent_on else {}
     app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
     app_state.intent_skips = IntentSkips()  # 사유 → 횟수(본문 없음)
+    app_state.tutor_repair_prompt = repair.load_system() if toggles.repair != "off" else None
     gate_on = toggles.oom_gate != "off"  # 자료 밖 확인 E(#213 B2): 프롬프트는 기동 때 한 번
     app_state.tutor_oom_gate_prompt = load_gate_system() if gate_on else None
     app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
@@ -914,4 +915,58 @@ async def _answer_v2(
         cite_top1=cfg.toggles.cite_top1,
         top_sections=top_sections,
     )
+    if (
+        cfg.toggles.repair != "off"
+        and body.get("action") == "answer"
+        and len(body.get("citations") or []) > cfg.toggles.max_citations  # cite_top1이 1위를 더함
+    ):
+        fixed = await repair_body(
+            state, conv, draft.sections, top_sections or draft.sections, out, action, verdict,
+            deadline=deadline,
+        )  # fmt: skip
+        if fixed is not None:
+            body = fixed
     return tutor_post(body, merged.category)
+
+
+async def repair_body(
+    state: Any,
+    conv: Conversation,
+    sections: Sequence[RetrievedSection],
+    top_sections: Sequence[RetrievedSection],
+    out: MainCallOut,
+    action: Action,
+    verdict: OutputVerdict | None,
+    *,
+    deadline: float,
+) -> dict[str, Any] | None:
+    """`toggles.repair`(후보 D): `cite_top1`이 더한 1위 섹션을 근거에 넣어 답을 한 번 고쳐 쓴다.
+
+    고쳐 쓴 답도 같은 결정적 수정(`assemble`)을 거친다. 실패·시간 부족·범주나 action 변경이면
+    None이고, 결정적 수정 뒤 answer가 아니거나 인용이 없거나 빈 답 안내가 든 답도 버린다(초안 유지).
+    """
+    cfg = state.tutor_cfg
+    system = getattr(state, "tutor_repair_prompt", None)
+    if system is None or not top_sections:
+        return None
+    added = top_sections[0]
+    fixed_out = await repair.rewrite(
+        state.tutor_llm, system, sections, added, out, conv,
+        deadline=deadline, now=asyncio.get_running_loop().time(),
+    )  # fmt: skip
+    if fixed_out is None:
+        return None
+    bundle = [*sections, *([] if any(s.id == added.id for s in sections) else [added])]
+    body = assemble(
+        fixed_out,
+        bundle,
+        action=action,
+        max_citations=cfg.toggles.max_citations,
+        verdict=verdict,
+        cite_top1=cfg.toggles.cite_top1,
+        top_sections=top_sections,
+    )
+    answer = body.get("answer") or ""
+    if body.get("action") != "answer" or not body.get("citations"):
+        return None
+    return None if NOT_IN_MATERIAL_NOTE in answer else body

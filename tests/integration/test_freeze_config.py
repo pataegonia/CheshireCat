@@ -56,6 +56,12 @@ def intent_mode(client) -> str:
     return str(getattr(client.app.state.tutor_cfg.toggles, "intent_override", "off"))
 
 
+def extra_drafts(client) -> int:
+    """주 호출 초안 여러 개(실험 `llm.multi_draft`)를 켰으면 A 밖의 초안 수, 끄거나 없으면 0."""
+    md = getattr(client.app.state.tutor_cfg.llm, "multi_draft", None)
+    return len(md.drafts) - 1 if md is not None and md.enabled else 0
+
+
 def ask(client, fake_send, body: dict) -> tuple[dict, list[str]]:
     """요청 하나를 보내고 (응답 본문, 이번 요청의 튜터 LLM 호출 스키마 이름)을 돌려준다."""
     before = len(fake_send.names)
@@ -67,6 +73,10 @@ def ask(client, fake_send, body: dict) -> tuple[dict, list[str]]:
 def test_baseline_copy_differs_from_the_repo_config_only_in_freeze_toggles(baseline_tutor_config):
     repo = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
     copy = yaml.safe_load(baseline_tutor_config.read_text(encoding="utf-8"))
+    # 실험 브랜치: 기준 사본은 llm.multi_draft.enabled도 끈다(나머지 값은 같다)
+    if "multi_draft" in repo["llm"]:
+        assert copy["llm"]["multi_draft"]["enabled"] is False
+        copy["llm"]["multi_draft"]["enabled"] = repo["llm"]["multi_draft"]["enabled"]
     assert {k: v for k, v in copy.items() if k != "toggles"} == {
         k: v for k, v in repo.items() if k != "toggles"
     }
@@ -100,12 +110,13 @@ def test_normal_question_calls_intent_then_main_as_the_repo_config_says(
     seen = f"intent_override={mode}, 호출={names}"
     assert_tutor_contract(body)
     assert ANSWER_WORD in body["answer"], seen  # 가짜 LLM(주 호출)의 답이 실제로 나간다
+    mains = [MAIN] * (1 + extra_drafts(client))  # 실험 multi_draft: 주 호출 초안 K개
     if mode == "off":
-        assert names == [MAIN], seen
+        assert names == mains, seen
     elif mode == "serial":
-        assert names == [INTENT, MAIN], seen
+        assert names == [INTENT, *mains], seen
     else:
-        assert sorted(names) == sorted([INTENT, MAIN]), seen
+        assert sorted(names) == sorted([INTENT, *mains]), seen
 
 
 def test_serial_intent_label_with_a_fixed_sentence_skips_the_main_call(
@@ -138,7 +149,7 @@ def test_a_failed_intent_call_still_sends_the_main_call_answer(repo_config_clien
 def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fake_send):
     client = repo_config_client
     mode = intent_mode(client)
-    base = 1 if mode == "off" else 2
+    base = (1 if mode == "off" else 2) + extra_drafts(client)
     fake_send.vary = True
     over = []
     for row in TUTOR_ROWS:
@@ -154,3 +165,23 @@ def test_public_tutor_rows_answer_within_the_call_budget(repo_config_client, fak
     assert over == [], (
         f"intent_override={mode}, 요청당 튜터 LLM 상한 {base}회(E면 +1)를 넘은 행: {over}"
     )
+
+
+def test_repo_config_with_multi_draft_off_calls_one_main_like_before(
+    open_app, monkeypatch, tmp_path, fake_send
+):
+    """실험 브랜치의 대조군(런박스 끔 측정): 저장소 설정에서 llm.multi_draft.enabled만 끄면 정상
+    질문의 튜터 LLM 호출이 동결 설정 그대로다(serial이면 [IntentOut, MainCallOut])."""
+    raw = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
+    if "multi_draft" not in raw["llm"]:
+        pytest.skip("multi_draft 키가 없는 설정")
+    raw["llm"]["multi_draft"]["enabled"] = False
+    path = tmp_path / "tutor-multi-off.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setenv("TUTOR_CONFIG", str(path))
+    with open_app() as client:
+        mode = intent_mode(client)
+        body, names = ask(client, fake_send, user(QUESTION))
+    assert_tutor_contract(body)
+    expected = {"off": [MAIN], "serial": [INTENT, MAIN]}.get(mode, sorted([INTENT, MAIN]))
+    assert (names if mode in ("off", "serial") else sorted(names)) == expected, names

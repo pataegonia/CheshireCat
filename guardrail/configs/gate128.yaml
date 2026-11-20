@@ -1,0 +1,66 @@
+# 가드 기본 설정. master-plan §4.4 블록을 그대로 옮겼다. 바꾸려면 §4.4를 먼저 고친다.
+# 키·주소는 여기에 쓰지 않는다(환경변수, §4.4 끝).
+version: "6.0.12"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
+paths: {kb: ../competition/kb, public: ../competition/public, prompts: prompts}   # 환경변수로 덮어쓸 수 있다(아래)
+prompts: {input_judge: input_judge_en.md, output_judge: output_judge_en_v2.md, output_judge_baseline: output_judge_baseline.md, jb_check: jb_check_en.md, oom_check: oom_check_en.md, request_check: request_check_en.md, output_judge_sent: output_judge_en_sent.md}   # 이름 → paths.prompts 아래 파일(id·version 머리말 필수). config_hash가 각 파일의 version을 읽는다. S2.7이 output_judge·output_judge_baseline을 더한다
+budget_s: 24                       # 요청 예산(GR-09). 규격은 30초. 서버 안전망은 +5초 = 29초(server.py). 실험(exp/guard-budget-24): 20 → 24초. 튜터 예산은 config/tutor.yaml budget_scale 1.0으로 24초 그대로
+block_categories: [jailbreak_injection, harmful_content, academic_dishonesty, off_topic]   # 범주 → decision 표(ADR-0012)
+llm:                               # 파라미터는 모두 null 가능(null = 보내지 않음). probe()가 거절된 것만 끈다
+  reasoning_effort: low
+  verbosity: low
+  max_completion_tokens: 1600      # 800이면 출력 판정 호출의 6–9%가 잘렸다(finish_reason=length). 1600에서 잘림 0/192(S2.9, results/2026-11-13-v1.md). 대신 read 12초(그때 값, 지금은 11초) 시간 초과가 유효 6회에서 8/384(2.1%)다(약 1,390토큰부터, 조치는 ADR-0014 S2.9 수정). 입력 판정은 800에서도 잘림이 없었다
+  structured_output: json_schema   # json_schema | json_object. probe()가 내린다
+  # read 11초 시간 초과는 호출이 요청 시작 뒤 약 1.5–1.8초 안에 나갔을 때만 재시도된다: llm.py가 지금 + 대기 + read > 마감이면 재시도하지 않고(budget_s 24), 대기는 0.2–0.5초(retry-after가 있으면 그만큼)라 첫 시도가 약 12.5–12.8초 안에 끝나야 재시도할 수 있다(11 + 0.5 + 11 = 22.5초). 1차 판정 뒤에 이어 부르는 호출(요청 점검 등)은 1차가 그 안에 끝났을 때만 해당한다. 실험(exp/guard-budget-24): 12 → 11초
+  timeout_s: {connect: 3, read: 11, write: 5, pool: 5}
+  retries: 1
+  retry_jitter_s: [0.2, 0.5]
+  gate: 128
+  per_role: {output_judge_medium: {reasoning_effort: medium, max_completion_tokens: 2000, read_s: 16}}   # 호출별 값(없는 호출은 위 공통 값). output_judge_medium은 output.medium_parallel의 medium 출력 판정: 토큰 2000(운영진 프록시 상한), read 16초(results/2026-11-16-score-probes.md 2·6절의 측정 설정)
+toggles:                           # GR-11. 모두 false + output.mode: baseline = "nano 단독" 베이스라인(configs/baseline.yaml)
+  knn_fewshot: true                # GR-05 few-shot 예시만 끈다(kNN 다수결은 knn_vote)
+  knn_vote: true                   # GR-05 kNN 다수결(실패 기본값·3번째 호출 투표). PRD GR-09 "kNN이 꺼져 있으면"은 이 키
+  lr: true                         # GR-05 LR(기본 범주·3번째 호출 투표)
+  third_call: false                # GR-05 ③, P2
+  low_signal_direct: true          # GR-06 저신호 직접 판정
+  literal_rule: true               # GR-07 ②
+  nano_tier3: true                 # GR-07 ③ 사용 여부(출력 nano 호출 자체는 v6 모드에서 `output.call_nano_when_unused: true`인 동안 늘 함). S3.1이 재기 전의 잠정 기본값. S3.1이 output.failure_default와 함께 4조합을 비교해 정한다
+  nano_span: true                  # GR-07 ③에서 확인된 answer_quote를 구간으로 낸다(ADR-0014 S2.9 수정). 자른 원문에 글자 그대로 있는 인용만 낸다. 끄면 ③은 false/[]. ③의 "근거 없음" 정밀도가 0.8 아래로 떨어지면 끈다
+  safe_rule: true                  # GR-08 safe 규칙만. GR-07 ①(block 범주 → true/[])은 output.mode: v6에서 토글 없이 늘 적용
+  oom_kb_snippet: false            # GR-04 out_of_material용 KB 조각, P1
+  embedding: false                 # GR-03·GR-05 임베딩, P2
+  jb_check: true                  # S3.3 탈옥 2차 판정(prompts.jb_check). 1차가 jailbreak_injection일 때만 호출 1회 추가
+  pii_intro_rule: true             # S3.9 자기소개(이름·학교·학년) 발화: nano가 normal·answer_seeking이면 pii_disclosure로. 호출 0, decision 불변(results/2026-11-16-score-probes.md)
+  oom_check: true                  # S3.10 자료 밖 확인(prompts.oom_check): nano가 normal이면 KB를 붙여 호출 1회 추가, not_stated면 out_of_material(results/2026-11-17-cause-fixes.md)
+  request_check: true               # S3.13: 1차가 normal·answer_seeking이면 자료 밖 확인 자리에 요청 점검 1회(prompts.request_check). 수업과 무관한 산출물이면 off_topic(results/2026-11-17-paired-compare.md)
+  block_recheck: true               # S3.13: 1차가 off_topic이면 요청 점검 1회, 학습 요청뿐이면 normal
+input:
+  label_mode: category             # category | act(S3.2 선별용 변형, R14 B3) | flags(S3.8 실험 변형, 범주 앞 예/아니오 두 칸, 미채택). v1은 category
+  window_last: 6
+  max_chars: 2000                  # 메시지 하나의 길이 상한(보이지 않는 문자만 지우고 넘으면 공백·반복을 줄인 뒤 앞 + 뒤, 무거운 정규화는 그 뒤. 판정 대상 <target>에도 적용, 긴 이력 대비)
+  max_answer_chars: 8000           # 후보 답변의 원문 길이 상한(전처리 전에 자름. SPEC §4 답변 최대 4000자). 출력 nano·규칙 ②·거절 정규식이 자른 답변을 본다. has_hidden_tags는 자르기 전 전체
+  knn: {analyzer: char_wb, ngram: [1, 3], max_examples: 8, per_category: 2, order: nearest_last, sublinear_tf: false}   # order·sublinear_tf: S3.2 선별용 변형(R14 B4·B5), 값은 v1 동작
+  knn_vote_k: 7                    # kNN 다수결 이웃 수(실패 기본값·3번째 호출)
+  lr: {analyzer: char_wb, ngram: [1, 3], C: 100}
+  oom_snippet_chars: 400
+kb: {top_k: 3, ngram: 2, k1: 1.2, b: 0.75}
+retrieval: {max_query_chars: 4000}   # BM25 질의(학습자 부분·답변 부분 각 //2)·kNN·LR 입력(발화 하나) 상한(긴 이력 대비, 뒤쪽을 남김)
+output:
+  mode: v6                         # v6 | baseline(출력 nano 베이스라인 프롬프트 → grounded·safe 바로, unsupported=[])
+  failure_default: grounded        # grounded(true/[]) | ungrounded(false/[]). 토글 아님. S3.1이 정한다(PRD GR-07·GR-09)
+                                   # 출력 nano가 실패했을 때와 nano_tier3가 꺼져 nano 판정을 쓰지 않을 때의 ④에만 적용한다.
+                                   # nano_tier3가 켜져 있고 nano가 근거 있음이라고 한 ④는 늘 true/[]다
+  call_nano_when_unused: true      # nano_tier3가 꺼졌을 때 출력 nano를 그래도 부를지. 측정 때는 true(S3.1 정밀도 기록). nano_tier3: false로 동결하면 false로 낮춰 호출을 아낄 수 있다
+  rule_min_margin: 3.5             # Ranking.margin(KbIndex.rank 한 번, 전체 순위, 섹션별 최고 점수) 기준. S3.1이 G∪T(가드 근거 있음 + 튜터 참조 답변) 오탐으로 정한다. 기본 3.5는 공개 세트에서 정한 잠정값(R13-A §6.2)
+  rule_emit_spans: true            # true = 규칙 ② → false + 규칙 구간 | false = false/[]. S3.1이 규칙 정밀도 P로 정한다(P ≥ 1/(1+s) → true, 0.5 ≤ P < 1/(1+s) → false, P < 0.5 → literal_rule 끔)
+  rule_span: clause                # clause(첫 토큰의 한 어절 앞 → 절 끝, S3.1 재생 4회 모두 pm4 대비 +0.004 출력 평균) | pm4(첫 토큰 ±4자, `merged_pm4_spans`, F1 0.638) | eojeol(어절 경계, 0.503)
+  rule_extra_tokens: []            # ablation: value_norm(콤마·만·천·억) | units_extra(주·일·년·글자) | bare_numeral(단위 없는 한글 수사, 미구현: 설정하면 기동 실패) | backtick_latin(백틱 안 영문만). 기본 [] = V2(NUM_RX + 인용 제거 + 수사 클래스 수정)
+  rule_require_same_kind: false    # ablation(미구현: true면 기동 실패): 같은 종류(단위 숫자/한글 수사/백틱 코드/함수 호출/리스트 리터럴)의 다른 값이 섹션에 있을 때만 걸림
+  tier3_trust: answer_quote        # all | answer_quote | both_quotes. nano "근거 없음" 가운데 ③에 쓰는 것(R14-D2). 잠정값, S3.1이 저장된 응답으로 정한다
+  quote_min_chars: 4               # answer_quote 확인에서 정규화 뒤 최소 글자 수. S3.13: 8이면 짧은 코드 문자열 인용이 버려진다(21회 재생에서 이득 15·손해 0)
+  context_max_chars: 4000          # 출력 nano에 주는 1위 섹션 전체의 길이 상한(R14-D4)
+  span_tidy: true                  # S3.10 구간 다듬기(인용·목록 기호, 숫자 구간 끝의 이에요·예요·이므로)
+  judge_mode: quote                # S3.13 실험, 기본 끔(quote | sentences)
+  quote_repair: false              # S3.13 실험, 기본 끔
+  medium_parallel: true            # 실험(exp/guard-out-medium): 출력 판정을 low와 medium(llm.per_role.output_judge_medium)으로 함께 보낸다. medium이 마감 0.5초 전까지 맞는 답을 내면 medium, 아니면 low, 둘 다 실패면 failure_default. /guard당 nano 최대 4회. 재생에서 가드 +0.71(짝 18개 중 17개가 0 이상, results/2026-11-16-score-probes.md 2·6절), 실제 실행은 재지 않았다
+embedding: {targets: [kb, knn], weight: 0.5}   # embedding 토글이 켜졌을 때만
+eval: {max_calls: 5000}            # 하네스 실행당 API 호출 상한(--max-calls로 덮어씀)

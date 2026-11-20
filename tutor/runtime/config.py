@@ -21,6 +21,8 @@ DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
+# multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다)
+MULTI_DRAFT_MAX_CALLS = 8
 
 
 class _Strict(BaseModel):
@@ -145,11 +147,41 @@ class Timeouts(_Strict):
     oom_gate: PositiveFloat  # 자료 밖 확인 E(toggles.oom_gate). E 시작(검색 직후)부터 센다
 
 
+class Draft(_Strict):
+    """주 호출 초안 하나(`multi_draft.drafts`). timeout_s가 없으면 `timeout_s.main`."""
+
+    effort: Literal["low", "medium"]  # minimal 금지(TU-13)
+    timeout_s: PositiveFloat | None = None
+
+
+class MultiDraft(_Strict):
+    """실험: 주 호출 초안 K개를 동시에 보내고 결정적으로 고른다(tutor.judge.multi_draft).
+
+    끄면(enabled false) 지금과 같다. 켜면 겹쳐 보내기(`timeout_s.main_hedge`)는 쓰지 않는다.
+    초안 A(첫 번째)는 지금의 주 호출이라 low여야 하고, medium은 하나까지다. medium 초안의 마감은
+    요청 마감 − margin_s다. 기다리기는 min(초안 시작 + wait_s, 요청 마감 − margin_s)까지.
+    """
+
+    enabled: bool
+    drafts: Annotated[list[Draft], Field(min_length=2, max_length=len("abcdefgh"))]
+    wait_s: PositiveFloat
+    margin_s: PositiveFloat
+
+    @model_validator(mode="after")
+    def _shape(self) -> "MultiDraft":
+        if self.drafts[0].effort != "low":
+            raise ValueError("multi_draft.drafts[0](초안 A = 지금의 주 호출)은 low여야 한다")
+        if sum(d.effort == "medium" for d in self.drafts) > 1:
+            raise ValueError("multi_draft.drafts의 medium은 하나까지다")
+        return self
+
+
 class Llm(_Strict):
     reasoning_effort: Literal["low", "medium"]  # minimal 금지(TU-13)
     # 튜터 주 호출 상한(가드 판정 호출과 따로). 프록시 상한을 넘으면 로드에서 실패한다
     max_completion_tokens: Annotated[int, Field(ge=1, le=PROXY_MAX_COMPLETION_TOKENS)]
     timeout_s: Timeouts
+    multi_draft: MultiDraft
 
 
 class EvalCfg(_Strict):
@@ -168,6 +200,23 @@ class TutorConfig(_Strict):
     answer: Answer
     llm: Llm
     eval: EvalCfg
+
+    @model_validator(mode="after")
+    def _multi_draft_calls(self) -> "TutorConfig":
+        md, t = self.llm.multi_draft, self.toggles
+        if not md.enabled:
+            return self
+        if self.llm.reasoning_effort != "low":
+            # 요청 전체 medium은 시간 초과로 무너진다(64–68 대 90). medium은 초안 하나에만 쓴다
+            raise ValueError("multi_draft를 켜면 llm.reasoning_effort는 low여야 한다")
+        # 초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E.
+        # 실험 브랜치 한정 상한 8(low 초안 5개까지): TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
+        calls = 2 + (len(md.drafts) - 1) + (t.intent_override != "off")
+        calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
+        if calls > MULTI_DRAFT_MAX_CALLS:
+            cap = MULTI_DRAFT_MAX_CALLS
+            raise ValueError(f"multi_draft: 요청당 nano {calls}회라 쓸 수 없다(실험 상한 {cap})")
+        return self
 
 
 def resolve_path(path: str | Path) -> Path:

@@ -32,6 +32,7 @@
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Sequence
+from types import SimpleNamespace
 from typing import Any
 
 from guardrail.schema import OutputVerdict
@@ -49,8 +50,9 @@ from tutor.answer.templates import (
     fixed_body,
     template_for,
 )
+from tutor.judge import main_call, multi_draft
 from tutor.judge.conversation import Conversation, normalize_fast, tidy
-from tutor.judge.draft import draft_answer
+from tutor.judge.draft import Draft, draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
     ATTACK_CATEGORIES,
@@ -365,6 +367,98 @@ def _complete(state: Any):
                     task.cancel()  # 요청이 끝난 뒤 남는 작업이 없게(TU-18). 취소는 삼키지 않는다
 
     return complete
+
+
+def _draft_code(result: Any) -> str:
+    """초안 결과의 로그 코드: 성공 "-", 잘림이면 finish_reason(length·content_filter),
+    그 밖은 오류 코드."""
+    if result.error is None:
+        return "-"
+    if result.error == "bad_json" and result.finish_reason in ("length", "content_filter"):
+        return str(result.finish_reason)
+    return str(result.error)
+
+
+def _multi_complete(state: Any, runs: list[MainCallOut | None]):
+    """`llm.multi_draft`를 켰을 때의 주 호출 어댑터(겹쳐 보내기 대신). 초안 K개를 동시에 보내고
+    `multi_draft.wait_drafts` 규칙으로 기다린다. 초안마다 정리한 결과(무효면 None)를 `runs`에
+    번호 순으로 채우고, 유효한 결과 하나(없으면 A의 결과)를 돌려준다. 실제로 고르는 일은
+    `_pick_draft`가 근거 묶음을 받아서 한다. 초안 메타데이터는 `multi_draft.SHADOW`에 남긴다."""
+    cfg = state.tutor_cfg
+    md = cfg.llm.multi_draft
+    both = _t_on(cfg) and cfg.toggles.guard_classify != "off"
+    retries = 0 if both else MAIN_RETRIES  # 초안 A는 지금의 주 호출과 같은 재시도
+    llm = state.tutor_llm
+    sends_effort = getattr(llm, "sends_effort", True)
+
+    async def complete(messages, schema, *, deadline: float) -> CompleteResult:
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        shadow = multi_draft.SHADOW.get()
+        if shadow is not None:  # 안전망 시간 초과로 빠져나가도 칸이 남게 보내기 전에 센다
+            shadow.started += len(md.drafts)
+        tasks = []
+        for i, spec in enumerate(md.drafts):
+            low = spec.effort == "low"
+            tasks.append(
+                asyncio.ensure_future(
+                    llm.complete(
+                        MAIN_ROLE if i == 0 else f"{MAIN_ROLE}_{multi_draft.LETTERS[i]}",
+                        messages,
+                        schema,
+                        deadline=deadline if low else deadline - md.margin_s,
+                        timeout_s=spec.timeout_s or cfg.llm.timeout_s.main,
+                        retries=retries if i == 0 else 0,
+                        effort=spec.effort,
+                    )
+                )
+            )
+
+        def valid(result: Any) -> bool:
+            return result.error is None and isinstance(result.parsed, schema)
+
+        cut = min(start + md.wait_s, deadline - md.margin_s)
+        await multi_draft.wait_drafts(tasks, cut=cut, deadline=deadline, valid=valid)
+        ended = loop.time()
+        results = [t.result() if t.done() and not t.cancelled() else None for t in tasks]
+        for i, (spec, result) in enumerate(zip(md.drafts, results, strict=True)):
+            runs.append(main_call.clean(result.parsed) if result and valid(result) else None)
+            if shadow is not None:
+                effort = multi_draft.EFFORT_KEY[spec.effort] if sends_effort else "na"
+                shadow.drafts.append(
+                    multi_draft.DraftStat(
+                        key=f"{effort}_{multi_draft.LETTERS[i]}",
+                        ms=result.latency_ms if result else (ended - start) * 1000,
+                        attempts=result.attempts if result else 1,
+                        code=_draft_code(result) if result else "cut",
+                        gate_ms=getattr(result, "gate_ms", 0.0) if result else 0.0,
+                    )
+                )
+        done = [r for r in results if r is not None]
+        return next((r for r in done if valid(r)), results[0] or (done[-1] if done else _NO_RESULT))
+
+    return complete
+
+
+# 초안이 하나도 끝나지 않았을 때(요청 마감) run_main_call에 돌려주는 실패 결과
+_NO_RESULT = SimpleNamespace(parsed=None, error="timeout")
+
+
+def _pick_draft(state: Any, draft: Draft, runs: Sequence[MainCallOut | None]) -> Draft:
+    """초안 가운데 하나를 고른다(`multi_draft.select`). 유효한 초안이 없으면 주 호출 실패 그대로."""
+    efforts = [d.effort for d in state.tutor_cfg.llm.multi_draft.drafts]
+    sections = multi_draft.contract_sections(draft.sections)
+    chosen = multi_draft.select(runs, efforts, sections)
+    shadow = multi_draft.SHADOW.get()
+    if shadow is not None:
+        actions = {o.action for o in runs if o is not None}
+        shadow.valid = sum(o is not None for o in runs)
+        shadow.split = len(actions) > 1
+        shadow.chosen = chosen
+        shadow.a_action = runs[0].action if runs and runs[0] is not None else None
+        shadow.chosen_action = None if chosen is None else runs[chosen].action  # type: ignore[union-attr]
+    out = None if chosen is None else runs[chosen]
+    return Draft(sections=draft.sections, out=out)
 
 
 def _start_intent(
@@ -697,10 +791,12 @@ async def _answer_v2(
                 return tutor_post(fixed_body(hit[0]), hit[1])
         if begin_gate is not None:
             await begin_gate()  # 직렬 T가 고정 문장으로 끝내지 않은 요청만 여기에 온다
+        multi = cfg.llm.multi_draft.enabled  # 실험: 주 호출 초안 여러 개 + 고르기
+        runs: list[MainCallOut | None] = []
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,
-            complete=_complete(state),
+            complete=_multi_complete(state, runs) if multi else _complete(state),
             deadline=deadline,
             k=cfg.retrieval.k,
             signals=labels(signals) if cfg.toggles.signals else (),
@@ -709,6 +805,8 @@ async def _answer_v2(
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
+        if multi:
+            draft = _pick_draft(state, draft, runs)
         if deferred is not None and draft.out is None:
             # 주 호출이 실패했으면 T 고정 문장. 성공했으면 아래 T 덮기(decide)가 parallel과 같은
             # 규칙으로 정한다(주 호출의 escalate·refuse 등 더 강한 action을 지킨다, #233 리뷰)

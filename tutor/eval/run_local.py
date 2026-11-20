@@ -85,6 +85,7 @@ from tutor.eval.recall import (
 )
 from tutor.judge.examples import build_index, load_examples
 from tutor.judge.main_call import EVIDENCE_CHECK_PROBE
+from tutor.judge.multi_draft import SHADOW, Shadow
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, ROOT, TutorConfig, load_config
@@ -161,6 +162,7 @@ async def _collect(
     state: Any,
     checks: dict[str, bool | None] | None = None,
     calls_log: list[int] | None = None,
+    shadows: dict[str, Shadow] | None = None,
 ) -> tuple[dict[str, Any], list[float]]:
     """한 실행의 (행 id → 응답, 요청마다 걸린 시간(초)). 실패한 요청도 시간을 잰다.
 
@@ -168,6 +170,8 @@ async def _collect(
 
     checks가 있으면 행마다 주 호출이 쓴 근거 대조 칸 값(#162)을 담는다. 주 호출이 칸을 내지
     않았으면(주 호출 실패, 주 호출 전에 끝난 요청, 칸 끔) None이다.
+
+    shadows가 있으면 행마다 주 호출 초안 기록(`llm.multi_draft`, 끄면 빈 기록)을 담는다.
     """
     slots = asyncio.Semaphore(metrics.WORKERS)
 
@@ -179,6 +183,8 @@ async def _collect(
             token = EVIDENCE_CHECK_PROBE.set(seen if checks is not None else None)
             sent: Counter[str] = Counter()  # 이 요청이 보낸 호출(재시도 포함)
             sent_token = gate.REQUEST_CALLS.set(sent)
+            shadow = Shadow()  # 이 행(요청) 하나의 초안 기록
+            shadow_token = SHADOW.set(shadow)
             try:
                 response = await _respond(preset, row, own)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
@@ -187,6 +193,9 @@ async def _collect(
             finally:
                 EVIDENCE_CHECK_PROBE.reset(token)
                 gate.REQUEST_CALLS.reset(sent_token)
+                SHADOW.reset(shadow_token)
+            if shadows is not None:
+                shadows[row["id"]] = shadow
             if calls_log is not None:
                 calls_log.append(sum(sent.values()))
             if checks is not None:
@@ -206,6 +215,7 @@ def collect_timed(
     *,
     setup: Callable[[], Awaitable[Any]] | None = None,
     calls_log: list[int] | None = None,
+    shadows: list[dict[str, Shadow]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[float]]:
     """실행마다 응답을, 그리고 요청마다 걸린 시간(초, 모든 실행)을 모은다(TU-16 지연).
 
@@ -214,6 +224,7 @@ def collect_timed(
     setup이 있으면 같은 루프에서 먼저 불러 그 결과를 state로 쓴다(가드 LLM 클라이언트도 루프에
     묶인다, --guard).
     checks(목록)를 주면 실행마다 행 → 근거 대조 칸 값(#162)을 하나씩 덧붙인다.
+    shadows(목록)를 주면 실행마다 행 → 주 호출 초안 기록(`llm.multi_draft`)을 하나씩 덧붙인다.
     """
     if preset not in PRESETS:
         raise ValueError(f"모르는 프리셋: {preset}")
@@ -223,9 +234,12 @@ def collect_timed(
         out = []
         for _ in range(runs):
             seen: dict[str, bool | None] | None = None if checks is None else {}
-            out.append(await _collect(preset, rows, own, seen, calls_log))
+            drafts: dict[str, Shadow] | None = None if shadows is None else {}
+            out.append(await _collect(preset, rows, own, seen, calls_log, drafts))
             if checks is not None and seen is not None:
                 checks.append(seen)
+            if shadows is not None and drafts is not None:
+                shadows.append(drafts)
         return out
 
     results = asyncio.run(every_run())
@@ -286,6 +300,12 @@ def _judge_calls(row: dict[str, Any]) -> int:
         + int(item["labels"]["action"] in scoring.CONTENT_ACTIONS)
         + int(item["kind"] == "attack")
     )
+
+
+def _extra_drafts(cfg: TutorConfig) -> int:
+    """주 호출 초안 여러 개(`llm.multi_draft`)를 켰으면 초안 A 밖의 초안 수(요청당 추가 호출)."""
+    md = cfg.llm.multi_draft
+    return len(md.drafts) - 1 if md.enabled and cfg.mode == "v2" else 0
 
 
 def expected_calls(
@@ -705,7 +725,64 @@ def _parser() -> argparse.ArgumentParser:
         help="tutor 프리셋의 설정 덮기(예: mode=baseline). 값은 YAML로 읽는다"
         " (off는 따옴표째 넘긴다: 'toggles.verify=\"off\"')",
     )
+    ap.add_argument(
+        "--rows-jsonl",
+        type=Path,
+        help="행별 채점 결과 JSONL(실행·행 id·문항 점수·항목 점수·낸 action·주 호출 초안 기록)."
+        " 본문은 남기지 않는다",
+    )
     return ap
+
+
+def row_records(
+    scored: Sequence[Sequence[metrics.Scored]],
+    shadows: Sequence[Mapping[str, Shadow]] | None = None,
+) -> list[dict[str, Any]]:
+    """`--rows-jsonl` 줄: 실행마다 행 하나. id·숫자·action 이름표뿐이다(본문 없음, TU-15).
+
+    항목 점수는 채점기 결과 그대로다(그 문항에 없는 항목·판정하지 않은 항목은 None). md_*는 주 호출
+    초안 기록(`llm.multi_draft`): 보낸 초안 수·유효한 수·고른 번호·갈림·초안 A 혼자의 action
+    (초안 A가 무효면 None)·고른 초안의 action(뒤 단계 T·E가 바꾸기 전, 없으면 None)·초안별 코드.
+    `action`은 뒤 단계를 지난 최종 action이다. 끄면 md_n이 0이다. --responses면 md_*가 없다.
+    """
+    out = []
+    for run, rows in enumerate(scored):
+        for s in rows:
+            r = s.result
+            judged = not r["judge_error"]
+            rec: dict[str, Any] = {
+                "run": run,
+                "id": s.row_id,
+                "category": s.category,
+                "gold_action": s.gold_action,
+                "action": s.pred_action,
+                "citations": s.citations,
+                "points": s.points,
+                "action_ok": float(r["action_correct"]),
+                "citation_f1": metrics.citation_f1(r),
+                "facts": r["facts"] if judged else None,
+                "faithful": None if not judged or r["faithful"] is None else float(r["faithful"]),
+                "complied": r["complied"],
+            }
+            shadow = shadows[run].get(s.row_id) if shadows is not None else None
+            if shadow is not None:
+                rec.update(
+                    md_n=shadow.started,
+                    md_ok=shadow.valid,
+                    md_pick=shadow.chosen,
+                    md_split=shadow.split,
+                    md_a_action=shadow.a_action,
+                    md_pick_action=shadow.chosen_action,
+                    md_codes=[d.code for d in shadow.drafts],
+                )
+            out.append(rec)
+    return out
+
+
+def write_rows_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = (json.dumps(rec, ensure_ascii=False) for rec in records)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
 
 def _tutor_config(
@@ -1012,7 +1089,7 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         preset=args.preset,
         runs=args.runs,
         judge=args.judge,
-        tutor_calls=CALLS_PER_REQUEST[cfg.mode],
+        tutor_calls=CALLS_PER_REQUEST[cfg.mode] + _extra_drafts(cfg),
     )
     if args.guard:  # 가드 classify·judge_output은 TUTOR_CALLS 안에 이미 있다. probe만 더한다
         calls += guard_probe_calls(load_guard_config().llm)
@@ -1061,6 +1138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     latency: list[float] = []
     calls_log: list[int] = []  # 요청마다 보낸 nano 시도 수(튜터·가드)
     checks: list[dict[str, bool | None]] | None = None
+    shadows: list[dict[str, Shadow]] | None = [] if args.rows_jsonl is not None else None
+    drafts = {} if shadows is None else {"shadows": shadows}  # --rows-jsonl일 때만 넘긴다
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides, guard=args.guard) else None
         setup = None
@@ -1093,11 +1172,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             checks = []  # 실행마다 행 → 근거 대조 칸 값(#162)
         if setup is None:
             all_responses, latency = collect_timed(
-                args.preset, rows, args.runs, own, checks, calls_log=calls_log
+                args.preset, rows, args.runs, own, checks, calls_log=calls_log, **drafts
             )
         else:  # 가드 LLM·폴드별 가드는 응답을 모으는 루프에서 만든다
             all_responses, latency = collect_timed(
-                args.preset, rows, args.runs, checks=checks, setup=setup, calls_log=calls_log
+                args.preset,
+                rows,
+                args.runs,
+                checks=checks,
+                setup=setup,
+                calls_log=calls_log,
+                **drafts,
             )
     else:
         all_responses = [fixed] * args.runs
@@ -1109,6 +1194,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses
     ]
     report = metrics.build_report(scored)  # 홀드아웃 행은 이미 뺐다: 교차 검증 행 = 모든 행
+    if args.rows_jsonl is not None:
+        write_rows_jsonl(args.rows_jsonl, row_records(scored, shadows or None))
     by_axis = case_set.axis_scores(scored, rows, judged=judge is not None) if team else None
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
     failed = sum(state.tutor_llm.failures.values()) if state is not None else 0

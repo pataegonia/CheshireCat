@@ -1,0 +1,104 @@
+##### mode: []
+selftest OK
+설정 6.0.10, 개발 후보 답변 행 64개(정답 구간 28행), 변형 12개
+
+== ('out-v1:out-v1', 0): 행 64
+   재생 ≠ 기록 33행: ['pub-032699fa', 'pub-0d043203', 'pub-15a22837', 'pub-1bfbf389', 'pub-1e028d19', 'pub-21b3da1a', 'pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-3dfcc677'] — 이 실행은 변형을 채점하지 않는다
+
+== ('out-v1:out-v1', 1): 행 64
+   재생 ≠ 기록 34행: ['pub-032699fa', 'pub-0d043203', 'pub-15a22837', 'pub-1bfbf389', 'pub-1e028d19', 'pub-21b3da1a', 'pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-3dfcc677'] — 이 실행은 변형을 채점하지 않는다
+
+== ('out-v1:out-v1', 2): 행 64
+   재생 ≠ 기록 33행: ['pub-032699fa', 'pub-0d043203', 'pub-1bfbf389', 'pub-1e028d19', 'pub-21b3da1a', 'pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-3f1f5041', 'pub-66e1a648'] — 이 실행은 변형을 채점하지 않는다
+
+== ('s-a-nofewshot:s-a-nofewshot', 0): 출력 nano 기록 없음(입력만 실행?) — 건너뜀
+
+== ('s28-smoke:s28-smoke', 0): 행 64
+   재생 ≠ 기록 21행: ['pub-0d043203', 'pub-1bfbf389', 'pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-94e2db73', 'pub-9b188d93', 'pub-9b2c13b1', 'pub-a51884fe', 'pub-a9f721b2'] — 이 실행은 변형을 채점하지 않는다
+
+== ('s29-adopted:s29-adopted', 0): 행 64
+   재생 ≠ 기록 14행: ['pub-0d043203', 'pub-1bfbf389', 'pub-3021b08c', 'pub-94e2db73', 'pub-9b188d93', 'pub-9b2c13b1', 'pub-9b375ba2', 'pub-a51884fe', 'pub-a9f721b2', 'pub-b4a1d8bb'] — 이 실행은 변형을 채점하지 않는다
+
+== ('s29-baseline:s29-baseline', 0): 행 64
+Traceback (most recent call last):
+  File "C:\Users\kirin\Desktop\CheshireCat\.claude\worktrees\score90-base\guardrail\scripts\r16\span_replay.py", line 532, in <module>
+    main(args.responses, args.rows, args.sets, args.candidate, args.alts)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\kirin\Desktop\CheshireCat\.claude\worktrees\score90-base\guardrail\scripts\r16\span_replay.py", line 438, in main
+    pred = replay(VARIANTS[0], facts[i], r["response"]["input"]["category"],
+                  nano_of(r)[1], cfg, block)  # fmt: skip
+  File "C:\Users\kirin\Desktop\CheshireCat\.claude\worktrees\score90-base\guardrail\scripts\r16\span_replay.py", line 274, in replay
+    a_ok = quote_ok(nano["answer_quote"], f.answer, min_chars)
+                    ~~~~^^^^^^^^^^^^^^^^
+KeyError: 'answer_quote'
+##### mode: [--set output.rule_span=pm4]
+selftest OK
+설정 6.0.10, 개발 후보 답변 행 64개(정답 구간 28행), 변형 12개
+
+== ('out-v1:out-v1', 0): 행 64
+   재생 ≠ 기록 33행: ['pub-032699fa', 'pub-0d043203', 'pub-15a22837', 'pub-1bfbf389', 'pub-1e028d19', 'pub-21b3da1a', 'pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-3dfcc677'] — 이 실행은 변형을 채점하지 않는다
+
+== ('out-v1:out-v1', 1): 행 64
+   재생 ≠ 기록 34행: ['pub-032699fa', 'pub-0d043203', 'pub-15a22837', 'pub-1bfbf389', 'pub-1e028d19', 'pub-21b3da1a', 'pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-3dfcc677'] — 이 실행은 변형을 채점하지 않는다
+
+== ('out-v1:out-v1', 2): 행 64
+   재생 ≠ 기록 33행: ['pub-032699fa', 'pub-0d043203', 'pub-1bfbf389', 'pub-1e028d19', 'pub-21b3da1a', 'pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-3f1f5041', 'pub-66e1a648'] — 이 실행은 변형을 채점하지 않는다
+
+== ('s-a-nofewshot:s-a-nofewshot', 0): 출력 nano 기록 없음(입력만 실행?) — 건너뜀
+
+== ('s28-smoke:s28-smoke', 0): 행 64
+   재생 ≠ 기록 14행: ['pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-94e2db73', 'pub-9b2c13b1', 'pub-a9f721b2', 'pub-ab667cc1', 'pub-b4a1d8bb', 'pub-b9c40748', 'pub-ceca1e47'] — 이 실행은 변형을 채점하지 않는다
+
+== ('s29-adopted:s29-adopted', 0): 행 64
+   재생 ≠ 기록 7행: ['pub-3021b08c', 'pub-94e2db73', 'pub-9b2c13b1', 'pub-9b375ba2', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 채점하지 않는다
+
+== ('s29-baseline:s29-baseline', 0): 행 64
+Traceback (most recent call last):
+  File "C:\Users\kirin\Desktop\CheshireCat\.claude\worktrees\score90-base\guardrail\scripts\r16\span_replay.py", line 532, in <module>
+    main(args.responses, args.rows, args.sets, args.candidate, args.alts)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\kirin\Desktop\CheshireCat\.claude\worktrees\score90-base\guardrail\scripts\r16\span_replay.py", line 438, in main
+    pred = replay(VARIANTS[0], facts[i], r["response"]["input"]["category"],
+                  nano_of(r)[1], cfg, block)  # fmt: skip
+  File "C:\Users\kirin\Desktop\CheshireCat\.claude\worktrees\score90-base\guardrail\scripts\r16\span_replay.py", line 274, in replay
+    a_ok = quote_ok(nano["answer_quote"], f.answer, min_chars)
+                    ~~~~^^^^^^^^^^^^^^^^
+KeyError: 'answer_quote'
+== ('s29-combo:s29-combo', 0): 행 64
+   재생 ≠ 기록 7행: ['pub-94e2db73', 'pub-9b2c13b1', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-ceca1e47', 'pub-d495c20
+== ('s29-combo:s29-combo', 1): 행 64
+   재생 ≠ 기록 6행: ['pub-94e2db73', 'pub-9b2c13b1', 'pub-9b375ba2', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712
+== ('s29-combo:s29-combo', 2): 행 64
+   재생 ≠ 기록 8행: ['pub-3021b08c', 'pub-94e2db73', 'pub-9b2c13b1', 'pub-9b375ba2', 'pub-a9f721b2', 'pub-b4a1d8b
+== ('s29-default:s29-default', 0): 행 64
+   재생 ≠ 기록 15행: ['pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-66e1a648', 'pub-8c42c8dd', 'pub-94e2db
+== ('s29-default:s29-default', 1): 행 64
+   재생 ≠ 기록 14행: ['pub-3021b08c', 'pub-33eab8bb', 'pub-66e1a648', 'pub-94e2db73', 'pub-9b2c13b1', 'pub-a9f721
+== ('s29-default:s29-default', 2): 행 64
+   재생 ≠ 기록 14행: ['pub-270f0749', 'pub-3021b08c', 'pub-33eab8bb', 'pub-66e1a648', 'pub-7fb64802', 'pub-94e2db
+== ('s29-merged:s29-merged', 0): 행 64
+   재생 ≠ 기록 7행: ['pub-94e2db73', 'pub-9b2c13b1', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-ceca1e47', 'pub-d495c20
+== ('s29-merged:s29-merged', 1): 행 64
+   재생 ≠ 기록 7행: ['pub-3021b08c', 'pub-94e2db73', 'pub-9b2c13b1', 'pub-9b375ba2', 'pub-a9f721b2', 'pub-b4a1d8b
+== ('s29-merged:s29-merged', 2): 행 64
+   재생 ≠ 기록 6행: ['pub-94e2db73', 'pub-9b2c13b1', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-ceca1e47', 'pub-e92c712
+== ('s29-r10:s29-r10', 0): 행 64
+   재생 ≠ 기록 6행: ['pub-94e2db73', 'pub-9b2c13b1', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-ceca1e47', 'pub-e92c712
+== ('s29-r10:s29-r10', 1): 행 64
+   재생 ≠ 기록 5행: ['pub-94e2db73', 'pub-9b2c13b1', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실�
+== ('s29-r10:s29-r10', 2): 행 64
+   재생 ≠ 기록 7행: ['pub-3021b08c', 'pub-94e2db73', 'pub-9b2c13b1', 'pub-9b375ba2', 'pub-a9f721b2', 'pub-b4a1d8b
+== ('s29-r10:s29-r10', 3): 행 64
+   재생 ≠ 기록 4행: ['pub-94e2db73', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 
+== ('s29-r10:s29-r10', 4): 행 64
+   재생 ≠ 기록 4행: ['pub-94e2db73', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 
+== ('s29-r10:s29-r10', 5): 행 64
+   재생 ≠ 기록 4행: ['pub-94e2db73', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 
+== ('s29-r10:s29-r10', 6): 행 64
+   재생 ≠ 기록 4행: ['pub-94e2db73', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 
+== ('s29-r10:s29-r10', 7): 행 64
+   재생 ≠ 기록 4행: ['pub-94e2db73', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 
+== ('s29-r10:s29-r10', 8): 행 64
+   재생 ≠ 기록 4행: ['pub-94e2db73', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 
+== ('s29-r10:s29-r10', 9): 행 64
+   재생 ≠ 기록 4행: ['pub-94e2db73', 'pub-a9f721b2', 'pub-b4a1d8bb', 'pub-e92c712e'] — 이 실행은 변형을 

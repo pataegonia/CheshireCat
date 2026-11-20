@@ -963,7 +963,7 @@ async def _answer_v2(
         top_sections=top_sections,
     )
     final = tutor_post(body, merged.category)
-    if runs:  # 고른 초안의 문장이 나가는 경로: 초안별 인용을 남긴다(cite_rule·측정, 호출 0회)
+    if runs and kind is None:  # 고른 초안의 문장이 나가는 경로: 초안별 인용(호출 0회)
         chosen = next((i for i, o in enumerate(runs) if o is draft.out), None)
         md_cites = [
             None

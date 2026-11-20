@@ -149,11 +149,11 @@ def test_e_replaced_response_keeps_its_citations():
     assert shadow.cite_path is False and shadow.md_cites is not None
 
 
-def test_uncited_pick_stays_uncited():
+def test_fixed_sentence_picked_by_the_main_call_bypasses_the_rule():
     jb = MainCallOut(category="jailbreak_injection", action="refuse", sentences=[])
     body, shadow = flow([jb, jb, ONE], "pick_add_vote")
     assert body["action"] == "refuse" and body["citations"] == []
-    assert shadow.md_cites == [[], [], [TOP]]
+    assert shadow.md_cites is None and shadow.cite_path is False
 
 
 def test_fallback_fixed_sentence_bypasses_the_rule():

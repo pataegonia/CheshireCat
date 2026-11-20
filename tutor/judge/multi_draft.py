@@ -183,6 +183,7 @@ CITE_RULES = (
     "single_support",
     "single_support_model",
     "single_agree",
+    "top1_only",
 )
 
 
@@ -193,6 +194,7 @@ def compose_cites(
     actions: Sequence[str | None],
     chosen: int,
     md_model: Sequence[Sequence[str] | None] | None = None,
+    top1: str | None = None,
 ) -> list[str]:
     """`llm.multi_draft.cite_rule`: 고른 초안의 인용(`pick`, 응답에 나간 순서)을 같은 action
     초안들의 인용(`md_cites`, 초안 번호 순)으로 고친다. 호출 0회. pick이 비면 그대로 둔다
@@ -205,9 +207,12 @@ def compose_cites(
     single_model: pick의 모델 인용만(없으면 pick).
     single_support: pick이 2개 이상이면 같은 action 초안 가운데 그 섹션을 인용 목록에 가진 수가
     가장 많은 섹션 하나(동률이면 pick). single_support_model: 같은 계산을 모델 인용으로.
-    single_agree: 같은 action 초안의 모델 인용이 모두 같으면 그것만(아니면 pick)."""
+    single_agree: 같은 action 초안의 모델 인용이 모두 같으면 그것만(아니면 pick).
+    top1_only: pick이 2개 이상이고 cite_top1이 더하는 섹션(`top1`)이 들어 있으면 그것만."""
     if rule == "pick" or not pick:
         return list(pick)
+    if rule == "top1_only":
+        return [top1] if len(pick) >= 2 and top1 in pick else list(pick)
     if rule.startswith("single_"):
         if md_model is None:
             raise ValueError(f"{rule}에는 초안별 모델 인용(md_model)이 있어야 한다")

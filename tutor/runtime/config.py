@@ -184,6 +184,7 @@ class MultiDraft(_Strict):
         "single_support",
         "single_support_model",
         "single_agree",
+        "top1_only",
     ] = "pick"
 
     @model_validator(mode="after")

@@ -976,13 +976,13 @@ async def _answer_v2(
         if chosen is not None:
             md_cites[chosen] = sorted(final["citations"])  # 고른 초안은 실제로 나간 인용
         actions = [None if o is None else o.action for o in runs]
-        seen["md"] = (md_cites, actions, chosen, md_model)
+        top = draft.sections if top_sections is None else top_sections
+        top1 = top[0].id if cfg.toggles.cite_top1 and top else None
+        seen["md"] = (md_cites, actions, chosen, md_model, top1)
         seen["pick_body"] = final
         shadow = multi_draft.SHADOW.get()
         if shadow is not None:
-            shadow.md_cites, shadow.md_model_cites = md_cites, md_model
-            top = draft.sections if top_sections is None else top_sections
-            shadow.top1 = top[0].id if cfg.toggles.cite_top1 and top else None
+            shadow.md_cites, shadow.md_model_cites, shadow.top1 = md_cites, md_model, top1
     return final
 
 

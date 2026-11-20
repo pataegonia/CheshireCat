@@ -44,6 +44,12 @@ def gold_rows() -> dict[str, dict[str, Any]]:
     return {r["id"]: r for r in public_tutor_rows() if r["id"] not in held}
 
 
+def top1_of(rec: Mapping[str, Any]) -> str | None:
+    """cite_top1이 더한 섹션. 기록(`md_top1`)이 없는 옛 파일은 pick으로 잰 행의 `cites` 끝."""
+    cites = rec.get("cites") or []
+    return rec.get("md_top1") or (cites[-1] if cites else None)
+
+
 def model_cites(rec: Mapping[str, Any]) -> tuple[list[list[str] | None], bool]:
     """(초안별 모델 인용, 기록에서 읽었나). `md_model_cites`가 없는 파일(421cb9f 형식)은 기록된
     최종 인용으로 되살린다: cite_top1은 비지 않은 목록 끝에 1위를 하나 더하고(이미 있으면 그대로),
@@ -52,8 +58,7 @@ def model_cites(rec: Mapping[str, Any]) -> tuple[list[list[str] | None], bool]:
     없어 검색 1위로 채운 인용도 모델 인용으로 센다(기록만으로는 가를 수 없다)."""
     if rec.get("md_model_cites") is not None:
         return rec["md_model_cites"], True
-    cites = rec.get("cites") or []
-    top1 = rec.get("md_top1") or (cites[-1] if cites else None)
+    top1 = top1_of(rec)
     out: list[list[str] | None] = []
     for c in rec["md_cites"]:
         out.append(None if c is None else ([s for s in c if s != top1] or list(c)))
@@ -68,7 +73,7 @@ def rule_cites(rec: Mapping[str, Any], rule: str) -> list[str] | None:
         return rec.get("cites")
     pick = rec["cites"] if set(rec.get("cites") or []) == set(md[chosen]) else md[chosen]
     model = model_cites(rec)[0] if rule.startswith("single_") else None
-    return compose_cites(rule, pick, md, rec["md_actions"], chosen, model)
+    return compose_cites(rule, pick, md, rec["md_actions"], chosen, model, top1_of(rec))
 
 
 def prf(row: Mapping[str, Any], action: str, cites: Sequence[str], kb: Mapping[str, str]):

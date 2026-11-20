@@ -106,6 +106,14 @@ def test_single_rules_need_model_cites_and_fall_back_to_pick():
         compose_cites("single_model", ["X", "T"], md, ANS3, 0)
 
 
+def test_top1_only_keeps_the_top1_when_two_or_more_are_cited():
+    md = [["T", "X"], ["T"], ["T"]]
+    assert compose_cites("top1_only", ["X", "T"], md, ANS3, 0, None, "T") == ["T"]
+    assert compose_cites("top1_only", ["T"], md, ANS3, 0, None, "T") == ["T"]
+    assert compose_cites("top1_only", ["X", "Y"], md, ANS3, 0, None, "T") == ["X", "Y"]
+    assert compose_cites("top1_only", ["X", "T"], md, ANS3, 0) == ["X", "T"]  # 1위 모름
+
+
 # --- 흐름: 기록과 규칙 ---
 
 
@@ -155,6 +163,9 @@ def test_unverified_claim_has_no_model_cite():
         ([TWO, TWO, TWO], "single_support", {TOP, OTHER}),  # 모두 둘 다 인용: 동률 → pick
         ([TWO, TWO, TWO], "single_support_model", {OTHER}),
         ([ONE, TWO, TWO], "single_model", {TOP}),  # 1개 인용은 그대로
+        ([TWO, ONE, ONE], "top1_only", {TOP}),
+        ([TWO, TWO, TWO], "top1_only", {TOP}),
+        ([ONE, TWO, TWO], "top1_only", {TOP}),
     ],
 )
 def test_rules_change_only_the_citations(outs, rule, cites):
@@ -248,6 +259,25 @@ def test_run_local_rows_have_cites_and_draft_cites(tmp_path, monkeypatch):
     assert res["mismatch_pick_vs_recorded"] == 0 and res["mismatch_recorded_f1"] == 0
 
 
+def test_run_local_top1_only_flag_cites_only_the_top1(tmp_path, monkeypatch):
+    from tests.tutor import tutor_testlib
+
+    tutor_testlib.answer_openai(monkeypatch)
+    rows = tmp_path / "rows.jsonl"
+    argv = ["--preset", "tutor", "--out", str(tmp_path), "--rows-jsonl", str(rows)]
+    argv += ["--tutor-set", "llm.multi_draft.enabled=true"]
+    argv += ["--tutor-set", "llm.multi_draft.cite_rule=top1_only"]
+    assert run_local.main(argv) == 0
+    recs = [json.loads(x) for x in rows.read_text(encoding="utf-8").splitlines()]
+    path = [r for r in recs if r["md_cite_path"]]
+    assert path
+    for r in path:
+        pick = r["md_cites"][r["md_pick"]]
+        two = len(pick) >= 2 and r["md_top1"] in pick
+        assert r["cites"] == [r["md_top1"]] if two else set(r["cites"]) == set(pick)
+    assert any(len(r["md_cites"][r["md_pick"]]) >= 2 for r in path)  # 2개 인용 행이 있다
+
+
 def _kb():
     from tutor.eval.grader import KB_DIR, score_local
 
@@ -311,12 +341,16 @@ def test_replay_on_a_tiny_synthetic_file(tmp_path):
     assert even["single_support"] == {"right": 1, "wrong": 0, "same": 1, "other": 0}
     assert even["single_agree"]["same"] == 2 and even["pick_add_vote"]["same"] == 2
     assert res["broken"]["single_model"] == [row["id"]]
+    assert even["top1_only"] == {"right": 1, "wrong": 0, "same": 1, "other": 0}  # 1위 = cites 끝
     # 기록된 모델 인용이 있으면 그것을 쓴다(다른 초안은 1위 채우기라 모델 인용 없음)
     new = {**path_rec, "md_model_cites": [[x], [], []], "md_top1": e}
     res2 = cite_replay.replay_run([new], gold, _kb())
     assert res2["derived_model_rows"] == 0
     assert res2["mean_f1"]["single_support_model"] == pytest.approx(0.0)  # x 1 > e 0
     assert res2["mean_f1"]["single_agree"] == pytest.approx(2 / 3)
+    assert res2["mean_f1"]["top1_only"] == pytest.approx(1.0)  # 기록된 md_top1 = e
+    res3 = cite_replay.replay_run([{**new, "md_top1": x}], gold, _kb())
+    assert res3["mean_f1"]["top1_only"] == pytest.approx(0.0)  # 기록을 되살리기보다 먼저 쓴다
     out = tmp_path / "out.txt"
     with out.open("w", encoding="utf-8") as fh:
         assert cite_replay.main([str(rows), str(rows)], out=fh) == 0

@@ -43,6 +43,7 @@ FREEZE_TOGGLES = {
     "quote_from_top1": False,
     "oom_gate": "off",
     "oom_schedule": "with_request",
+    "english_embedding": False,  # E(oom_gate)를 끈 기준에서는 켤 수 없다(로드에서 거부)
 }
 
 

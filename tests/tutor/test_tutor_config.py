@@ -36,7 +36,7 @@ def test_repo_config_has_the_prd_defaults():
     # TU-10 합치기 신호 조건 기본 끔(3회 비교 뒤 정함)
     assert toggles.jailbreak_needs_signal is False
     assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
-    assert toggles.english_embedding is False  # 측정 전이라 끔(켤지는 측정 뒤 정한다)
+    assert toggles.english_embedding is True  # 11/19 켬(실제 제출 5대5, #242 결과 문서 11절)
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)
     assert toggles.cite_top1 is True  # TU-07 검색 1위 인용 더하기(11/15 런박스 짝 비교로 켬)
@@ -70,18 +70,18 @@ def test_main_call_timeout_uses_the_budget_headroom():
     assert backstop_s(budget) < 30  # 안전망까지 SPEC §3 요청당 30초 안
 
 
-def test_repo_config_keeps_the_guard_budget_and_scale_can_raise_it():
+def test_repo_config_scales_the_guard_budget_to_24s():
     from guardrail.config import load_config as load_guard_config
 
     from tutor.runtime.budget import budget_s
 
     cfg = config.load_config(config.ROOT / config.DEFAULT_CONFIG)
-    assert cfg.budget_scale == 1.0  # 11/18 제출 5대5에서 1.2가 점수 차이를 내지 못해 끔
+    assert cfg.budget_scale == 1.2  # 11/19 켬(실제 제출 판과 맞춤)
     guard = load_guard_config()
     assert guard.budget_s == 20  # 가드 예산은 그대로
-    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(20)
-    scaled = config.load_config(overrides={"budget_scale": 1.2})
-    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=scaled)) == pytest.approx(24)
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=cfg)) == pytest.approx(24)
+    unscaled = config.load_config(overrides={"budget_scale": 1.0})
+    assert budget_s(types.SimpleNamespace(cfg=guard, tutor_cfg=unscaled)) == pytest.approx(20)
 
 
 @pytest.mark.parametrize(
@@ -115,8 +115,8 @@ def test_budget_scale_key_is_required_and_budget_s_is_gone(tmp_path):
 
 def test_repo_config_has_the_hedge_and_intent_wait_limits():
     timeouts = config.load_config(config.ROOT / config.DEFAULT_CONFIG).llm.timeout_s
-    assert (timeouts.main_hedge, timeouts.intent_wait) == (18, 8)
-    assert timeouts.main_hedge >= timeouts.main  # 겹쳐 보내기는 끔(11/18 제출 5대5: 점수 차이 없음)
+    assert (timeouts.main_hedge, timeouts.intent_wait) == (12, 8)
+    assert timeouts.main_hedge < timeouts.main  # 겹쳐 보내기는 켬(11/19, 실제 제출 판과 맞춤)
     assert timeouts.intent_wait >= timeouts.intent  # T 대기 상한은 끔(11/18 모의 부하: 가드 지연)
 
 

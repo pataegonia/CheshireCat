@@ -570,7 +570,10 @@ def test_run_local_measures_the_real_v2_path_with_query_embeddings(monkeypatch, 
         monkeypatch.setenv(name, value)
     fake = FakeEmbed()
     monkeypatch.setattr(run_local, "openai_embed", lambda: fake)
-    code = run_local.main(["--preset", "tutor", *ON, "--out", str(tmp_path)])
+    # 영어 장치는 끈다: 켜면 E 근거 묶음·규칙 A 다시 찾기도 질의 임베딩을 불러 아래 1:1이 깨진다
+    # (켠 경로는 test_english_embedding이 본다)
+    off = ("--tutor-set", "toggles.english_embedding=false")
+    code = run_local.main(["--preset", "tutor", *ON, *off, "--out", str(tmp_path)])
     assert sent  # v2 주 호출까지 갔다(가짜 전송)
     english = [used for is_english, used in searched if is_english]
     assert english and all(isinstance(used, emb.EmbeddingSearch) for used in english)

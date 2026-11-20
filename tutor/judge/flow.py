@@ -694,10 +694,16 @@ GATE_SKIP_SIGNALS = frozenset({Signal.CRISIS, Signal.OVERRIDE})
 
 def _english_embedding(state: Any) -> dict[str, Any]:
     """`toggles.english_embedding`이 켜졌으면 retrieve에 넘길 인자(영어 질의는 임베딩 순위만).
-    기동 때 임베딩을 못 만들었으면 `embedding`이 None이라 BM25다. 꺼졌으면 빈 인자."""
-    if not state.tutor_cfg.toggles.english_embedding:
+    기동 때 임베딩을 못 만들었으면 `embedding`이 None이라 BM25다. 꺼졌으면 빈 인자.
+    `toggles.code_block_lang`이 켜졌으면 코드 블록 때문에 영어로 보인 한국어 질문을 가르는
+    인자도 넘긴다."""
+    toggles = state.tutor_cfg.toggles
+    if not toggles.english_embedding:
         return {}
-    return {"embedding": getattr(state, "tutor_emb", None), "english_only_embedding": True}
+    extra = {"embedding": getattr(state, "tutor_emb", None), "english_only_embedding": True}
+    if toggles.code_block_lang:
+        extra["code_block_lang"] = True
+    return extra
 
 
 async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob | None:
@@ -854,6 +860,7 @@ async def _answer_v2(
             signals=labels(signals) if cfg.toggles.signals else (),
             embedding=getattr(state, "tutor_emb", None),  # 토글이 켜져 만들어졌을 때만(TU-11)
             english_only_embedding=cfg.toggles.english_embedding,
+            code_block_lang=cfg.toggles.code_block_lang,
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )

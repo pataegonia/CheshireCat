@@ -101,6 +101,9 @@ FREEZE_TOGGLES_OFF = {
     "reverse_question": "off",
     "soft_jailbreak_draft": "off",
     "mention_marker": "off",
+    # 튜터 code_block_lang: 코드 블록 때문에 영어로 보인 한국어 질문은 코드 뺀 BM25만
+    # (임베딩이 있을 때만 영향)
+    "code_block_lang": False,
 }
 
 

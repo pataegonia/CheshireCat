@@ -48,6 +48,7 @@ FREEZE_TOGGLES = {
     "reverse_question": "off",
     "soft_jailbreak_draft": "off",
     "mention_marker": "off",
+    "code_block_lang": False,  # 켠 동작은 test_code_block_lang이 overrides로 본다
 }
 
 

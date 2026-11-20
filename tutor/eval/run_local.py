@@ -747,6 +747,10 @@ def row_records(
     `action`은 뒤 단계를 지난 최종 action이다. 끄면 md_n이 0이다. --responses면 md_*가 없다.
     md_actions는 초안별 action(무효 None). stages는 실험 단계 기록(tutor.judge.specialists.StageRec,
     키 rq·sj·mm, 토글 off인 단계는 없다): trig·verdict·conf·before·after·changed·ms.
+    `cites`는 응답이 낸 인용(KB 섹션 ID만, 낸 순서, 형식 오류면 None). md_cites는 초안별로 그
+    초안이 골라졌다면 같은 결정적 인용 경로가 냈을 인용(정렬, 무효 초안 None, 고른 초안의 assemble
+    경로까지 오지 않은 요청은 None). md_cite_path는 최종 응답이 그 경로에서 그대로 나갔나
+    (cite_rule 적용 대상, 재생 tutor.eval.cite_replay가 쓴다).
     """
     out = []
     for run, rows in enumerate(scored):
@@ -760,6 +764,7 @@ def row_records(
                 "gold_action": s.gold_action,
                 "action": s.pred_action,
                 "citations": s.citations,
+                "cites": None if s.cited is None else list(s.cited),
                 "points": s.points,
                 "action_ok": float(r["action_correct"]),
                 "citation_f1": metrics.citation_f1(r),
@@ -778,6 +783,8 @@ def row_records(
                     md_pick_action=shadow.chosen_action,
                     md_codes=[d.code for d in shadow.drafts],
                     md_actions=list(shadow.actions),
+                    md_cites=shadow.md_cites,
+                    md_cite_path=shadow.cite_path,
                     stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )
             out.append(rec)

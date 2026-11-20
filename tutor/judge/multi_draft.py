@@ -67,6 +67,11 @@ class Shadow:
     stages: dict[str, StageRec] = field(default_factory=dict)
     drafts: list[DraftStat] = field(default_factory=list)
     sent: Counter[str] = field(default_factory=Counter)  # 이 요청의 튜터 LLM 시도 수(역할별)
+    # 측정 전용(로그에 내지 않는다, 섹션 ID). 초안별로 그 초안이 골라졌다면 같은 결정적 인용 경로가
+    # 냈을 인용(정렬, 무효 초안 None). 응답이 고른 초안의 assemble 경로까지 온 요청에만 있다
+    md_cites: list[list[str] | None] | None = None
+    # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
+    cite_path: bool = False
 
     def log_field(self) -> str | None:
         """접근 로그 끝 칸. 초안을 하나도 보내지 않았으면 None(칸 없음).
@@ -152,6 +157,41 @@ def abstain_override(outs: Sequence[MainCallOut | None], chosen: int | None) -> 
     if chosen is None or outs[chosen].action != "answer":  # type: ignore[union-attr]
         return None
     return next((i for i, o in enumerate(outs) if o is not None and o.action == "abstain"), None)
+
+
+CITE_RULES = ("pick", "vote", "pick_drop_lone", "pick_add_vote")
+
+
+def compose_cites(
+    rule: str,
+    pick: Sequence[str],
+    md_cites: Sequence[Sequence[str] | None],
+    actions: Sequence[str | None],
+    chosen: int,
+) -> list[str]:
+    """`llm.multi_draft.cite_rule`: 고른 초안의 인용(`pick`, 응답에 나간 순서)을 같은 action
+    초안들의 인용(`md_cites`, 초안 번호 순)으로 고친다. 호출 0회. pick이 비면 그대로 둔다
+    (인용 없는 action).
+
+    vote: 고른 초안 포함, action이 고른 초안과 같은 유효한 초안 2개 이상이 인용한 섹션(비면 pick).
+    pick_drop_lone: pick에서 같은 action의 다른 초안이 하나도 인용하지 않은 섹션을 뺀다(비면 pick).
+    pick_add_vote: pick ∪ vote. 순서는 pick 먼저, 그다음 초안 번호 순."""
+    if rule == "pick" or not pick:
+        return list(pick)
+    others = [
+        c
+        for i, c in enumerate(md_cites)
+        if i != chosen and c is not None and actions[i] == actions[chosen]
+    ]
+    counts = Counter(s for c in [pick, *others] for s in set(c))
+    voted = [s for s in dict.fromkeys([*pick, *(s for c in others for s in c)]) if counts[s] >= 2]
+    if rule == "vote":
+        return voted or list(pick)
+    if rule == "pick_drop_lone":
+        return [s for s in pick if counts[s] >= 2] or list(pick)
+    if rule == "pick_add_vote":
+        return list(dict.fromkeys([*pick, *voted]))
+    raise ValueError(f"모르는 cite_rule: {rule}")
 
 
 async def wait_drafts(

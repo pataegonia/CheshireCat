@@ -33,6 +33,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
+from functools import partial
 from types import SimpleNamespace
 from typing import Any
 
@@ -51,7 +52,7 @@ from tutor.answer.templates import (
     fixed_body,
     template_for,
 )
-from tutor.judge import main_call, multi_draft
+from tutor.judge import gate_hint, main_call, multi_draft
 from tutor.judge.conversation import Conversation, normalize_fast, tidy
 from tutor.judge.draft import Draft, draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
@@ -397,11 +398,15 @@ def _draft_code(result: Any) -> str:
     return str(result.error)
 
 
-def _multi_complete(state: Any, runs: list[MainCallOut | None]):
+def _multi_complete(state: Any, runs: list[MainCallOut | None], seen: dict[str, Any] | None = None):
     """`llm.multi_draft`를 켰을 때의 주 호출 어댑터(겹쳐 보내기 대신). 초안 K개를 동시에 보내고
     `multi_draft.wait_drafts` 규칙으로 기다린다. 초안마다 정리한 결과(무효면 None)를 `runs`에
     번호 순으로 채우고, 유효한 결과 하나(없으면 A의 결과)를 돌려준다. 실제로 고르는 일은
-    `_pick_draft`가 근거 묶음을 받아서 한다. 초안 메타데이터는 `multi_draft.SHADOW`에 남긴다."""
+    `_pick_draft`가 근거 묶음을 받아서 한다. 초안 메타데이터는 `multi_draft.SHADOW`에 남긴다.
+
+    `gate_hint: last`(후보 N1)면 마지막 초안만 E 결과를 기다렸다가(`gate_hint.await_hint`, 끝 =
+    cut − gate_hint_gen_s) 단서가 있으면 단서 블록을 더한 메시지로, 없으면 같은 메시지로 한 번
+    보낸다. E 작업과 근거 묶음은 `seen`(요청 안에서만)의 gate·sections에서 읽는다."""
     cfg = state.tutor_cfg
     md = cfg.llm.multi_draft
     both = _t_on(cfg) and cfg.toggles.guard_classify != "off"
@@ -409,36 +414,40 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
     llm = state.tutor_llm
     sends_effort = getattr(llm, "sends_effort", True)
 
+    def send(role: str, schema: Any, kwargs: dict[str, Any], messages: list[dict[str, str]]):
+        return llm.complete(role, messages, schema, **kwargs)
+
     async def complete(messages, schema, *, deadline: float) -> CompleteResult:
         loop = asyncio.get_running_loop()
         start = loop.time()
         shadow = multi_draft.SHADOW.get()
         if shadow is not None:  # 안전망 시간 초과로 빠져나가도 칸이 남게 보내기 전에 센다
             shadow.started += len(md.drafts)
+        cut = min(start + md.wait_s, deadline - md.margin_s)
+        hinted = len(md.drafts) - 1 if md.gate_hint == "last" else None
         tasks = []
         for i, spec in enumerate(md.drafts):
             low = spec.effort == "low"
             # 스트림 초안만 인자를 더한다(끈 설정은 지금과 같은 호출)
             extra = {"stream": True, "max_tokens": spec.max_tokens} if spec.stream else {}
-            tasks.append(
-                asyncio.ensure_future(
-                    llm.complete(
-                        MAIN_ROLE if i == 0 else f"{MAIN_ROLE}_{multi_draft.LETTERS[i]}",
-                        messages,
-                        schema,
-                        deadline=deadline if low else deadline - md.margin_s,
-                        timeout_s=spec.timeout_s or cfg.llm.timeout_s.main,
-                        retries=retries if i == 0 else 0,
-                        effort=spec.effort,
-                        **extra,
-                    )
-                )
-            )
+            kwargs = {
+                "deadline": deadline if low else deadline - md.margin_s,
+                "timeout_s": spec.timeout_s or cfg.llm.timeout_s.main,
+                "retries": retries if i == 0 else 0,
+                "effort": spec.effort,
+                **extra,
+            }
+            role = MAIN_ROLE if i == 0 else f"{MAIN_ROLE}_{multi_draft.LETTERS[i]}"
+            call = partial(send, role, schema, kwargs)
+            if i == hinted:
+                until = cut - md.gate_hint_gen_s
+                tasks.append(asyncio.ensure_future(_hinted_draft(call, messages, seen, until)))
+            else:
+                tasks.append(asyncio.ensure_future(call(messages)))
 
         def valid(result: Any) -> bool:
             return result.error is None and isinstance(result.parsed, schema)
 
-        cut = min(start + md.wait_s, deadline - md.margin_s)
         await multi_draft.wait_drafts(tasks, cut=cut, deadline=deadline, valid=valid)
         ended = loop.time()
         results = [t.result() if t.done() and not t.cancelled() else None for t in tasks]
@@ -462,6 +471,20 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
         return next((r for r in done if valid(r)), results[0] or (done[-1] if done else _NO_RESULT))
 
     return complete
+
+
+async def _hinted_draft(
+    call: Any, messages: list[dict[str, str]], seen: dict[str, Any] | None, until: float
+):
+    """후보 N1의 마지막 초안: E를 `until`까지 기다리고(E는 취소하지 않는다) 단서가 있으면 단서를
+    더한 메시지로, 없으면 같은 메시지로 한 번 보낸다. 상태 코드만 로그·기록에 남긴다."""
+    seen = {} if seen is None else seen
+    hint, code = await gate_hint.await_hint(seen.get("gate"), seen.get("sections"), until)
+    draft_log.info("multi_draft hint=%s", code)  # 코드만(본문 없음)
+    shadow = multi_draft.SHADOW.get()
+    if shadow is not None:
+        shadow.hint = code
+    return await call(messages if hint is None else gate_hint.with_hint(messages, hint))
 
 
 # 초안이 하나도 끝나지 않았을 때(요청 마감) run_main_call에 돌려주는 실패 결과
@@ -577,6 +600,8 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
         if mode != "off":
             _stage(key)  # 켠 단계는 돌지 않아도 기록 칸이 있다(trig 0)
     jobs: list[GateJob] = []  # 이 요청이 띄운 E(많아야 하나). finally에서 취소한다
+    # 요청 안에서만: sj가 쓸 주 호출 메시지·sj가 답을 냈나, N1 단서 초안이 볼 E 작업·근거 묶음
+    seen: dict[str, Any] = {}
 
     async def begin(gate_deadline: float) -> None:
         try:
@@ -588,6 +613,7 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             return
         if job is not None:
             jobs.append(job)
+            seen["gate"] = job
             await asyncio.sleep(0)  # E 요청이 뒤따르는 호출보다 먼저 나가도록 한 번 양보한다
 
     later = None
@@ -607,7 +633,6 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
                     await begin(gate_deadline)
 
     try:
-        seen: dict[str, Any] = {}  # 요청 안에서만: sj가 쓸 주 호출 메시지·sj가 답을 냈나
         body = await _answer_v2(req, state, deadline=deadline, begin_gate=later, seen=seen)
         counts = getattr(state, "oom_gate_counts", None)
         gate = jobs[0] if jobs else None
@@ -847,7 +872,7 @@ async def _answer_v2(
             await begin_gate()  # 직렬 T가 고정 문장으로 끝내지 않은 요청만 여기에 온다
         multi = cfg.llm.multi_draft.enabled  # 실험: 주 호출 초안 여러 개 + 고르기
         runs: list[MainCallOut | None] = []
-        complete = _multi_complete(state, runs) if multi else _complete(state)
+        complete = _multi_complete(state, runs, seen) if multi else _complete(state)
         if cfg.toggles.soft_jailbreak_draft != "off":
             complete = _capture(complete, seen)  # sj 초안이 같은 메시지를 쓴다
         if multi and cfg.llm.multi_draft.top1_redraft == "parallel":
@@ -868,6 +893,11 @@ async def _answer_v2(
             english_only_embedding=cfg.toggles.english_embedding,
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
+            on_sections=(
+                partial(seen.__setitem__, "sections")
+                if multi and cfg.llm.multi_draft.gate_hint != "off"
+                else None
+            ),
         )
         if multi:
             draft = _pick_draft(state, draft, runs)

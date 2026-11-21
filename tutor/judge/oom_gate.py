@@ -84,7 +84,7 @@ def _count(counts: GateCounts | None, reason: str) -> None:
 class GateJob:
     """시작한 E 호출. `until`(루프 시각)이 지나면 결과를 기다리지 않는다."""
 
-    task: "asyncio.Task[bool | None]"
+    task: "asyncio.Task[OomOut | None]"  # E 출력(실패·잘림이면 None)
     until: float
 
     def cancel(self) -> None:
@@ -94,8 +94,8 @@ class GateJob:
 
 async def _call(
     llm: Any, messages: list[dict[str, str]], deadline: float, limit: float, counts
-) -> bool | None:
-    """found 값. 실패·잘림이면 None."""
+) -> OomOut | None:
+    """E 출력(asked·quote·found). 실패·잘림이면 None."""
     try:
         result = await llm.complete(
             ROLE, messages, OomOut, deadline=deadline, timeout_s=limit, retries=0
@@ -111,7 +111,7 @@ async def _call(
     if result.error is not None or not isinstance(result.parsed, OomOut):
         _count(counts, "error" if result.error is not None else "invalid")
         return None
-    return result.parsed.found
+    return result.parsed
 
 
 def start_gate(
@@ -142,8 +142,9 @@ async def material_absent(job: GateJob, counts: GateCounts | None = None) -> boo
         return False
     if job.task.cancelled():
         return False
-    found = job.task.result()
-    if found is None:
+    out = job.task.result()
+    if out is None:
         return False
+    found = out.found
     _count(counts, "found" if found else "absent")
     return found is False

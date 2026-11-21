@@ -208,6 +208,11 @@ class MultiDraft(_Strict):
     top1_redraft: Literal["off", "on", "parallel"] = "off"
     # 1위 초안이 유효한 abstain이면(고른 초안은 answer) 그 abstain 초안을 고른 것처럼 낸다
     top1_redraft_abstain: Literal["off", "on"] = "off"
+    # 후보 N1(실험, tutor.judge.gate_hint): last면 마지막 초안을 자료 밖 확인 E 결과를 기다렸다가
+    # 보내고, E가 found=true이며 그 quote가 근거 묶음 섹션 원문에 있으면 단서 블록을 더해 보낸다.
+    # 기다리는 끝 = min(초안 시작 + wait_s, 요청 마감 − margin_s) − gate_hint_gen_s. 호출 수 그대로
+    gate_hint: Literal["off", "last"] = "off"
+    gate_hint_gen_s: PositiveFloat = 6.0  # 단서 초안이 생성에 쓸 최소 시간(초기 실험값, 실측 아님)
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":
@@ -264,6 +269,8 @@ class TutorConfig(_Strict):
     @model_validator(mode="after")
     def _multi_draft_calls(self) -> "TutorConfig":
         md, t = self.llm.multi_draft, self.toggles
+        if md.gate_hint != "off" and not (md.enabled and t.oom_gate != "off"):
+            raise ValueError("gate_hint는 multi_draft.enabled·toggles.oom_gate가 필요하다")
         # 실험 단계가 더하는 호출: rq는 answer에만(2), sj는 탈옥 거절에만(1)이라 한 요청에서 둘 중
         # 하나만 돈다(flow.answer_v2). 그래서 둘의 큰 쪽만 더한다
         stages = max(2 * (t.reverse_question != "off"), int(t.soft_jailbreak_draft != "off"))

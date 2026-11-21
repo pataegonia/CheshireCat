@@ -84,6 +84,8 @@ class Shadow:
     )
     # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
     cite_path: bool = False
+    # 후보 N1 단서 초안 상태(gate_hint 코드: used·no_gate·late·failed·absent·no_quote). 끔이면 None
+    hint: str | None = None
 
     def log_field(self) -> str | None:
         """접근 로그 끝 칸. 초안을 하나도 보내지 않았으면 None(칸 없음).
@@ -114,6 +116,8 @@ class Shadow:
             same = 0 if act is None else 1 if act == self.chosen_action else 2
             code = self.redraft.replace("used_abstain", "used_alt").replace(":", "_")
             parts.append(f"rd=1/{same}/{code}/{self.redraft_ms:.0f}")
+        if self.hint is not None:
+            parts.append(f"md_hint={self.hint}")
         for key, rec in self.stages.items():
             parts += rec.log_parts(key)
         return ";".join(parts)

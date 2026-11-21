@@ -9,7 +9,7 @@
 - 요청 내용은 이 함수의 지역 변수로만 쓰고 남기지 않는다(TU-18).
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +36,7 @@ async def draft_answer(
     english_only_embedding: bool = False,
     examples: str = "",
     index: KbIndex | None = None,
+    on_sections: Callable[[tuple[Section, ...]], None] | None = None,
 ) -> Draft:
     """검색 상위 k개를 근거 묶음으로 주 호출을 한 번 부른다.
 
@@ -44,6 +45,7 @@ async def draft_answer(
     `english_only_embedding`이 True일 때만 `retrieve(…, english_only_embedding=True)`로 넘긴다.
     `examples`는 판단 예시 블록(TU-08)이다. 비었으면 넣지 않는다.
     `index`는 기동 때 만든 KB 색인(`state.tutor_kb`)이다. 있을 때만 `retrieve(…, index=)`로 넘긴다.
+    `on_sections`가 있으면 주 호출 전에 근거 묶음을 넘긴다(후보 N1 단서 확인용, 요청 안에서만).
     """
     query, history = conv.search_query()
     extra = {
@@ -54,6 +56,8 @@ async def draft_answer(
     if english_only_embedding:
         extra["english_only_embedding"] = True
     sections = tuple(await retrieve(query, history, k=k, **extra))
+    if on_sections is not None:
+        on_sections(sections)
     out = await run_main_call(
         complete, prompt, conv, sections, signals, deadline=deadline, examples=examples
     )

@@ -138,6 +138,8 @@ class InputCfg(_Strict):
     # act = nano는 요청 유형을 고르고 코드가 범주로 대응
     # flags = 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔. results/2026-11-16-input-flags.md)
     label_mode: Literal["category", "act", "flags"]
+    # 1차를 3표(지금 1차·요청 유형·예시 없음)로. 실험, 기본 끔(results/2026-11-19-zero-call-checks)
+    ensemble: bool
     window_last: int
     max_chars: int
     max_answer_chars: int

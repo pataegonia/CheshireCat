@@ -24,7 +24,13 @@ from guardrail.decide import (
     safe_of,
     trusted,
 )
-from guardrail.judges.input_judge import build_window, check_oom, check_request, judge_input
+from guardrail.judges.input_judge import (
+    act_config,
+    build_window,
+    check_oom,
+    check_request,
+    judge_input,
+)
 from guardrail.judges.output_judge import (
     MAX_SENTENCES,
     ask_grounded,
@@ -89,6 +95,8 @@ class Judgement:
     )
     # output.medium_parallel로 두 호출을 보냈을 때 쓴 쪽: med | low | default(둘 다 실패)
     output_source: str | None = None
+    # input.ensemble로 1차를 3표로 냈을 때의 표 "A,B,C"(범주 이름, 무효는 -). 하네스 기록용
+    input_votes: str | None = None
 
 
 class ConstantGuard:
@@ -235,6 +243,8 @@ class Guard:
             load_prompt(cfg, name)
         if cfg.toggles.jb_check:
             load_prompt(cfg, "jb_check")
+        if cfg.input.ensemble:
+            load_prompt(act_config(cfg), "input_judge")
         if cfg.toggles.oom_check:
             load_prompt(cfg, "oom_check")
         if cfg.toggles.request_check or cfg.toggles.block_recheck:
@@ -266,6 +276,7 @@ class Guard:
             request_check=t.request_check,
             block_recheck=t.block_recheck,
             medium=self.cfg.output.medium_parallel,
+            ensemble=self.cfg.input.ensemble,
         )
 
     async def classify(self, messages: list[dict[str, str]] | Sequence[Message]) -> Category:
@@ -322,12 +333,13 @@ class Guard:
         request_check: bool = False,
         block_recheck: bool = False,
         medium: bool = False,
+        ensemble: bool = False,
     ) -> Judgement:
         t0 = time.monotonic()
         try:
             return await self._judge(
                 req, t0, category, retries, intro_rule, oom_check, request_check, block_recheck,
-                medium,
+                medium, ensemble,
             )  # fmt: skip
         except Exception as exc:  # noqa: BLE001 - GR-09: 어떤 실패에도 규격 응답. 종류 이름만 남긴다
             out = (
@@ -349,6 +361,7 @@ class Guard:
         request_check: bool = False,
         block_recheck: bool = False,
         medium: bool = False,
+        ensemble: bool = False,
     ) -> Judgement:
         """given이 있으면 입력 nano 없이 그 범주를 쓴다. retries는 nano마다(None=설정값).
 
@@ -361,6 +374,9 @@ class Guard:
 
         medium(output.medium_parallel)도 `judge`만 켠다: 출력 판정을 low·medium 두 호출로 보낸다
         (`_ask_pair`). 그때 `/guard`당 nano는 최대 4회다.
+
+        ensemble(input.ensemble, 실험)도 `judge`만 켠다: 1차를 3표로 내고(`judge_input`) 이어지는
+        확인·출력은 합친 범주로 지금과 같이 간다. 1차 호출이 2회 늘어 최대 6회다.
 
         intro_rule은 `judge`(`/guard` 응답)만 켠다: nano가 normal·answer_seeking이라 한 자기소개
         발화의 범주를 pii_disclosure로 낸다(S3.9). 출력은 nano 범주로 이미 계산한 값 그대로다.
@@ -393,7 +409,9 @@ class Guard:
         trace: dict[str, str | None] = {}  # 탈옥 2차 판정(입력 태스크 안, 같은 마감)의 결과
         if not p.low and given is None:
             tasks["input_judge"] = asyncio.create_task(
-                self._input(p, deadline, retries, trace, oom_check, request_check, block_recheck)
+                self._input(
+                    p, deadline, retries, trace, oom_check, request_check, block_recheck, ensemble
+                )
             )
         wants_nano = baseline or cfg.toggles.nano_tier3 or cfg.output.call_nano_when_unused
         if p.answer and wants_nano and p.output_error is None:
@@ -441,13 +459,16 @@ class Guard:
         # 입력 쪽 추가 호출은 하나뿐이다. request_check가 oom_check 칸도 채우므로 한 번만 센다
         second = "oom_check" in trace or "request_check" in trace
         calls = len(tasks) + ("jb_check" in trace) + second + ("out" in trace)
+        calls += 2 * ("ensemble" in trace)  # 투표자 B·C
         intro = intro_rule and source == "nano" and category in ("normal", "answer_seeking")
         if intro and is_self_intro(p.target):  # 둘 다 허용 범주라 decision·출력 단·safe는 그대로다
             category = "pii_disclosure"  # 자기소개 + 학습 질문은 pii가 먼저다(입력 프롬프트)
         elif trace.get("oom_check") == "not_stated" and source == "nano" and category == "normal":
             category = "out_of_material"  # normal과 같은 허용 범주라 출력·safe는 그대로다
         j = self._result(category, source, out, p, t0, t1, calls, tuple(errors))
-        return dataclasses.replace(j, output_source=trace.get("out"))
+        return dataclasses.replace(
+            j, output_source=trace.get("out"), input_votes=trace.get("ensemble")
+        )
 
     async def _ask_pair(
         self, low_call: Awaitable[Any], p: _Prepared, deadline: float, trace: dict[str, str | None]
@@ -490,6 +511,7 @@ class Guard:
         oom_check: bool,
         request_check: bool = False,
         block_recheck: bool = False,
+        ensemble: bool = False,
     ) -> Category | None:
         """입력 판정. 1차 뒤에 확인 호출을 최대 하나 이어 부른다(탈옥 2차가 불렸으면 생략).
 
@@ -500,7 +522,7 @@ class Guard:
         """
         category = await judge_input(
             p.window, p.target, p.examples, self.llm, self.cfg,
-            deadline=deadline, retries=retries, trace=trace,
+            deadline=deadline, retries=retries, trace=trace, ensemble=ensemble,
         )  # fmt: skip
         if category is None or "jb_check" in trace:
             return category

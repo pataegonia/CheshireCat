@@ -597,7 +597,7 @@ async def test_measure_writes_no_nano_output_for_held_out_rows(monkeypatch):
             judgements={i: SimpleNamespace(
                 input_source="s", output_tier=None, calls=1, errors=(), knn_major=None,
                 lr_pred=None, answer_quote_ok=None, kb_quote_ok=None, nano_refuses=None,
-                quote_repaired=None,
+                quote_repaired=None, input_votes=None,
             ) for i in "ab"},
             judge_kind="K",
         )  # fmt: skip

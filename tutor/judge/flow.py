@@ -414,6 +414,12 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
         tasks = []
         for i, spec in enumerate(md.drafts):
             low = spec.effort == "low"
+            # 초안별 스트리밍·출력 상한(설정에 있을 때만 넘긴다. 없으면 지금과 같은 호출)
+            extra: dict[str, Any] = {}
+            if spec.stream:
+                extra["stream"] = True
+            if spec.max_completion_tokens is not None:
+                extra["max_completion_tokens"] = spec.max_completion_tokens
             tasks.append(
                 asyncio.ensure_future(
                     llm.complete(
@@ -424,6 +430,7 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
                         timeout_s=spec.timeout_s or cfg.llm.timeout_s.main,
                         retries=retries if i == 0 else 0,
                         effort=spec.effort,
+                        **extra,
                     )
                 )
             )

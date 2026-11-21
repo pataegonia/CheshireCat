@@ -11,6 +11,9 @@
   덮되, probe가 끈 파라미터(None)는 끈 채로 둔다.
 - 측정용 수(calls·failures·attempt_errors·completion_buckets)는 역할·고정 갈래·토큰 구간을 키로
   수만 센다. 답과 재시도 판단에서 읽지 않고 본문은 남기지 않는다.
+- 호출 하나만 스트리밍으로 보낼 수 있다(`complete(stream=True)`, multi_draft 초안). 조각을 이어
+  붙여 비스트리밍 응답과 같은 모양으로 만든 뒤 같은 파싱을 지난다. 보내기와 읽기 전체가 호출당
+  시간 제한 안에 들고, 끝나면(시간 초과·취소 포함) 스트림을 닫는다. /tutor 응답은 스트리밍이 아니다.
 """
 
 import asyncio
@@ -30,7 +33,7 @@ from typing import Any, Literal
 import openai
 from guardrail.config import load_config as load_guard_config
 from guardrail.judges.schemas import strict_schema
-from guardrail.llm import ErrorCode
+from guardrail.llm import ErrorCode, _read_stream
 from pydantic import BaseModel
 
 from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, TutorConfig
@@ -41,6 +44,7 @@ Structured = Literal["json_schema", "json_object"]
 Outcome = Literal["sent", "budget", "gate", "no_time"]
 OPTIONAL_PARAMS = ("reasoning_effort", "verbosity", "max_completion_tokens")
 RETRY_JITTER_S = (0.2, 0.5)  # 가드 기본 설정(llm.retry_jitter_s)과 같다
+STREAM_CLOSE_S = 1.0  # 스트림 닫기를 기다리는 상한(닫기가 걸려도 마감을 넘기지 않게)
 TOKEN_BUCKET = 100  # 성공한 시도의 completion_tokens 분포 구간 폭
 # 요청 하나에서 보낸 시도 수(역할별). 라우터가 요청마다 새 Counter를 넣는다(없으면 세지 않는다).
 # 접근 로그의 /tutor 호출 기록 칸(multi_draft를 켰을 때)에 쓴다. 본문은 없다
@@ -73,6 +77,7 @@ def _token_bucket(tokens: int) -> int:
     """completion_tokens의 구간: TOKEN_BUCKET 단위로 올리고 0~프록시 상한 안에 둔다.
 
     구간 b는 (b - TOKEN_BUCKET, b] 토큰이다(상한 b 이하). 키는 역할마다 21개를 넘지 않는다.
+    스트림 초안이 2000을 넘겨도 2000 구간에 든다(측정용 수라 답에는 영향이 없다).
     """
     bucket = math.ceil(tokens / TOKEN_BUCKET) * TOKEN_BUCKET
     return min(max(bucket, 0), PROXY_MAX_COMPLETION_TOKENS)
@@ -98,6 +103,29 @@ def _bad_json_cause(resp: Any) -> str:
     if not isinstance(getattr(message, "content", None), str):
         return "no_content"
     return "schema"
+
+
+async def _collect_stream(stream: Any) -> Any:
+    """스트림 조각을 이어 붙여 비스트리밍 응답과 같은 모양으로 만든다(`_parse`·`_bad_json_cause`가
+    그대로 읽게). 조각 읽기는 가드 `_read_stream`과 같다: 내용 조각이 하나도 없으면 내용은 None
+    (→ bad_json), finish_reason·usage는 마지막 값."""
+    content, finish, usage = await _read_stream(stream)
+    message = SimpleNamespace(content=content, refusal=None)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason=finish)], usage=usage
+    )
+
+
+async def _close_stream(stream: Any) -> None:
+    """스트림을 닫는다(끝까지 읽었든 시간 초과·취소로 끊겼든). 닫기 실패는 결과와 상관없다."""
+    close = getattr(stream, "close", None)
+    if close is None:
+        return
+    try:
+        async with asyncio.timeout(STREAM_CLOSE_S):
+            await close()
+    except Exception:  # noqa: BLE001, S110 - 코드로만 돌려주는 호출이라 닫기 실패는 삼킨다
+        pass
 
 
 def _status_code(status: int) -> tuple[ErrorCode, bool]:
@@ -184,9 +212,16 @@ class TutorLLM:
         timeout_s: float,
         retries: int,
         effort: str | None = None,
+        stream: bool = False,
+        max_completion_tokens: int | None = None,
     ) -> Result:
         """`effort`를 주면 이 호출만 reasoning_effort를 그 값으로 보낸다(multi_draft 초안).
-        probe가 reasoning_effort를 껐으면 주어도 보내지 않는다(`sends_effort`)."""
+        probe가 reasoning_effort를 껐으면 주어도 보내지 않는다(`sends_effort`).
+
+        `max_completion_tokens`도 같은 방식으로 이 호출만 덮는다(probe가 껐으면 보내지 않는다).
+        `stream`이면 stream=True로 보내고 조각을 이어 붙인다. 보내기와 읽기 전체가 `timeout_s`
+        (마감이 더 이르면 마감) 안에 들고, 빈 스트림·잘림은 bad_json, 중간 시간 초과는 timeout이다.
+        셋 다 주지 않은 호출의 요청 내용은 전과 같다."""
         result = await self._complete(
             role,
             messages,
@@ -195,6 +230,8 @@ class TutorLLM:
             timeout_s=timeout_s,
             retries=retries,
             effort=effort,
+            stream=stream,
+            max_completion_tokens=max_completion_tokens,
         )
         if result.error is not None and result.error != "budget":
             self.failures[(role, result.error)] += 1
@@ -210,11 +247,17 @@ class TutorLLM:
         timeout_s: float,
         retries: int,
         effort: str | None = None,
+        stream: bool = False,
+        max_completion_tokens: int | None = None,
     ) -> Result:
         t0 = self._now()
         kwargs = self._request(messages, schema)
         if effort is not None and "reasoning_effort" in kwargs:
             kwargs["reasoning_effort"] = effort
+        if max_completion_tokens is not None and "max_completion_tokens" in kwargs:
+            kwargs["max_completion_tokens"] = max_completion_tokens
+        if stream:
+            kwargs["stream"] = True
         attempts, last = 0, _Attempt(error="timeout")
         waited: list[float] = []  # 시도마다 게이트 대기(초)
         while True:
@@ -280,11 +323,18 @@ class TutorLLM:
             if sent is not None:
                 sent[role] += 1
             cap = min(limit, left)
+            raw = None  # 스트림 호출이 받은 스트림(끝나면 닫는다)
             try:
-                async with asyncio.timeout(cap):  # 호출당 시간 제한(보내는 시간 전체)
+                async with asyncio.timeout(cap):  # 호출당 시간 제한(보내기 + 스트림 읽기 전체)
                     resp = await self._send({**kwargs, "timeout": cap})
+                    if kwargs.get("stream") and not hasattr(resp, "choices"):
+                        raw = resp
+                        resp = await _collect_stream(raw)
             except Exception as exc:  # noqa: BLE001 - 코드로만 돌려준다(메시지·본문은 보지 않는다)
                 return "sent", self._tally(role, self._fail(exc))
+            finally:
+                if raw is not None:  # 시간 초과·취소로 끊겨도 닫는다
+                    await _close_stream(raw)
         return "sent", self._tally(role, self._parse(resp, schema))
 
     def _tally(self, role: str, a: _Attempt) -> _Attempt:

@@ -52,3 +52,10 @@ def test_real_kb_titles_are_in_the_kb_text():
     assert blob  # 기동 때 한 번 만든다
     for section in list(state.tutor_kb.sections.values())[:20]:
         assert unknown_terms.squash(section.text)[:30] in blob
+
+
+def test_noun_endings_in_and_haeji_are_names() -> None:
+    blob = unknown_terms.squash("적금 자료와 기능 카드 설명")
+    assert unknown_terms.missing_terms("중도해지 수수료 규정은 뭐야", blob) == ["중도해지수수료"]
+    assert unknown_terms.missing_terms("참고 자료의 승인 상태가 뭐야", blob) == ["승인상태"]
+    assert unknown_terms.missing_terms("누군지 규칙 알려줘", blob) == []  # 의문형 '-ㄴ지'는 여전히 거른다

@@ -744,3 +744,115 @@ def test_missing_base_url_is_an_auth_error_and_sends_nothing(fake_openai, monkey
 
 
 CFG = load_config()
+
+
+# --- 스트림 초안(multi_draft.drafts[].stream) ---
+
+
+def chunk(content=None, finish=None, tokens=None):
+    delta = types.SimpleNamespace(content=content)
+    choice = types.SimpleNamespace(delta=delta, finish_reason=finish)
+    usage = types.SimpleNamespace(completion_tokens=tokens) if tokens else None
+    return types.SimpleNamespace(choices=[choice], usage=usage)
+
+
+class Stream:
+    """비동기 조각 스트림(close를 기록한다). delay가 있으면 조각마다 그만큼 쉰다."""
+
+    def __init__(self, *chunks, delay=0.0):
+        self.chunks, self.delay, self.closed = list(chunks), delay, False
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for c in self.chunks:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            yield c
+
+    async def close(self):
+        self.closed = True
+
+
+def test_stream_draft_is_joined_and_parsed_with_the_same_schema():
+    stream = Stream(chunk('{"answer"'), chunk(': "a"}'), chunk(finish="stop"), chunk(tokens=4200))
+    send = Send(stream)
+    llm, clock = make(send, src=base({**GUARD_PARAMS, "max_completion_tokens": 1600}))
+    result = asyncio.run(
+        llm.complete(
+            "main_c",
+            [],
+            Out,
+            deadline=clock() + 20,
+            timeout_s=8,
+            retries=0,
+            effort="medium",
+            stream=True,
+            max_tokens=6000,
+        )
+    )
+    assert result.parsed == Out(answer="a") and result.error is None
+    assert (result.finish_reason, result.completion_tokens) == ("stop", 4200)
+    kwargs = send.sent[0]
+    assert kwargs["stream"] is True and kwargs["max_completion_tokens"] == 6000
+    assert kwargs["reasoning_effort"] == "medium"
+
+
+def test_non_stream_request_has_no_stream_key_and_keeps_its_token_cap():
+    send = Send(ok())
+    llm, clock = make(send, src=base({**GUARD_PARAMS, "max_completion_tokens": 1600}))
+    run(llm, clock)
+    assert "stream" not in send.sent[0] and send.sent[0]["max_completion_tokens"] == 1600
+
+
+def test_max_tokens_is_not_sent_when_the_probe_turned_it_off():
+    send = Send(Stream(chunk('{"answer": "a"}', finish="stop")))
+    llm, clock = make(send)  # GUARD_PARAMS: max_completion_tokens None
+    asyncio.run(
+        llm.complete(
+            "main_c",
+            [],
+            Out,
+            deadline=clock() + 20,
+            timeout_s=8,
+            retries=0,
+            stream=True,
+            max_tokens=6000,
+        )
+    )
+    assert "max_completion_tokens" not in send.sent[0]
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        (chunk('{"answer": "a'), chunk(finish="length")),  # 내용 중간에 잘림
+        (chunk(finish="length", tokens=6000),),  # 추론에 다 써 내용 없음
+    ],
+)
+def test_truncated_stream_is_a_failed_draft_shown_as_length(chunks):
+    llm, clock = make(Send(Stream(*chunks)))
+    result = asyncio.run(
+        llm.complete("main_c", [], Out, deadline=clock() + 20, timeout_s=8, retries=0, stream=True)
+    )
+    assert result.error == "bad_json" and result.finish_reason == "length"
+    assert llm.attempt_errors == {("main_c", "length"): 1}
+
+
+def test_stream_limit_covers_the_whole_stream_and_closes_it():
+    stream = Stream(chunk('{"answer"'), chunk(': "a"}', finish="stop"), delay=1.0)
+
+    async def send(_kwargs):
+        return stream
+
+    llm = tutor_llm.TutorLLM(send, contextlib.nullcontext, model="m", base=base())
+
+    async def go():
+        loop = asyncio.get_running_loop()
+        return await llm.complete(
+            "main_c", [], Out, deadline=loop.time() + 20, timeout_s=0.05, retries=0, stream=True
+        )
+
+    result = asyncio.run(go())
+    assert result.error == "timeout" and result.attempts == 1 and stream.closed

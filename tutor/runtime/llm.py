@@ -100,6 +100,25 @@ def _bad_json_cause(resp: Any) -> str:
     return "schema"
 
 
+async def _read_stream(stream: Any) -> SimpleNamespace:
+    """스트림 조각 → 비스트림 응답 모양(choices[0].message.content·finish_reason, usage).
+    가드 llm._read_stream과 같은 규칙: 내용은 이어 붙이고 finish_reason·usage는 마지막 값,
+    내용 조각이 없으면 content None(예: 추론에 토큰을 다 써 length로 끝남)."""
+    parts: list[str] = []
+    finish, usage = None, None
+    async for chunk in stream:
+        usage = getattr(chunk, "usage", None) or usage
+        for choice in getattr(chunk, "choices", None) or []:
+            text = getattr(getattr(choice, "delta", None), "content", None)
+            if isinstance(text, str):
+                parts.append(text)
+            finish = getattr(choice, "finish_reason", None) or finish
+    message = SimpleNamespace(content="".join(parts) if parts else None, refusal=None)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason=finish)], usage=usage
+    )
+
+
 def _status_code(status: int) -> tuple[ErrorCode, bool]:
     """(오류 코드, 재시도 대상). 가드 llm과 같은 표(테스트로 맞춘다)."""
     if status == 408:
@@ -184,9 +203,14 @@ class TutorLLM:
         timeout_s: float,
         retries: int,
         effort: str | None = None,
+        stream: bool = False,
+        max_tokens: int | None = None,
     ) -> Result:
         """`effort`를 주면 이 호출만 reasoning_effort를 그 값으로 보낸다(multi_draft 초안).
-        probe가 reasoning_effort를 껐으면 주어도 보내지 않는다(`sends_effort`)."""
+        probe가 reasoning_effort를 껐으면 주어도 보내지 않는다(`sends_effort`).
+        `stream`이면 스트리밍으로 보내 조각을 이어 붙인 뒤 같은 스키마로 읽고, 호출당 시간 제한은
+        스트림 전체에 걸린다. `max_tokens`는 이 호출만의 max_completion_tokens(probe가 끄면
+        보내지 않는다)."""
         result = await self._complete(
             role,
             messages,
@@ -195,6 +219,8 @@ class TutorLLM:
             timeout_s=timeout_s,
             retries=retries,
             effort=effort,
+            stream=stream,
+            max_tokens=max_tokens,
         )
         if result.error is not None and result.error != "budget":
             self.failures[(role, result.error)] += 1
@@ -210,11 +236,17 @@ class TutorLLM:
         timeout_s: float,
         retries: int,
         effort: str | None = None,
+        stream: bool = False,
+        max_tokens: int | None = None,
     ) -> Result:
         t0 = self._now()
         kwargs = self._request(messages, schema)
         if effort is not None and "reasoning_effort" in kwargs:
             kwargs["reasoning_effort"] = effort
+        if max_tokens is not None and "max_completion_tokens" in kwargs:
+            kwargs["max_completion_tokens"] = max_tokens
+        if stream:
+            kwargs["stream"] = True
         attempts, last = 0, _Attempt(error="timeout")
         waited: list[float] = []  # 시도마다 게이트 대기(초)
         while True:
@@ -280,11 +312,19 @@ class TutorLLM:
             if sent is not None:
                 sent[role] += 1
             cap = min(limit, left)
+            resp = None
             try:
-                async with asyncio.timeout(cap):  # 호출당 시간 제한(보내는 시간 전체)
+                async with asyncio.timeout(cap):  # 호출당 시간 제한(보내는 시간 전체, 스트림 포함)
                     resp = await self._send({**kwargs, "timeout": cap})
+                    if kwargs.get("stream") and not hasattr(resp, "choices"):
+                        resp = await _read_stream(resp)
             except Exception as exc:  # noqa: BLE001 - 코드로만 돌려준다(메시지·본문은 보지 않는다)
                 return "sent", self._tally(role, self._fail(exc))
+            finally:
+                close = getattr(resp, "close", None) if kwargs.get("stream") else None
+                if close is not None:  # 취소·시간 초과로 끊긴 스트림도 연결을 닫는다
+                    with contextlib.suppress(Exception):
+                        await close()
         return "sent", self._tally(role, self._parse(resp, schema))
 
     def _tally(self, role: str, a: _Attempt) -> _Attempt:

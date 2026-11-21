@@ -157,14 +157,27 @@ class Draft(_Strict):
 
     effort: Literal["low", "medium"]  # minimal 금지(TU-13)
     timeout_s: PositiveFloat | None = None
+    # 실험: 스트리밍으로 보낸다. 프록시는 비스트림 요청만 출력 2000토큰으로 묶는다(가드
+    # llm.per_role.output_judge_medium과 같은 우회). max_tokens는 이 초안의 max_completion_tokens
+    stream: bool = False
+    max_tokens: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def _proxy_cap(self) -> "Draft":
+        if not self.stream and (self.max_tokens or 0) > PROXY_MAX_COMPLETION_TOKENS:
+            raise ValueError(
+                f"multi_draft 초안 max_tokens > {PROXY_MAX_COMPLETION_TOKENS}면 stream이어야 한다"
+            )
+        return self
 
 
 class MultiDraft(_Strict):
     """실험: 주 호출 초안 K개를 동시에 보내고 결정적으로 고른다(tutor.judge.multi_draft).
 
     끄면(enabled false) 지금과 같다. 켜면 겹쳐 보내기(`timeout_s.main_hedge`)는 쓰지 않는다.
-    초안 A(첫 번째)는 지금의 주 호출이라 low여야 하고, medium은 하나까지다. medium 초안의 마감은
-    요청 마감 − margin_s다. 기다리기는 min(초안 시작 + wait_s, 요청 마감 − margin_s)까지.
+    초안 A(첫 번째)는 지금의 주 호출이라 low여야 하고, 스트림 아닌 medium은 하나까지다.
+    medium 초안의 마감은 요청 마감 − margin_s다.
+    기다리기는 min(초안 시작 + wait_s, 요청 마감 − margin_s)까지.
     """
 
     enabled: bool
@@ -200,8 +213,8 @@ class MultiDraft(_Strict):
     def _shape(self) -> "MultiDraft":
         if self.drafts[0].effort != "low":
             raise ValueError("multi_draft.drafts[0](초안 A = 지금의 주 호출)은 low여야 한다")
-        if sum(d.effort == "medium" for d in self.drafts) > 1:
-            raise ValueError("multi_draft.drafts의 medium은 하나까지다")
+        if sum(d.effort == "medium" and not d.stream for d in self.drafts) > 1:
+            raise ValueError("multi_draft.drafts의 스트림 아닌 medium은 하나까지다")
         return self
 
 

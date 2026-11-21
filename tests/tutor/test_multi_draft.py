@@ -11,6 +11,7 @@
 import asyncio
 
 import pytest
+import yaml
 
 from tests.tutor.test_flow import QUESTION, ask, state_with
 from tutor.judge import flow, multi_draft
@@ -537,3 +538,52 @@ def test_aa_config_accepts_off_shadow_on_and_rejects_others():
         assert load_config(overrides={AA: value}).llm.multi_draft.abstain_if_any == value
     with pytest.raises(ValueError):
         load_config(overrides={AA: True})
+
+
+# --- 스트림 초안 ---
+
+STREAM_MED = {"effort": "medium", "stream": True, "max_tokens": 6000}
+# run_local --tutor-set 값(yaml.safe_load)과 같은 문자열
+STREAM_SETS = [
+    "[{effort: low}, {effort: low}, {effort: medium, stream: true, max_tokens: 6000}]",
+    "[{effort: low}, {effort: medium, stream: true, max_tokens: 6000},"
+    " {effort: medium, stream: true, max_tokens: 6000}]",
+]
+
+
+@pytest.mark.parametrize("value", STREAM_SETS)
+def test_config_accepts_stream_medium_drafts_from_tutor_set(value):
+    c = load_config(overrides={"llm.multi_draft.drafts": yaml.safe_load(value)})
+    meds = [d for d in c.llm.multi_draft.drafts if d.effort == "medium"]
+    assert meds and all(d.stream and d.max_tokens == 6000 for d in meds)
+
+
+@pytest.mark.parametrize(
+    "drafts",
+    [
+        [{"effort": "low"}, {"effort": "medium", "max_tokens": 6000}],  # 2000 넘으면 stream만
+        [{"effort": "medium", "stream": True}, {"effort": "low"}],  # 초안 A는 여전히 low
+        [{"effort": "low"}, STREAM_MED, {"effort": "medium"}, {"effort": "medium"}],
+    ],
+)
+def test_config_still_rejects_unsafe_stream_shapes(drafts):
+    with pytest.raises(ValueError):
+        cfg(**{"llm.multi_draft.drafts": drafts})
+
+
+def test_only_stream_drafts_get_stream_args():
+    llm = ScriptLLM((0.0, ok(GOOD_OUT)), (0.0, ok(GOOD_OUT)), (0.0, ok(GOOD_OUT)))
+    run_flow(llm, **{"llm.multi_draft.drafts": [{"effort": "low"}, {"effort": "low"}, STREAM_MED]})
+    assert ["stream" in c for c in llm.calls] == [False, False, True]
+    assert llm.calls[2]["max_tokens"] == 6000 and llm.calls[2]["effort"] == "medium"
+
+
+def test_failed_stream_draft_counts_as_a_failed_draft():
+    llm = ScriptLLM(
+        (0.0, ok(GOOD_OUT)), (0.0, ok(GOOD_OUT)), (0.0, result(error="bad_json", finish="length"))
+    )
+    body, _took, shadow = run_flow(
+        llm, **{"llm.multi_draft.drafts": [{"effort": "low"}, {"effort": "low"}, STREAM_MED]}
+    )
+    assert body["action"] == "answer" and shadow.valid == 2
+    assert [d.code for d in shadow.drafts][2] == "length"

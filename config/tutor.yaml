@@ -56,7 +56,7 @@ llm:
     oom_gate: 9                # 자료 밖 확인 E. E 시작(검색 직후)부터 센다(#213 B2: 마감 없을 때 동시 64에서 20초 넘김 6.9%, 9초 마감으로 실제 제출 시간 초과 0). 넘으면 흐름 결과 그대로
   multi_draft:                 # 실험(exp/tutor-multidraft): 주 호출 초안 여러 개를 같은 근거 묶음으로 동시에 보내고 모델 호출 없이 고른다(tutor.judge.multi_draft). 켜면 main_hedge는 쓰지 않는다. 초안 A = 지금의 주 호출(low, 재시도 그대로), 나머지 재시도 0. 요청당 nano 최대 6회(A 2 + B 1 + C 1 + T 1 + E 1): 팀 규칙 TU-13(4회)을 넘어 main에 넣으려면 튜터 담당 동의가 필요하다. false면 지금과 같다
     enabled: true
-    drafts:                    # 첫 번째는 low여야 하고 medium은 하나까지(요청당 nano 8회까지 로드). timeout_s가 없으면 timeout_s.main. 런박스 개발 세트 튜터만: [low, low, medium]에서 medium 초안이 출력 2000토큰 상한에 66% 잘렸다. [low, low, low]는 튜터 점수 91.29 ± 0.94(4회), 끄면 89.92 ± 1.82(6회). 같은 요청 안에서 고르기가 action 12개를 고치고 4개를 깼다
+    drafts:                    # 첫 번째는 low여야 하고 스트림 아닌 medium은 하나까지(요청당 nano 8회까지 로드). timeout_s가 없으면 timeout_s.main. 초안마다 stream: true·max_tokens(예 6000)를 주면 스트리밍으로 보낸다(프록시 2000 상한은 비스트림만, 기본 끔). 런박스 개발 세트 튜터만: [low, low, medium]에서 medium 초안이 출력 2000토큰 상한에 66% 잘렸다. [low, low, low]는 튜터 점수 91.29 ± 0.94(4회), 끄면 89.92 ± 1.82(6회). 같은 요청 안에서 고르기가 action 12개를 고치고 4개를 깼다
       - {effort: low}
       - {effort: low}
       - {effort: low}

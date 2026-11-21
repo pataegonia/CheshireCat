@@ -136,12 +136,13 @@ class InputOnlyGuard:
         )
         first = 1 + 2 * cfg.input.ensemble  # input.ensemble이면 1차 3표
         calls = first + ("jb_check" in trace)  # 탈옥 2차 판정을 불렀으면 +1
+        votes = trace.get("ensemble")
         if category is None:
             return self._result(
-                req, "normal", "default", calls=first, errors=("input_judge",), **side
+                req, "normal", "default", calls=first, errors=("input_judge",), votes=votes, **side
             )
         errors = ("jb_check",) if trace.get("jb_check", "") is None else ()
-        return self._result(req, category, "nano", calls=calls, errors=errors, **side)
+        return self._result(req, category, "nano", calls=calls, errors=errors, votes=votes, **side)
 
     @staticmethod
     def _result(
@@ -154,6 +155,7 @@ class InputOnlyGuard:
         errors: tuple[str, ...] = (),
         knn_major: Category | None = None,
         lr_pred: Category | None = None,
+        votes: str | None = None,
     ) -> Judgement:
         output = OutputVerdict(True, (), True) if req.has_candidate else None
         return Judgement(
@@ -167,6 +169,7 @@ class InputOnlyGuard:
             calls=calls,
             errors=errors,
             latency_ms={},
+            input_votes=votes,
         )
 
 

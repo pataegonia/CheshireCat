@@ -159,3 +159,50 @@ def test_call_estimates_count_the_two_extra_voters():
     rows = [object()] * 3
     est = estimate_calls({"x": on}, rows, 1, on.llm, input_only=True)
     assert est - estimate_calls({"x": off}, rows, 1, off.llm, input_only=True) == 6
+
+
+async def test_raising_voter_is_invalid_and_a_raising_alone_keeps_todays_error(
+    no_rule, monkeypatch
+):
+    from guardrail.judges import input_judge
+
+    real = input_judge._ask
+
+    async def b_c_raise(window, target, examples, llm, cfg, *rest):
+        if cfg.input.label_mode == "act" or not examples:  # B·C
+            raise RuntimeError("voter")
+        return await real(window, target, examples, llm, cfg, *rest)
+
+    monkeypatch.setattr(input_judge, "_ask", b_c_raise)
+    guard, _ = await make(voters("off_topic", "normal", "normal"), input__ensemble=True)
+    j = await guard.judge(req())
+    assert (j.response.category, j.errors, j.input_votes) == ("off_topic", (), "off_topic,-,-")
+
+    async def all_raise(*a):
+        raise RuntimeError("all")
+
+    monkeypatch.setattr(input_judge, "_ask", all_raise)
+    j = await guard.judge(req())
+    assert "input_judge:RuntimeError" in j.errors and j.input_source in ("fallback", "default")
+
+
+async def test_input_only_harness_records_votes():
+    from fakes import FakeLLM
+    from test_guard import _public
+
+    from guardrail.data import labeled_rows
+    from guardrail.eval.run import InputOnlyGuard
+    from guardrail.llm import LLM
+
+    overrides = {
+        "input.ensemble": True,
+        "toggles.request_check": False,  # --input-only가 받지 않는 토글
+        "toggles.block_recheck": False,
+    }
+    cfg = load_config(overrides=overrides)
+    fake = FakeLLM(respond=voters("normal", "off_topic", "off_topic"))
+    llm = LLM(cfg.llm, send=fake.send)
+    await llm.start()
+    j = await InputOnlyGuard(cfg, llm, labeled_rows(_public())).judge(req())
+    assert (j.response.category, j.calls) == ("off_topic", 3)
+    assert j.input_votes == "normal,off_topic,off_topic"

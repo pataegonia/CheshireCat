@@ -12,6 +12,8 @@ from guardrail.schema import Category
 from guardrail.signals import Signals
 
 Tier = Literal[1, 2, 3, 4]
+# input.block_veto가 B·C를 부르는 1차 범주
+VETO_FIRST: frozenset[Category] = frozenset({"jailbreak_injection", "off_topic"})
 
 
 def fallback_category(knn_major: Category | None, lr_pred: Category | None) -> Category:
@@ -41,6 +43,16 @@ def ensemble_vote(votes: Sequence[Category | None], block: frozenset[Category]) 
     side = blocks if is_block else allows
     counts = Counter(side)
     return max(side, key=counts.__getitem__)  # max는 동수면 앞의 것(투표자 순서)을 낸다
+
+
+def veto_release(
+    first: Category, b: Category | None, c: Category | None, block: frozenset[Category]
+) -> Category | None:
+    """input.block_veto: 1차(A)가 jailbreak_injection·off_topic이고 B·C가 둘 다 유효한 허용이면 C의
+    범주(허용이 확인됐으니 B로 대신할 일이 없다). 아니면 None(A 그대로)."""
+    if first not in VETO_FIRST or b is None or c is None or b in block or c in block:
+        return None
+    return c
 
 
 def request_category(first: Category, asks_kinds: Sequence[str]) -> Category | None:

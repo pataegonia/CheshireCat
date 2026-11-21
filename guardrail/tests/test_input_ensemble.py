@@ -206,3 +206,78 @@ async def test_input_only_harness_records_votes():
     j = await InputOnlyGuard(cfg, llm, labeled_rows(_public())).judge(req())
     assert (j.response.category, j.calls) == ("off_topic", 3)
     assert j.input_votes == "normal,off_topic,off_topic"
+
+
+# --- input.block_veto: 1차가 탈옥·off_topic일 때만 B·C를 불러 둘 다 허용이면 푼다 ---
+
+
+@pytest.mark.parametrize(
+    ("first", "b", "c", "want"),
+    [
+        ("jailbreak_injection", "normal", "answer_seeking", "answer_seeking"),  # C의 범주
+        ("off_topic", "normal", "normal", "normal"),
+        ("off_topic", "normal", "off_topic", None),  # 하나라도 차단이면 그대로
+        ("jailbreak_injection", "harmful_content", "normal", None),
+        ("off_topic", None, "normal", None),  # 무효가 있으면 그대로
+        ("off_topic", "normal", None, None),
+        ("harmful_content", "normal", "normal", None),  # 대상 범주가 아니다
+        ("academic_dishonesty", "normal", "normal", None),
+        ("normal", "normal", "normal", None),
+    ],
+)
+def test_veto_release(first, b, c, want):
+    from guardrail.decide import veto_release
+
+    assert veto_release(first, b, c, BLOCK) == want
+
+
+def test_ensemble_and_block_veto_cannot_both_be_on():
+    with pytest.raises(ValueError, match="block_veto"):
+        load_config(overrides={"input.ensemble": True, "input.block_veto": True})
+
+
+async def test_veto_not_triggered_for_allow_first(no_rule):
+    guard, fake = await make(voters("normal", "off_topic", "off_topic"), input__block_veto=True)
+    j = await guard.judge(req())
+    assert j.response.category == "normal" and j.input_votes is None
+    assert len(calls(fake, "input")) == 1 and j.calls == 2
+
+
+async def test_veto_releases_and_skips_jb_check(no_rule):
+    guard, fake = await make(
+        voters("jailbreak_injection", "normal", "answer_seeking"), input__block_veto=True
+    )
+    j = await guard.judge(req())
+    assert j.response.category == "answer_seeking" and j.response.output.safe is True
+    assert j.input_votes == "jailbreak_injection,normal,answer_seeking"
+    assert sorted(_voter(r) for r in calls(fake, "input")) == ["A", "B", "C"]
+    assert calls(fake, "jb_check") == [] and (j.calls, j.errors) == (4, ())
+
+
+async def test_veto_keeps_block_and_jb_check_runs_as_today(no_rule):
+    guard, fake = await make(
+        voters("jailbreak_injection", "normal", "off_topic", jb="apply"), input__block_veto=True
+    )
+    j = await guard.judge(req())
+    assert j.response.category == "jailbreak_injection"
+    assert len(calls(fake, "jb_check")) == 1 and j.calls == 5
+    assert j.input_votes == "jailbreak_injection,normal,off_topic"
+
+
+async def test_veto_release_runs_allow_path_checks(no_rule):
+    # 풀린 off_topic은 차단 재확인 대신 허용 쪽 요청 점검(request_check)을 탄다
+    guard, fake = await make(
+        voters("off_topic", "normal", "normal"),
+        input__block_veto=True,
+        toggles__request_check=True,
+        toggles__block_recheck=True,
+    )
+    j = await guard.judge(req())
+    assert j.input_votes == "off_topic,normal,normal" and "request_check" in j.errors
+    assert j.calls == 5  # A + B·C + 요청 점검 1회(가짜 응답이 스키마에 안 맞아 실패) + 출력
+
+
+def test_block_veto_estimate_is_an_upper_bound():
+    off = load_config()
+    on = load_config(overrides=parse_sets(["input.block_veto=true"]))
+    assert calls_per_row(on, True) == calls_per_row(off, True) + 2

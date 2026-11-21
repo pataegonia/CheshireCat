@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
-from guardrail.decide import ensemble_vote
+from guardrail.decide import VETO_FIRST, ensemble_vote, veto_release
 from guardrail.judges.schemas import (
     ACT_TO_CATEGORY,
     InputActOut,
@@ -123,7 +123,7 @@ async def judge_input(
     kb_snippet: str | None = None,
     retries: int | None = None,
     trace: dict[str, str | None] | None = None,
-    ensemble: bool = False,
+    voters: bool = False,
 ) -> Category | None:
     """마지막 학습자 발화의 범주. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
 
@@ -131,14 +131,18 @@ async def judge_input(
     일시적 오류에만 `retries`회(None이면 `llm.retries`) 한다.
     trace를 넘기면 2차 판정을 부른 경우 `trace["jb_check"]`에 결과(apply·study, 실패면 None)를
     남긴다. 호출자가 호출 수·오류를 센다.
-    ensemble(input.ensemble 실험)이면 1차를 3표(`_ensemble`)로 내고 탈옥 2차는 합친 결과에 건다.
+    voters면 설정의 실험을 따른다(`/guard`·--input-only만 켠다). input.ensemble이면 1차를
+    3표(`_ensemble`)로 내고 탈옥 2차는 합친 결과에 건다. input.block_veto면 1차가 차단(탈옥·
+    off_topic)일 때만 B·C를 불러(`_veto`) 풀리면 허용 범주로 이어 간다(탈옥 2차는 건너뛴다).
     """
-    if ensemble:
+    if voters and cfg.input.ensemble:
         category = await _ensemble(
             window, target, examples, llm, cfg, deadline, kb_snippet, retries, trace
         )
     else:
         category = await _ask(window, target, examples, llm, cfg, deadline, kb_snippet, retries)
+        if voters and cfg.input.block_veto and category in VETO_FIRST:
+            category = await _veto(category, window, target, llm, cfg, deadline, kb_snippet, trace)
     if category == "jailbreak_injection" and cfg.toggles.jb_check:
         try:
             verdict = await check_jailbreak(
@@ -194,6 +198,34 @@ async def _ensemble(
     if category is None and isinstance(got[0], BaseException):
         raise got[0]
     return category
+
+
+async def _veto(
+    first: Category,
+    window: list[Message],
+    target: str,
+    llm: LLM,
+    cfg: GuardConfig,
+    deadline: float,
+    kb_snippet: str | None,
+    trace: dict[str, str | None] | None,
+) -> Category:
+    """input.block_veto: B(요청 유형)·C(예시 없음)를 재시도 없이 같은 마감으로 함께 부른다.
+
+    둘 다 유효한 허용이면 `veto_release` 범주, 아니면(예외·무효 포함) 1차 그대로.
+    trace["ensemble"] = 표 "A,B,C"(무효는 -).
+    """
+    if trace is not None:
+        trace["ensemble"] = None  # 호출을 시작했다(마감으로 끊겨도 호출 수를 센다)
+    got = await asyncio.gather(
+        _ask(window, target, [], llm, act_config(cfg), deadline, kb_snippet, 0),
+        _ask(window, target, [], llm, cfg, deadline, kb_snippet, 0),
+        return_exceptions=True,
+    )
+    b, c = (None if isinstance(g, BaseException) else g for g in got)
+    if trace is not None:
+        trace["ensemble"] = ",".join(v or "-" for v in (first, b, c))
+    return veto_release(first, b, c, frozenset(cfg.block_categories)) or first
 
 
 async def _ask(

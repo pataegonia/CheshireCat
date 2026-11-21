@@ -140,6 +140,8 @@ class InputCfg(_Strict):
     label_mode: Literal["category", "act", "flags"]
     # 1차를 3표(지금 1차·요청 유형·예시 없음)로. 실험, 기본 끔(results/2026-11-19-zero-call-checks)
     ensemble: bool
+    # 1차가 jailbreak_injection·off_topic일 때만 B·C를 더 불러 둘 다 허용이면 푼다. 실험, 기본 끔
+    block_veto: bool
     window_last: int
     max_chars: int
     max_answer_chars: int
@@ -215,6 +217,8 @@ class GuardConfig(_Strict):
         if t.third_call and not (t.knn_vote and t.lr):
             raise ValueError("toggles.third_call은 knn_vote·lr이 둘 다 켜졌을 때만 켤 수 있다")
         # rules.py는 요청 때 NotImplementedError를 낸다. 기동 때 막는다(rules를 import하면 순환)
+        if self.input.ensemble and self.input.block_veto:
+            raise ValueError("input.ensemble과 input.block_veto는 함께 켤 수 없다")
         o = self.output
         if "bare_numeral" in o.rule_extra_tokens:
             raise ValueError("output.rule_extra_tokens의 bare_numeral은 미구현이다")

@@ -1,0 +1,79 @@
+# 후보 A 실험 설정(11/22, 실제 제출 A/B용): config/tutor.yaml과 multi_draft.drafts의 세 번째 초안 한 줄만 다르다(tests/tutor/test_medium_draft_config.py가 확인). 튜터 프로세스를 TUTOR_CONFIG=config/tutor_medium_draft.yaml로 띄운다. 기본 판(저장소 설정)은 바꾸지 않는다.
+# 튜터 설정(TU-14). 형식은 가드 GR-11과 같다: 모든 키가 필수이고 모르는 키는 로드에서 실패한다.
+# 기동 때 한 번 읽는다(tutor.startup). ablation 프리셋은 이 파일 위에 깊은 병합한다(통합 하네스 IN-06).
+# 요청 예산은 가드 설정 budget_s × 이 파일의 budget_scale이다. judge_skip_s·fallback_action은 config/runtime.yaml(통합)에 있다.
+# 키·주소는 여기에 쓰지 않는다(.env 환경변수). 값은 엄격히 본다: off는 따옴표로("off", YAML에서 off는 false).
+version: "tutor-1"
+mode: v2                       # v2 | baseline(검색 상위 3개 + 일반 튜터 프롬프트 1회 + 형식 후처리, 토글은 모두 끔)
+budget_scale: 1.0              # 튜터 요청 예산 = 가드 설정 budget_s(24) × 이 값(1.0–1.5, 26초에서 자른다) = 24초(안전망 3초를 더해 최악 27초). 실험(exp/guard-budget-24): 가드 budget_s를 20 → 24로 올리면서 1.2 → 1.0으로 내려 튜터 예산은 24초 그대로다. 아래는 1.2였을 때의 기록: 11/19 리더 결정으로 실제 제출에 쓴 판(tutor/t2.34-english-on 5bda8be)과 맞춰 켬. 이득을 잰 것은 아니다: 예산 24초·겹쳐 보내기를 켠 구성을 그때 제출 판과 견준 11/18 제출 5대5에서 점수 차이를 찾지 못했고 /guard p50이 제출 1회 평균 0.4초 길었다(결과 문서 2026-11-18-budget-hedge-experiments.md 10절)
+toggles:
+  name_dict: false             # 이름 사전(TU-04). 순위 올리기 방식은 채택 안 함(#81: recall@1 하락). 힌트 방식은 이름 사전 코드가 없어 #82에서 재지 못함(이어서 할지는 #81)
+  fewshot: "off"               # "off" | fixed | knn. 공개 세트 판단 예시(TU-08). 끔 / 고정 / kNN을 3회씩 비교해 순이득이 있을 때만 켠다
+  action_from_category: false  # 범주 → action 표 강제. 켜도 answer 쪽으로는 덮지 않음(TU-06). 측정 후 미채택(#82, 11/15 교차 검증 160행 판정 포함 3회, 기준 80.26): 81.14로 분산 안, 낸 범주의 오답은 못 고치고 scaffold → answer 9 → 16
+  signals: true                # 결정적 신호 힌트(TU-05)
+  verify: "off"                # off | guard. 가드 judge_output 검증(TU-09). self(자체 검증)는 만들지 않음(#83, 로드에서 거부). 11/14 리더 결정으로 #170(S2.11) 머지 뒤 런박스 켬/끔 3회 비교 전까지 끔: 모의 부하·#170 리뷰 측정에서 지연이 크게 늘고 튜터 5초 제한으로 대부분 건너뛰는데, 건너뛴 호출도 nano는 이미 나간다
+  guard_classify: "off"        # off | serial | parallel. 가드 classify 합치기(TU-10). 11/14 리더 결정으로 verify와 같은 까닭에 같은 비교 전까지 끔(켜면 parallel)
+  jailbreak_needs_signal: false  # classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05)가 없으면 주 호출을 덮지 않는다(TU-10). 11/15 가드 비교에서 오차단이 모두 "수업의 공격 기법을 배우는 정상 질문" → refuse였다. 3회 비교 뒤 정한다
+  embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
+  english_embedding: true      # 영어 발화(한글 없이 라틴만)에는 임베딩 순위만으로 검색하고(BM25와 섞지 않음), 자료 밖 확인 E를 oom_gate 모드와 상관없이(off 제외) 임베딩 근거 묶음으로 부르며, 규칙 A 재검색에도 임베딩을 쓴다. toggles.embedding이 꺼져 있어도 이 토글이 켜지면 기동 때 KB 임베딩을 만든다. oom_gate가 off면 로드에서 거부한다. 11/18 런박스(영어 문항 × 5회, 두 번): 대조 세트 영어 answer 15 → 60/60·정답 절 인용 15 → 52~55/60, 공개 영어 정상 action 51~53 → 54~55/60, 공개 영어 자료 밖 abstain 14~15 → 14(조용할 때)·11(E 시간 초과가 많던 때)/15(결과 문서 2026-11-18-budget-hedge-experiments.md 6절). 11/19 리더 결정으로 켬: 같은 코드에 이 줄만 다른 실제 제출 5대5(같은 문서 11절)에서 튜터 +1.54(5쌍 중 4쌍)·가드 −1.64(경로 못 찾음)·총점 −0.05
+  rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
+  vote: false                  # action 투표(병렬 3회). 요청당 호출 상한(TU-13)을 넘어 만들지 않음(#83, true는 로드에서 거부)
+  cite_top1: true              # 인용이 있는데 검색 1위 섹션이 빠졌으면 1위를 뒤에 더한다(TU-07). 켜면 인용이 max_citations + 1개까지. 11/15 런박스 짝 비교(같은 답의 끔·켬)로 켬: 판정 없이 인용 F1 +0.034·+0.024, 판정 포함 튜터 +0.31점·충실 하락 0
+  top1_dialog_query: true      # cite_top1이 더할 1위를 창 안의 튜터 발화까지 넣은 질의(규칙 A)로 다시 검색해 고른다. 주 호출 근거 묶음은 그대로, LLM 0회, BM25 1회 추가. 호출 없이 잰 검색 1위 83 → 92/97(개발, 2026-11-18). 개발 재생에서 인용 오름 9·내림 0, 제출 86.05 → 86.61로 내려간 흔적 없음(결과 문서 7.10절)이라 켬(11/18)
+  scaffold_state_rule: false   # answer_seeking에서 정답 사실을 먼저 밝힘(true) / 숨김(false)(TU-06). true면 과제 대행 보정(flow.delegation_guard)도 켠다(숨김에서는 delegation_override로 켠다). 11/14 측정으로 숨김(전체 이득 없음, 과제 대행 행 0점 증가). T3에서 운영진 답(§11-1-4)과 함께 다시 본다
+  delegation_override: true    # 동결 설정 켬(11/18, 리더 결정: main 대비 판정 포함 +4.3~5.4 묶음). 대행 신호(TU-05 DELEGATION)가 잡히면 주 호출의 answer·scaffold를 academic 고정 scaffold로 바꾼다(숨김에서도, 주 호출 실패 기본값 포함, TU-06). abstain·더 강한 action은 그대로, 위기·지시 무력화 신호나 classify 위기·공격 범주가 있으면 덮지 않음. main 설정은 끔이고 동결 설정(이 파일)에서 켠다. 켜기 전 조건은 PRD TU-06(교재 인용 오탐 예외, 행 단위 짝 계산)
+  fallback_quote: true         # 동결 설정 켬(11/18, T 관문과 함께). 주 호출 실패이고 신호가 없으며 classify가 normal·없음이면 clarify 대신 검색 1위 섹션에서 질문과 가장 겹치는 문장 1–2개를 옮긴 자료 인용 답(answer + 그 섹션 인용, LLM 0회, TU-12, #201 A-2). Q.·A.·표·코드 블록 줄은 옮기지 않음. main 설정은 끔이고 동결 설정(이 파일)에서 켠다. 켜기 전 조건은 PRD TU-12: classify 실패·시간 초과도 없음과 같아 같은 위험, classify 끔에서는 T 의도 이름표 관문(#220) 뒤
+  quote_append: true           # 동결 설정 켬(11/18, #225). 최종 answer에 첫 인용 섹션에서 질문과 가장 겹치는 자료 문장(최대 2개, tutor.answer.quote.quote_sentences)을 "자료에는 이렇게 나와 있어요:" 뒤에 덧붙인다. 답에 이미 있는 문장은 빼고, 4,000자를 넘으면 그대로. action·인용은 그대로, LLM 0회(TU-07). 11/17 런박스: 사실 손실(정답 섹션 인용 + 사실 빠짐) 2.2 → 1.0점, 시간대 맞춘 6대6 +2.1(빈 답 안내에도 붙이던 판, 동결 묶음 위. 빈 답 안내를 뺀 지금 판은 동결 묶음 + #222 T 프롬프트 위 같은 시간대 3대3 +0.63). main 설정은 끔이고 동결 설정(이 파일)에서 켠다
+  quote_from_top1: true        # 동결 설정 켬(11/18). quote_append가 붙일 자료 문장을 첫 인용 대신 cite_top1이 뒤에 더한 1위 섹션(top1_dialog_query면 규칙 A 1위)에서 고른다. 인용이 max_citations보다 많을 때만(그때 마지막 인용이 더한 1위), action·인용은 그대로, LLM 0회. main(`972c309`) 개발 판정 포함 3회(교차 검증 160행)의 answer 응답을 합쳐 보면 cite_top1이 1위를 더한 응답이 34건이고, 그중 32건은 첫 인용이 정답 섹션이 아니고 더한 1위가 정답 섹션이었다(이 32건 사실 평균 0.625). 나머지 2건은 둘 다 정답 섹션이 아니었고, 첫 인용만 정답인 경우는 없었다(공개 세트 정답은 이 오프라인 확인에만 썼고 규칙 조건에는 쓰지 않는다, TD-10). 켠 판을 같은 방법으로 3회 재어 main 3회와 견주면 그 갈래 사실 평균 0.625 → 0.882, 충실 0.969 → 0.824, 튜터 89.65 → 88.75(87.97 · 89.48 · 88.80). 차이를 문항별로 가르면 토글이 바꿀 수 있는 24문항이 +0.19점, 바꿀 수 없는 136문항이 −1.09점(측정 흔들림)이다
+  intent_override: "serial"    # 동결 설정 serial(11/18, 리더 결정). "off" | parallel | serial. T 의도 판정(#209 프롬프트) nano 1회, 이름표로 주 호출 action을 덮는다(tutor.judge.intent.decide, TU-06). parallel은 주 호출과 동시에, serial은 T 먼저(guard_classify off에서만) · refuse 고정 문장(유해-실행·탈옥)과 위기 이름표면 주 호출 없이 내고, redirect·scaffold 고정 문장 이름표는 주 호출도 불러 성공하면 parallel과 같은 규칙으로 정한다(실패면 T 고정 문장, #233). 11/17 런박스(교차 검증 160행, 판정 포함): 대행 덮기 + 자료 인용 답 위에 serial을 켜면 82.76 → 85.79, T가 덮을 수 있던 행 고침 17 · 망침 3. 혼합 부하(가드 300 + 튜터 300, 동시 64) 시간 초과 0, /guard p95 7.27~7.47초. main 설정은 끔이고 동결 설정(이 파일)에서 켠다
+  oom_gate: "named_term"       # 동결 설정 named_term(11/18, 리더 결정: 최종 후보 위 3대3에서 자료 밖 고침 5·망침 0, E가 abstain으로 바꾼 8행 모두 정답 abstain). "off" | all | named_term. 자료 밖 확인 E(#213 B2의 E, tutor/prompts/oom_check.md = #162 v0): 주 호출과 동시에 nano 1회, 최종 answer인데 E가 "근거에 없음"이면 자료 밖 고정 문장. 한글 없이 라틴만 있는 발화는 부르지 않음. named_term은 판단 대상에 KB에 없는 이름 붙은 말(규칙·지수·등급 …)이 있을 때만 부름. 마감은 llm.timeout_s.oom_gate. main 설정은 끔이고 동결 설정(이 파일)에서 켠다
+  oom_schedule: "after_intent_fresh" # 동결 설정 after_intent_fresh(11/18). with_request | after_intent | after_intent_fresh. E를 보내는 때(oom_gate가 켜졌을 때만). with_request는 요청 시작 때. after_intent는 직렬 T가 주 호출 없이 끝낼 요청(refuse·위기 고정 문장)에는 E를 보내지 않고 주 호출 직전에 보낸다(E 마감은 요청 시작부터). after_intent_fresh는 같은 순서에 E 마감을 E 시작부터 센다(요청 마감 안). 개발 160 기준 oom_gate: all에서 E 호출 3~4%를 덜 보낸다(T가 끝내는 요청). main 설정은 with_request
+  reverse_question: "off"        # 실험(exp/tutor-specialists). 런박스 개발 세트 shadow 4회: 고치는 행 5, 망치는 행 22라 끔(11/20). "off" | shadow | on. 최종 answer이고 판단 대상에 코드 블록이 없으면 답 문장만으로 "이 답이 답하는 질문"을 되살리고(nano minimal) 학습자 질문과 견준다(nano minimal). 다른 속성·다른 대상(신뢰도 llm.reverse_question.min_confidence 이상)이면 on에서 자료 밖 고정 문장(abstain). shadow는 판정만 기록. 요청당 nano +2(answer일 때만)
+  soft_jailbreak_draft: "off"    # 실험. 런박스 개발 세트 shadow 4회: 정답이 answer인 행 하나를 4회 모두 고쳤고, 정답이 refuse인 행에는 답한 적 없어 켰다가(11/20), 실제 제출에서 켠 판(B)이 끈 판(A)보다 −0.66(B−A)이라 끔(11/20, exp/tutor-cite-vote). "off" | shadow | on. 결과가 지시 무력화 신호 없는 탈옥 거절(refuse 고정 문장)이면 같은 주 호출 메시지에 "정상 범주로 보고 개념만 설명" 지시를 더한 low 초안의 답·인용을 on에서 낸다(무효면 거절 그대로). 주 호출이 끝난 뒤에 띄운다(거절은 고른 주 호출 초안이 정해, 띄울 때는 조건을 모른다). 요청당 nano +1(거절일 때만, rq와 겹치지 않는다)
+  mention_marker: "off"          # 실험. shadow 4회에서 트리거가 너무 적어 판단하지 못해 끔(11/20). "off" | shadow | on. T가 유해-비하인데 판단 대상에 언급 표지(따옴표, "~라는 문장·댓글·표현…" 꼴)가 있으면 on에서 T 고정 문장 대신 주 호출 결과를 쓴다. 호출 0회
+  inline_cite: false           # 답변 끝 (섹션 ID) 표기. 켜면 citations와 같은 ID를 붙인다(TU-07). 측정 후 미채택(#82, 11/15 교차 검증 160행 판정 포함 3회, 기준 80.26): 81.72로 범위가 겹침. 주 호출 뒤 후처리라 프롬프트가 같아 차이는 측정 잡음
+  evidence_check: false        # 주 호출이 범주보다 먼저 "묻는 내용이 근거 묶음에 있는가"(asked_in_evidence)를 쓴다(TU-06, #162). 판단 보조일 뿐 action을 덮지 않는다. 3회 비교 뒤 정한다
+  max_citations: 1             # 1 | 2. 공개 세트 근거 2개 행 0(#82 사전 집계)이라 2는 이득 없어 켜지 않음(TU-07). 실전 2근거 문항은 점검 세트(#80)에서 본다
+fewshot:                       # 판단 예시 고르기(TU-08). 가드 GR-05 input.knn과 같은 값
+  ngram: [1, 3]                # 문자 n-gram(char_wb) 범위
+  max_examples: 8              # knn 전체 상한(4–8)
+  per_category: 2              # knn 범주당 상한
+  with_answer: false           # 예시에 정답 답변도 붙이는가. 기본 끔(다른 섹션 사실이 섞이고 answer_seeking 숨김 방식과 충돌), ablation
+retrieval:
+  k: 5                         # 근거 묶음 섹션 수. recall@5 = @8 = 0.958(#81), 판정 3회 비교에서 3은 분산 안(11/13)
+answer:
+  max_sentences: 3             # 1–3문장 기본(상한 아님, TU-06)
+llm:
+  reasoning_effort: low        # low | medium. minimal 금지(TU-13). 가드 probe가 끈 파라미터는 보내지 않는다. medium은 측정 후 미채택(#82, 11/15 교차 검증 160행 판정 포함 3회, 기준 80.26): 상한 2000 안에 들지 않아 length로 311회 기본값, 51.72
+  max_completion_tokens: 2000  # 주 호출 상한(추론 토큰 포함) = 운영진 프록시 상한(넘기면 400, 로드에서 실패). 11/14 런박스 실측(교차 검증 160행, 판정 없이 1회씩): 1600에서 length 1회(기본값으로 나감), 2000에서 0회·1600을 넘겨 성공 3회, 요청 지연 최대 14.6초(당시 주 호출 15초 안). 상한까지 가는 호출만 영향받는다. 가드 판정 호출 상한(가드 설정 1600, #149)과 따로 정한다
+  timeout_s:                   # 호출당 시간 제한(TU-13). 주 호출은 T1 실측으로 정함
+    main: 18                   # 주 호출. 보낸 시각부터 센다. 8 → 15초(#73: 8초는 v2 출력이 길어 재시도 36%). 15 → 18초(11/15 점검 세트 판정 없이 2회: 15초에서 비교·계산 질문 4/98이 시간 초과로 기본값 clarify, 18초에서 0). 요청 예산(가드 budget_s 24 × budget_scale 1.0 = 24) 안에 2초 이상 남긴다. serial T면 T가 최대 8초를 먼저 써서 주 호출 창은 약 16초다(min(18, 남은 시간))
+    main_hedge: 12             # 주 호출이 이 시간 안에 안 끝나면 두 번째 주 호출을 겹쳐 보낸다(먼저 성공한 쪽을 쓴다). main 이상으로 두면 끔. 11/19 리더 결정으로 budget_scale 1.2와 함께 실제 제출에 쓴 판(5bda8be)과 맞춰 켬. 11/18 런박스 짝 비교(12초, 예산 24와 함께, 7회 2,338요청): 대체 답으로 나간 요청 58 → 22. 같은 날 제출 5대5에서는 점수 차이가 없었다(결과 문서 2026-11-18-budget-hedge-experiments.md 10절)
+    classify: 5                # 가드 classify(주 호출과 병렬). 부른 때부터 센다, 게이트 대기 포함
+    verify: 5                  # 검증·judge_output
+    embedding: 2
+    intent: 8                  # T 의도 판정 호출(toggles.intent_override). 11/16·17 런박스 동시 8에서 p50 2.0~2.4·p95 3.3~4.4초. 11/17 저녁 5초로 줄인 판정 포함 측정에서 T 시간 초과가 0 → 1~5회/160행으로 늘어 8초로 둔다(리더 결정). serial은 주 호출 앞에서 이 제한까지 기다리고, parallel은 주 호출이 먼저 끝나도 이 제한까지는 기다린다
+    intent_wait: 8             # 직렬 T가 주 호출을 붙잡는 최대 시간. 그 안에 T가 안 오면 T를 취소하지 않고 주 호출을 먼저 보내 parallel 규칙으로 정한다. intent 이상이면 지금처럼 T 제한까지 기다린다(끔). 3초는 마감을 넘는 요청을 더 줄이지만(약 33 → 21) 모의 혼합 부하에서 /guard p95가 0.9~2.4초 늘어 끈 채로 둔다(11/18)
+    oom_gate: 9                # 자료 밖 확인 E. E 시작(검색 직후)부터 센다(#213 B2: 마감 없을 때 동시 64에서 20초 넘김 6.9%, 9초 마감으로 실제 제출 시간 초과 0). 넘으면 흐름 결과 그대로
+  multi_draft:                 # 실험(exp/tutor-multidraft): 주 호출 초안 여러 개를 같은 근거 묶음으로 동시에 보내고 모델 호출 없이 고른다(tutor.judge.multi_draft). 켜면 main_hedge는 쓰지 않는다. 초안 A = 지금의 주 호출(low, 재시도 그대로), 나머지 재시도 0. 요청당 nano 최대 6회(A 2 + B 1 + C 1 + T 1 + E 1): 팀 규칙 TU-13(4회)을 넘어 main에 넣으려면 튜터 담당 동의가 필요하다. false면 지금과 같다
+    enabled: true
+    drafts:                    # 첫 번째는 low여야 하고 스트림 아닌 medium은 하나까지(요청당 nano 8회까지 로드). timeout_s가 없으면 timeout_s.main. 초안마다 stream: true·max_tokens(예 6000)를 주면 스트리밍으로 보낸다(프록시 2000 상한은 비스트림만, 기본 끔). 런박스 개발 세트 튜터만: [low, low, medium]에서 medium 초안이 출력 2000토큰 상한에 66% 잘렸다. [low, low, low]는 튜터 점수 91.29 ± 0.94(4회), 끄면 89.92 ± 1.82(6회). 같은 요청 안에서 고르기가 action 12개를 고치고 4개를 깼다
+      - {effort: low}
+      - {effort: low}
+      - {effort: medium, stream: true, max_tokens: 6000}   # 후보 A: 세 번째 초안만 medium 스트림 6000토큰(재시도 0, 마감 = 요청 마감 − margin_s, 늦거나 실패하면 low 초안 둘로 고른다)
+    wait_s: 17                 # 초안 시작부터 이만큼 지나거나 요청 마감 − margin_s가 되면 유효한 초안으로 고른다(유효한 것이 없으면 하나가 올 때까지 마감 안에서 기다린다)
+    abstain_if_any: "off"      # off | shadow | on(실험). 켰다가 실제 제출에서 켠 판(C)이 끈 판(A)보다 −0.50(C−A)이라 끔(11/20, exp/tutor-cite-vote). 고른 action이 answer인데 유효한 초안 하나라도 abstain이면 abstain 초안(순서상 첫 번째)으로 바꾼다. 고른 action이 answer 밖이면 건드리지 않는다. 개발 세트 4회 초안별 action: 정답 abstain 행은 abstain 초안 0/3이 33건, 1/3이 10건, 2/3이 8건, 3/3이 13건. 정답 answer 행은 0/3이 359건, 1/3이 1건, 2/3이 1건, 3/3이 2건이라 abstain 초안 하나만 있어도 abstain일 가능성이 크다(11/20). 호출 0회
+    cite_rule: pick            # pick | vote | pick_drop_lone | pick_add_vote(실험, 호출 0회). 응답이 고른 초안에서 그대로 나갈 때만(T·E·고정 문장이 바꾸면 그대로) 인용 목록만 초안끼리 합쳐 고친다. 답·action은 그대로. pick = 고른 초안의 인용(지금). vote = 고른 action과 같은 유효한 초안 2개 이상이 인용한 섹션(비면 pick). pick_drop_lone = pick에서 같은 action의 다른 초안이 인용하지 않은 섹션을 뺀다(비면 pick). pick_add_vote = pick ∪ vote. single_model = pick의 모델 인용만(cite_top1 추가 빼기, 모델 인용이 없으면 pick). single_support = 인용이 2개 이상이면 같은 action 초안 목록에 가장 많이 든 섹션 하나(동률이면 pick), single_support_model = 같은 계산을 모델 인용으로. single_agree = 같은 action 초안의 모델 인용이 모두 같으면 그것만. top1_only = 인용이 2개 이상이고 cite_top1이 더하는 섹션이 들어 있으면 그것만. 오프라인 재생은 tutor.eval.cite_replay
+    prefer_top1: "on"          # off | on(실험, 호출 0회). 런박스 개발 3회 실측(11/20): 바뀐 요청 회당 2~5건, 바뀐 8개 id 점수 .767→.858, 내린 id 0이라 켬. 고른 초안의 모델 인용(확인된 근거)에 cite_top1 섹션이 없고 action이 같은 다른 초안의 모델 인용에 있으면 그 초안으로 바꾼다(답·문장·인용 모두 그 초안, 여럿이면 고르기 순서). 바꾼 초안이 뒤 단계에서 같은 action·범주를 낼 때만, 가드 판정(verify)을 돌린 요청에서는 바꾸지 않는다. 개발 재생: 2개 인용 중 1개 정답인 84행 중 83행에서 정답이 1위였다(11/20)
+    top1_redraft: "on"         # 런박스 개발 3회(11/20): on 89.64·91.51·91.04, parallel 90.05·89.74·91.09, prefer_top1만 89.69·90.57·90.21. on이 쓰인 13개 id 오름 8·내림 0이라 on을 켬. off | on | parallel(실험, nano +1). parallel은 주 호출이 도는 요청마다 규칙 A 1위 섹션 하나만 근거로 둔 초안을 정규 초안과 함께 띄우고(고르기·다수결 밖) 아래 조건이 맞을 때만 같은 규칙으로 쓴다(마감까지 안 오면 late, 조건이 안 맞으면 not_needed). on은 고르기(prefer_top1 포함) 뒤 고른 초안이 answer인데 그 초안도 같은 action의 다른 초안도 cite_top1 섹션을 확인된 근거로 쓰지 않았고 응답이 assemble 경로로 나가면, 근거 묶음을 그 섹션 하나로 줄인 low 초안을 한 번 더 부른다(같은 프롬프트·스키마, 재시도 0, 마감 = 요청 마감 − margin_s, 남은 시간이 4초 밑이면 부르지 않음). 유효하고 answer·같은 범주이며 그 섹션을 확인된 근거로 쓰면 그 초안의 답·인용을 쓴다
+    top1_redraft_abstain: "on"  # 런박스 개발 3회(11/20): 90.94·90.00·91.67, used_abstain 5행 중 정답 abstain 4(2개 id)·answer 1. 앞선 6회 기록의 rejected:action 8행 중 정답 abstain 7. off | on(실험, 호출 0회 추가). top1_redraft 초안이 유효한 abstain이면(고른 초안은 answer) 그 초안을 고른 abstain 초안처럼 뒤 단계(T·합치기·후처리·E)에 넘겨 낸다(md_redraft = used_abstain). 개발 6회: rejected:action 8행 중 정답 abstain 7(11/20)
+    margin_s: 3                # medium 초안의 마감 = 요청 마감 − 이 값. 기다리기 끝도 같다(뒤 단계·E 기다림 몫)
+  reverse_question:            # toggles.reverse_question 호출 둘. minimal은 이 단계에만 허용(TD-06 예외, 튜터 담당 동의 전 실험)
+    effort: minimal
+    timeout_s: 4               # 호출 하나 상한
+    margin_s: 1                # 두 호출 모두 요청 마감 − 1초 안에 끝낸다. 남은 시간이 없으면 부르지 않는다
+    min_confidence: 4          # B 신뢰도가 이 값 이상일 때만 abstain
+  soft_jailbreak_draft:        # toggles.soft_jailbreak_draft 추가 low 초안(시간 상한은 timeout_s.main)
+    margin_s: 1                # 초안은 요청 마감 − 1초 안에 끝낸다
+eval:
+  max_calls: 5000              # 개발 실행 운영진 API 호출 상한(TU-14, 가드 GR-11과 같음)

@@ -856,3 +856,53 @@ def test_stream_limit_covers_the_whole_stream_and_closes_it():
 
     result = asyncio.run(go())
     assert result.error == "timeout" and result.attempts == 1 and stream.closed
+
+
+class BrokenStream(Stream):
+    """조각 몇 개를 준 뒤 연결이 끊긴다(운영진 프록시 중간 종료)."""
+
+    async def _gen(self):
+        for c in self.chunks:
+            yield c
+        raise openai.APIConnectionError(request=REQ)
+
+
+def stream_call(stream):
+    send = Send(stream)
+    llm, clock = make(send, src=base({**GUARD_PARAMS, "max_completion_tokens": 1600}))
+    result = asyncio.run(
+        llm.complete(
+            "main_c",
+            [],
+            Out,
+            deadline=clock() + 20,
+            timeout_s=8,
+            retries=0,
+            effort="medium",
+            stream=True,
+            max_tokens=6000,
+        )
+    )
+    return result, llm
+
+
+def test_stream_cut_mid_way_is_a_server_error_and_the_stream_is_closed():
+    stream = BrokenStream(chunk('{"answer"'))
+    result, llm = stream_call(stream)
+    assert result.parsed is None and result.error == "server"
+    assert stream.closed  # 끊긴 스트림도 닫는다
+    assert llm.attempt_errors[("main_c", "server")] == 1
+
+
+@pytest.mark.parametrize(
+    ("chunks", "cause"),
+    [
+        ((chunk('{"answer": '), chunk("not json"), chunk(finish="stop")), "schema"),  # 잘못된 JSON
+        ((chunk(finish="stop"), chunk(tokens=300)), "no_content"),  # 내용 조각 없음
+        ((chunk(""), chunk(finish="stop")), "schema"),  # 빈 문자열만
+    ],
+)
+def test_bad_or_empty_stream_content_is_a_bad_json_attempt(chunks, cause):
+    result, llm = stream_call(Stream(*chunks))
+    assert result.parsed is None and result.error == "bad_json"
+    assert llm.attempt_errors[("main_c", cause)] == 1

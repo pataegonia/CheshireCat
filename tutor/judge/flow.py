@@ -30,6 +30,7 @@
 """
 
 import asyncio
+import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from types import SimpleNamespace
@@ -102,6 +103,9 @@ from tutor.retrieval import Section as RetrievedSection
 from tutor.retrieval import retrieve
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
+# 가드 접근 로그(guardrail.access, INFO)의 하위 로거. 여러 초안의 상태·고른 번호만 한 줄씩 남긴다
+# (요청 내용 없음). "/tutor" 글자를 넣지 않아 요청 수 세기와 섞이지 않는다
+draft_log = logging.getLogger("guardrail.access.multi_draft")
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
 MAIN_HEDGE_ROLE = "main_hedge"  # 겹쳐 보낸 두 번째 주 호출(따로 센다)
 HEDGE_MIN_LEFT_S = 4.0  # 요청 마감까지 이보다 덜 남았으면 겹쳐 보내지 않는다(끝낼 수 없다)
@@ -438,6 +442,9 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None]):
         await multi_draft.wait_drafts(tasks, cut=cut, deadline=deadline, valid=valid)
         ended = loop.time()
         results = [t.result() if t.done() and not t.cancelled() else None for t in tasks]
+        # 초안별 상태만(v 유효 · f 실패·무효 · l 기다리기 끝까지 안 옴). 본문 없음(SPEC §8)
+        states = "".join("l" if r is None else ("v" if valid(r) else "f") for r in results)
+        draft_log.info("multi_draft drafts=%s", states)
         for i, (spec, result) in enumerate(zip(md.drafts, results, strict=True)):
             runs.append(main_call.clean(result.parsed) if result and valid(result) else None)
             if shadow is not None:
@@ -475,6 +482,7 @@ def _pick_draft(state: Any, draft: Draft, runs: Sequence[MainCallOut | None]) ->
         rec.after = rec.before if alt is None else runs[alt].action  # type: ignore[union-attr]
         if alt is not None and aa_mode == "on":
             rec.changed, chosen = True, alt
+    draft_log.info("multi_draft chosen=%s", "none" if chosen is None else chosen)  # 번호만
     shadow = multi_draft.SHADOW.get()
     if shadow is not None:
         actions = {o.action for o in runs if o is not None}

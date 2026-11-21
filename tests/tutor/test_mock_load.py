@@ -595,7 +595,7 @@ def test_summary_prints_numbers_only_and_judges_the_bar(capsys):
     assert (
         "가정: 튜터 모드 v2, 가짜 지연 튜터 주 호출 p50 4.9초·p95 8.3초"
         "·가드 판정 p50 4.51초·p95 6.62초(배율 0.001)"
-        ", 가드 판정 최대 2회 병렬(읽기 제한 12초·마감 20초), 게이트 64, 동시 64"
+        ", 가드 판정 최대 2회 병렬(읽기 제한 11초·마감 24초), 게이트 64, 동시 64"
         ", 튜터 가드 단계 classify 끔·judge_output 끔\n" in out
     )
     assert f"튜터 {report.llm_calls}회" in out  # 튜터는 직접 판정을 뺀 수

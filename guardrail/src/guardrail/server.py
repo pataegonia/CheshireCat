@@ -4,6 +4,7 @@
   응답은 `judgement.response.to_json(block)`.
 - 인증 실패(401)를 뺀 모든 경로가 200 + 규격 응답이다. 422를 내지 않는다(본문 반사 방지).
 - 로그는 한 줄 7필드(시각, 경로, 요청 바이트, 응답 바이트, 상태, ms, 오류 클래스)뿐이다.
+  판정이 끝난 /guard 줄에만 8번째 칸(호출 기록, `_call_field`)이 붙는다. 숫자와 코드뿐이다.
   요청·답변 본문, 예외 메시지, 트레이스백을 남기지 않는다(실격 조건).
 - 팀 앱은 `include_router(router)`로 붙이고 lifespan은 `FastAPI(lifespan=...)` 생성자에 준다.
   `mount()`로 붙이면 하위 앱 lifespan이 돌지 않아 기동 검사가 빠진다(그래도 401로 닫힌다).
@@ -28,7 +29,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from guardrail.config import GuardConfig, load_config
 from guardrail.guard import ConstantGuard, Guard, Judgement
-from guardrail.llm import openai_env
+from guardrail.llm import CALL_LOG, CallStat, openai_env
 from guardrail.schema import Category, GuardRequest, GuardResponse, OutputVerdict, parse_request
 
 access_log = logging.getLogger("guardrail.access")
@@ -36,7 +37,7 @@ startup_log = logging.getLogger("guardrail.access.startup")  # 같은 핸들러�
 LOGGED_PATHS = frozenset({"/guard", "/tutor"})  # 그 밖의 경로는 "other"(경로도 요청이 정한다)
 UNAUTHORIZED = {"error": "unauthorized"}
 MAX_BODY_BYTES = 4 * 1024 * 1024  # 요청 본문 상한. 넘으면 읽기를 멈추고 기본값(GR-09)
-BACKSTOP_MARGIN_S = 5.0  # 판정기 마감(budget_s) 위의 서버 안전망. 20 + 5 < 규격 30초
+BACKSTOP_MARGIN_S = 5.0  # 판정기 마감(budget_s) 위의 서버 안전망. 24 + 5 = 29 < 규격 30초
 SAFE_DEFAULT = {  # 기본 응답을 만들다 실패해도 내는 마지막 값(output은 넣는 쪽)
     "input": {"decision": "allow", "category": "normal"},
     "output": {"grounded": True, "unsupported": [], "safe": True, "category": "normal"},
@@ -152,9 +153,12 @@ async def guard_route(request: Request) -> JSONResponse:
     raw: bytes | None = None
     try:
         raw = await _read_body(request)
+        stats: list[CallStat] = []
+        CALL_LOG.set(stats)  # 이 요청의 nano 호출 기록(라우트 태스크 안에서만 보인다)
         async with asyncio.timeout(state.cfg.budget_s + BACKSTOP_MARGIN_S):
             judgement = await state.guard.judge(parse_request(raw))
         body = judgement.response.to_json(state.block)
+        request.state.detail = _call_field(judgement, stats)
         # 200이어도 기본값으로 떨어진 판정을 로그에서 센다. 코드뿐이다(역할·예외 클래스 이름)
         request.state.error = ",".join(judgement.errors) or None
     except Exception as exc:  # 메시지는 남기지 않는다(GR-12)
@@ -233,6 +237,26 @@ def _int_header(value: str) -> int:
     return int(value) if value.isascii() and value.isdecimal() else 0
 
 
+def _call_field(judgement: Judgement, stats: Sequence[CallStat]) -> str:
+    """로그 8번째 칸: `calls=시작한 nano 수;prep=ms;llm=ms[;out=med|low|default]` 뒤에 끝난 호출마다
+    (끝난 순서) `;역할=걸린 ms/보낸 횟수/오류 코드(없으면 -)/게이트 대기 ms`. 공백이 없고
+    숫자·역할·코드뿐이다.
+    """
+    stage = judgement.latency_ms
+    parts = [f"calls={judgement.calls}"]
+    parts += [
+        f"{name}={stage[key]:.0f}"
+        for name, key in (("prep", "prepare"), ("llm", "llm"))
+        if key in stage
+    ]
+    if judgement.output_source:  # output.medium_parallel: 쓴 출력 판정(med·low·default)
+        parts.append(f"out={judgement.output_source}")
+    parts += [
+        f"{role}={ms:.0f}/{n}/{error or '-'}/{gate:.0f}" for role, error, n, ms, gate in stats
+    ]
+    return ";".join(parts)
+
+
 def _log_line(request: Request, status: int, resp_bytes: int, started: float) -> None:
     path = request.url.path if request.url.path in LOGGED_PATHS else "other"
     req_bytes = getattr(request.state, "req_bytes", None)
@@ -241,7 +265,9 @@ def _log_line(request: Request, status: int, resp_bytes: int, started: float) ->
     error = getattr(request.state, "error", None) or "-"
     ms = (time.perf_counter() - started) * 1000
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    access_log.info("%s %s %d %d %d %.1f %s", ts, path, req_bytes, resp_bytes, status, ms, error)
+    detail = getattr(request.state, "detail", None)
+    tail = f"{error} {detail}" if detail else error  # 판정이 끝난 /guard 줄에만 8번째 칸
+    access_log.info("%s %s %d %d %d %.1f %s", ts, path, req_bytes, resp_bytes, status, ms, tail)
 
 
 async def _access_log(request: Request, call_next: Callable[[Request], Awaitable[Any]]) -> Any:

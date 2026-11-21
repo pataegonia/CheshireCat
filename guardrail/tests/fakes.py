@@ -69,7 +69,48 @@ class Boom:
 class Hang: ...
 
 
-Step = Ok | Timeout | ConnectFail | HttpStatus | Boom | Hang
+@dataclass(frozen=True)
+class Stream:
+    """stream=true 응답: 조각 내용을 차례로 낸다. 마지막 조각에 finish_reason(과 usage).
+    `hang_after`면 그만큼 낸 뒤 영영 기다린다(스트림 전체 한도 시험). `fail_after`면 그만큼 낸 뒤
+    읽기 시간 초과 예외."""
+
+    parts: tuple[str, ...] = ('{"evidence": "e", ', '"category": "normal"}')
+    finish_reason: str | None = "stop"
+    completion_tokens: int | None = None
+    hang_after: int | None = None
+    fail_after: int | None = None
+
+
+class FakeStream:
+    """openai AsyncStream 대용(choices 속성 없음, async for, close())."""
+
+    def __init__(self, step: Stream) -> None:
+        self.step = step
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def __aiter__(self):
+        s = self.step
+        for i, text in enumerate(s.parts):
+            if s.hang_after is not None and i >= s.hang_after:
+                await asyncio.Event().wait()
+            if s.fail_after is not None and i >= s.fail_after:
+                raise openai.APITimeoutError(request=_REQ)
+            last = i == len(s.parts) - 1
+            choice = SimpleNamespace(
+                delta=SimpleNamespace(content=text), finish_reason=s.finish_reason if last else None
+            )
+            yield SimpleNamespace(choices=[choice], usage=None)
+        if s.completion_tokens is not None:  # include_usage처럼 choices 없는 마지막 조각
+            yield SimpleNamespace(
+                choices=[], usage=SimpleNamespace(completion_tokens=s.completion_tokens)
+            )
+
+
+Step = Ok | Timeout | ConnectFail | HttpStatus | Boom | Hang | Stream
 
 
 class FakeClock:
@@ -96,6 +137,7 @@ class FakeLLM:
         self.steps = deque(steps)
         self.respond = respond
         self.requests: list[dict[str, Any]] = []
+        self.streams: list[FakeStream] = []
 
     async def send(self, kwargs: dict[str, Any]) -> Any:
         # 실제 전송처럼 UTF-8 JSON으로 직렬화한다(짝 없는 surrogate는 보내기 전에 실패)
@@ -133,4 +175,7 @@ class FakeLLM:
                 raise RuntimeError(step.message)
             case Hang():
                 await asyncio.Event().wait()
+            case Stream():
+                self.streams.append(FakeStream(step))
+                return self.streams[-1]
         raise AssertionError(f"알 수 없는 단계: {step!r}")

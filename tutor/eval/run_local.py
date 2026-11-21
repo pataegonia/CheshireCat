@@ -85,6 +85,8 @@ from tutor.eval.recall import (
 )
 from tutor.judge.examples import build_index, load_examples
 from tutor.judge.main_call import EVIDENCE_CHECK_PROBE
+from tutor.judge.multi_draft import SHADOW, Shadow
+from tutor.judge.specialists import STAGE_ROLES
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, ROOT, TutorConfig, load_config
@@ -161,6 +163,7 @@ async def _collect(
     state: Any,
     checks: dict[str, bool | None] | None = None,
     calls_log: list[int] | None = None,
+    shadows: dict[str, Shadow] | None = None,
 ) -> tuple[dict[str, Any], list[float]]:
     """한 실행의 (행 id → 응답, 요청마다 걸린 시간(초)). 실패한 요청도 시간을 잰다.
 
@@ -168,6 +171,8 @@ async def _collect(
 
     checks가 있으면 행마다 주 호출이 쓴 근거 대조 칸 값(#162)을 담는다. 주 호출이 칸을 내지
     않았으면(주 호출 실패, 주 호출 전에 끝난 요청, 칸 끔) None이다.
+
+    shadows가 있으면 행마다 주 호출 초안 기록(`llm.multi_draft`, 끄면 빈 기록)을 담는다.
     """
     slots = asyncio.Semaphore(metrics.WORKERS)
 
@@ -179,6 +184,8 @@ async def _collect(
             token = EVIDENCE_CHECK_PROBE.set(seen if checks is not None else None)
             sent: Counter[str] = Counter()  # 이 요청이 보낸 호출(재시도 포함)
             sent_token = gate.REQUEST_CALLS.set(sent)
+            shadow = Shadow()  # 이 행(요청) 하나의 초안 기록
+            shadow_token = SHADOW.set(shadow)
             try:
                 response = await _respond(preset, row, own)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
@@ -187,6 +194,9 @@ async def _collect(
             finally:
                 EVIDENCE_CHECK_PROBE.reset(token)
                 gate.REQUEST_CALLS.reset(sent_token)
+                SHADOW.reset(shadow_token)
+            if shadows is not None:
+                shadows[row["id"]] = shadow
             if calls_log is not None:
                 calls_log.append(sum(sent.values()))
             if checks is not None:
@@ -206,6 +216,7 @@ def collect_timed(
     *,
     setup: Callable[[], Awaitable[Any]] | None = None,
     calls_log: list[int] | None = None,
+    shadows: list[dict[str, Shadow]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[float]]:
     """실행마다 응답을, 그리고 요청마다 걸린 시간(초, 모든 실행)을 모은다(TU-16 지연).
 
@@ -214,6 +225,7 @@ def collect_timed(
     setup이 있으면 같은 루프에서 먼저 불러 그 결과를 state로 쓴다(가드 LLM 클라이언트도 루프에
     묶인다, --guard).
     checks(목록)를 주면 실행마다 행 → 근거 대조 칸 값(#162)을 하나씩 덧붙인다.
+    shadows(목록)를 주면 실행마다 행 → 주 호출 초안 기록(`llm.multi_draft`)을 하나씩 덧붙인다.
     """
     if preset not in PRESETS:
         raise ValueError(f"모르는 프리셋: {preset}")
@@ -223,9 +235,12 @@ def collect_timed(
         out = []
         for _ in range(runs):
             seen: dict[str, bool | None] | None = None if checks is None else {}
-            out.append(await _collect(preset, rows, own, seen, calls_log))
+            drafts: dict[str, Shadow] | None = None if shadows is None else {}
+            out.append(await _collect(preset, rows, own, seen, calls_log, drafts))
             if checks is not None and seen is not None:
                 checks.append(seen)
+            if shadows is not None and drafts is not None:
+                shadows.append(drafts)
         return out
 
     results = asyncio.run(every_run())
@@ -288,6 +303,12 @@ def _judge_calls(row: dict[str, Any]) -> int:
     )
 
 
+def _extra_drafts(cfg: TutorConfig) -> int:
+    """주 호출 초안 여러 개(`llm.multi_draft`)를 켰으면 초안 A 밖의 초안 수(요청당 추가 호출)."""
+    md = cfg.llm.multi_draft
+    return len(md.drafts) - 1 if md.enabled and cfg.mode == "v2" else 0
+
+
 def expected_calls(
     rows: Sequence[dict[str, Any]],
     *,
@@ -295,11 +316,13 @@ def expected_calls(
     runs: int,
     judge: bool,
     tutor_calls: int = TUTOR_CALLS,
+    judge_repeat: int = 1,
 ) -> int:
-    """실행 전에 세는 운영진 API 예상 호출 수(TU-16 호출 예산). 재시도 여유로 1.1배 한다."""
+    """실행 전에 세는 운영진 API 예상 호출 수(TU-16 호출 예산). 재시도 여유로 1.1배 한다.
+    `judge_repeat`(--judge-repeat)이면 판정 몫을 그만큼 곱한다."""
     per_run = tutor_calls * len(rows) if preset == "tutor" else 0
     if judge:
-        per_run += sum(_judge_calls(row) for row in rows)
+        per_run += judge_repeat * sum(_judge_calls(row) for row in rows)
     return (per_run * runs * 11 + 9) // 10  # 정수로 1.1배 올림(가드 하네스와 같음)
 
 
@@ -418,6 +441,7 @@ def _write(
     team: Mapping[str, Any] | None = None,
     gate_summary: Mapping[str, Any] | None = None,
     tutor: Mapping[str, Any] | None = None,
+    judge_cfg: Mapping[str, Any] | None = None,
 ) -> Path:
     """결과 JSON을 남긴다. tainted면 기본값이나 BM25가 섞인 결과라 --compare 기준이 되지 못한다.
 
@@ -444,6 +468,8 @@ def _write(
         data["gate"] = dict(gate_summary)
     if invalid is not None:
         data["invalid"] = invalid
+    if judge_cfg is not None:  # --judge-effort 등: 판정 설정과 시도·잘림 수(숫자만)
+        data["judge_config"] = dict(judge_cfg)
     if checks is not None:
         data["evidence_check"] = {
             "by_run": [dict(sorted(seen.items())) for seen in checks],
@@ -683,10 +709,38 @@ def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="튜터 세부 지표 로컬 측정(TU-16·T1.5)")
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--preset", choices=PRESETS)
-    source.add_argument("--responses", type=Path, help="JSONL: 줄마다 {id, response}")
+    source.add_argument(
+        "--responses",
+        type=Path,
+        nargs="+",
+        help="JSONL: 줄마다 {id, response}. 여러 개면 파일 하나가 실행 하나(--save-responses 결과)",
+    )
     ap.add_argument("--cases", default="public", help="public(기본) | team | 점검 세트 JSONL 경로")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--judge", action="store_true", help="운영진 API로 사실·충실·응함 판정")
+    ap.add_argument(
+        "--judge-effort",
+        choices=("minimal", "low", "medium", "high"),
+        help="판정 호출의 reasoning_effort(기본: 보내지 않음 = 운영진 judge.py, 모델 기본값)",
+    )
+    ap.add_argument(
+        "--judge-max-tokens",
+        type=int,
+        help="판정 호출의 max_completion_tokens(기본: 운영진 judge.py와 같은 4000)",
+    )
+    ap.add_argument(
+        "--judge-repeat",
+        type=int,
+        default=1,
+        help="판정마다 N번 물어 다수결(참/거짓 과반, facts 중앙값). 판정 호출이 N배",
+    )
+    ap.add_argument(
+        "--save-responses",
+        type=Path,
+        metavar="PATH",
+        help="tutor 프리셋의 응답을 JSONL(줄마다 {id, response})로 남긴다(답변 본문이 든다, "
+        "git 밖 runs/에 둔다). 실행이 여럿이면 PATH 이름 뒤에 -r<실행 번호>",
+    )
     ap.add_argument(
         "--max-calls", type=int, help="운영진 API 호출 상한(기본: config/tutor.yaml eval.max_calls)"
     )
@@ -705,7 +759,126 @@ def _parser() -> argparse.ArgumentParser:
         help="tutor 프리셋의 설정 덮기(예: mode=baseline). 값은 YAML로 읽는다"
         " (off는 따옴표째 넘긴다: 'toggles.verify=\"off\"')",
     )
+    ap.add_argument(
+        "--rows-jsonl",
+        type=Path,
+        help="행별 채점 결과 JSONL(실행·행 id·문항 점수·항목 점수·낸 action·주 호출 초안 기록)."
+        " 본문은 남기지 않는다",
+    )
     return ap
+
+
+def row_records(
+    scored: Sequence[Sequence[metrics.Scored]],
+    shadows: Sequence[Mapping[str, Shadow]] | None = None,
+) -> list[dict[str, Any]]:
+    """`--rows-jsonl` 줄: 실행마다 행 하나. id·숫자·action 이름표뿐이다(본문 없음, TU-15).
+
+    항목 점수는 채점기 결과 그대로다(그 문항에 없는 항목·판정하지 않은 항목은 None). md_*는 주 호출
+    초안 기록(`llm.multi_draft`): 보낸 초안 수·유효한 수·고른 번호·갈림·초안 A 혼자의 action
+    (초안 A가 무효면 None)·고른 초안의 action(뒤 단계 T·E가 바꾸기 전, 없으면 None)·초안별 코드.
+    `action`은 뒤 단계를 지난 최종 action이다. 끄면 md_n이 0이다. --responses면 md_*가 없다.
+    md_actions는 초안별 action(무효 None). stages는 실험 단계 기록(tutor.judge.specialists.StageRec,
+    키 rq·sj·mm, 토글 off인 단계는 없다): trig·verdict·conf·before·after·changed·ms.
+    `cites`는 응답이 낸 인용(KB 섹션 ID만, 낸 순서, 형식 오류면 None). md_cites는 초안별로 그
+    초안이 골라졌다면 같은 결정적 인용 경로가 냈을 인용(정렬, 무효 초안 None, 고른 초안의 assemble
+    경로까지 오지 않은 요청은 None). md_cite_path는 최종 응답이 그 경로에서 그대로 나갔나
+    (cite_rule 적용 대상, 재생 tutor.eval.cite_replay가 쓴다). md_model_cites는 그중 모델이 인용한
+    섹션(확인된 인용, 검색 1위 채우기·cite_top1 추가 제외), md_top1은 cite_top1이 더하는 섹션.
+    md_pick_top1_switch는 prefer_top1이 고른 초안을 바꿨나(그러면 md_pick은 바꾼 초안).
+    md_redraft는 top1_redraft 결과(None·skip_time·used·rejected:<사유>), md_redraft_ms는 그
+    호출 시간.
+    used면 최종 응답은 그 초안이고 md_cites는 고른 초안 기준이다. md_redraft_action은 유효한 1위
+    초안의 action(없으면 None), used_abstain은 top1_redraft_abstain이 그 abstain 초안을 낸 것.
+    md_bundle은 주 호출 근거 묶음 섹션 ID(검색 순위 순, 초안을 고른 요청만).
+    """
+    out = []
+    for run, rows in enumerate(scored):
+        for s in rows:
+            r = s.result
+            judged = not r["judge_error"]
+            rec: dict[str, Any] = {
+                "run": run,
+                "id": s.row_id,
+                "category": s.category,
+                "gold_action": s.gold_action,
+                "action": s.pred_action,
+                "citations": s.citations,
+                "cites": None if s.cited is None else list(s.cited),
+                "points": s.points,
+                "action_ok": float(r["action_correct"]),
+                "citation_f1": metrics.citation_f1(r),
+                "facts": r["facts"] if judged else None,
+                "faithful": None if not judged or r["faithful"] is None else float(r["faithful"]),
+                "complied": r["complied"],
+            }
+            shadow = shadows[run].get(s.row_id) if shadows is not None else None
+            if shadow is not None:
+                rec.update(
+                    md_n=shadow.started,
+                    md_ok=shadow.valid,
+                    md_pick=shadow.chosen,
+                    md_split=shadow.split,
+                    md_a_action=shadow.a_action,
+                    md_pick_action=shadow.chosen_action,
+                    md_codes=[d.code for d in shadow.drafts],
+                    md_actions=list(shadow.actions),
+                    md_cites=shadow.md_cites,
+                    md_model_cites=shadow.md_model_cites,
+                    md_top1=shadow.top1,
+                    md_pick_top1_switch=shadow.top1_switch,
+                    md_redraft=shadow.redraft,
+                    md_redraft_ms=round(shadow.redraft_ms),
+                    md_redraft_action=shadow.redraft_action,
+                    md_bundle=shadow.bundle,
+                    md_cite_path=shadow.cite_path,
+                    stages={key: asdict(rec) for key, rec in shadow.stages.items()},
+                )
+            out.append(rec)
+    return out
+
+
+def answer_failures(failures: Mapping[tuple[str, str], int]) -> int:
+    """답을 기본값으로 바꾼 최종 실패 수. 실험 단계 호출(rq·sj)의 실패는 응답을 바꾸지 않으므로
+    (그대로 둔다) 결과를 tainted로 만들지 않는다. 그 수는 실패 줄과 행별 stages에 그대로 남는다."""
+    return sum(n for (role, _), n in failures.items() if role not in STAGE_ROLES)
+
+
+def save_responses(path: Path, all_responses: Sequence[Mapping[str, Any]]) -> list[Path]:
+    """`--save-responses`: 실행마다 {id, response} JSONL(`--responses`가 읽는 꼴). 실행이 하나면
+    PATH 그대로, 여럿이면 PATH 이름 뒤에 -r<번호>. 답변 본문이 들어 있다(git 밖에 둔다)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out = []
+    for run, responses in enumerate(all_responses):
+        target = (
+            path if len(all_responses) == 1 else path.with_name(f"{path.stem}-r{run}{path.suffix}")
+        )
+        lines = (
+            json.dumps({"id": i, "response": r}, ensure_ascii=False) for i, r in responses.items()
+        )
+        target.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+        out.append(target)
+    return out
+
+
+def _judge_cfg(args: argparse.Namespace, judge: Any) -> dict[str, Any] | None:
+    """--judge-effort·--judge-max-tokens·--judge-repeat 설정과 시도·잘림 수. 기본 판정기면 None."""
+    stats = getattr(judge, "stats", None)
+    if judge is None or stats is None:
+        return None
+    return {
+        "effort": args.judge_effort,
+        "max_tokens": args.judge_max_tokens,
+        "repeat": args.judge_repeat,
+        "stats": dict(sorted(stats.items())),
+        "truncated": sum(n for k, n in stats.items() if k.startswith("length_")),
+    }
+
+
+def write_rows_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = (json.dumps(rec, ensure_ascii=False) for rec in records)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
 
 def _tutor_config(
@@ -977,14 +1150,31 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
             sys.stdout.write(f"가드 설정 기본 아님: {' · '.join(changed)}\n")
     if args.max_calls is None:
         args.max_calls = cfg.eval.max_calls
-    judge = judge_from_env() if args.judge else None
+    tuned = args.judge_effort is not None or args.judge_max_tokens is not None
+    if (tuned or args.judge_repeat != 1) and not args.judge:
+        ap.error("--judge-effort·--judge-max-tokens·--judge-repeat는 --judge와 쓴다")
+    if args.judge_repeat < 1:
+        ap.error("--judge-repeat는 1 이상이어야 한다")
+    if args.save_responses is not None and args.preset != "tutor":
+        ap.error("--save-responses는 --preset tutor에서만 쓴다")
+    judge = None
+    if args.judge:  # 설정을 주지 않으면 운영진 판정기 그대로(인자 없이 부른다)
+        tuned_args = (args.judge_effort, args.judge_max_tokens, args.judge_repeat)
+        judge = judge_from_env(*tuned_args) if tuned or args.judge_repeat != 1 else judge_from_env()
     if args.judge and judge is None:
         ap.error("--judge에는 OPENAI_BASE_URL·OPENAI_MODEL·OPENAI_API_KEY가 모두 필요하다")
     kind = "public" if args.cases == "public" else "team"
     if kind == "team" and args.preset not in (None, "tutor"):  # reference는 정답 답변을 낸다
         ap.error("--cases는 --preset tutor나 --responses와 쓴다(점검 세트에는 정답 답변이 없다)")
     try:
-        fixed = load_responses(args.responses) if args.responses else None
+        args.fixed_all = [load_responses(p) for p in args.responses or ()]
+        fixed = args.fixed_all[0] if args.fixed_all else None
+        if len(args.fixed_all) > 1:  # 파일 하나 = 실행 하나
+            if any(set(f) != set(fixed) for f in args.fixed_all):
+                raise ValueError("응답 파일들의 id가 서로 다르다")
+            if args.runs != 1:
+                raise ValueError("응답 파일을 여럿 주면 --runs를 주지 않는다(파일 수가 실행 수)")
+            args.runs = len(args.fixed_all)
         previous = (
             load_previous(args.compare, judge=args.judge, cases=kind) if args.compare else None
         )
@@ -1012,7 +1202,8 @@ def _inputs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[Any,
         preset=args.preset,
         runs=args.runs,
         judge=args.judge,
-        tutor_calls=CALLS_PER_REQUEST[cfg.mode],
+        tutor_calls=CALLS_PER_REQUEST[cfg.mode] + _extra_drafts(cfg),
+        judge_repeat=args.judge_repeat,
     )
     if args.guard:  # 가드 classify·judge_output은 TUTOR_CALLS 안에 이미 있다. probe만 더한다
         calls += guard_probe_calls(load_guard_config().llm)
@@ -1039,7 +1230,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
     rows, fixed, judge, previous, cfg, overrides, embedding, excluded, guard = _inputs(ap, args)
     team = args.cases != "public"
-    reserve = expected_calls(rows, preset=None, runs=args.runs, judge=args.judge)  # 판정 몫
+    reserve = expected_calls(  # 판정 몫
+        rows, preset=None, runs=args.runs, judge=args.judge, judge_repeat=args.judge_repeat
+    )
     tutor_cap = args.max_calls - reserve - embedding
     guard_cap, guard_probe = 0, 0
     if args.guard:  # 가드 몫(probe + 요청당 classify·judge_output)을 튜터 몫에서 떼어 준다
@@ -1061,6 +1254,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     latency: list[float] = []
     calls_log: list[int] = []  # 요청마다 보낸 nano 시도 수(튜터·가드)
     checks: list[dict[str, bool | None]] | None = None
+    shadows: list[dict[str, Shadow]] | None = [] if args.rows_jsonl is not None else None
+    drafts = {} if shadows is None else {"shadows": shadows}  # --rows-jsonl일 때만 넘긴다
     if fixed is None:  # 자기 state가 아니면 tutor.handle(기본 state)로 부른다
         own = state if _own_state(cfg, overrides, guard=args.guard) else None
         setup = None
@@ -1093,14 +1288,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             checks = []  # 실행마다 행 → 근거 대조 칸 값(#162)
         if setup is None:
             all_responses, latency = collect_timed(
-                args.preset, rows, args.runs, own, checks, calls_log=calls_log
+                args.preset, rows, args.runs, own, checks, calls_log=calls_log, **drafts
             )
         else:  # 가드 LLM·폴드별 가드는 응답을 모으는 루프에서 만든다
             all_responses, latency = collect_timed(
-                args.preset, rows, args.runs, checks=checks, setup=setup, calls_log=calls_log
+                args.preset,
+                rows,
+                args.runs,
+                checks=checks,
+                setup=setup,
+                calls_log=calls_log,
+                **drafts,
             )
     else:
-        all_responses = [fixed] * args.runs
+        all_responses = args.fixed_all if len(args.fixed_all) > 1 else [fixed] * args.runs
+    if args.save_responses is not None:
+        save_responses(args.save_responses, all_responses)
     llm_stopped = stop.tripped  # 튜터 단계에서 멈췄나(판정 단계에서 멈춘 것과 가른다)
     stop.next_stage()
     kb = score_local.load_kb_dir(KB_DIR)
@@ -1109,16 +1312,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         metrics.score_run(rows, responses, judge=scorer, kb=kb) for responses in all_responses
     ]
     report = metrics.build_report(scored)  # 홀드아웃 행은 이미 뺐다: 교차 검증 행 = 모든 행
+    if args.rows_jsonl is not None:
+        write_rows_jsonl(args.rows_jsonl, row_records(scored, shadows or None))
     by_axis = case_set.axis_scores(scored, rows, judged=judge is not None) if team else None
     blocked = sum(state.tutor_llm.blocked.values()) if state is not None else 0
-    failed = sum(state.tutor_llm.failures.values()) if state is not None else 0
+    failed = answer_failures(state.tutor_llm.failures) if state is not None else 0
     use = _embedding_use(counted, built, rows, args.runs, embedding_sites(cfg.toggles))
     guard_run = _guard_run(guard_llm, getattr(state, "guard_skips", None))
     tainted = bool(blocked) or bool(failed) or (use is not None and not use.ok) or stop.tripped
     # 가드 단계를 건너뛰었거나 가드 호출이 오류로 끝난 행은 튜터 단독·가드 기본값 결과다(#165 리뷰)
     tainted = tainted or (guard_run is not None and not guard_run["clean"])
     invalid = stop.reason()
-    name = (args.preset or args.responses.stem) + ("-team" if team else "")
+    name = (args.preset or args.responses[0].stem) + ("-team" if team else "")
     check_summary = (
         evidence_check_summary(rows, all_responses, checks) if checks is not None else None
     )
@@ -1152,8 +1357,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         checks=checks,
         check_summary=check_summary,
         team=None if by_axis is None else {"file": args.cases, "axes": case_set.axes_json(by_axis)},
+        judge_cfg=_judge_cfg(args, judge),
     )
     _show(report, sys.stdout, judged=judge is not None)
+    jc = _judge_cfg(args, judge)
+    if jc is not None:
+        sys.stdout.write(
+            f"판정 설정: effort {jc['effort'] or '기본'} · 상한 {jc['max_tokens'] or 4000}"
+            f" · 반복 {jc['repeat']} · 판정 시도 {jc['stats'].get('attempts', 0)}"
+            f" · 잘림(length) {jc['truncated']}\n"
+        )
     if check_summary is not None:
         show_evidence_check(check_summary, sys.stdout)
     if by_axis is not None:

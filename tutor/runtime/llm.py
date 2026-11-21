@@ -22,6 +22,7 @@ import random
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -41,6 +42,9 @@ Outcome = Literal["sent", "budget", "gate", "no_time"]
 OPTIONAL_PARAMS = ("reasoning_effort", "verbosity", "max_completion_tokens")
 RETRY_JITTER_S = (0.2, 0.5)  # 가드 기본 설정(llm.retry_jitter_s)과 같다
 TOKEN_BUCKET = 100  # 성공한 시도의 completion_tokens 분포 구간 폭
+# 요청 하나에서 보낸 시도 수(역할별). 라우터가 요청마다 새 Counter를 넣는다(없으면 세지 않는다).
+# 접근 로그의 /tutor 호출 기록 칸(multi_draft를 켰을 때)에 쓴다. 본문은 없다
+SENT: ContextVar[Counter[str] | None] = ContextVar("tutor_llm_sent", default=None)
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,7 @@ class Result:
     latency_ms: float
     finish_reason: str | None  # 마지막 시도의(length면 잘림). 응답이 없으면 None
     completion_tokens: int | None  # 마지막 시도의 usage.completion_tokens
+    gate_ms: float = 0.0  # 게이트 대기 합(모든 시도)
 
 
 @dataclass(frozen=True)
@@ -178,9 +183,18 @@ class TutorLLM:
         deadline: float,
         timeout_s: float,
         retries: int,
+        effort: str | None = None,
     ) -> Result:
+        """`effort`를 주면 이 호출만 reasoning_effort를 그 값으로 보낸다(multi_draft 초안).
+        probe가 reasoning_effort를 껐으면 주어도 보내지 않는다(`sends_effort`)."""
         result = await self._complete(
-            role, messages, schema, deadline=deadline, timeout_s=timeout_s, retries=retries
+            role,
+            messages,
+            schema,
+            deadline=deadline,
+            timeout_s=timeout_s,
+            retries=retries,
+            effort=effort,
         )
         if result.error is not None and result.error != "budget":
             self.failures[(role, result.error)] += 1
@@ -195,36 +209,45 @@ class TutorLLM:
         deadline: float,
         timeout_s: float,
         retries: int,
+        effort: str | None = None,
     ) -> Result:
         t0 = self._now()
         kwargs = self._request(messages, schema)
+        if effort is not None and "reasoning_effort" in kwargs:
+            kwargs["reasoning_effort"] = effort
         attempts, last = 0, _Attempt(error="timeout")
+        waited: list[float] = []  # 시도마다 게이트 대기(초)
         while True:
             if deadline - self._now() <= 0:
-                return self._result(last, attempts, t0)
+                return self._result(last, attempts, t0, waited)
             outcome, a = await self._attempt(
-                role, kwargs, schema, deadline, timeout_s, retrying=attempts > 0
+                role, kwargs, schema, deadline, timeout_s, retrying=attempts > 0, waited=waited
             )
             if outcome == "budget":
                 self.blocked[role] += 1
-                return self._result(_Attempt(error="budget"), attempts, t0)
+                return self._result(_Attempt(error="budget"), attempts, t0, waited)
             if a is None:  # 게이트 대기로 마감이나 다시 보낼 시간을 다 썼다(앞 오류를 그대로)
-                return self._result(last, attempts, t0)
+                return self._result(last, attempts, t0, waited)
             attempts, last = attempts + 1, a
             if a.error is None or not a.retry or attempts > retries:
-                return self._result(a, attempts, t0)
+                return self._result(a, attempts, t0, waited)
             wait = _retry_after(a.headers or {})
             if wait is None or wait <= 0:
                 lo, hi = RETRY_JITTER_S
                 wait = lo + (hi - lo) * self._rand()
             if self._now() + wait + timeout_s > deadline:  # 다시 보낼 시간이 예산에 없다
-                return self._result(a, attempts, t0)
+                return self._result(a, attempts, t0, waited)
             await self._sleep(wait)
 
     # --- 내부 ---
 
     def _now(self) -> float:
         return self._clock() if self._clock is not None else asyncio.get_running_loop().time()
+
+    @property
+    def sends_effort(self) -> bool:
+        """reasoning_effort를 보내는가(probe가 끄지 않았나)."""
+        return self.params.get("reasoning_effort") is not None
 
     async def _attempt(
         self,
@@ -235,19 +258,27 @@ class TutorLLM:
         limit: float,
         *,
         retrying: bool,
+        waited: list[float] | None = None,
     ) -> tuple[Outcome, _Attempt | None]:
         async with contextlib.AsyncExitStack() as stack:
+            g0 = self._now()
             try:
                 async with asyncio.timeout(deadline - self._now()):  # 게이트 대기도 마감 안에
                     await stack.enter_async_context(self.gate())
             except TimeoutError:
                 return "gate", None
+            finally:
+                if waited is not None:
+                    waited.append(self._now() - g0)
             if self.max_calls is not None and sum(self.calls.values()) >= self.max_calls:
                 return "budget", None
             left = deadline - self._now()
             if retrying and limit > left:  # 가드와 같이: 게이트 대기 뒤 다시 보낼 시간이 모자람
                 return "no_time", None
             self.calls[role] += 1
+            sent = SENT.get()
+            if sent is not None:
+                sent[role] += 1
             cap = min(limit, left)
             try:
                 async with asyncio.timeout(cap):  # 호출당 시간 제한(보내는 시간 전체)
@@ -321,7 +352,9 @@ class TutorLLM:
         self.unexpected[type(exc).__name__] += 1
         return _Attempt(error="server")
 
-    def _result(self, a: _Attempt, attempts: int, t0: float) -> Result:
+    def _result(
+        self, a: _Attempt, attempts: int, t0: float, waited: list[float] | None = None
+    ) -> Result:
         return Result(
             parsed=a.parsed if a.error is None else None,
             error=a.error,
@@ -329,6 +362,7 @@ class TutorLLM:
             latency_ms=(self._now() - t0) * 1000,
             finish_reason=a.finish_reason,
             completion_tokens=a.completion_tokens,
+            gate_ms=sum(waited or ()) * 1000,
         )
 
 

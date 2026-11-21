@@ -21,6 +21,9 @@ DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
+# multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다)
+MULTI_DRAFT_MAX_CALLS = 8
+Stage = Literal["off", "shadow", "on"]  # 실험 단계(tutor.judge.specialists). shadow는 기록만
 
 
 class _Strict(BaseModel):
@@ -78,6 +81,10 @@ class Toggles(_Strict):
     # 보낸다. E 마감은 요청 시작부터 llm.timeout_s.oom_gate로 같다(호출 순서만 바꾼다).
     # after_intent_fresh는 같은 순서에 E 마감만 E 시작부터 센다(요청 마감보다 늦지 않게)
     oom_schedule: Literal["with_request", "after_intent", "after_intent_fresh"]
+    # 실험 단계 셋(exp/tutor-specialists, tutor.judge.specialists). off | shadow | on
+    reverse_question: Stage  # 최종 answer → 답이 답하는 질문 되살리기 → 다른 속성·대상이면 abstain
+    soft_jailbreak_draft: Stage  # 신호 없는 탈옥 거절이면 "정상으로 보고 개념 설명" 초안의 답
+    mention_marker: Stage  # T 유해-비하 + 언급 표지면 T 고정 문장 대신 주 호출(호출 0회)
 
     @model_validator(mode="after")
     def _not_built(self) -> "Toggles":
@@ -145,11 +152,83 @@ class Timeouts(_Strict):
     oom_gate: PositiveFloat  # 자료 밖 확인 E(toggles.oom_gate). E 시작(검색 직후)부터 센다
 
 
+class Draft(_Strict):
+    """주 호출 초안 하나(`multi_draft.drafts`). timeout_s가 없으면 `timeout_s.main`."""
+
+    effort: Literal["low", "medium"]  # minimal 금지(TU-13)
+    timeout_s: PositiveFloat | None = None
+
+
+class MultiDraft(_Strict):
+    """실험: 주 호출 초안 K개를 동시에 보내고 결정적으로 고른다(tutor.judge.multi_draft).
+
+    끄면(enabled false) 지금과 같다. 켜면 겹쳐 보내기(`timeout_s.main_hedge`)는 쓰지 않는다.
+    초안 A(첫 번째)는 지금의 주 호출이라 low여야 하고, medium은 하나까지다. medium 초안의 마감은
+    요청 마감 − margin_s다. 기다리기는 min(초안 시작 + wait_s, 요청 마감 − margin_s)까지.
+    """
+
+    enabled: bool
+    drafts: Annotated[list[Draft], Field(min_length=2, max_length=len("abcdefgh"))]
+    wait_s: PositiveFloat
+    margin_s: PositiveFloat
+    # 고른 action이 answer인데 유효한 초안 하나라도 abstain이면 그 초안으로 바꾼다(실험).
+    # shadow는 기록만
+    abstain_if_any: Stage = "off"
+    # 응답이 고른 초안에서 나갈 때 인용 목록만 초안끼리 합치는 규칙(multi_draft.compose_cites)
+    cite_rule: Literal[
+        "pick",
+        "vote",
+        "pick_drop_lone",
+        "pick_add_vote",
+        "single_model",
+        "single_support",
+        "single_support_model",
+        "single_agree",
+        "top1_only",
+    ] = "pick"
+    # 고른 초안의 모델 인용에 cite_top1 섹션이 없고 같은 action의 다른 초안 모델 인용에 있으면
+    # 그 초안으로 바꾼다(답·인용 모두 그 초안, 호출 0회, flow._top1_draft)
+    prefer_top1: Literal["off", "on"] = "off"
+    # 고른 answer 초안도 같은 action 초안도 cite_top1 섹션을 확인된 근거로 쓰지 않으면, 근거 묶음을
+    # 그 섹션 하나로 줄인 low 초안을 한 번 더 부른다(nano +1, flow._top1_redraft)
+    # parallel: 정규 초안과 함께 띄우고(요청마다 nano +1) 고른 뒤 같은 조건·규칙으로 쓴다
+    top1_redraft: Literal["off", "on", "parallel"] = "off"
+    # 1위 초안이 유효한 abstain이면(고른 초안은 answer) 그 abstain 초안을 고른 것처럼 낸다
+    top1_redraft_abstain: Literal["off", "on"] = "off"
+
+    @model_validator(mode="after")
+    def _shape(self) -> "MultiDraft":
+        if self.drafts[0].effort != "low":
+            raise ValueError("multi_draft.drafts[0](초안 A = 지금의 주 호출)은 low여야 한다")
+        if sum(d.effort == "medium" for d in self.drafts) > 1:
+            raise ValueError("multi_draft.drafts의 medium은 하나까지다")
+        return self
+
+
+class ReverseQuestion(_Strict):
+    """`toggles.reverse_question` 호출 둘(A 되살리기·B 견주기). minimal은 이 단계에만 허용한다
+    (TD-06: 튜터 다른 호출은 minimal 금지)."""
+
+    effort: Literal["minimal", "low"]
+    timeout_s: PositiveFloat  # 호출 하나의 상한
+    margin_s: PositiveFloat  # 두 호출 모두 요청 마감 − 이 값 안에서 끝난다
+    min_confidence: Annotated[int, Field(ge=1, le=5)]  # B 신뢰도가 이 값 이상일 때만 abstain
+
+
+class SoftJailbreak(_Strict):
+    """`toggles.soft_jailbreak_draft` 추가 low 초안. 시간 상한은 `timeout_s.main`."""
+
+    margin_s: PositiveFloat  # 초안은 요청 마감 − 이 값 안에서 끝난다
+
+
 class Llm(_Strict):
     reasoning_effort: Literal["low", "medium"]  # minimal 금지(TU-13)
     # 튜터 주 호출 상한(가드 판정 호출과 따로). 프록시 상한을 넘으면 로드에서 실패한다
     max_completion_tokens: Annotated[int, Field(ge=1, le=PROXY_MAX_COMPLETION_TOKENS)]
     timeout_s: Timeouts
+    multi_draft: MultiDraft
+    reverse_question: ReverseQuestion
+    soft_jailbreak_draft: SoftJailbreak
 
 
 class EvalCfg(_Strict):
@@ -168,6 +247,35 @@ class TutorConfig(_Strict):
     answer: Answer
     llm: Llm
     eval: EvalCfg
+
+    @model_validator(mode="after")
+    def _multi_draft_calls(self) -> "TutorConfig":
+        md, t = self.llm.multi_draft, self.toggles
+        # 실험 단계가 더하는 호출: rq는 answer에만(2), sj는 탈옥 거절에만(1)이라 한 요청에서 둘 중
+        # 하나만 돈다(flow.answer_v2). 그래서 둘의 큰 쪽만 더한다
+        stages = max(2 * (t.reverse_question != "off"), int(t.soft_jailbreak_draft != "off"))
+        if not md.enabled and not stages:
+            return self
+        if md.enabled and self.llm.reasoning_effort != "low":
+            # 요청 전체 medium은 시간 초과로 무너진다(64–68 대 90). medium은 초안 하나에만 쓴다
+            raise ValueError("multi_draft를 켜면 llm.reasoning_effort는 low여야 한다")
+        # 초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E + 실험 단계.
+        # 실험 브랜치 한정 상한 8: TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
+        calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
+        calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
+        calls += stages + (md.enabled and md.top1_redraft != "off")
+        early = md.enabled and md.top1_redraft == "parallel"
+        if early and not (t.cite_top1 and t.top1_dialog_query):
+            # 1위를 주 호출 앞에서 알아야 한다: 규칙 A 검색(top1_dialog_query)으로만 미리 찾는다
+            raise ValueError(
+                "top1_redraft: parallel은 toggles.cite_top1·top1_dialog_query가 필요하다"
+            )
+        if calls > MULTI_DRAFT_MAX_CALLS:
+            cap = MULTI_DRAFT_MAX_CALLS
+            raise ValueError(
+                f"multi_draft·실험 단계: 요청당 nano {calls}회라 쓸 수 없다(실험 상한 {cap})"
+            )
+        return self
 
 
 def resolve_path(path: str | Path) -> Path:

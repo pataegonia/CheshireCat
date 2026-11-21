@@ -298,7 +298,7 @@ def calls_per_row(cfg: GuardConfig, has_candidate: bool) -> int:
     if has_candidate and (
         out.mode == "baseline" or cfg.toggles.nano_tier3 or out.call_nano_when_unused
     ):
-        n += 1
+        n += 1 + (out.medium_parallel and out.mode != "baseline")  # medium 출력 판정
     if cfg.toggles.third_call:
         n += 1
     return n

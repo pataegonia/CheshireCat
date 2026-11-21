@@ -97,6 +97,10 @@ FREEZE_TOGGLES_OFF = {
     # 튜터 #242 english_embedding: 영어 발화는 임베딩 순위만 + 영어에도 E. E를 끈 기준에서는
     # 켤 수 없다(튜터 설정 로드에서 거부)
     "english_embedding": False,
+    # 실험 단계(exp/tutor-specialists, tutor.judge.specialists): 저장소 설정은 shadow
+    "reverse_question": "off",
+    "soft_jailbreak_draft": "off",
+    "mention_marker": "off",
 }
 
 
@@ -109,6 +113,8 @@ def write_tutor_config(path: Path, *, mode: str | None = None, **toggles: str) -
     raw = yaml.safe_load((ROOT / "config" / "tutor.yaml").read_text(encoding="utf-8"))
     off = {k: v for k, v in FREEZE_TOGGLES_OFF.items() if k in raw["toggles"]}
     raw["toggles"] = {**raw["toggles"], **off, **toggles}
+    if "multi_draft" in raw["llm"]:  # 실험 브랜치: 주 호출 초안 여러 개도 기준 설정에서 끈다
+        raw["llm"]["multi_draft"]["enabled"] = False
     if mode is not None:
         raw["mode"] = mode
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")  # "off"는 따옴표로
@@ -129,11 +135,13 @@ MAX_LLM_CALLS_PER_REQUEST = {"v2": 1, "baseline": 1}
 #   test_real_guard.py가 `real_guard=True`로 본다.
 # - `/guard` 3: 입력 판정 1 + 탈옥 2차 판정 1(1차가 jailbreak_injection일 때만, 가드 #183
 #   `toggles.jb_check`) + 출력 판정 1(후보 답변이 있을 때).
+#   실험 브랜치 exp/guard-out-medium: 가드 `output.medium_parallel`이 출력 판정을 low·medium 두
+#   호출로 보내 4다. 요청당 3회 규칙을 넘는다(main에 넣기 전에 pyr27 동의가 필요하다).
 # - `/tutor` 3: 가드가 튜터용 메서드를 올린 뒤(이슈 #119) classify 1(탈옥이면 2차로 +1) +
 #   judge_output 1. 튜터는 judge_output에 범주를 넘긴다(넘기지 않으면 가드가 classify를 한 번 더
 #   부른다, 가드 interface.md의 judge_output 설명).
 # - 가짜 전송은 실패를 내지 않아 재시도 몫은 넣지 않는다. 키 없이 뜬 상수 판정기 앱은 0이다.
-MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 3}
+MAX_GUARD_LLM_CALLS_PER_REQUEST = {"/tutor": 3, "/guard": 4}
 GUARD_BUDGET_HINT = (
     "가드 nano 호출이 상한을 넘었다. 판정기를 바꿨으면 "
     "applib.MAX_GUARD_LLM_CALLS_PER_REQUEST · guard_call_budget을 고친다. "
@@ -263,6 +271,10 @@ class FakeSend:
             reply = {"label": self.intent_label, "self_info": False}
         elif name == OOM_GATE:  # 자료 밖 확인 E(tutor.judge.oom_gate)
             reply = {"asked": answer, "quote": "", "found": self.oom_found}
+        elif name == "RqQuestion":  # 실험 rq 호출 A(tutor.judge.specialists)
+            reply = {"question": answer}
+        elif name == "RqCompare":  # 실험 rq 호출 B: 같은 질문(답을 바꾸지 않는다)
+            reply = {"verdict": "same", "confidence": 5}
         elif name == "MainCallOut":  # v2 주 호출(tutor.judge.main_call)
             user_part = messages[-1]["content"] if messages else ""
             if self.vary:

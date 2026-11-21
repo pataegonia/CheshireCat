@@ -801,6 +801,7 @@ P0(TU-01–03, TU-05–07, TU-10, TU-12–19)는 자르지 않는다. 특히 TU-
 | T 의도 판정 프롬프트 `tutor/prompts/intent.md`(이름표 정의·경계 문장·퓨샷) | — | 팀이 직접 씀(#209, 퓨샷은 프롬프트 안 예시, SPEC §7.1). 공개 세트와 15자 겹침 0(테스트) | TU-06(#220) |
 | 과목 목차(메모리, 파일 없음) | `kb/` 섹션 ID와 제목을 서버를 켤 때 한 번 모음(배포 자료 가공, SPEC §7.1) | — | TU-06(#220) |
 | 자료 밖 확인 프롬프트 `tutor/prompts/oom_check.md`(#162 v0, `harness/prompts/oom_check.md`와 본문이 같음) | — | 팀이 직접 씀(#162). 지어낸 예 1개, 과목 사실 없음. 공개 세트와 15자 겹침 0(테스트) | TU-06(`oom_gate`) |
+| 실험 단계 프롬프트 `tutor/prompts/rq_rebuild.md`·`rq_compare.md`, sj 추가 지시·언급 표지 정규식 `tutor/judge/specialists.py` | — | 팀이 직접 씀(exp/tutor-specialists, 일반 원칙만). 과목 사실·공개 세트 문구 없음, 15자 겹침 0(테스트) | 실험(`toggles.reverse_question`·`soft_jailbreak_draft`·`mention_marker`). main 전 튜터 담당 동의 필요(TU-13·TD-06) |
 | KB 조각 임베딩(메모리, 파일 없음) | `kb/` 조각(BM25와 같은 244개)을 서버를 띄울 때 운영진 `text-embedding-3-small`로 임베딩(배포 자료 가공, SPEC §7.1). 질의 임베딩은 영어 위주 질의에서 요청마다 1회 쓰고 남기지 않음 | 팀(코드) + 운영진 API | TU-11(#81), `toggles.embedding`이 켜졌을 때만(기본 끔. 측정에서 recall@1이 오르지 않아 끈 채로 둔다) |
 | (쓰면) nano 합성 예시 | 운영진 `gpt-5-nano`. 생성 스크립트와 함께 커밋 | 팀 + nano | 기본 안 씀 |
 | 라이브러리 | 가드 provenance 1절의 목록과 같은 범위(`openai`, `pydantic`, `pyyaml`, `fastapi`, `uvicorn`, `scikit-learn`). 튜터가 더하는 것은 여기에 행으로 적는다 | 오픈소스, 모델·사전 파일 없음, 외부 호출은 운영진 엔드포인트만. `tiktoken`·Kiwi는 쓰지 않음 | — |

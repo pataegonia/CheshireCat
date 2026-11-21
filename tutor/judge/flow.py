@@ -32,6 +32,7 @@
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Sequence
+from types import SimpleNamespace
 from typing import Any
 
 from guardrail.schema import OutputVerdict
@@ -49,8 +50,9 @@ from tutor.answer.templates import (
     fixed_body,
     template_for,
 )
+from tutor.judge import main_call, multi_draft
 from tutor.judge.conversation import Conversation, normalize_fast, tidy
-from tutor.judge.draft import draft_answer
+from tutor.judge.draft import Draft, draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
 from tutor.judge.guard_merge import (
     ATTACK_CATEGORIES,
@@ -82,6 +84,18 @@ from tutor.judge.oom_gate import GateCounts, GateJob, english_only, material_abs
 from tutor.judge.oom_gate import build_messages as build_gate_messages
 from tutor.judge.oom_gate import load_system as load_gate_system
 from tutor.judge.signals import Signal, detect, direct_clarify, labels
+from tutor.judge.specialists import (
+    REDRAFT_ROLE,
+    RQ_ABSTAIN,
+    RQ_CODE,
+    SJ_ROLE,
+    RqPrompts,
+    StageRec,
+    bounded,
+    has_mention_marker,
+    reverse_question,
+    sj_messages,
+)
 from tutor.judge.unknown_terms import kb_blob, missing_terms
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
@@ -117,6 +131,8 @@ def prepare_judge(app_state: Any) -> None:
     app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
     named = toggles.oom_gate == "named_term"  # KB 전체 글(비교용)도 기동 때 한 번
     app_state.tutor_kb_blob = kb_blob(app_state.tutor_kb.sections) if named else None
+    rq_on = toggles.reverse_question != "off"  # 실험 rq 프롬프트 둘: 기동 때 한 번
+    app_state.tutor_rq_prompts = RqPrompts.load() if rq_on else None
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
@@ -367,6 +383,109 @@ def _complete(state: Any):
     return complete
 
 
+def _draft_code(result: Any) -> str:
+    """초안 결과의 로그 코드: 성공 "-", 잘림이면 finish_reason(length·content_filter),
+    그 밖은 오류 코드."""
+    if result.error is None:
+        return "-"
+    if result.error == "bad_json" and result.finish_reason in ("length", "content_filter"):
+        return str(result.finish_reason)
+    return str(result.error)
+
+
+def _multi_complete(state: Any, runs: list[MainCallOut | None]):
+    """`llm.multi_draft`를 켰을 때의 주 호출 어댑터(겹쳐 보내기 대신). 초안 K개를 동시에 보내고
+    `multi_draft.wait_drafts` 규칙으로 기다린다. 초안마다 정리한 결과(무효면 None)를 `runs`에
+    번호 순으로 채우고, 유효한 결과 하나(없으면 A의 결과)를 돌려준다. 실제로 고르는 일은
+    `_pick_draft`가 근거 묶음을 받아서 한다. 초안 메타데이터는 `multi_draft.SHADOW`에 남긴다."""
+    cfg = state.tutor_cfg
+    md = cfg.llm.multi_draft
+    both = _t_on(cfg) and cfg.toggles.guard_classify != "off"
+    retries = 0 if both else MAIN_RETRIES  # 초안 A는 지금의 주 호출과 같은 재시도
+    llm = state.tutor_llm
+    sends_effort = getattr(llm, "sends_effort", True)
+
+    async def complete(messages, schema, *, deadline: float) -> CompleteResult:
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        shadow = multi_draft.SHADOW.get()
+        if shadow is not None:  # 안전망 시간 초과로 빠져나가도 칸이 남게 보내기 전에 센다
+            shadow.started += len(md.drafts)
+        tasks = []
+        for i, spec in enumerate(md.drafts):
+            low = spec.effort == "low"
+            tasks.append(
+                asyncio.ensure_future(
+                    llm.complete(
+                        MAIN_ROLE if i == 0 else f"{MAIN_ROLE}_{multi_draft.LETTERS[i]}",
+                        messages,
+                        schema,
+                        deadline=deadline if low else deadline - md.margin_s,
+                        timeout_s=spec.timeout_s or cfg.llm.timeout_s.main,
+                        retries=retries if i == 0 else 0,
+                        effort=spec.effort,
+                    )
+                )
+            )
+
+        def valid(result: Any) -> bool:
+            return result.error is None and isinstance(result.parsed, schema)
+
+        cut = min(start + md.wait_s, deadline - md.margin_s)
+        await multi_draft.wait_drafts(tasks, cut=cut, deadline=deadline, valid=valid)
+        ended = loop.time()
+        results = [t.result() if t.done() and not t.cancelled() else None for t in tasks]
+        for i, (spec, result) in enumerate(zip(md.drafts, results, strict=True)):
+            runs.append(main_call.clean(result.parsed) if result and valid(result) else None)
+            if shadow is not None:
+                effort = multi_draft.EFFORT_KEY[spec.effort] if sends_effort else "na"
+                shadow.drafts.append(
+                    multi_draft.DraftStat(
+                        key=f"{effort}_{multi_draft.LETTERS[i]}",
+                        ms=result.latency_ms if result else (ended - start) * 1000,
+                        attempts=result.attempts if result else 1,
+                        code=_draft_code(result) if result else "cut",
+                        gate_ms=getattr(result, "gate_ms", 0.0) if result else 0.0,
+                    )
+                )
+        done = [r for r in results if r is not None]
+        return next((r for r in done if valid(r)), results[0] or (done[-1] if done else _NO_RESULT))
+
+    return complete
+
+
+# 초안이 하나도 끝나지 않았을 때(요청 마감) run_main_call에 돌려주는 실패 결과
+_NO_RESULT = SimpleNamespace(parsed=None, error="timeout")
+
+
+def _pick_draft(state: Any, draft: Draft, runs: Sequence[MainCallOut | None]) -> Draft:
+    """초안 가운데 하나를 고른다(`multi_draft.select`). 유효한 초안이 없으면 주 호출 실패 그대로."""
+    efforts = [d.effort for d in state.tutor_cfg.llm.multi_draft.drafts]
+    sections = multi_draft.contract_sections(draft.sections)
+    chosen = multi_draft.select(runs, efforts, sections)
+    aa_mode = state.tutor_cfg.llm.multi_draft.abstain_if_any
+    if aa_mode != "off":
+        rec = _stage("aa")
+        alt = multi_draft.abstain_override(runs, chosen)
+        rec.before = None if chosen is None else runs[chosen].action  # type: ignore[union-attr]
+        rec.trig = alt is not None
+        rec.after = rec.before if alt is None else runs[alt].action  # type: ignore[union-attr]
+        if alt is not None and aa_mode == "on":
+            rec.changed, chosen = True, alt
+    shadow = multi_draft.SHADOW.get()
+    if shadow is not None:
+        actions = {o.action for o in runs if o is not None}
+        shadow.valid = sum(o is not None for o in runs)
+        shadow.actions = [None if o is None else o.action for o in runs]
+        shadow.split = len(actions) > 1
+        shadow.chosen = chosen
+        shadow.a_action = runs[0].action if runs and runs[0] is not None else None
+        shadow.chosen_action = None if chosen is None else runs[chosen].action  # type: ignore[union-attr]
+        shadow.bundle = [s.id for s in draft.sections]  # 측정 전용: 근거 묶음 섹션(검색 순위 순)
+    out = None if chosen is None else runs[chosen]
+    return Draft(sections=draft.sections, out=out)
+
+
 def _start_intent(
     state: Any, conv: Conversation, signals: Sequence[Signal], deadline: float
 ) -> IntentJob | None:
@@ -439,6 +558,13 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
     시작부터 센 값 그대로 두고(호출 순서만 바뀐다), after_intent_fresh는 E 시작부터 센다.
     """
     toggles = state.tutor_cfg.toggles
+    for key, mode in (
+        ("rq", toggles.reverse_question),
+        ("sj", toggles.soft_jailbreak_draft),
+        ("mm", toggles.mention_marker),
+    ):
+        if mode != "off":
+            _stage(key)  # 켠 단계는 돌지 않아도 기록 칸이 있다(trig 0)
     jobs: list[GateJob] = []  # 이 요청이 띄운 E(많아야 하나). finally에서 취소한다
 
     async def begin(gate_deadline: float) -> None:
@@ -470,7 +596,8 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
                     await begin(gate_deadline)
 
     try:
-        body = await _answer_v2(req, state, deadline=deadline, begin_gate=later)
+        seen: dict[str, Any] = {}  # 요청 안에서만: sj가 쓸 주 호출 메시지·sj가 답을 냈나
+        body = await _answer_v2(req, state, deadline=deadline, begin_gate=later, seen=seen)
         counts = getattr(state, "oom_gate_counts", None)
         gate = jobs[0] if jobs else None
         if (
@@ -479,10 +606,18 @@ async def answer_v2(req: TutorRequest, state: Any, *, deadline: float) -> dict[s
             and await material_absent(gate, counts)
         ):
             return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")
-        return append_quote(req, state, body)
+        replaced = (
+            None if seen.get("sj_used") else await _reverse_question(req, state, body, deadline)
+        )  # sj가 낸 answer에는 rq를 돌리지 않는다(한 요청에 단계 하나, 호출 상한 8의 전제)
+        if replaced is not None:
+            return replaced
+        return apply_cite_rule(state, seen, body, append_quote(req, state, body))
     finally:
         for job in jobs:
             job.cancel()
+        task = seen.get("redraft_task")
+        if task is not None and not task.done():
+            task.cancel()  # 쓰지 않은 1위 초안(요청이 끝난 뒤 남는 작업이 없게, TU-18)
 
 
 QUESTION_ENDS = ("?", "？")  # 덧붙이지 않는 문장 끝(자료가 던지는 질문, 점검 세트 리뷰 11/17)
@@ -633,6 +768,7 @@ async def _answer_v2(
     *,
     deadline: float,
     begin_gate: Callable[[], Awaitable[None]] | None = None,
+    seen: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """v2 흐름 본체. 예외는 올린다(라우터가 클래스 이름만 기록하고 기본값을 낸다).
 
@@ -645,6 +781,7 @@ async def _answer_v2(
     if direct_clarify(conv):
         return tutor_post(fixed_body(Fixed.CLARIFY))  # TU-05: 빈 발화, 앞 대화 뒤의 자모·기호만
     cfg = state.tutor_cfg
+    seen = {} if seen is None else seen  # sj가 쓸 주 호출 메시지·스키마(요청 안에서만)
     signals = detect(conv)  # 기본값 선택에는 토글과 상관없이 쓴다(TU-12)
     guard = getattr(state, "guard", None)
     skips: GuardSkips | None = getattr(state, "guard_skips", None)
@@ -697,10 +834,22 @@ async def _answer_v2(
                 return tutor_post(fixed_body(hit[0]), hit[1])
         if begin_gate is not None:
             await begin_gate()  # 직렬 T가 고정 문장으로 끝내지 않은 요청만 여기에 온다
+        multi = cfg.llm.multi_draft.enabled  # 실험: 주 호출 초안 여러 개 + 고르기
+        runs: list[MainCallOut | None] = []
+        complete = _multi_complete(state, runs) if multi else _complete(state)
+        if cfg.toggles.soft_jailbreak_draft != "off":
+            complete = _capture(complete, seen)  # sj 초안이 같은 메시지를 쓴다
+        if multi and cfg.llm.multi_draft.top1_redraft == "parallel":
+            # 1위 섹션 하나만 근거로 둔 초안을 정규 초안과 함께 띄운다(고르기·다수결 밖)
+            seen["rule_a"] = await _rule_a_top(state, conv)
+            if seen["rule_a"]:
+                seen["redraft_task"] = _start_redraft(
+                    state, conv, signals, seen["rule_a"][0], deadline
+                )
         draft = await draft_answer(
             conv,
             prompt=state.tutor_prompt,
-            complete=_complete(state),
+            complete=complete,
             deadline=deadline,
             k=cfg.retrieval.k,
             signals=labels(signals) if cfg.toggles.signals else (),
@@ -709,6 +858,8 @@ async def _answer_v2(
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
         )
+        if multi:
+            draft = _pick_draft(state, draft, runs)
         if deferred is not None and draft.out is None:
             # 주 호출이 실패했으면 T 고정 문장. 성공했으면 아래 T 덮기(decide)가 parallel과 같은
             # 규칙으로 정한다(주 호출의 escalate·refuse 등 더 강한 action을 지킨다, #233 리뷰)
@@ -758,6 +909,7 @@ async def _answer_v2(
     action = choose_action(out, from_category=cfg.toggles.action_from_category)
     # T 덮기(대행 보정 뒤, 합치기 앞). classify가 위기·공격이면 T는 비키고 합치기가 정한다
     decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    decided = _mention_marker(cfg, conv, intent_label, decided, action)
     if decided is not None:
         kind = template_for(decided.category, decided.action)
         if kind is not None:
@@ -769,7 +921,8 @@ async def _answer_v2(
     merged = merge_category(out.category, action, trusted)
     if merged.fixed is not None:
         # TU-10: classify가 공격 범주로 덮었다. 고정 문장은 판정하지 않는다
-        return tutor_post(fixed_body(merged.fixed), merged.category)
+        soft = await _soft_jailbreak(state, merged.fixed, signals, seen, draft.sections, deadline)
+        return soft or tutor_post(fixed_body(merged.fixed), merged.category)
     verdict = None
     # 주 호출 문장이 그대로 나가는 경로만 검증한다(고정 문장에는 판정할 주장이 없다, TU-09)
     if cfg.toggles.verify == "guard" and template_for(merged.category, action) is None:
@@ -793,20 +946,13 @@ async def _answer_v2(
         and cfg.toggles.top1_dialog_query
         and template_for(merged.category, action) is None  # 고정 문장은 인용이 없다
     ):  # 규칙 A: 튜터 발화까지 넣은 질의로 한 번 더 찾아 1위만 쓴다(LLM 0회, BM25만)
-        query, history = conv.search_query(all_roles=True)
-        try:  # 더할 인용 하나를 고르는 일이라, 실패하거나 비면 끔일 때의 1위로 돌아간다
-            top_sections = (
-                await retrieve(
-                    query,
-                    history,
-                    k=cfg.retrieval.k,
-                    index=state.tutor_kb,
-                    **_english_embedding(state),
-                )
-                or None
-            )
-        except Exception:  # 메시지는 남기지 않는다
-            top_sections = None
+        # top1_redraft parallel이 주 호출 앞에서 이미 찾았으면 그 결과(같은 질의)를 쓴다
+        top_sections = seen.get("rule_a") or await _rule_a_top(state, conv)
+    kind = template_for(merged.category, action)
+    if kind is not None:  # 주 호출이 고른 고정 문장(탈옥 거절이면 sj가 볼 수 있다)
+        soft = await _soft_jailbreak(state, kind, signals, seen, draft.sections, deadline)
+        if soft is not None:
+            return soft
     body = assemble(
         out,
         draft.sections,
@@ -816,4 +962,553 @@ async def _answer_v2(
         cite_top1=cfg.toggles.cite_top1,
         top_sections=top_sections,
     )
+    final = tutor_post(body, merged.category)
+    if runs and kind is None:  # 고른 초안의 문장이 나가는 경로: 초안별 인용(호출 0회)
+        chosen = next((i for i, o in enumerate(runs) if o is draft.out), None)
+        both = [
+            None
+            if o is None
+            else _draft_cites(cfg, o, signals, trusted, intent_label, draft.sections, top_sections)
+            for i, o in enumerate(runs)
+        ]
+        md_cites = [None if b is None else b[0] for b in both]
+        md_model = [None if b is None else b[1] for b in both]
+        top = draft.sections if top_sections is None else top_sections
+        top1 = top[0].id if cfg.toggles.cite_top1 and top else None
+        switched = False
+        if cfg.llm.multi_draft.prefer_top1 == "on" and verdict is None and chosen is not None:
+            alt = _top1_draft(state, draft, runs, md_model, chosen, top1)
+            path = (
+                None if alt is None else _draft_path(cfg, runs[alt], signals, trusted, intent_label)
+            )
+            if path is not None and path[1] == action and path[2] == merged.category:
+                # 1위 섹션을 확인된 근거로 쓴 같은 action 초안의 문장·인용으로 바꾼다(호출 0회)
+                body = assemble(
+                    path[0],
+                    draft.sections,
+                    action=action,
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                    top_sections=top_sections,
+                )
+                final, chosen, switched = tutor_post(body, merged.category), alt, True
+        if chosen is not None:
+            md_cites[chosen] = sorted(final["citations"])  # 고른 초안은 실제로 나간 인용
+        actions = [None if o is None else o.action for o in runs]
+        seen["md"] = (md_cites, actions, chosen, md_model, top1)
+        seen["pick_body"] = final
+        shadow = multi_draft.SHADOW.get()
+        if shadow is not None:
+            shadow.md_cites, shadow.md_model_cites, shadow.top1 = md_cites, md_model, top1
+            shadow.top1_switch = switched
+            if switched:
+                shadow.chosen = chosen
+        picked = None if chosen is None else runs[chosen]
+        rd_mode = cfg.llm.multi_draft.top1_redraft
+        if (
+            rd_mode != "off"
+            and verdict is None  # 가드 판정은 고른 초안의 문장에 대한 것이다
+            and picked is not None
+            and picked.action == action == "answer"
+            and top1 is not None
+            and not any(  # 같은 action의 어느 초안도 1위를 확인된 근거로 쓰지 않았다
+                o is not None and o.action == picked.action and top1 in (md_model[i] or [])
+                for i, o in enumerate(runs)
+            )
+        ):
+            if rd_mode == "on":
+                redone = await _top1_redraft(state, conv, signals, top[0], picked, deadline, shadow)
+            else:
+                redone = await _parallel_redraft(state, seen, top[0], picked, deadline, shadow)
+            path = (
+                None if redone is None else _draft_path(cfg, redone, signals, trusted, intent_label)
+            )
+            if (
+                redone is not None and redone.action == "abstain"
+            ):  # top1_redraft_abstain(used_abstain)
+                # 고른 초안이 abstain이었을 때와 같은 뒤 단계를 지난다(대행 보정 → T → 합치기 →
+                # assemble·고정 문장 → 후처리, 근거 묶음은 그 초안이 본 1위 섹션 하나)
+                final = _downstream(
+                    cfg, redone, [top[0]], signals, trusted, intent_label, top_sections
+                )
+                seen.pop("pick_body")
+            elif redone is not None and (
+                path is None or path[1] != action or path[2] != merged.category
+            ):
+                _redraft_mark(shadow, "rejected:path")
+            elif path is not None:
+                body = assemble(
+                    path[0],
+                    [top[0]],
+                    action=action,
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                    top_sections=top_sections,
+                )
+                final = tutor_post(body, merged.category)
+                seen.pop("pick_body")  # 고른 초안의 응답이 아니다: cite_rule을 걸지 않는다
+                _redraft_mark(shadow, "used")
+    return final
+
+
+def _downstream(
+    cfg: Any,
+    out: MainCallOut,
+    sections: Sequence[RetrievedSection],
+    signals: Sequence[Signal],
+    trusted: str | None,
+    intent_label: str | None,
+    top_sections: Sequence[RetrievedSection] | None,
+) -> dict[str, Any]:
+    """초안 하나를 고른 초안처럼 `_answer_v2`의 뒤 단계(대행 보정 → T 덮기 → 합치기 → assemble·
+    고정 문장 → 후처리)에 통과시킨 응답. 호출이 드는 가드 판정·sj와 mm 기록은 뺀다."""
+    toggles = cfg.toggles
+    out = delegation_guard(
+        out,
+        signals,
+        state_rule=toggles.scaffold_state_rule,
+        override=toggles.delegation_override,
+        classified=trusted,
+    )
+    action = choose_action(out, from_category=toggles.action_from_category)
+    decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    if decided is not None:
+        kind = template_for(decided.category, decided.action)
+        if kind is not None:
+            return tutor_post(fixed_body(kind), decided.category)
+        out, action = out.model_copy(update={"category": decided.category}), decided.action
+    merged = merge_category(out.category, action, trusted)
+    if merged.fixed is not None:
+        return tutor_post(fixed_body(merged.fixed), merged.category)
+    body = assemble(
+        out,
+        sections,
+        action=action,
+        max_citations=toggles.max_citations,
+        cite_top1=toggles.cite_top1,
+        top_sections=top_sections,
+    )
     return tutor_post(body, merged.category)
+
+
+async def _rule_a_top(state: Any, conv: Conversation) -> list[RetrievedSection] | None:
+    """규칙 A(`top1_dialog_query`): 튜터 발화까지 넣은 질의의 검색 결과. 실패하거나 비면 None
+    (더할 인용 하나를 고르는 일이라 끔일 때의 1위로 돌아간다)."""
+    cfg = state.tutor_cfg
+    query, history = conv.search_query(all_roles=True)
+    try:
+        found = await retrieve(
+            query, history, k=cfg.retrieval.k, index=state.tutor_kb, **_english_embedding(state)
+        )
+    except Exception:  # 메시지는 남기지 않는다
+        return None
+    return list(found) or None
+
+
+def _redraft_mark(shadow: multi_draft.Shadow | None, code: str) -> None:
+    if shadow is not None:
+        shadow.redraft = code
+
+
+async def _top1_redraft(
+    state: Any,
+    conv: Conversation,
+    signals: Sequence[Signal],
+    top: RetrievedSection,
+    picked: MainCallOut,
+    deadline: float,
+    shadow: multi_draft.Shadow | None,
+) -> MainCallOut | None:
+    """`llm.multi_draft.top1_redraft`: 근거 묶음을 cite_top1 섹션 하나로 줄인 low 초안을 한 번 더
+    부른다(재시도 0). 다른 초안과 같은 프롬프트·스키마·신호·판단 예시, 근거 묶음만 다르다.
+    마감은 요청 마감 − `multi_draft.margin_s`(medium 초안·기다리기 끝과 같다)이고, 그때까지
+    `HEDGE_MIN_LEFT_S`보다 덜 남았으면 부르지 않는다(skip_time). 유효하고 answer이며 고른 초안과
+    범주가 같고, 그 섹션을 확인된 근거로 쓴 초안만 돌려준다(아니면 rejected:<사유>, None)."""
+    until = deadline - state.tutor_cfg.llm.multi_draft.margin_s
+    if until - asyncio.get_running_loop().time() < HEDGE_MIN_LEFT_S:
+        _redraft_mark(shadow, "skip_time")
+        return None
+    parsed, ms, _late = await _redraft_run(state, conv, signals, top, until)
+    if shadow is not None:
+        shadow.redraft_ms = ms
+    return _accept_redraft(state, parsed, top, picked, shadow)
+
+
+LATE_EPS_S = 0.01  # 마감에 걸려 끝난 호출로 보는 여유(bounded가 until에 끊는다)
+
+
+async def _redraft_run(
+    state: Any, conv: Conversation, signals: Sequence[Signal], top: RetrievedSection, until: float
+) -> tuple[Any, float, bool]:
+    """1위 섹션 하나만 근거로 둔 low 초안 호출 하나 → (결과 또는 None, ms, 마감에 걸렸나)."""
+    cfg = state.tutor_cfg
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    messages = main_call.build_messages(
+        state.tutor_prompt,
+        conv,
+        [top],
+        labels(signals) if cfg.toggles.signals else (),
+        examples_block(state, conv),
+    )
+    parsed = await bounded(
+        state.tutor_llm,
+        REDRAFT_ROLE,
+        messages,
+        state.tutor_prompt.schema,
+        until=until,
+        timeout_s=cfg.llm.timeout_s.main,
+        effort="low",
+    )
+    now = loop.time()
+    return parsed, (now - t0) * 1000, parsed is None and now >= until - LATE_EPS_S
+
+
+def _start_redraft(
+    state: Any,
+    conv: Conversation,
+    signals: Sequence[Signal],
+    top: RetrievedSection,
+    deadline: float,
+) -> "asyncio.Future[tuple[Any, float, bool]] | None":
+    """`top1_redraft: parallel`: 정규 초안과 함께 1위 초안을 띄운다. 마감은 "on"과 같은 요청 마감 −
+    `multi_draft.margin_s`이고, 그때까지 `HEDGE_MIN_LEFT_S`보다 덜 남았으면 띄우지 않는다."""
+    until = deadline - state.tutor_cfg.llm.multi_draft.margin_s
+    shadow = multi_draft.SHADOW.get()
+    if until - asyncio.get_running_loop().time() < HEDGE_MIN_LEFT_S:
+        _redraft_mark(shadow, "skip_time")
+        return None
+    _redraft_mark(shadow, "not_needed")  # 고른 뒤 조건이 맞으면 바뀐다
+    return asyncio.ensure_future(_redraft_run(state, conv, signals, top, until))
+
+
+async def _parallel_redraft(
+    state: Any,
+    seen: dict[str, Any],
+    top: RetrievedSection,
+    picked: MainCallOut,
+    deadline: float,
+    shadow: multi_draft.Shadow | None,
+) -> MainCallOut | None:
+    """띄워 둔 1위 초안을 받는다. 아직 돌면 "on"과 같은 마감(요청 마감 − margin_s)까지만 기다리고,
+    그때도 안 끝났거나 마감에 걸려 끝났으면 late. 받는 규칙은 "on"과 같다(`_accept_redraft`).
+    띄우지 않은 요청(1위 없음·시간 부족)은 띄울 때 남긴 기록 그대로 None."""
+    task = seen.get("redraft_task")
+    if task is None:
+        return None
+    until = deadline - state.tutor_cfg.llm.multi_draft.margin_s
+    left = until - asyncio.get_running_loop().time()
+    if not task.done():
+        await asyncio.wait({task}, timeout=max(left, 0.0) + LATE_EPS_S)
+    if not task.done():
+        task.cancel()
+        _redraft_mark(shadow, "late")
+        return None
+    parsed, ms, late = task.result()
+    if shadow is not None:
+        shadow.redraft_ms = ms
+    if late:
+        _redraft_mark(shadow, "late")
+        return None
+    return _accept_redraft(state, parsed, top, picked, shadow)
+
+
+def _accept_redraft(
+    state: Any,
+    parsed: Any,
+    top: RetrievedSection,
+    picked: MainCallOut,
+    shadow: multi_draft.Shadow | None,
+) -> MainCallOut | None:
+    """유효하고 answer이며 고른 초안과 범주가 같고 1위 섹션을 확인된 근거로 쓴 초안만 돌려준다
+    (아니면 rejected:<사유>, None). `top1_redraft_abstain`이 on이면 유효한 abstain 초안도
+    돌려준다(used_abstain, 고른 초안은 이 단계에 오는 조건상 answer다). 유효한 초안의 action은
+    `Shadow.redraft_action`에 남긴다(측정 전용)."""
+    out = None if parsed is None else main_call.clean(parsed)
+    if out is not None and shadow is not None:
+        shadow.redraft_action = out.action
+    abstain_on = state.tutor_cfg.llm.multi_draft.top1_redraft_abstain == "on"
+    if out is not None and out.action == "abstain" and abstain_on:
+        _redraft_mark(shadow, "used_abstain")
+        return out
+    verified = (
+        set()
+        if out is None
+        else multi_draft.verified_sids(out, multi_draft.contract_sections([top]))
+    )
+    reason = (
+        "fail"
+        if out is None
+        else "action"
+        if out.action != "answer"
+        else "category"
+        if out.category != picked.category
+        else "cite"
+        if top.id not in verified
+        else None
+    )
+    if reason is not None:
+        _redraft_mark(shadow, f"rejected:{reason}")
+        return None
+    return out
+
+
+def _top1_draft(
+    state: Any,
+    draft: Draft,
+    runs: Sequence[MainCallOut | None],
+    md_model: Sequence[Sequence[str] | None],
+    chosen: int,
+    top1: str | None,
+) -> int | None:
+    """`llm.multi_draft.prefer_top1`: 고른 초안의 모델 인용에 1위(`top1`)가 없고, action이 같은
+    다른 유효한 초안의 모델 인용(확인된 근거)에 있으면 그 초안 번호. 여럿이면 고르기와 같은 순서
+    (근거 비율 → 확인된 인용 수 → medium → A → 번호). 없으면 None."""
+    if top1 is None or top1 in (md_model[chosen] or []):
+        return None
+    action = runs[chosen].action  # type: ignore[union-attr]
+    keep = [
+        o
+        if o is not None and i != chosen and o.action == action and top1 in (md_model[i] or [])
+        else None
+        for i, o in enumerate(runs)
+    ]
+    if not any(keep):
+        return None
+    efforts = [d.effort for d in state.tutor_cfg.llm.multi_draft.drafts]
+    return multi_draft.select(keep, efforts, multi_draft.contract_sections(draft.sections))
+
+
+def _draft_path(
+    cfg: Any,
+    out: MainCallOut,
+    signals: Sequence[Signal],
+    trusted: str | None,
+    intent_label: str | None,
+) -> tuple[MainCallOut, Action, str] | None:
+    """초안 하나를 `_answer_v2`의 결정적 단계(대행 보정 → T 덮기 → 합치기)에 통과시킨 (결과, action,
+    범주). 고정 문장이 되면 None. 호출이 드는 단계(가드 판정·sj)와 mm 기록은 뺀다."""
+    toggles = cfg.toggles
+    out = delegation_guard(
+        out,
+        signals,
+        state_rule=toggles.scaffold_state_rule,
+        override=toggles.delegation_override,
+        classified=trusted,
+    )
+    action = choose_action(out, from_category=toggles.action_from_category)
+    decided = None if _classify_wins(trusted) else decide_intent(intent_label, signals, action)
+    if decided is not None:
+        if template_for(decided.category, decided.action) is not None:
+            return None
+        out, action = out.model_copy(update={"category": decided.category}), decided.action
+    merged = merge_category(out.category, action, trusted)
+    if merged.fixed is not None or template_for(merged.category, action) is not None:
+        return None
+    return out, action, merged.category
+
+
+def _draft_cites(
+    cfg: Any,
+    out: MainCallOut,
+    signals: Sequence[Signal],
+    trusted: str | None,
+    intent_label: str | None,
+    sections: Sequence[RetrievedSection],
+    top_sections: Sequence[RetrievedSection] | None,
+) -> tuple[list[str], list[str]]:
+    """초안이 골라졌다면 `_answer_v2`의 결정적 단계(대행 보정 → T 덮기 → 합치기 → assemble →
+    후처리)가 냈을 (인용, 모델 인용), 둘 다 정렬. 모델 인용은 결정적 수정(IN-04)이 고른 인용 가운데
+    그 초안의 claim 인용 문구가 원문에서 확인된 섹션이다(검색 1위 채우기·cite_top1 추가는 빠진다).
+    호출 0회라 호출이 드는 부분은 뺀다: 가드 판정(`toggles.verify`)은 None으로 보고, sj 초안은
+    부르지 않으며(고정 문장이면 []), mm은 기록하지 않는다(기록 칸을 쓰기 때문, 이 브랜치 설정에서
+    끔). 규칙 A 1위(`top_sections`)는 고른 초안이 쓴 것을 그대로 쓴다(같은 질의라 같은 결과)."""
+    toggles = cfg.toggles
+    path = _draft_path(cfg, out, signals, trusted, intent_label)
+    if path is None:
+        return [], []
+    out, action, category = path
+    body = assemble(out, sections, action=action, max_citations=toggles.max_citations)
+    verified = multi_draft.verified_sids(out, multi_draft.contract_sections(sections))
+    model = [c for c in tutor_post(body, category)["citations"] if c in verified]
+    if toggles.cite_top1:  # assemble(cite_top1=True)와 같은 추가
+        body = add_top_citation(body, sections if top_sections is None else top_sections)
+    return sorted(tutor_post(body, category)["citations"]), sorted(model)
+
+
+def apply_cite_rule(
+    state: Any, seen: dict[str, Any], body: dict[str, Any], final: dict[str, Any]
+) -> dict[str, Any]:
+    """`llm.multi_draft.cite_rule`: `body`가 고른 초안의 assemble 경로가 낸 응답 그대로일 때만
+    (`seen["pick_body"]`) 자료 문장 덧붙이기 뒤의 `final`에서 인용 목록만 바꾼다. 답·action은
+    그대로다(덧붙일 섹션은 이미 pick 인용으로 골랐다). T·E·rq·sj·고정 문장이 바꾼 응답은 그대로."""
+    md = seen.get("md")
+    if md is None or seen.get("pick_body") is not body:
+        return final
+    shadow = multi_draft.SHADOW.get()
+    if shadow is not None:
+        shadow.cite_path = True
+    rule = state.tutor_cfg.llm.multi_draft.cite_rule
+    cites = multi_draft.compose_cites(rule, final["citations"], *md)
+    return final if cites == final["citations"] else {**final, "citations": cites}
+
+
+# --- 실험 단계(tutor.judge.specialists). shadow는 기록만, on은 응답을 바꾼다 ---
+
+
+def _stage(key: str) -> StageRec:
+    """이 요청의 단계 기록. 기록 칸(라우터·측정 도구의 Shadow)이 없으면 버리는 기록."""
+    shadow = multi_draft.SHADOW.get()
+    if shadow is None:
+        return StageRec()
+    return shadow.stages.setdefault(key, StageRec())
+
+
+def _capture(complete: Any, seen: dict[str, Any]) -> Any:
+    """주 호출 어댑터를 감싸 보낸 메시지·스키마를 `seen`에 둔다(sj 초안이 같은 메시지를 쓴다)."""
+
+    async def wrapped(messages, schema, *, deadline: float) -> CompleteResult:
+        seen["messages"], seen["schema"] = messages, schema
+        return await complete(messages, schema, deadline=deadline)
+
+    return wrapped
+
+
+HARMFUL_DEMEANING = "유해-비하"  # T 이름표(tutor.judge.intent.TARGET)
+
+
+def _mention_marker(
+    cfg: Any, conv: Conversation, label: str | None, decided: Any, action: Action
+) -> Any:
+    """mm: T가 유해-비하로 덮으려 하는데 판단 대상에 언급 표지가 있으면, on에서 덮기를 버리고
+    주 호출 action을 둔다. shadow는 기록만. 주 호출이 없는 경로(실패)는 여기에 오지 않는다."""
+    mode = cfg.toggles.mention_marker
+    if mode == "off" or label != HARMFUL_DEMEANING or decided is None:
+        return decided
+    rec = _stage("mm")
+    marked = has_mention_marker(conv.target_raw)
+    rec.trig, rec.verdict = True, str(int(marked))
+    rec.before, rec.after = decided.action, action if marked else decided.action
+    if marked and mode == "on":
+        rec.changed = True
+        return None
+    return decided
+
+
+# sj를 돌리지 않는 신호: 지시 무력화(진짜 탈옥), 위기(escalate가 먼저), 과제 대행(대행 덮기 몫)
+SJ_BLOCKERS = frozenset({Signal.OVERRIDE, Signal.CRISIS, Signal.DELEGATION})
+
+
+async def _soft_jailbreak(
+    state: Any,
+    kind: Fixed,
+    signals: Sequence[Signal],
+    seen: dict[str, Any],
+    sections: Sequence[RetrievedSection],
+    deadline: float,
+) -> dict[str, Any] | None:
+    """sj: 지시 무력화 신호 없는 탈옥 거절이면 "정상으로 보고 개념 설명" low 초안을 하나 더 부른다.
+
+    초안이 answer이고 결정적 수정 뒤에도 인용 있는 answer(빈 답 안내 아님)면 used. on에서만 그 답을
+    낸다(None이면 거절 그대로). 예외·실패·시간 부족은 kept, 초안이 왔지만 쓸 수 없으면 invalid."""
+    cfg = state.tutor_cfg
+    mode = cfg.toggles.soft_jailbreak_draft
+    if (
+        mode == "off"
+        or kind != Fixed.REFUSE_JAILBREAK
+        or not SJ_BLOCKERS.isdisjoint(signals)
+        or "messages" not in seen
+    ):
+        return None
+    rec = _stage("sj")
+    rec.trig, rec.before, rec.after, rec.verdict = True, "refuse", "refuse", "kept"
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    body = None
+    try:
+        parsed = await bounded(
+            state.tutor_llm,
+            SJ_ROLE,
+            sj_messages(seen["messages"]),
+            seen["schema"],
+            until=deadline - cfg.llm.soft_jailbreak_draft.margin_s,
+            timeout_s=cfg.llm.timeout_s.main,
+            effort="low",
+        )
+        if parsed is not None:
+            rec.verdict = "invalid"
+            out = main_call.clean(parsed)
+            if out.action == "answer":
+                candidate = assemble(
+                    out.model_copy(update={"category": "normal"}),
+                    sections,
+                    action="answer",
+                    max_citations=cfg.toggles.max_citations,
+                    cite_top1=cfg.toggles.cite_top1,
+                )
+                answer = candidate.get("answer") or ""
+                if (
+                    candidate.get("action") == "answer"
+                    and candidate.get("citations")
+                    and NOT_IN_MATERIAL_NOTE not in answer
+                ):
+                    body = candidate
+    except Exception:  # noqa: BLE001 - 단계 실패는 거절을 그대로 둔다(메시지는 남기지 않는다)
+        body = None
+    rec.ms = (loop.time() - t0) * 1000
+    if body is None:
+        return None
+    rec.verdict, rec.after = "used", "answer"
+    if mode != "on":
+        return None
+    rec.changed = True
+    seen["sj_used"] = True
+    return tutor_post(body, "normal")
+
+
+CODE_FENCE = "`" * 3  # 판단 대상에 코드 블록이 있으면 rq를 돌리지 않는다
+
+
+async def _reverse_question(
+    req: TutorRequest, state: Any, body: dict[str, Any], deadline: float
+) -> dict[str, Any] | None:
+    """rq: 최종 answer(자료 문장 덧붙이기 전)의 문장만으로 되살린 질문을 학습자 질문과 견준다.
+
+    다른 속성·다른 대상(신뢰도 `min_confidence` 이상)이면 on에서 자료 밖 고정 문장(E와 같은 길).
+    판단 대상에 코드 블록이 있거나, 빈 답 안내가 든 답이거나, sj가 낸 answer면 돌지 않는다.
+    예외·실패·시간 부족은 fail이고 응답을 바꾸지 않는다."""
+    cfg = state.tutor_cfg
+    mode = cfg.toggles.reverse_question
+    prompts = getattr(state, "tutor_rq_prompts", None)
+    if mode == "off" or prompts is None or body.get("action") != "answer":
+        return None
+    answer = body.get("answer") or ""
+    if not answer or NOT_IN_MATERIAL_NOTE in answer:
+        return None
+    conv = tidy(_messages(req))
+    if CODE_FENCE in conv.target_raw:
+        return None
+    rec = _stage("rq")
+    rec.trig, rec.before, rec.after = True, "answer", "answer"
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    try:
+        code, conf = await reverse_question(
+            state.tutor_llm,
+            prompts,
+            cfg.llm.reverse_question,
+            answer=answer,
+            question=conv.target_raw,
+            deadline=deadline,
+        )
+    except Exception:  # noqa: BLE001 - 단계 실패는 답을 그대로 둔다
+        code, conf = "fail", 0
+    rec.ms = (loop.time() - t0) * 1000
+    rec.verdict, rec.conf = RQ_CODE.get(code, "fail"), conf
+    if code not in RQ_ABSTAIN or conf < cfg.llm.reverse_question.min_confidence:
+        return None
+    rec.after = "abstain"
+    if mode != "on":
+        return None
+    rec.changed = True
+    return tutor_post(fixed_body(Fixed.ABSTAIN), "out_of_material")

@@ -26,6 +26,7 @@ from fakes import (
     Ok,
     RateLimited,
     ServerError,
+    Stream,
     Timeout,
 )
 
@@ -559,3 +560,85 @@ async def test_per_role_does_not_revive_a_param_the_probe_turned_off():
     llm.params["reasoning_effort"] = None  # probe()가 거절로 끈 상태
     await call(llm, clock)
     assert "reasoning_effort" not in fake.requests[0]
+
+
+@pytest.mark.parametrize(
+    ("start", "attempts", "error"), [(0.0, 2, None), (1.0, 2, None), (3.0, 1, "timeout")]
+)
+async def test_read_timeout_is_retried_only_when_two_reads_fit_the_default_budget(
+    start, attempts, error
+):
+    # 기본 설정(budget_s 24, read 11): read 시간 초과 뒤 대기 0.5초 + read 11초가 마감 안에 들어야
+    # 재시도한다. 요청 시작 뒤 3초에 나간 호출(1차 판정 뒤의 요청 점검 등)은 재시도하지 못한다
+    cfg = load_config()
+    clock = FakeClock()
+    fake = FakeLLM(Timeout(), Ok(OK_IN))
+
+    async def send(kwargs):
+        if isinstance(fake.steps[0], Timeout):
+            clock.now += cfg.llm.timeout_s.read  # read 한도를 다 쓰고 시간 초과
+        return await fake.send(kwargs)
+
+    llm = LLM(cfg.llm, send=send, clock=clock, sleep=clock.sleep, rand=lambda: 1.0)
+    deadline = clock() + cfg.budget_s
+    clock.now += start
+    r = await llm.complete("request_check", MSGS, InputOut, deadline=deadline)
+    assert (r.attempts, r.error, len(fake.requests)) == (attempts, error, attempts)
+
+
+# --- 호출별 스트림(llm.per_role.<역할>.stream) ---
+
+STREAM_ROLE = {"input_judge": RoleParams(max_completion_tokens=6000, read_s=16, stream=True)}
+
+
+async def test_stream_role_concatenates_chunks_and_keeps_the_last_finish_reason():
+    llm, fake, clock = make(Stream(completion_tokens=900), per_role=STREAM_ROLE)
+    r = await call(llm, clock)
+    assert r.parsed == InputOut(evidence="e", category="normal")
+    assert (r.error, r.attempts, r.finish_reason, r.completion_tokens) == (None, 1, "stop", 900)
+    sent = fake.requests[0]
+    assert sent["stream"] is True and sent["max_completion_tokens"] == 6000
+    assert sent["timeout"].read == 16 and sent["response_format"]["type"] == "json_schema"
+    assert fake.streams[0].closed  # 다 읽은 스트림은 닫는다
+
+
+async def test_stream_without_usage_has_no_token_count():
+    llm, _, clock = make(Stream(), per_role=STREAM_ROLE)
+    r = await call(llm, clock)
+    assert (r.error, r.finish_reason, r.completion_tokens) == (None, "stop", None)
+
+
+async def test_stream_cut_by_length_is_bad_json_like_the_non_stream_path():
+    # 추론에 토큰을 다 써 내용 조각 없이 length로 끝난 스트림과 중간에 잘린 JSON
+    for parts in ((), ('{"evidence": "e", ',)):
+        step = Stream(parts=parts or ("",), finish_reason="length")
+        llm, _, clock = make(step, step, per_role=STREAM_ROLE)
+        r = await call(llm, clock)
+        assert (r.error, r.finish_reason, r.attempts) == ("bad_json", "length", 2)
+
+
+async def test_stream_read_limit_covers_the_whole_stream():
+    # 조각이 오다 멈추면 read_s(스트림 전체 한도)에서 끊는다. 재시도도 같은 한도
+    role = {"input_judge": RoleParams(read_s=0.05, stream=True)}
+    llm, fake, clock = make(Stream(hang_after=1), Stream(hang_after=1), per_role=role)
+    r = await call(llm, clock, budget=100.0)
+    assert (r.error, r.parsed) == ("timeout", None)
+    assert all(s.closed for s in fake.streams)
+
+
+async def test_stream_respects_the_request_deadline_before_its_read_limit():
+    llm, _, clock = make(Stream(hang_after=1), per_role=STREAM_ROLE)
+    r = await llm.complete("input_judge", MSGS, InputOut, deadline=clock() + 0.05, retries=0)
+    assert (r.error, r.attempts) == ("timeout", 1)
+
+
+async def test_stream_read_timeout_mid_stream_is_a_timeout_and_retried():
+    llm, _, clock = make(Stream(fail_after=1), Stream(), per_role=STREAM_ROLE)
+    r = await call(llm, clock)
+    assert (r.error, r.attempts) == (None, 2)
+
+
+async def test_only_the_stream_role_streams():
+    llm, fake, clock = make(Ok(OK_IN), per_role=STREAM_ROLE)
+    await llm.complete("output_judge", MSGS, InputOut, deadline=clock() + 20)
+    assert "stream" not in fake.requests[0]

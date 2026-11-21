@@ -44,6 +44,10 @@ FREEZE_TOGGLES = {
     "oom_gate": "off",
     "oom_schedule": "with_request",
     "english_embedding": False,  # E(oom_gate)를 끈 기준에서는 켤 수 없다(로드에서 거부)
+    # 실험 단계(exp/tutor-specialists): 켠 동작은 test_specialists가 본다
+    "reverse_question": "off",
+    "soft_jailbreak_draft": "off",
+    "mention_marker": "off",
 }
 
 
@@ -56,6 +60,14 @@ def _baseline_config(tmp_path_factory):
     # 겹쳐 보내기·직렬 T 단축 대기도 끈 값으로 둔다(켠 동작은 test_main_hedge·test_intent가 본다)
     timeouts = raw["llm"]["timeout_s"]
     timeouts.update(main_hedge=timeouts["main"], intent_wait=timeouts["intent"])
+    # 실험 multi_draft(주 호출 초안 여러 개)도 끈다(켠 동작은 test_multi_draft가 본다)
+    if "multi_draft" in raw["llm"]:
+        raw["llm"]["multi_draft"]["enabled"] = False
+        raw["llm"]["multi_draft"]["abstain_if_any"] = "off"  # 켠 동작은 test_multi_draft가 본다
+        # 초안 바꾸기·1위 다시 쓰기도 끈다(켠 동작은 test_cite_rule이 본다)
+        raw["llm"]["multi_draft"]["prefer_top1"] = "off"
+        raw["llm"]["multi_draft"]["top1_redraft"] = "off"
+        raw["llm"]["multi_draft"]["top1_redraft_abstain"] = "off"
     path = tmp_path_factory.mktemp("tutor_config") / "tutor_baseline.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     return path

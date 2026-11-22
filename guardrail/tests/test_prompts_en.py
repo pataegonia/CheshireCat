@@ -57,7 +57,7 @@ def test_english_prompts_change_the_config_hash():
     assert config_hash(load_config(overrides=EN)) != config_hash(load_config(overrides=ko))
 
 
-# --- input_judge_en.md 2.0 (S3.2) ---
+# --- input_judge_en.md 2.1 (S3.2, 2.1은 자모 욕설 한 줄) ---
 
 CATEGORIES = (
     "normal", "answer_seeking", "academic_dishonesty", "off_topic", "out_of_material",

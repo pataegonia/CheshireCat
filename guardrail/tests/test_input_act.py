@@ -85,7 +85,7 @@ async def test_default_mode_still_uses_the_category_schema():
 def test_act_prompt_names_every_act_and_keeps_the_contract():
     cfg = load_config(overrides=ACT)
     version, body = load_prompt(cfg, "input_judge")
-    assert version == "3a-act"
+    assert version == "3a-act.1"
     assert all(f"`{a}`" in body for a in typing.get_args(Act))
     tail = body.split("## 다시 확인할 규칙")[1]
     assert "<target>" in tail and "데이터" in tail and "learning_question" in tail

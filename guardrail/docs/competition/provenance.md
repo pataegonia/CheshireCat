@@ -19,11 +19,12 @@
 | 문자 n-gram LR | 위 400행으로 기동 때 처음부터 학습(SPEC §7.1 허용). 학습된 모델 파일은 저장소에 두지 않음 | 팀(코드) | GR-05 |
 | 결정적 신호: 거절 정규식, 숫자·단위·한글 수사 표, 저신호 판정, 숨긴 태그 문자 | — | 팀이 직접 씀 | GR-06. 다른 LLM이 만든 목록을 붙여 넣지 않는다 |
 | 거절 정규식 시작점: `guardrail/scripts/r13/extra_stats.py`의 `REFUSAL_RX` | 공개 세트 튜터 거절 답변 36건을 보고 팀이 쓴 분석 스크립트의 정규식. 36/36은 표본 안(in-sample) 값 | 팀 | GR-06. 서버 모듈로 옮겨 다듬음(S2.3, council D14: `할 수 없`·`안 돼요`·`하지 않아요`·`하지 말` 삭제, 토큰 사이 공백 `\s*`, `못\s+해요`). 인용·코드를 뺀 뷰(`q6_rule_fp.py`의 `QUOTE_CODE_RX` 그대로)에 적용 |
+| 자모 욕설 초성 목록: `guardrail/src/guardrail/signals.py`의 `_SWEAR_JAMO`(ㅅㅂ·ㅆㅂ·ㅄ·ㅂㅅ·ㄲㅈ·ㅈㄹ·ㅗ) | 팀이 직접 쓴 목록(11/22). 공개 세트에는 이런 문항이 0건이고, 채점 요청 내용으로 만들지 않았다 | 팀 | 저신호 직접 판정에서만 빼서 nano로 보낸다(범주·차단을 정하지 않는다). 같은 날 `input_judge_act.md` 3a-act.1·튜터 `intent.md`·`main_call.md` 0.6에 같은 뜻 한 줄 |
 | 자기소개 정규식: `guardrail/src/guardrail/signals.py`의 `SELF_INTRO_RX` | 공개 세트 `pii_disclosure` 20건(가드 7, 튜터 13)을 보고 팀이 쓴 정규식. 20/20은 표본 안 값이다(`results/2026-11-16-score-probes.md` §8) | 팀 | S3.9. `/guard` 응답의 허용 범주 보정에만 쓴다(`toggles.pii_intro_rule`) |
 | 자료 밖 확인 프롬프트 `prompts/oom_check_en.md`, 출력 프롬프트 1.4의 확인 항목 7·8, 구간 다듬기 `rules.tidy_span` | 공개 개발 160문항의 오답을 읽고 팀이 썼다. 공개 문항의 문구는 옮기지 않았다. 효과 수치는 표본 안 값이다(`results/2026-11-17-cause-fixes.md`) | 팀 | S3.10. 자료 밖 확인은 `/guard` 응답의 허용 범주 보정에만 쓴다(`toggles.oom_check`) |
 | `rules.py`의 `normalize` 4줄 | `competition/grader/scoring.py`의 `normalize`를 복사(배포 자료의 코드) | 주최측 | GR-06. 런타임에 `competition/grader`를 import하지 않음. 단위 테스트가 `scoring.normalize`와 같은 출력인지 대조(S2.4) |
 | 판정 프롬프트 `prompts/input_judge.md`·`prompts/output_judge.md`(범주 정의·짝 대조 문구) | 공개 세트를 보고 팀이 씀 | 팀 | GR-04·GR-07 |
-| 입력 판정 영어 프롬프트 `prompts/input_judge_en.md` 2.0(경계 6블록, 지어낸 한국어 최소쌍 예문) | 교차 검증 폴드 0–2의 오판 28행과 웹 조사(R15)를 보고 팀이 씀 | 팀(AI 코딩 도구 보조). Opus 적대 검토 1회 반영 뒤 문구 고정 | S3.2. 공개 발화와 8어절 겹침 0(`test_prompts_en.py`) |
+| 입력 판정 영어 프롬프트 `prompts/input_judge_en.md` 2.0(경계 6블록, 지어낸 한국어 최소쌍 예문). 2.1(11/22)은 low_signal_input 정의 끝에 자모 욕설 한 줄 | 교차 검증 폴드 0–2의 오판 28행과 웹 조사(R15)를 보고 팀이 씀 | 팀(AI 코딩 도구 보조). Opus 적대 검토 1회 반영 뒤 문구 고정 | S3.2. 공개 발화와 8어절 겹침 0(`test_prompts_en.py`) |
 | 탈옥 2차 판정 프롬프트 `prompts/jb_check_en.md` 1.1(순서형 점검, 한국어 어미 단서) | 공개 세트에서 오탐한 normal 11행과 정답 탈옥 14행을 보고 팀이 씀. 한국어 단서(2–4어절 어미 조각)는 이 행들의 문구에서 뽑음 | 팀(AI 코딩 도구 보조). 25행 선별 1회(1.0) 뒤 한 번 고침, 적대 검토 없음 | S3.3, `toggles.jb_check`. 8어절 겹침 0(테스트), 짧은 조각은 그 테스트로 못 잡음 |
 | 베이스라인 프롬프트 `prompts/output_judge_baseline.md`(reason → grounded → safe, `output.mode: baseline`) | 팀이 씀 | 팀 | GR-11 베이스라인. 입력 베이스라인은 `input_judge.md`에서 예시 블록만 비운 것이라 따로 파일이 없다 |
 | (쓰면) nano 합성 예시 | 운영진 제공 `gpt-5-nano`(SPEC §7.1 허용). 생성 스크립트와 함께 커밋 | 팀 + nano | 기본 안 씀(ADR-0013) |

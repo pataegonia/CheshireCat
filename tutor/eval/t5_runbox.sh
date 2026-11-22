@@ -50,6 +50,7 @@ check() {
 }
 
 screen_tutor() {  # 순서 고정(결과 보기 전): 개발 R T5 T5R0 T5H2 → T5H2 T5R0 T5 R, 팀 세트 R T5 T5R0 T5H2
+  # 나눠 돌릴 때는 바퀴마다 TAG(a·b…)를 바꾼다(파일 이름이 겹치지 않게).
   # 시간이 모자라면 DEV_ORDER="R T5 T5R0 T5H2"(1바퀴)·TEAM_ORDER=""(팀 세트 건너뜀)로 줄인다
   check
   load_env
@@ -60,17 +61,17 @@ screen_tutor() {  # 순서 고정(결과 보기 전): 개발 R T5 T5R0 T5H2 → 
     i=$((i + 1)); cfg=$(printf "%s\n" "${TUTOR_ARMS[@]}" | grep "^$arm:" | cut -d: -f2)
     echo "$(date '+%T') dev $i/${#order[@]} $arm"
     TUTOR_CONFIG=$cfg uv run --no-sync python -m tutor.eval.run_local --preset tutor --judge \
-      --runs 1 --rows-jsonl "$OUT/dev_${arm}_$i.jsonl" --out "$OUT/runs" > "$OUT/dev_${arm}_$i.log" 2>&1 \
-      || echo "  실패 rc=$? (로그 $OUT/dev_${arm}_$i.log)"
-    tail -n 3 "$OUT/dev_${arm}_$i.log"
+      --runs 1 --rows-jsonl "$OUT/dev_${arm}_${TAG:-a}$i.jsonl" --out "$OUT/runs" > "$OUT/dev_${arm}_${TAG:-a}$i.log" 2>&1 \
+      || echo "  실패 rc=$? (로그 $OUT/dev_${arm}_${TAG:-a}$i.log)"
+    tail -n 3 "$OUT/dev_${arm}_${TAG:-a}$i.log"
   done
   for arm in ${TEAM_ORDER-R T5 T5R0 T5H2}; do
     cfg=$(printf "%s\n" "${TUTOR_ARMS[@]}" | grep "^$arm:" | cut -d: -f2)
     echo "$(date '+%T') team $arm"
     TUTOR_CONFIG=$cfg uv run --no-sync python -m tutor.eval.run_local --preset tutor --judge \
-      --cases team --runs 1 --rows-jsonl "$OUT/team_$arm.jsonl" --out "$OUT/runs" > "$OUT/team_$arm.log" 2>&1 \
-      || echo "  실패 rc=$? (로그 $OUT/team_$arm.log)"
-    tail -n 3 "$OUT/team_$arm.log"
+      --cases team --runs 1 --rows-jsonl "$OUT/team_${arm}_${TAG:-a}.jsonl" --out "$OUT/runs" > "$OUT/team_${arm}_${TAG:-a}.log" 2>&1 \
+      || echo "  실패 rc=$? (로그 $OUT/team_${arm}_${TAG:-a}.log)"
+    tail -n 3 "$OUT/team_${arm}_${TAG:-a}.log"
   done
 }
 
@@ -83,8 +84,8 @@ screen_guard() {  # 순서 고정: G0 G1 G2 → G2 G1 G0, 반복 1씩(가드 하
     i=$((i + 1)); g=$(printf "%s\n" "${GUARD_ARMS[@]}" | grep "^$arm:" | cut -d: -f2)
     echo "$(date '+%T') guard $i/${#order[@]} $arm"
     (cd guardrail && env -u GUARD_CONFIG uv run --no-sync python -m guardrail.eval.run \
-      --config "configs/$g.yaml" --name "${arm}_$i" --repeat 1 --out "$OUT/guard" \
-      > "$OUT/guard_${arm}_$i.log" 2>&1) || echo "  실패 rc=$? (로그 $OUT/guard_${arm}_$i.log)"
+      --config "configs/$g.yaml" --name "${arm}_${TAG:-a}$i" --repeat 1 --out "$OUT/guard" \
+      > "$OUT/guard_${arm}_${TAG:-a}$i.log" 2>&1) || echo "  실패 rc=$? (로그 $OUT/guard_${arm}_${TAG:-a}$i.log)"
   done
 }
 
@@ -105,7 +106,7 @@ report() {
   echo; echo "## 가드(반복마다 보고서 표 줄·요약)"
   for f in "$OUT"/guard/*/report.md; do
     [ -e "$f" ] || continue
-    grep -E "^\| (G0|G1|G2)_[0-9]+ \||출력 평균|호출 [0-9]+회|지연 p50|혼동행렬|판정기 오류" "$f" | cut -c1-400
+    grep -E "^\| (G0|G1|G2)_[a-z][0-9]+ \||출력 평균|호출 [0-9]+회|지연 p50|혼동행렬|판정기 오류" "$f" | cut -c1-400
   done
 }
 

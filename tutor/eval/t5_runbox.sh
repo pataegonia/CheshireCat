@@ -50,10 +50,12 @@ check() {
 }
 
 screen_tutor() {  # 순서 고정(결과 보기 전): 개발 R T5 T5R0 T5H2 → T5H2 T5R0 T5 R, 팀 세트 R T5 T5R0 T5H2
+  # 시간이 모자라면 DEV_ORDER="R T5 T5R0 T5H2"(1바퀴)·TEAM_ORDER=""(팀 세트 건너뜀)로 줄인다
   check
   load_env
   export GUARD_CONFIG=guardrail/configs/gate128.yaml
-  local order=(R T5 T5R0 T5H2 T5H2 T5R0 T5 R) i=0 arm cfg
+  local order i=0 arm cfg
+  read -r -a order <<< "${DEV_ORDER:-R T5 T5R0 T5H2 T5H2 T5R0 T5 R}"
   for arm in "${order[@]}"; do
     i=$((i + 1)); cfg=$(printf "%s\n" "${TUTOR_ARMS[@]}" | grep "^$arm:" | cut -d: -f2)
     echo "$(date '+%T') dev $i/${#order[@]} $arm"
@@ -62,7 +64,7 @@ screen_tutor() {  # 순서 고정(결과 보기 전): 개발 R T5 T5R0 T5H2 → 
       || echo "  실패 rc=$? (로그 $OUT/dev_${arm}_$i.log)"
     tail -n 3 "$OUT/dev_${arm}_$i.log"
   done
-  for arm in R T5 T5R0 T5H2; do
+  for arm in ${TEAM_ORDER-R T5 T5R0 T5H2}; do
     cfg=$(printf "%s\n" "${TUTOR_ARMS[@]}" | grep "^$arm:" | cut -d: -f2)
     echo "$(date '+%T') team $arm"
     TUTOR_CONFIG=$cfg uv run --no-sync python -m tutor.eval.run_local --preset tutor --judge \
@@ -75,7 +77,8 @@ screen_tutor() {  # 순서 고정(결과 보기 전): 개발 R T5 T5R0 T5H2 → 
 screen_guard() {  # 순서 고정: G0 G1 G2 → G2 G1 G0, 반복 1씩(가드 하네스가 반복마다 표를 낸다)
   check
   load_env
-  local order=(G0 G1 G2 G2 G1 G0) i=0 arm g
+  local order i=0 arm g
+  read -r -a order <<< "${GUARD_ORDER:-G0 G1 G2 G2 G1 G0}"
   for arm in "${order[@]}"; do
     i=$((i + 1)); g=$(printf "%s\n" "${GUARD_ARMS[@]}" | grep "^$arm:" | cut -d: -f2)
     echo "$(date '+%T') guard $i/${#order[@]} $arm"

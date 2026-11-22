@@ -33,6 +33,9 @@ STREAM_DRAFTS = [
     {"effort": "low"},
     {"effort": "medium", "stream": True, "max_completion_tokens": 6000},
 ]
+# t2.46 MD: 설정 파일은 초안 5개(t2.45)이고 세 번째만 medium 스트림이다
+# (위 STREAM_DRAFTS는 단위 시험용 3개)
+FILE_DRAFTS = [*STREAM_DRAFTS, {"effort": "low"}, {"effort": "low"}]
 PARAMS = {"reasoning_effort": "low", "verbosity": "low", "max_completion_tokens": 2000}
 
 
@@ -298,7 +301,7 @@ def test_draft_token_cap_depends_on_stream():
 def test_medium_stream_config_differs_from_the_repo_config_only_in_drafts():
     repo = yaml.safe_load(REPO_CFG.read_text(encoding="utf-8"))
     exp = yaml.safe_load(STREAM_CFG.read_text(encoding="utf-8"))
-    assert exp["llm"]["multi_draft"]["drafts"] == STREAM_DRAFTS
+    assert exp["llm"]["multi_draft"]["drafts"] == FILE_DRAFTS
     strip = copy.deepcopy
     repo_rest, exp_rest = strip(repo), strip(exp)
     del repo_rest["llm"]["multi_draft"]["drafts"], exp_rest["llm"]["multi_draft"]["drafts"]
@@ -307,7 +310,7 @@ def test_medium_stream_config_differs_from_the_repo_config_only_in_drafts():
 
 def test_medium_stream_config_loads_with_the_same_nano_call_count():
     repo, exp = load_config(REPO_CFG), load_config(STREAM_CFG)
-    assert exp.max_nano_calls() == repo.max_nano_calls() == 7
+    assert exp.max_nano_calls() == repo.max_nano_calls() == 9
     assert exp.max_nano_calls() <= tutor_config.MULTI_DRAFT_MAX_CALLS
     medium = exp.llm.multi_draft.drafts[2]
     assert (medium.effort, medium.stream, medium.max_completion_tokens) == ("medium", True, 6000)

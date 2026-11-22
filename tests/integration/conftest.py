@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 _CLEARED_ENV = (
     "GUARD_CONFIG",
+    "GUARD_OVERLAY",  # 실험 덮개(exp/guard-jamo-longinput)
     "GUARD_KB_DIR",
     "GUARD_PUBLIC_DIR",
     "GUARD_PROMPTS_DIR",

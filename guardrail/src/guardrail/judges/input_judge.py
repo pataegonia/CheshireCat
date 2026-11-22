@@ -24,7 +24,7 @@ from guardrail.judges.schemas import (
     JbCheckOut,
     OomCheckOut,
 )
-from guardrail.judges.schemas_exp import RequestCheckOut
+from guardrail.judges.schemas_exp import InputTopdownOut, RequestCheckOut
 from guardrail.kb import Hit
 from guardrail.llm import LLM
 from guardrail.preprocess import clip, decode_tags
@@ -127,23 +127,30 @@ async def judge_input(
     남긴다. 호출자가 호출 수·오류를 센다.
     """
     messages = build_messages(window, target, examples, cfg, kb_snippet)
-    if cfg.input.label_mode == "act":  # 요청 유형을 받아 범주로 대응시킨다(S3.2 선별용 변형)
+    if cfg.input.reasoning_effort == "medium":
+        # 실험: 스트림 medium(llm.per_role.input_judge_medium)으로 한 번만 보낸다. 실패·시간 초과면
+        # None이라 호출자가 지금의 대체 경로(LR → kNN)를 쓴다. 마감은 요청 마감과 per_role read_s 중
+        # 이른 쪽이다(LLM.complete가 스트림 전체에 건다)
+        role, tries = "input_judge_medium", 0
+    else:
+        role, tries = "input_judge", retries
+    if cfg.input.judge_mode == "topdown":  # 실험: evidence → group → category(기본 끔)
         result = await llm.complete(
-            "input_judge", messages, InputActOut, deadline=deadline, retries=retries
+            role, messages, InputTopdownOut, deadline=deadline, retries=tries
         )
+        p = result.parsed
+        category = p.category if isinstance(p, InputTopdownOut) else None
+    elif cfg.input.label_mode == "act":  # 요청 유형을 받아 범주로 대응시킨다(S3.2 선별용 변형)
+        result = await llm.complete(role, messages, InputActOut, deadline=deadline, retries=tries)
         parsed = result.parsed
         category = ACT_TO_CATEGORY[parsed.act] if isinstance(parsed, InputActOut) else None
     elif cfg.input.label_mode == "flags":  # 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔)
         # 두 칸은 범주를 고르기 전에 쓰게 하는 장치일 뿐 판정에 쓰지 않는다(ADR-0012: 범주만 쓴다)
-        result = await llm.complete(
-            "input_judge", messages, InputFlagOut, deadline=deadline, retries=retries
-        )
+        result = await llm.complete(role, messages, InputFlagOut, deadline=deadline, retries=tries)
         p = result.parsed
         category = p.category if isinstance(p, InputFlagOut) else None
     else:
-        result = await llm.complete(
-            "input_judge", messages, InputOut, deadline=deadline, retries=retries
-        )
+        result = await llm.complete(role, messages, InputOut, deadline=deadline, retries=tries)
         category = result.parsed.category if isinstance(result.parsed, InputOut) else None
     if category == "jailbreak_injection" and cfg.toggles.jb_check:
         try:

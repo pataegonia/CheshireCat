@@ -28,6 +28,9 @@ from guardrail.schema import Category
 
 ROOT = Path(__file__).resolve().parents[2]  # guardrail/
 DEFAULT_CONFIG = "configs/default.yaml"
+# 실험(exp/guard-jamo-longinput): GUARD_CONFIG(없으면 기본 설정) 위에 깊은 병합할 덮개 파일.
+# ablation 프리셋과 같은 형식이다(바꿀 키만 적는다). path를 직접 넘긴 load_config에는 걸지 않는다
+OVERLAY_ENV = "GUARD_OVERLAY"
 PATH_ENV = {"kb": "GUARD_KB_DIR", "public": "GUARD_PUBLIC_DIR", "prompts": "GUARD_PROMPTS_DIR"}
 
 
@@ -76,6 +79,7 @@ class Llm(_Strict):
             "input_judge",
             "output_judge",
             "output_judge_medium",
+            "input_judge_medium",
             "jb_check",
             "oom_check",
             "request_check",
@@ -145,6 +149,17 @@ class InputCfg(_Strict):
     knn_vote_k: PositiveInt
     lr: LrCfg
     oom_snippet_chars: int
+    # 실험(exp/guard-jamo-longinput, 셋 다 기본은 지금 동작):
+    # jamo_profanity_not_low: 자모만 있는 발화라도 욕설 초성(signals.JAMO_PROFANITY)이 들면
+    # 저신호 직접 판정을 하지 않고 nano로 보낸다. 튜터 direct_clarify도 같은 값을 읽는다
+    jamo_profanity_not_low: bool
+    # flat = 지금(범주 하나). topdown = evidence → group → category 순서로 쓰게 한다
+    # (InputTopdownOut, prompts.input_judge가 topdown 프롬프트여야 한다).
+    # 범주 → decision 표는 그대로
+    judge_mode: Literal["flat", "topdown"]
+    # low = 지금(공통 llm 값). medium = 입력 판정을 llm.per_role.input_judge_medium(스트림)으로,
+    # 재시도 없이 보낸다. 실패·시간 초과면 지금의 대체 경로(LR → kNN)
+    reasoning_effort: Literal["low", "medium"]
 
 
 class KbCfg(_Strict):
@@ -219,6 +234,19 @@ class GuardConfig(_Strict):
         if o.rule_require_same_kind:
             raise ValueError("output.rule_require_same_kind: true는 미구현이다")
         # shortcut: 파일 이름으로 판별. 순서를 말하는 프롬프트가 늘면 머리말 필드로
+        i = self.input
+        if i.reasoning_effort == "medium" and "input_judge_medium" not in self.llm.per_role:
+            raise ValueError(
+                "input.reasoning_effort: medium은 llm.per_role.input_judge_medium이 필요하다"
+            )
+        if i.judge_mode == "topdown" and (
+            i.label_mode != "category" or "topdown" not in self.prompts.get("input_judge", "")
+        ):
+            # shortcut: 파일 이름으로 판별(아래 nearest_first 검사와 같은 방식)
+            raise ValueError(
+                "input.judge_mode: topdown은 label_mode: category와"
+                " topdown 입력 프롬프트가 필요하다"
+            )
         if self.input.knn.order == "nearest_first" and self.prompts.get("input_judge") in (
             "input_judge.md",
             "input_judge_en.md",
@@ -279,12 +307,17 @@ def load_config(
     overrides: dict[str, Any] | None = None,
     ablation: str | Path | None = None,
 ) -> GuardConfig:
-    """설정을 읽어 검증한다. 순서: 파일 → ablation 깊은 병합 → GUARD_*_DIR → overrides → 검증.
+    """설정을 읽어 검증한다. 순서: 파일 → (GUARD_OVERLAY) → ablation 깊은 병합 → GUARD_*_DIR →
+    overrides → 검증.
 
-    path가 없으면 GUARD_CONFIG(없으면 configs/default.yaml). 덮어쓴 값은 모두 검증 전에 들어가므로
+    path가 없으면 GUARD_CONFIG(없으면 configs/default.yaml)이고, GUARD_OVERLAY가 있으면 그 파일을
+    위에 깊은 병합한다(path를 넘기면 덮개는 쓰지 않는다). 덮어쓴 값은 모두 검증 전에 들어가므로
     모르는 키는 extra="forbid"로 실패하고, 덮어쓴 값이 config_hash에 들어간다.
     """
     raw = _read_yaml(path if path is not None else os.environ.get("GUARD_CONFIG", DEFAULT_CONFIG))
+    overlay = os.environ.get(OVERLAY_ENV) if path is None else None
+    if overlay:  # 실험 덮개(GUARD_OVERLAY). 서버·튜터가 같은 환경변수로 같은 설정을 읽는다
+        raw = _deep_merge(raw, _read_yaml(overlay))
     if ablation is not None:
         raw = _deep_merge(raw, _read_yaml(ablation))
     for field, env in PATH_ENV.items():

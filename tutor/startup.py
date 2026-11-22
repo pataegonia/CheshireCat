@@ -7,6 +7,8 @@ import asyncio
 import logging
 from typing import Any
 
+from guardrail.config import load_config as load_guard_config
+
 from tutor.judge.flow import prepare_judge
 from tutor.retrieval import build_index, default_index
 from tutor.retrieval.embedding import BUILD_TIMEOUT_S, Embed, EmbeddingSearch, openai_embed
@@ -30,6 +32,10 @@ def prepare(app_state: Any, cfg: TutorConfig | None = None) -> None:
     app_state.tutor_kb = build_index(guard_cfg) if guard_cfg is not None else default_index()
     app_state.tutor_llm = build_llm(app_state, app_state.tutor_cfg)
     app_state.tutor_emb = None
+    # 가드 설정 input.jamo_profanity_not_low(실험, 기본 끔): 서버는 가드가 읽은 설정, 프로세스 안
+    # 호출은 같은 규칙(GUARD_CONFIG·GUARD_OVERLAY)으로 다시 읽는다. direct_clarify·T 프롬프트가 쓴다
+    gcfg = guard_cfg if guard_cfg is not None else load_guard_config()
+    app_state.tutor_jamo_not_low = bool(gcfg.input.jamo_profanity_not_low)
     prepare_judge(app_state)  # 주 호출 프롬프트(범주 → action 표 포함, #72)
 
 

@@ -1,0 +1,6 @@
+# 실험 덮개(exp/guard-jamo-longinput): 1 자모 욕설 + 2 입력 프롬프트 한 줄. 기본 설정(또는 gate128) 위에 깊은 병합한다.
+# 띄우기: GUARD_CONFIG=configs/default.yaml(또는 gate128.yaml) GUARD_OVERLAY=configs/exp-jamo.yaml. 머지하지 않는다
+version: "6.0.12+exp-jamo"
+prompts: {input_judge: input_judge_en_jamo.md}   # input_judge_en.md + low_signal_input 정의 끝 한 줄(version 2.1)
+input:
+  jamo_profanity_not_low: true   # 자모 욕설 초성(signals.JAMO_PROFANITY)이 든 자모열은 저신호 직접 판정 대신 nano로. 튜터 direct_clarify·T 프롬프트(intent_jamo.md)도 따른다

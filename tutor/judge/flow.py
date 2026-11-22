@@ -76,6 +76,8 @@ from tutor.judge.intent import (
     table_of_contents,
     wait_intent,
 )
+from tutor.judge.intent import JAMO_PROMPT_PATH as INTENT_JAMO_PROMPT_PATH
+from tutor.judge.intent import PROMPT_PATH as INTENT_PROMPT_PATH
 from tutor.judge.intent import build_messages as build_intent_messages
 from tutor.judge.intent import decide as decide_intent
 from tutor.judge.intent import load_system as load_intent_system
@@ -122,7 +124,11 @@ def prepare_judge(app_state: Any) -> None:
     )
     app_state.guard_skips = GuardSkips()  # (단계, 사유) → 횟수. 요청 내용은 남기지 않는다
     intent_on = toggles.intent_override != "off"  # T 의도 판정(#209): 프롬프트·목차는 기동 때 한 번
-    app_state.tutor_intent_prompt = load_intent_system() if intent_on else None
+    # 가드 설정 input.jamo_profanity_not_low(실험)를 켜면 저신호 정의에 자모 욕설 한 줄을 더한
+    # 복사본(intent_jamo.md)
+    jamo = getattr(app_state, "tutor_jamo_not_low", False)
+    intent_path = INTENT_JAMO_PROMPT_PATH if jamo else INTENT_PROMPT_PATH
+    app_state.tutor_intent_prompt = load_intent_system(intent_path) if intent_on else None
     sections = app_state.tutor_kb.sections if intent_on else {}
     app_state.tutor_intent_toc = table_of_contents(sections) if intent_on else None
     app_state.intent_skips = IntentSkips()  # 사유 → 횟수(본문 없음)
@@ -136,6 +142,12 @@ def prepare_judge(app_state: Any) -> None:
     cfg = getattr(app_state, "tutor_cfg", None)
     on = cfg is not None and cfg.toggles.fewshot != "off"
     app_state.tutor_examples = build_index(cfg.fewshot) if on else None
+
+
+def _jamo_not_low(state: Any) -> bool:
+    """가드 설정 `input.jamo_profanity_not_low`(실험). `tutor.startup.prepare`가 기동 때 읽어 둔
+    값이고, 없으면(테스트 state) 끔과 같다."""
+    return bool(getattr(state, "tutor_jamo_not_low", False))
 
 
 def examples_block(state: Any, conv: Conversation) -> str:
@@ -715,7 +727,7 @@ async def _start_gate(req: TutorRequest, state: Any, deadline: float) -> GateJob
     if system is None:
         return None
     conv: Conversation = tidy(_messages(req))
-    if direct_clarify(conv):
+    if direct_clarify(conv, jamo_profanity_not_low=_jamo_not_low(state)):
         return None
     counts = getattr(state, "oom_gate_counts", None)
     if GATE_SKIP_SIGNALS.intersection(detect(conv)):
@@ -778,7 +790,7 @@ async def _answer_v2(
     함께 취소한다(요청이 끝난 뒤 남는 작업이 없게, TU-18).
     """
     conv: Conversation = tidy(_messages(req))
-    if direct_clarify(conv):
+    if direct_clarify(conv, jamo_profanity_not_low=_jamo_not_low(state)):
         return tutor_post(fixed_body(Fixed.CLARIFY))  # TU-05: 빈 발화, 앞 대화 뒤의 자모·기호만
     cfg = state.tutor_cfg
     seen = {} if seen is None else seen  # sj가 쓸 주 호출 메시지·스키마(요청 안에서만)

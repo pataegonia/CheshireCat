@@ -5,7 +5,13 @@ from fastapi.testclient import TestClient
 from tests.tutor.tutor_testlib import TOKEN, make_app
 from tutor.runtime import config as tutor_config
 
-GUARD_ENV = ("GUARD_CONFIG", "GUARD_KB_DIR", "GUARD_PUBLIC_DIR", "GUARD_PROMPTS_DIR")
+GUARD_ENV = (
+    "GUARD_CONFIG",
+    "GUARD_OVERLAY",  # 실험 덮개(exp/guard-jamo-longinput)
+    "GUARD_KB_DIR",
+    "GUARD_PUBLIC_DIR",
+    "GUARD_PROMPTS_DIR",
+)
 
 # tutor.judge.guard_merge는 import 때 가드 설정을 읽는다(ATTACK_CATEGORIES). 셸의 가드 설정이
 # 그 값을 물지 않게, 테스트 모듈보다 먼저 가드 환경변수를 잠깐 지운 채 불러오고 바로 되돌린다

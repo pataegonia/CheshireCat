@@ -1,0 +1,5 @@
+# 실험 덮개(exp/guard-jamo-longinput): 3 긴 입력. 메시지 하나의 길이 상한 2000 → 8000(넘으면 앞 + 뒤). 머지하지 않는다
+# 띄우기: GUARD_CONFIG=configs/default.yaml(또는 gate128.yaml) GUARD_OVERLAY=configs/exp-long.yaml
+version: "6.0.12+exp-long"
+input:
+  max_chars: 8000                # kNN·LR 질의는 retrieval.max_query_chars(4000)에서 따로 잘린다(앞쪽 4000자)

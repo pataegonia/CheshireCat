@@ -24,7 +24,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from guardrail.preprocess import skeleton
-from guardrail.signals import is_low_signal
+from guardrail.signals import has_jamo_profanity, is_low_signal
 
 from tutor.judge.conversation import Conversation, normalize_fast
 
@@ -45,7 +45,7 @@ def _tutor_asked(conv: Conversation) -> bool:
     return last.endswith(("?", "？")) or bool(_ASKING_END.search(last))
 
 
-def direct_clarify(conv: Conversation) -> bool:
+def direct_clarify(conv: Conversation, *, jamo_profanity_not_low: bool = False) -> bool:
     """LLM 없이 clarify 고정 문장을 낼 입력인가(TU-05).
 
     - 숨긴 텍스트가 있으면 거짓이다.
@@ -54,12 +54,16 @@ def direct_clarify(conv: Conversation) -> bool:
     - 그 밖은 가드 `is_low_signal`(GR-06) 그대로다. 조건은 그 docstring에 있다.
     - 다만 튜터가 바로 앞에서 질문했다면 짧은 대답("ㅇㅇ")일 수 있으니 주 호출로 보낸다(튜터 고유,
       공개 세트 저신호 8행은 모두 해당 없음).
+    - `jamo_profanity_not_low`는 가드 설정 `input.jamo_profanity_not_low`(실험, 기본 끔)를 그대로
+      넘긴다: 켜면 자모 욕설 초성이 든 발화는 저신호가 아니다(가드와 같은 규칙).
     """
     if conv.target_hidden:  # 가드도 거짓을 내지만, 가드 기준이 바뀌어도 튜터는 지킨다
         return False
     if conv.is_empty:
         return True
     low = is_low_signal(conv.target_raw, conv.has_history, conv.target_hidden)
+    if low and jamo_profanity_not_low and has_jamo_profanity(conv.target_raw):
+        return False
     return low and not _tutor_asked(conv)
 
 

@@ -1,0 +1,11 @@
+# 실험 덮개(exp/guard-jamo-longinput): 1 + 2 + 3 + 4 전부. 머지하지 않는다
+# 띄우기: GUARD_CONFIG=configs/default.yaml(또는 gate128.yaml) GUARD_OVERLAY=configs/exp-all.yaml
+version: "6.0.12+exp-all"
+prompts: {input_judge: input_judge_en_topdown_jamo.md}   # topdown + low_signal_input 자모 욕설 한 줄(version 2.3-topdown-jamo)
+llm:
+  per_role: {input_judge_medium: {reasoning_effort: medium, max_completion_tokens: 6000, read_s: 14, stream: true}}
+input:
+  jamo_profanity_not_low: true
+  max_chars: 8000
+  judge_mode: topdown
+  reasoning_effort: medium

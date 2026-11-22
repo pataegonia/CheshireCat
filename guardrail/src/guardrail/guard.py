@@ -52,6 +52,7 @@ from guardrail.schema import (
 from guardrail.signals import (
     Signals,
     has_hidden_tags,
+    has_jamo_profanity,
     is_low_signal,
     is_refusal,
     is_self_intro,
@@ -572,9 +573,12 @@ class Guard:
             for m in build_window(req.messages, cfg.input.window_last)
         ]
         text = normalize(clipped)[: cfg.retrieval.max_query_chars]
+        pre = strip_tags(clipped)
         low = t.low_signal_direct and is_low_signal(
-            strip_tags(clipped), len(req.messages) > 1, decode_tags(clipped)[1]
+            pre, len(req.messages) > 1, decode_tags(clipped)[1]
         )
+        if low and cfg.input.jamo_profanity_not_low and has_jamo_profanity(pre):
+            low = False  # 실험: 자모 욕설은 저신호 직접 판정 대신 nano로(harmful_content를 보게)
         knn_major = self.knn.majority(text) if t.knn_vote and self.knn else None
         lr_pred = self.lr.predict(text) if t.lr and self.lr else None
         examples = self.knn.fewshot(text) if t.knn_fewshot and self.knn and not low else []

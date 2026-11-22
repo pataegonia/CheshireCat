@@ -1,0 +1,10 @@
+# 실험 덮개(exp/guard-jamo-longinput): 4a topdown + 4b 입력 판정 medium(스트림). 머지하지 않는다
+# 띄우기: GUARD_CONFIG=configs/default.yaml(또는 gate128.yaml) GUARD_OVERLAY=configs/exp-perf.yaml
+version: "6.0.12+exp-perf"
+prompts: {input_judge: input_judge_en_topdown.md}   # evidence → group → category(version 2.2-topdown)
+llm:
+  # 입력 판정 medium: 출력 판정 medium과 같은 스트림 방식(프록시 비스트림 상한 2000을 넘겨 6000). read_s는 스트림 전체에 걸리고 요청 마감이 더 이르면 마감. 재시도 0, 실패면 LR → kNN
+  per_role: {input_judge_medium: {reasoning_effort: medium, max_completion_tokens: 6000, read_s: 14, stream: true}}
+input:
+  judge_mode: topdown
+  reasoning_effort: medium

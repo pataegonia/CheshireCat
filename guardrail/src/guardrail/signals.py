@@ -17,7 +17,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from guardrail.preprocess import FLAG_SEQUENCE, TAG_CHARS, normalize
+from guardrail.preprocess import FLAG_SEQUENCE, TAG_CHARS, _fold_width, normalize
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,10 @@ _BLANK_CATEGORIES = frozenset({"Zs", "Zl", "Zp", "Cf", "Mn", "Me"})
 # 자모만 모아 조합했을 때 이만큼 음절이 생기면 자모로 풀어 쓴 문장으로 본다(council D13).
 # 1이면 스펙 예시 "ㅇㅏ"(→아)까지 LLM으로 가므로 2. 1음절 우회("ㅅㅣㅂ")는 감수한다.
 _SPELLED_SYLLABLES = 2
+# 자모 욕설 초성(실험 input.jamo_profanity_not_low, 출처 "팀 작성"): 팀이 직접 쓴 일반 규칙이다.
+# 공개 세트·채점 문구에서 뽑지 않았다. 공백·기호를 뺀 자모열에 하나라도 들면 저신호가 아니다
+# (nano 판정으로 보낸다). 쌍자음·겹자음 표기(ㅆ·ㅄ)도 따로 적는다
+JAMO_PROFANITY = ("ㅅㅂ", "ㅆㅂ", "ㅄ", "ㅂㅅ", "ㄲㅈ", "ㅈㄹ", "ㅗ")
 
 
 def _has_letter(ch: str) -> bool:
@@ -109,6 +113,13 @@ def _spelled_syllables(text: str) -> int:
     return len(_SYLLABLE.findall(normalize(jamo)))
 
 
+def has_jamo_profanity(text: str) -> bool:
+    """공백·기호를 뺀 자모열에 `JAMO_PROFANITY` 가운데 하나가 드는가. 반각 자모는 호환 자모로
+    접는다(NFKC는 호환 자모를 조합형 자모로 바꿔 목록과 어긋나므로 쓰지 않는다)."""
+    jamo = "".join(_fold_width(c) for c in unicodedata.normalize("NFC", text) if _JAMO.match(c))
+    return any(word in jamo for word in JAMO_PROFANITY)
+
+
 def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
     """자모·문장부호·이모티콘만 있고(숫자·라틴·완성 음절·숨긴 텍스트 없음) 앞에 대화가 있음.
 
@@ -118,6 +129,8 @@ def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
     NFC가 조합하지 않으므로 "자모 조합 전" 뷰는 그대로다.
     자모로 풀어 쓴 문장(조합하면 음절 2개 이상)은 저신호가 아니다: 잘못 False면 nano 호출 1회,
     잘못 True면 입력 판정을 건너뛰므로 False 쪽으로 기운다.
+    실험 `input.jamo_profanity_not_low`는 이 함수를 바꾸지 않고 부르는 쪽이 `has_jamo_profanity`로
+    한 번 더 거른다(튜터와 맞춘 세 인자 계약 그대로, test_shared_api).
     """
     if not has_history or hidden:
         return False

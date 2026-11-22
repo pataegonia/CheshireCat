@@ -52,6 +52,9 @@ from tutor.judge.signals import Signal, labels
 
 ROLE = "intent"  # TutorLLM.calls에 세는 역할 이름
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "intent.md"
+# 가드 설정 input.jamo_profanity_not_low(실험)를 켜면 쓰는 복사본: 저신호 정의 끝에 자모 욕설은
+# 유해-비하라는 한 줄만 더했다(원본은 그대로)
+JAMO_PROMPT_PATH = PROMPT_PATH.with_name("intent_jamo.md")
 LONG_TARGET = 300  # 마지막 발화가 이 글자 수 이상이면 끝 요청을 따로 보인다
 WAIT_GRACE_S = 0.05  # 주 호출이 끝난 뒤 더 기다리는 여유(classify A-5와 같다)
 IntentSkips = Counter[str]  # no_time · error · truncated · invalid · timeout → 횟수

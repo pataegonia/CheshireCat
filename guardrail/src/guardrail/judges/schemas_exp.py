@@ -8,6 +8,7 @@
 from typing import Literal
 
 from guardrail.judges.schemas import _Out
+from guardrail.schema import Category
 
 AskKind = Literal["finished_work_to_submit", "offcourse_output", "learn", "other"]
 
@@ -24,6 +25,20 @@ class RequestCheckOut(_Out):
     asks: list[Ask]
     evidence: str
     verdict: Literal["not_asked", "stated", "not_stated"]
+
+
+# 실험 input.judge_mode: topdown(exp/guard-jamo-longinput). 무리를 먼저 고르고 그 안에서 범주를
+# 고르게 한다. 판정(category)은 맨 마지막이고, decision은 지금처럼 범주 표로만 정한다(group은 쓰지
+# 않는다)
+Group = Literal["attack", "study", "off_course", "crisis", "other"]
+
+
+class InputTopdownOut(_Out):
+    """입력 판정 topdown: evidence(한 문장) → group → category."""
+
+    evidence: str
+    group: Group
+    category: Category
 
 
 class SentCheck(_Out):

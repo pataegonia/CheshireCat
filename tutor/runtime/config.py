@@ -21,6 +21,8 @@ DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
+# 스트리밍으로 보내면 6000토큰까지 받는다(가드 쪽 실측, guardrail.llm의 스트림 호출과 같은 상한)
+STREAM_MAX_COMPLETION_TOKENS = 6000
 # multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다)
 MULTI_DRAFT_MAX_CALLS = 8
 Stage = Literal["off", "shadow", "on"]  # 실험 단계(tutor.judge.specialists). shadow는 기록만
@@ -157,10 +159,24 @@ class Timeouts(_Strict):
 
 
 class Draft(_Strict):
-    """주 호출 초안 하나(`multi_draft.drafts`). timeout_s가 없으면 `timeout_s.main`."""
+    """주 호출 초안 하나(`multi_draft.drafts`). timeout_s가 없으면 `timeout_s.main`.
+
+    stream·max_completion_tokens는 선택이다. 둘 다 없으면 지금과 같은 요청이 나간다."""
 
     effort: Literal["low", "medium"]  # minimal 금지(TU-13)
     timeout_s: PositiveFloat | None = None
+    # 이 초안만 stream=true로 보내고 조각을 이어 붙인다(프록시의 비스트리밍 출력 상한을 넘기려고)
+    stream: bool = False
+    # 이 초안만의 출력 상한(추론 토큰 포함). 없으면 llm.max_completion_tokens
+    max_completion_tokens: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def _token_cap(self) -> "Draft":
+        cap = STREAM_MAX_COMPLETION_TOKENS if self.stream else PROXY_MAX_COMPLETION_TOKENS
+        if self.max_completion_tokens is not None and self.max_completion_tokens > cap:
+            how = "스트리밍" if self.stream else "비스트리밍(프록시가 400을 낸다)"
+            raise ValueError(f"multi_draft.drafts의 max_completion_tokens: {how} 상한은 {cap}이다")
+        return self
 
 
 class MultiDraft(_Strict):
@@ -287,7 +303,8 @@ class TutorConfig(_Strict):
         """요청당 nano 최대 호출 수(아래 검증이 실험 상한 8과 견주는 값).
 
         초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E + 실험 단계
-        + 1위 다시 쓰기 + 섹션 재순위(rerank). 임베딩 호출(union)은 nano가 아니라 세지 않는다."""
+        + 1위 다시 쓰기 + 섹션 재순위(rerank). 스트리밍·출력 상한은 호출 수를 바꾸지 않고,
+        임베딩 호출(union)은 nano가 아니라 세지 않는다."""
         md, t = self.llm.multi_draft, self.toggles
         calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
         calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")

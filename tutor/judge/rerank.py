@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from tutor.judge.conversation import Conversation
 from tutor.judge.main_call import _turn_block, defuse
@@ -96,6 +96,54 @@ def union_ids(bm25: Sequence[str], vector: Sequence[str], limit: int) -> list[st
     return list(dict.fromkeys([*bm25, *vector]))[:limit]
 
 
+def answer_schema(ids: Sequence[str]) -> type[RerankOut]:
+    """이 요청의 출력 스키마: `best`의 json_schema에 후보 id + none을 enum으로 건다(strict
+    json_schema면 모델이 후보 밖 글자를 낼 수 없다). 이름은 그대로 RerankOut이고 RerankOut의
+    하위 클래스다. 받는 쪽 검증은 문자열 그대로라(enum을 검증에 쓰지 않는다) json_object 모드에서
+    비슷하게 틀린 답도 `normalize_best`까지 온다. 요청마다 만들고 남기지 않는다(TU-18)."""
+    enum = [*dict.fromkeys(ids), NONE]
+    best = (str, Field(json_schema_extra={"enum": enum}))
+    return create_model("RerankOut", __base__=RerankOut, best=best)  # type: ignore[call-overload]
+
+
+_NONE_WORDS = frozenset({"none", "null", "nil", "n/a", "na", "-", "없음", "없다", "해당 없음"})
+_WRAP = " \t\r\n\"'`“”‘’[](){}<>「」『』.,:;"
+_SPACE = re.compile(r"\s+")
+# 후보 밖 id의 모양(측정 전용, 정규화 전 원래 답 기준). exact가 아니면 recall --fail-detail이 센다
+ID_SHAPES = ("exact", "case_space", "wrapped", "title", "none_word", "empty", "other")
+
+
+def normalize_best(
+    raw: str, ids: Sequence[str], titles: dict[str, str] | None = None
+) -> tuple[str | None, str]:
+    """모델의 `best` → (후보 id | "none" | None(쓸 수 없음), 모양).
+
+    앞뒤 공백·따옴표·괄호를 벗기고, 대소문자·공백만 다른 id, 더 긴 글 안에 후보 id가 하나만 든
+    경우(예: "후보 id=…", id 뒤 제목), 후보 제목을 그대로 낸 경우를 그 후보로 읽는다. 빈 값과
+    none 뜻의 낱말은 none이다. 섹션 id와 조각 id는 같은 형식이라(KbIndex 조각 = 섹션 id) 조각
+    번호가 붙은 답("id#2" 같은 꼴)은 감싼 글로 읽혀 그 섹션이 된다."""
+    if raw in ids:
+        return raw, "exact"
+    s = raw.strip(_WRAP)
+    if not s:
+        return NONE, "empty"
+    if s.lower() in _NONE_WORDS:
+        return NONE, "none_word"
+    key = _SPACE.sub("", s).casefold()
+    by_key = {_SPACE.sub("", i).casefold(): i for i in ids}
+    if key in by_key:
+        return by_key[key], "case_space"
+    inside = [i for k, i in by_key.items() if k in key]
+    if len(inside) == 1:
+        return inside[0], "wrapped"
+    if titles:
+        want = _SPACE.sub(" ", s).casefold()
+        named = [i for i in ids if _SPACE.sub(" ", titles.get(i, "")).strip().casefold() == want]
+        if len(named) == 1:
+            return named[0], "title"
+    return None, "other"
+
+
 def judge(result: Any, ids: Sequence[str]) -> tuple[Code, str | None]:
     """호출 결과 → (코드, 고른 id). 고른 id는 후보 안의 id일 때만."""
     code, best, _fail = judge_detail(result, ids)
@@ -108,8 +156,11 @@ def judge(result: Any, ids: Sequence[str]) -> tuple[Code, str | None]:
 FAIL_KINDS = ("format", "length", "out_of_candidates", "exception")
 
 
-def judge_detail(result: Any, ids: Sequence[str]) -> tuple[Code, str | None, str | None]:
-    """`judge`와 같고, failed면 그 갈래(`FAIL_KINDS` 또는 `api:<오류 코드>`)도 낸다."""
+def judge_detail(
+    result: Any, ids: Sequence[str], titles: dict[str, str] | None = None
+) -> tuple[Code, str | None, str | None]:
+    """`judge`와 같고, failed면 그 갈래(`FAIL_KINDS` 또는 `api:<오류 코드>`)도 낸다.
+    `best`는 `normalize_best`로 읽는다(titles를 주면 제목으로 낸 답도 읽는다)."""
     if result.error == "timeout":
         return "timeout", None, None
     if result.finish_reason == "length":
@@ -120,12 +171,19 @@ def judge_detail(result: Any, ids: Sequence[str]) -> tuple[Code, str | None, str
         return "failed", None, f"api:{result.error}"
     if not isinstance(result.parsed, RerankOut):
         return "failed", None, "format"
-    best = result.parsed.best.strip()
-    if best.lower() == NONE:
+    best, _shape = normalize_best(result.parsed.best, ids, titles)
+    if best == NONE:
         return "none", None, None
-    if best not in ids:
+    if best is None:
         return "failed", None, "out_of_candidates"
     return "called", best, None  # 쓸 수 있는 답(same·changed는 apply가 정한다)
+
+
+def id_shape(result: Any, ids: Sequence[str], titles: dict[str, str] | None = None) -> str | None:
+    """측정 전용: 스키마를 통과한 답의 `best` 모양(`ID_SHAPES`). 답이 없으면 None."""
+    if result is None or result.error is not None or not isinstance(result.parsed, RerankOut):
+        return None
+    return normalize_best(result.parsed.best, ids, titles)[1]
 
 
 @dataclass
@@ -138,6 +196,7 @@ class Outcome:
     union: bool = False  # 후보에 질의 임베딩 상위를 합쳤나
     embed_calls: int = 0  # 이 rerank가 부른 질의 임베딩 수(0·1)
     fail: str | None = None  # failed의 갈래(judge_detail). 측정 전용, 로그에 내지 않는다
+    shape: str | None = None  # 답의 id 모양(id_shape, 정규화 전). 측정 전용, 로그에 내지 않는다
     ms: float = 0.0
 
 
@@ -204,7 +263,7 @@ async def _run(
         result = await llm.complete(
             ROLE,
             messages,
-            RerankOut,
+            answer_schema(ids),  # best에 후보 id enum(strict json_schema)
             deadline=until,
             timeout_s=left,
             retries=0,
@@ -218,7 +277,9 @@ async def _run(
     if result is None:
         out.code, out.best, out.fail = "failed", None, "exception"
     else:
-        out.code, out.best, out.fail = judge_detail(result, ids)
+        titles = {s.id: s.title for s in pool}
+        out.code, out.best, out.fail = judge_detail(result, ids, titles)
+        out.shape = id_shape(result, ids, titles)
     out.ms = (loop.time() - t0) * 1000
     return out
 

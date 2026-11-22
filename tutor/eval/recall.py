@@ -246,6 +246,7 @@ class RerankRow:
     cand_bm25: tuple[str, ...]
     cand_union: tuple[str, ...] | None  # union 후보(질의 임베딩이 됐을 때만)
     fail: str | None = None  # failed의 갈래(rerank.judge_detail)
+    shape: str | None = None  # 답의 id 모양(rerank.id_shape, 정규화 전)
 
 
 @dataclass(frozen=True)
@@ -263,6 +264,7 @@ class RerankReport:
     cand_recall_union: float | None  # union 후보를 잰 행만(없으면 None)
     union_rows: int
     fails: dict[str, int] = field(default_factory=dict)  # failed 갈래 → 행 수
+    shapes: dict[str, int] = field(default_factory=dict)  # 답의 id 모양 → 행 수(exact 포함)
 
 
 def _changes(rows: Sequence[RerankRow], base: Callable[[RerankRow], str | None]) -> tuple[int, ...]:
@@ -278,7 +280,10 @@ def summarize_rerank(rows: Sequence[RerankRow]) -> RerankReport:
         raise ValueError("측정할 행이 없다")
     codes: dict[str, int] = {}
     fails: dict[str, int] = {}
+    shapes: dict[str, int] = {}
     for r in rows:
+        if r.shape is not None:
+            shapes[r.shape] = shapes.get(r.shape, 0) + 1
         codes[r.code] = codes.get(r.code, 0) + 1
         if r.code == "failed":
             kind = r.fail or "exception"
@@ -302,6 +307,7 @@ def summarize_rerank(rows: Sequence[RerankRow]) -> RerankReport:
         ),
         union_rows=len(unions),
         fails=fails,
+        shapes=shapes,
     )
 
 
@@ -350,6 +356,7 @@ async def _rerank_one(
         cand_bm25=tuple(s.id for s in bundle[: rr.candidates]),
         cand_union=outcome.candidates if outcome.union else None,
         fail=outcome.fail,
+        shape=outcome.shape,
     )
 
 
@@ -427,6 +434,24 @@ def fail_line(fails: dict[str, int]) -> str:
     return f"실패 종류: {' · '.join(parts)}(합 {sum(fails.values())})\n"
 
 
+SHAPE_LABELS = {
+    "exact": "그대로",
+    "case_space": "대소문자·공백",
+    "wrapped": "감싼 글",
+    "title": "제목",
+    "none_word": "none 낱말",
+    "empty": "빈 값",
+    "other": "읽지 못함(후보 밖)",
+}
+
+
+def shape_line(shapes: dict[str, int]) -> str:
+    """스키마를 통과한 답의 best 모양별 수(정규화 전). 그대로가 아닌 것은 정규화가 살렸거나
+    (대소문자·공백·감싼 글·제목 → 후보, none 낱말·빈 값 → none) 못 살린 것(읽지 못함)이다."""
+    parts = [f"{label} {shapes.get(k, 0)}" for k, label in SHAPE_LABELS.items()]
+    return f"답의 id 모양: {' · '.join(parts)}\n"
+
+
 def write_rerank(
     reports: Sequence[RerankReport], source: str, out: Any, *, fail_detail: bool = False
 ) -> None:
@@ -457,6 +482,7 @@ def write_rerank(
         )
         if fail_detail:
             out.write(fail_line(r.fails))
+            out.write(shape_line(r.shapes))
 
 
 def _rerank_main(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:

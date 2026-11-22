@@ -184,9 +184,12 @@ class TutorLLM:
         timeout_s: float,
         retries: int,
         effort: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> Result:
         """`effort`를 주면 이 호출만 reasoning_effort를 그 값으로 보낸다(multi_draft 초안).
-        probe가 reasoning_effort를 껐으면 주어도 보내지 않는다(`sends_effort`)."""
+        probe가 reasoning_effort를 껐으면 주어도 보내지 않는다(`sends_effort`).
+        `max_completion_tokens`도 같은 방식으로 이 호출만 덮는다(rerank). 둘 다 주지 않은 호출의
+        요청 내용은 전과 같다."""
         result = await self._complete(
             role,
             messages,
@@ -195,6 +198,7 @@ class TutorLLM:
             timeout_s=timeout_s,
             retries=retries,
             effort=effort,
+            max_completion_tokens=max_completion_tokens,
         )
         if result.error is not None and result.error != "budget":
             self.failures[(role, result.error)] += 1
@@ -210,11 +214,14 @@ class TutorLLM:
         timeout_s: float,
         retries: int,
         effort: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> Result:
         t0 = self._now()
         kwargs = self._request(messages, schema)
         if effort is not None and "reasoning_effort" in kwargs:
             kwargs["reasoning_effort"] = effort
+        if max_completion_tokens is not None and "max_completion_tokens" in kwargs:
+            kwargs["max_completion_tokens"] = max_completion_tokens
         attempts, last = 0, _Attempt(error="timeout")
         waited: list[float] = []  # 시도마다 게이트 대기(초)
         while True:

@@ -36,6 +36,7 @@ async def draft_answer(
     english_only_embedding: bool = False,
     examples: str = "",
     index: KbIndex | None = None,
+    sections: Sequence[Section] | None = None,
 ) -> Draft:
     """검색 상위 k개를 근거 묶음으로 주 호출을 한 번 부른다.
 
@@ -44,7 +45,15 @@ async def draft_answer(
     `english_only_embedding`이 True일 때만 `retrieve(…, english_only_embedding=True)`로 넘긴다.
     `examples`는 판단 예시 블록(TU-08)이다. 비었으면 넣지 않는다.
     `index`는 기동 때 만든 KB 색인(`state.tutor_kb`)이다. 있을 때만 `retrieve(…, index=)`로 넘긴다.
+    `sections`를 주면 검색하지 않고 그 근거 묶음을 쓴다(rerank가 앞에서 같은 검색을 하고 순서를
+    고친 것, `toggles.rerank`). 없으면 지금처럼 검색한다.
     """
+    if sections is not None:
+        bundle = tuple(sections)
+        out = await run_main_call(
+            complete, prompt, conv, bundle, signals, deadline=deadline, examples=examples
+        )
+        return Draft(sections=bundle, out=out)
     query, history = conv.search_query()
     extra = {
         name: value

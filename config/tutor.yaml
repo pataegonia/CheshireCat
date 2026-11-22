@@ -15,7 +15,7 @@ toggles:
   jailbreak_needs_signal: false  # classify가 jailbreak_injection이어도 지시 무력화 신호(TU-05)가 없으면 주 호출을 덮지 않는다(TU-10). 11/15 가드 비교에서 오차단이 모두 "수업의 공격 기법을 배우는 정상 질문" → refuse였다. 3회 비교 뒤 정한다
   embedding: false             # 질의 임베딩(TU-11). recall@1이 오르지 않아 끔(#81). 기본 0회
   english_embedding: true      # 영어 발화(한글 없이 라틴만)에는 임베딩 순위만으로 검색하고(BM25와 섞지 않음), 자료 밖 확인 E를 oom_gate 모드와 상관없이(off 제외) 임베딩 근거 묶음으로 부르며, 규칙 A 재검색에도 임베딩을 쓴다. toggles.embedding이 꺼져 있어도 이 토글이 켜지면 기동 때 KB 임베딩을 만든다. oom_gate가 off면 로드에서 거부한다. 11/18 런박스(영어 문항 × 5회, 두 번): 대조 세트 영어 answer 15 → 60/60·정답 절 인용 15 → 52~55/60, 공개 영어 정상 action 51~53 → 54~55/60, 공개 영어 자료 밖 abstain 14~15 → 14(조용할 때)·11(E 시간 초과가 많던 때)/15(결과 문서 2026-11-18-budget-hedge-experiments.md 6절). 11/19 리더 결정으로 켬: 같은 코드에 이 줄만 다른 실제 제출 5대5(같은 문서 11절)에서 튜터 +1.54(5쌍 중 4쌍)·가드 −1.64(경로 못 찾음)·총점 −0.05
-  rerank: false                # nano로 섹션 다시 고르기. 요청당 호출 상한을 넘어 동결 설정에 쓰지 않음(TU-13)
+  rerank: "off"                # 실험(exp/tutor-rerank). "off" | context | top1. nano 1회로 검색 후보(llm.rerank.candidates개) 중 질문이 묻는 대상·속성을 실제로 담은 섹션 하나를 고른다(tutor.judge.rerank, tutor/prompts/rerank.md). BM25 검색 직후 T와 동시에 띄우고 주 호출 직전에 받는다. context는 근거 묶음 맨 앞으로만 옮기고, top1은 규칙 A 1위(cite_top1·prefer_top1·top1_redraft·quote_from_top1)도 바꾼다. 실패·시간 초과·none·후보 밖 id면 지금 순서. 요청당 nano +1(상한 8 안). 측정 전이라 끔. 실험 설정은 config/tutor.rerank-*.yaml
   vote: false                  # action 투표(병렬 3회). 요청당 호출 상한(TU-13)을 넘어 만들지 않음(#83, true는 로드에서 거부)
   cite_top1: true              # 인용이 있는데 검색 1위 섹션이 빠졌으면 1위를 뒤에 더한다(TU-07). 켜면 인용이 max_citations + 1개까지. 11/15 런박스 짝 비교(같은 답의 끔·켬)로 켬: 판정 없이 인용 F1 +0.034·+0.024, 판정 포함 튜터 +0.31점·충실 하락 0
   top1_dialog_query: true      # cite_top1이 더할 1위를 창 안의 튜터 발화까지 넣은 질의(규칙 A)로 다시 검색해 고른다. 주 호출 근거 묶음은 그대로, LLM 0회, BM25 1회 추가. 호출 없이 잰 검색 1위 83 → 92/97(개발, 2026-11-18). 개발 재생에서 인용 오름 9·내림 0, 제출 86.05 → 86.61로 내려간 흔적 없음(결과 문서 7.10절)이라 켬(11/18)
@@ -74,5 +74,15 @@ llm:
     min_confidence: 4          # B 신뢰도가 이 값 이상일 때만 abstain
   soft_jailbreak_draft:        # toggles.soft_jailbreak_draft 추가 low 초안(시간 상한은 timeout_s.main)
     margin_s: 1                # 초안은 요청 마감 − 1초 안에 끝낸다
+  rerank:                      # toggles.rerank 호출(nano 1회, 재시도 0, LLM 게이트를 거친다). toggles.rerank가 off면 읽지 않는다
+    timeout_s: 6               # 띄운 때부터 센다. 마감 = min(띄운 때 + 6초, 요청 마감 − margin_s). union의 질의 임베딩 대기도 이 안에 든다
+    margin_s: 8                # 요청 마감 − 8초 안에 끝낸다(주 호출이 쓸 시간을 남긴다)
+    reasoning_effort: low      # low | medium. minimal 금지(TU-13)
+    max_completion_tokens: 600 # 출력은 이유 한 문장 + id 하나. 추론 토큰 포함 상한
+    candidates: 5              # 검색 상위 몇 개를 후보로 주나(근거 묶음 retrieval.k와 같다)
+    snippet_chars: 400         # 후보 본문 앞부분 길이 상한(글자). 제목은 따로 준다
+    candidate_source: bm25     # bm25 | union. bm25 = 검색 상위 candidates개(영어 발화는 지금처럼 임베딩 상위). union = 한국어 발화도 질의 임베딩(기동 때 만든 tutor_emb, 섹션 벡터 그대로) 상위 candidates개를 구해 BM25 순서 → 벡터에만 있는 것 순으로 합친다(임베딩 호출 +1). 임베딩이 없거나 실패·늦으면 bm25 후보
+    candidates_max: 8          # union 후보 상한
+    embedding_timeout_s: 2     # union 질의 임베딩 상한(게이트 대기 포함)
 eval:
   max_calls: 5000              # 개발 실행 운영진 API 호출 상한(TU-14, 가드 GR-11과 같음)

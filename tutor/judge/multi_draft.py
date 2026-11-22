@@ -84,6 +84,12 @@ class Shadow:
     )
     # 최종 응답이 고른 초안에서 그대로 나갔나(cite_rule이 적용되는 요청). E·rq가 바꾸면 False
     cite_path: bool = False
+    # 섹션 재순위(toggles.rerank, tutor.judge.rerank): 코드(called·skipped·failed·timeout·none·
+    # same·changed)·걸린 ms·질의 임베딩 호출 수(union). 끔이면 None(칸 없음).
+    # 고른 id는 남기지 않는다
+    rerank: str | None = None
+    rerank_ms: float = 0.0
+    rerank_embed: int = 0
 
     def log_field(self) -> str | None:
         """접근 로그 끝 칸. 초안을 하나도 보내지 않았으면 None(칸 없음).
@@ -91,9 +97,10 @@ class Shadow:
         `calls=튜터 nano 시도 수;md_n=시작;md_ok=유효;md_split=0|1[;md_pick=번호;md_a_same=0|1]`
         뒤에 초안마다 `;effort_글자=ms/보낸 횟수/코드/게이트 대기 ms`. 가드 /guard 칸과 같은 모양.
         실험 단계 토글이 off가 아니면 끝에 `;rq=돌았나/신뢰도/판정 코드/ms;rq_ch=바꿨나`
-        (sj·mm도 같은 모양)를 더한다. 초안도 단계 기록도 없으면 None.
+        (sj·mm도 같은 모양)를 더한다. `toggles.rerank`가 off가 아니면 끝에
+        `;rr=불렀나/질의 임베딩 수/코드/ms`. 초안도 단계 기록도 rerank 기록도 없으면 None.
         """
-        if not self.started and not self.stages:
+        if not self.started and not self.stages and self.rerank is None:
             return None
         parts = [f"calls={sum(self.sent.values())}"]
         if self.started:
@@ -116,6 +123,9 @@ class Shadow:
             parts.append(f"rd=1/{same}/{code}/{self.redraft_ms:.0f}")
         for key, rec in self.stages.items():
             parts += rec.log_parts(key)
+        if self.rerank is not None:  # 가드 호출 기록 칸과 같은 모양: 불렀나/임베딩 수/코드/ms
+            called = int(self.rerank != "skipped")
+            parts.append(f"rr={called}/{self.rerank_embed}/{self.rerank}/{self.rerank_ms:.0f}")
         return ";".join(parts)
 
 

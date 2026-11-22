@@ -50,7 +50,7 @@ from tutor.answer.templates import (
     fixed_body,
     template_for,
 )
-from tutor.judge import main_call, multi_draft
+from tutor.judge import main_call, multi_draft, rerank
 from tutor.judge.conversation import Conversation, normalize_fast, tidy
 from tutor.judge.draft import Draft, draft_answer
 from tutor.judge.examples import build_index, normalize, render_examples
@@ -100,6 +100,7 @@ from tutor.judge.unknown_terms import kb_blob, missing_terms
 from tutor.request import TutorRequest
 from tutor.retrieval import Section as RetrievedSection
 from tutor.retrieval import retrieve
+from tutor.retrieval.embedding import is_english
 
 MAIN_ROLE = "main"  # TutorLLM.calls에 세는 역할 이름(TU-13 호출 수 집계)
 MAIN_RETRIES = 1  # 재시도는 주 호출만 1회(TU-13)
@@ -131,6 +132,8 @@ def prepare_judge(app_state: Any) -> None:
     app_state.oom_gate_counts = GateCounts()  # 사유 → 횟수(본문 없음)
     named = toggles.oom_gate == "named_term"  # KB 전체 글(비교용)도 기동 때 한 번
     app_state.tutor_kb_blob = kb_blob(app_state.tutor_kb.sections) if named else None
+    rr_on = toggles.rerank != "off"  # 실험 섹션 재순위 프롬프트: 기동 때 한 번
+    app_state.tutor_rerank_prompt = rerank.RerankPrompt.load() if rr_on else None
     rq_on = toggles.reverse_question != "off"  # 실험 rq 프롬프트 둘: 기동 때 한 번
     app_state.tutor_rq_prompts = RqPrompts.load() if rq_on else None
     cfg = getattr(app_state, "tutor_cfg", None)
@@ -797,9 +800,12 @@ async def _answer_v2(
         skips=skips,
     )
     intent: IntentJob | None = None
+    rr_job: rerank.RerankJob | None = None
     try:
         # T는 직렬 classify(ⓐ 비교 기준)에서는 부르지 않는다(주 호출 없이 끝나는 경로가 있다)
         intent = None if serial else _start_intent(state, conv, signals, deadline)
+        if cfg.toggles.rerank != "off":  # 실험: 검색 직후 T와 동시에(주 호출 직전에 받는다)
+            rr_job = await _start_rerank(state, conv, signals, deadline, seen)
         classified: str | None = None
         intent_label: str | None = None
         if classify is not None or intent is not None:
@@ -834,6 +840,9 @@ async def _answer_v2(
                 return tutor_post(fixed_body(hit[0]), hit[1])
         if begin_gate is not None:
             await begin_gate()  # 직렬 T가 고정 문장으로 끝내지 않은 요청만 여기에 온다
+        if rr_job is not None:
+            await _apply_rerank(state, conv, rr_job, seen)
+            rr_job = None  # 받았다(끝났거나 취소됐다)
         multi = cfg.llm.multi_draft.enabled  # 실험: 주 호출 초안 여러 개 + 고르기
         runs: list[MainCallOut | None] = []
         complete = _multi_complete(state, runs) if multi else _complete(state)
@@ -841,7 +850,8 @@ async def _answer_v2(
             complete = _capture(complete, seen)  # sj 초안이 같은 메시지를 쓴다
         if multi and cfg.llm.multi_draft.top1_redraft == "parallel":
             # 1위 섹션 하나만 근거로 둔 초안을 정규 초안과 함께 띄운다(고르기·다수결 밖)
-            seen["rule_a"] = await _rule_a_top(state, conv)
+            # rerank(top1)가 이미 정한 규칙 A 목록이 있으면 그것(같은 질의, 1위만 바뀐다)
+            seen["rule_a"] = seen.get("rule_a") or await _rule_a_top(state, conv)
             if seen["rule_a"]:
                 seen["redraft_task"] = _start_redraft(
                     state, conv, signals, seen["rule_a"][0], deadline
@@ -857,6 +867,7 @@ async def _answer_v2(
             english_only_embedding=cfg.toggles.english_embedding,
             examples=examples_block(state, conv),
             index=state.tutor_kb,  # 기동 때 가드 설정으로 만든 색인(TU-03)
+            sections=seen.get("rr_bundle"),  # rerank가 고친 근거 묶음(끔이면 None: 지금처럼 검색)
         )
         if multi:
             draft = _pick_draft(state, draft, runs)
@@ -893,6 +904,8 @@ async def _answer_v2(
             classify.cancel()  # 아직 돌면 취소(요청이 끝난 뒤 남는 작업이 없게, TU-18)
         if intent is not None:
             intent.cancel()
+        if rr_job is not None:
+            rr_job.cancel()  # 고정 문장 경로로 끝났다(기록은 called로 남는다)
     # 제출물 대행 보정은 합치기 앞에 둔다: 보정된 academic scaffold는 표 고정 문장이라
     # classify가 덮지 않고(TU-10 규칙 1), 고정 문장이라 judge_output도 부르지 않는다.
     # 덮기(override)는 classify가 위기·공격 범주면 걸지 않아 그 범주가 합치기에서 이긴다.
@@ -948,6 +961,8 @@ async def _answer_v2(
     ):  # 규칙 A: 튜터 발화까지 넣은 질의로 한 번 더 찾아 1위만 쓴다(LLM 0회, BM25만)
         # top1_redraft parallel이 주 호출 앞에서 이미 찾았으면 그 결과(같은 질의)를 쓴다
         top_sections = seen.get("rule_a") or await _rule_a_top(state, conv)
+    if top_sections is None and seen.get("rr_keep_top") is not None:
+        top_sections = seen["rr_keep_top"]  # rerank context: cite_top1은 바꾸기 전 1위 그대로
     kind = template_for(merged.category, action)
     if kind is not None:  # 주 호출이 고른 고정 문장(탈옥 거절이면 sj가 볼 수 있다)
         soft = await _soft_jailbreak(state, kind, signals, seen, draft.sections, deadline)
@@ -1089,6 +1104,80 @@ def _downstream(
         top_sections=top_sections,
     )
     return tutor_post(body, merged.category)
+
+
+def _rerank_mark(code: str, ms: float = 0.0, embed: int = 0) -> None:
+    shadow = multi_draft.SHADOW.get()
+    if shadow is not None:
+        shadow.rerank, shadow.rerank_ms, shadow.rerank_embed = code, ms, embed
+
+
+async def _start_rerank(
+    state: Any,
+    conv: Conversation,
+    signals: Sequence[Signal],
+    deadline: float,
+    seen: dict[str, Any],
+) -> rerank.RerankJob | None:
+    """`toggles.rerank`: 주 호출과 같은 검색(질의·k·임베딩 인자)을 지금 하고 그 근거 묶음을
+    `seen["rr_bundle"]`에 둔 뒤 rerank를 띄운다. 프롬프트가 없거나 위기·지시 무력화 신호(고정 문장
+    쪽으로 끝나는 발화, E와 같은 `GATE_SKIP_SIGNALS`)면 부르지 않는다(skipped). 저신호 직접 판정은
+    이 함수 앞에서 이미 끝난다. union이고 한국어 발화이며 기동 때 임베딩이 있으면 질의 임베딩
+    상위를 후보에 합친다(영어 발화는 검색이 이미 임베딩 순위다)."""
+    cfg = state.tutor_cfg
+    prompt = getattr(state, "tutor_rerank_prompt", None)
+    if prompt is None or GATE_SKIP_SIGNALS.intersection(signals):
+        _rerank_mark("skipped")
+        return None
+    query, history = conv.search_query()
+    emb = getattr(state, "tutor_emb", None)
+    extra: dict[str, Any] = {"index": state.tutor_kb}
+    if emb is not None:  # draft_answer와 같은 인자(그래서 묶음이 주 호출 검색과 같다)
+        extra["embedding"] = emb
+    if cfg.toggles.english_embedding:
+        extra["english_only_embedding"] = True
+    bundle = tuple(await retrieve(query, history, k=cfg.retrieval.k, **extra))
+    seen["rr_bundle"] = bundle
+    rr = cfg.llm.rerank
+    union = rr.candidate_source == "union" and emb is not None and not is_english(query)
+    text = "\n".join([*history, query])[-state.tutor_kb.max_query_chars :]
+    job = rerank.start_rerank(
+        state.tutor_llm,
+        prompt,
+        conv,
+        bundle,
+        state.tutor_kb,
+        rr,
+        deadline=deadline,
+        emb=emb if union else None,
+        text=text,
+    )
+    _rerank_mark("skipped" if job is None else "called")
+    return job
+
+
+async def _apply_rerank(
+    state: Any, conv: Conversation, job: rerank.RerankJob, seen: dict[str, Any]
+) -> None:
+    """주 호출 직전: rerank 결과를 받아 근거 묶음(`seen["rr_bundle"]`)과, top1이면 규칙 A 목록
+    (`seen["rule_a"]`)을 고친다. 실패·시간 초과·none·후보 밖 id면 그대로 둔다. context에서 묶음
+    1위가 바뀌었고 규칙 A를 쓰지 않으면(cite_top1이 묶음 1위를 더한다) 바꾸기 전 묶음을
+    `seen["rr_keep_top"]`에 둬 cite_top1이 그대로 1위를 더하게 한다."""
+    cfg = state.tutor_cfg
+    mode = cfg.toggles.rerank
+    outcome = await rerank.wait_rerank(job)
+    original = seen["rr_bundle"]
+    rule_a = None
+    if mode == "top1" and cfg.toggles.cite_top1 and cfg.toggles.top1_dialog_query:
+        rule_a = seen.get("rule_a") or await _rule_a_top(state, conv)
+    applied = rerank.apply(mode, outcome, original, rule_a, state.tutor_kb)
+    seen["rr_bundle"] = applied.bundle
+    if applied.top is not None:
+        seen["rule_a"] = applied.top
+    keep = mode == "context" and applied.code == "changed"
+    if keep and cfg.toggles.cite_top1 and not cfg.toggles.top1_dialog_query:
+        seen["rr_keep_top"] = original
+    _rerank_mark(applied.code, outcome.ms, outcome.embed_calls)
 
 
 async def _rule_a_top(state: Any, conv: Conversation) -> list[RetrievedSection] | None:

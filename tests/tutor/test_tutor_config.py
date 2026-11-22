@@ -35,7 +35,9 @@ def test_repo_config_has_the_prd_defaults():
     assert toggles.guard_classify == "off"
     # TU-10 합치기 신호 조건 기본 끔(3회 비교 뒤 정함)
     assert toggles.jailbreak_needs_signal is False
-    assert (toggles.embedding, toggles.rerank, toggles.vote) == (False, False, False)  # TU-13
+    assert (toggles.embedding, toggles.vote) == (False, False)  # TU-13
+    # 실험(exp/tutor-rerank) 기본 끔. 값이 bool에서 "off" | context | top1로 바뀌었다
+    assert toggles.rerank == "off"
     assert toggles.english_embedding is True  # 11/19 켬(실제 제출 5대5, #242 결과 문서 11절)
     assert toggles.max_citations == 1  # TU-07 기본 1
     assert toggles.evidence_check is False  # #162 근거 대조 칸 기본 끔(3회 비교 뒤 정함)

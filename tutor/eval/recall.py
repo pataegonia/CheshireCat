@@ -228,12 +228,268 @@ def _embedding(ap: argparse.ArgumentParser) -> tuple[Build, CountedEmbed]:
     return build, counted
 
 
+# --- rerank 측정(--rerank, exp/tutor-rerank) ---
+
+RERANK_CONCURRENCY = 8  # 동시에 띄우는 rerank 수(런박스 동시 부하를 넘지 않게)
+
+
+@dataclass(frozen=True)
+class RerankRow:
+    """한 행(요청)의 rerank 측정. 섹션 ID·코드·ms뿐(본문 없음, 출력은 집계만)."""
+
+    gold: tuple[str, ...]
+    bm25_top: str | None  # 근거 묶음 1위
+    rule_a_top: str | None  # 규칙 A(튜터 발화까지 넣은 질의) 1위
+    best: str | None  # rerank가 고른 후보(쓸 수 있을 때만)
+    code: str  # called(쓸 수 있는 답) · none · failed · timeout · skipped
+    ms: float
+    cand_bm25: tuple[str, ...]
+    cand_union: tuple[str, ...] | None  # union 후보(질의 임베딩이 됐을 때만)
+
+
+@dataclass(frozen=True)
+class RerankReport:
+    rows: int
+    bm25_hit: int
+    rule_a_hit: int
+    rerank_hit: int  # rerank 1위(못 쓰면 BM25 1위) = context 모드 묶음 1위
+    top1_hit: int  # top1 모드 1위(못 쓰면 규칙 A 1위)
+    changed_bm25: tuple[int, int, int]  # (바꾼 행, 맞게, 틀리게) — BM25 1위 대비
+    changed_rule_a: tuple[int, int, int]  # 규칙 A 1위 대비
+    codes: dict[str, int]
+    ms: tuple[float, ...]
+    cand_recall_bm25: float
+    cand_recall_union: float | None  # union 후보를 잰 행만(없으면 None)
+    union_rows: int
+
+
+def _changes(rows: Sequence[RerankRow], base: Callable[[RerankRow], str | None]) -> tuple[int, ...]:
+    moved = [r for r in rows if r.best is not None and r.best != base(r)]
+    right = sum(r.best in r.gold and base(r) not in r.gold for r in moved)
+    wrong = sum(base(r) in r.gold and r.best not in r.gold for r in moved)
+    return len(moved), right, wrong
+
+
+def summarize_rerank(rows: Sequence[RerankRow]) -> RerankReport:
+    """행별 측정 → 집계(문항 본문·행 id 없음)."""
+    if not rows:
+        raise ValueError("측정할 행이 없다")
+    codes: dict[str, int] = {}
+    for r in rows:
+        codes[r.code] = codes.get(r.code, 0) + 1
+    unions = [r for r in rows if r.cand_union is not None]
+    return RerankReport(
+        rows=len(rows),
+        bm25_hit=sum(r.bm25_top in r.gold for r in rows),
+        rule_a_hit=sum(r.rule_a_top in r.gold for r in rows),
+        rerank_hit=sum((r.best or r.bm25_top) in r.gold for r in rows),
+        top1_hit=sum((r.best or r.rule_a_top) in r.gold for r in rows),
+        changed_bm25=_changes(rows, lambda r: r.bm25_top),  # type: ignore[arg-type]
+        changed_rule_a=_changes(rows, lambda r: r.rule_a_top),  # type: ignore[arg-type]
+        codes=codes,
+        ms=tuple(r.ms for r in rows if r.code != "skipped"),
+        cand_recall_bm25=sum(any(g in r.cand_bm25 for g in r.gold) for r in rows) / len(rows),
+        cand_recall_union=(
+            sum(any(g in (r.cand_union or ()) for g in r.gold) for r in unions) / len(unions)
+            if unions
+            else None
+        ),
+        union_rows=len(unions),
+    )
+
+
+async def _rerank_one(
+    row: dict[str, Any], cfg: Any, llm: Any, prompt: Any, emb: Any, source: str
+) -> RerankRow:
+    """서버 흐름과 같은 검색·후보·호출(`flow._start_rerank`·`_rule_a_top`과 같은 인자)."""
+    from tutor.judge import flow, rerank
+    from tutor.judge.conversation import tidy
+
+    index = default_index()
+    req = parse_request({"messages": list(row["messages"])})
+    conv = tidy(flow._messages(req)) if req is not None else tidy([])
+    extra: dict[str, Any] = {"index": index}
+    if emb is not None:
+        extra["embedding"] = emb
+        if cfg.toggles.english_embedding:
+            extra["english_only_embedding"] = True
+    query, history = conv.search_query()
+    bundle = await retrieve(query, history, k=cfg.retrieval.k, **extra)
+    rule_q, rule_h = conv.search_query(all_roles=True)
+    rule_a = await retrieve(rule_q, rule_h, k=cfg.retrieval.k, **extra)
+    rr = cfg.llm.rerank
+    union = source == "union" and emb is not None and not is_english(query)
+    text = "\n".join([*history, query])[-index.max_query_chars :]
+    loop = asyncio.get_running_loop()
+    job = rerank.start_rerank(
+        llm,
+        prompt,
+        conv,
+        bundle,
+        index,
+        rr,
+        deadline=loop.time() + rr.timeout_s + rr.margin_s,  # 요청 마감이 rerank 마감을 깎지 않게
+        emb=emb if union else None,
+        text=text,
+    )
+    outcome = rerank.Outcome("skipped") if job is None else await rerank.wait_rerank(job)
+    return RerankRow(
+        gold=tuple(row["labels"]["evidence"]),
+        bm25_top=bundle[0].id if bundle else None,
+        rule_a_top=rule_a[0].id if rule_a else (bundle[0].id if bundle else None),
+        best=outcome.best,
+        code=outcome.code,
+        ms=outcome.ms,
+        cand_bm25=tuple(s.id for s in bundle[: rr.candidates]),
+        cand_union=outcome.candidates if outcome.union else None,
+    )
+
+
+async def _rerank_run(
+    rows: Sequence[dict[str, Any]], cfg: Any, llm: Any, emb: Any, source: str
+) -> list[RerankRow]:
+    from tutor.judge.rerank import RerankPrompt
+
+    prompt = RerankPrompt.load()
+    sem = asyncio.Semaphore(RERANK_CONCURRENCY)
+
+    async def one(row: dict[str, Any]) -> RerankRow:
+        async with sem:
+            return await _rerank_one(row, cfg, llm, prompt, emb, source)
+
+    return list(await asyncio.gather(*(one(row) for row in rows)))
+
+
+def measure_rerank(
+    rows: Sequence[dict[str, Any]] | None = None,
+    *,
+    llm: Any,
+    runs: int = 1,
+    source: str = "bm25",
+    build: Build | None = None,
+    cfg: Any = None,
+) -> list[RerankReport]:
+    """rerank 호출만 실제로 부른다(주 호출·T·E 0회). 실행마다 집계 하나.
+
+    rows가 없으면 공개 교차 검증 행 중 정답 근거가 있는 행(`public_rows`, 홀드아웃 제외)이다. 주면
+    그대로 쓴다(테스트). build(임베딩 검색을 만드는 함수)를 주면 영어 질의는 서버처럼 임베딩
+    순위이고, source가 union이면 한국어 질의도 질의 임베딩 상위를 후보에 합친다."""
+    rows = public_rows() if rows is None else list(rows)
+    if not rows:
+        raise ValueError("측정할 행이 없다")
+    cfg = cfg if cfg is not None else load_config()
+
+    async def go() -> list[RerankReport]:
+        default_index()
+        emb = await build() if build is not None else None
+        return [
+            summarize_rerank(await _rerank_run(rows, cfg, llm, emb, source)) for _ in range(runs)
+        ]
+
+    return asyncio.run(go())
+
+
+def expected_rerank_calls(rows: int, runs: int, *, union: bool, embedding: bool) -> tuple[int, int]:
+    """(nano 호출, 임베딩 호출) 최대값. rerank는 재시도 0. 임베딩은 기동 때 KB 묶음 + 실행마다
+    영어 질의(서버처럼 임베딩 순위, 상한으로 행 수) + union이면 한국어 질의 하나씩
+    (상한으로 행 수)."""
+    emb = 0
+    if embedding:
+        emb = kb_embedding_batches() + rows * runs * (1 + int(union))
+    return rows * runs, emb
+
+
+def _pct(values: Sequence[float], q: float) -> str:
+    return f"{_percentile(values, q):.0f}" if values else "-"
+
+
+def write_rerank(reports: Sequence[RerankReport], source: str, out: Any) -> None:
+    """집계 숫자만 쓴다(문항 본문·행 id 없음)."""
+    for i, r in enumerate(reports, 1):
+        n = r.rows
+        out.write(f"[실행 {i}/{len(reports)}] 행 {n}개 · 후보 {source}\n")
+        out.write(
+            f"1위 적중: BM25 {r.bm25_hit}/{n} · 규칙 A {r.rule_a_hit}/{n}"
+            f" · rerank {r.rerank_hit}/{n}(못 쓰면 BM25 1위, context)"
+            f" · top1 모드 {r.top1_hit}/{n}(못 쓰면 규칙 A 1위)\n"
+        )
+        for name, (moved, right, wrong) in (
+            ("BM25 1위 대비", r.changed_bm25),
+            ("규칙 A 1위 대비", r.changed_rule_a),
+        ):
+            out.write(f"rerank가 바꾼 행({name}) {moved} · 맞게 {right} · 틀리게 {wrong}\n")
+        codes = r.codes
+        out.write(
+            f"none {codes.get('none', 0) / n:.1%} · 실패 {codes.get('failed', 0)}"
+            f" · 시간 초과 {codes.get('timeout', 0)} · 건너뜀 {codes.get('skipped', 0)}"
+            f" · 소요 ms p50 {_pct(r.ms, 0.5)} · p95 {_pct(r.ms, 0.95)}\n"
+        )
+        union = "-" if r.cand_recall_union is None else f"{r.cand_recall_union:.3f}"
+        out.write(
+            f"후보 recall: bm25 {r.cand_recall_bm25:.3f} · union {union}"
+            f"(union 후보를 만든 행 {r.union_rows}개)\n"
+        )
+
+
+def _rerank_main(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from tutor.runtime.llm import build_llm, missing_api_env
+
+    missing = missing_api_env()
+    if missing:
+        ap.error(f"--rerank에는 {'·'.join(missing)}이 필요하다(런박스)")
+    if args.runs < 1:
+        ap.error("--runs는 1 이상이다")
+    union = args.source == "union"
+    embedding = args.embedding or union
+    cfg = load_config()
+    rows = public_rows()
+    nano, emb_calls = expected_rerank_calls(len(rows), args.runs, union=union, embedding=embedding)
+    out = sys.stdout
+    out.write(
+        f"rerank 예상 호출: nano {nano}회 · 임베딩 {emb_calls}회(상한 {cfg.eval.max_calls}회)\n"
+    )
+    if nano + emb_calls > cfg.eval.max_calls:
+        ap.error(f"예상 호출 {nano + emb_calls}회가 상한 {cfg.eval.max_calls}회를 넘는다")
+    build, counted = _embedding(ap) if embedding else (None, None)
+    llm = build_llm(types_namespace(), cfg)
+    try:
+        reports = measure_rerank(rows, llm=llm, runs=args.runs, source=args.source, build=build)
+    except KbEmbeddingError as exc:
+        ap.error(f"KB 임베딩을 만들지 못했다: {exc}")
+    write_rerank(reports, args.source, out)
+    out.write(f"튜터 LLM 호출 {sum(llm.calls.values())}회(역할: {', '.join(sorted(llm.calls))})\n")
+    if counted is not None:
+        out.write(f"임베딩 호출 {counted.calls}회(실패 {counted.failures}회)\n")
+    return 0
+
+
+def types_namespace() -> Any:
+    """가드 LLM이 없는 state(로컬 측정): build_llm이 가드 설정의 파라미터와 자기 게이트를 쓴다."""
+    import types
+
+    return types.SimpleNamespace()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="recall@k 측정(TU-03·TU-11)")
     ap.add_argument(
         "--embedding", action="store_true", help="영어 질의에 임베딩 RRF(운영진 임베딩 API)"
     )
+    ap.add_argument(
+        "--rerank",
+        action="store_true",
+        help="rerank 호출만 실제로 불러 1위 적중을 잰다(운영진 API, 주 호출 0회)",
+    )
+    ap.add_argument("--runs", type=int, default=1, help="--rerank 반복 횟수(기본 1)")
+    ap.add_argument(
+        "--source",
+        choices=("bm25", "union"),
+        default="bm25",
+        help="--rerank 후보: bm25(검색 상위) | union(질의 임베딩 상위를 합침)",
+    )
     args = ap.parse_args(argv)
+    if args.rerank:
+        return _rerank_main(ap, args)
     build, counted = _embedding(ap) if args.embedding else (None, None)
     try:
         report = measure(build=build)

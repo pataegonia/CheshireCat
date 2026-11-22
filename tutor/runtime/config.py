@@ -45,7 +45,11 @@ class Toggles(_Strict):
     # 쓴다. toggles.embedding이 꺼져 있어도 이 토글이 켜지면 기동 때 KB 임베딩을 만든다.
     # 측정 전이라 끔
     english_embedding: bool
-    rerank: bool
+    # 실험(exp/tutor-rerank): nano로 검색 후보 중 질문에 맞는 섹션 하나를 고른다
+    # (tutor.judge.rerank).
+    # context는 근거 묶음 맨 앞으로만 옮기고, top1은 규칙 A 1위(cite_top1·prefer_top1·top1_redraft·
+    # quote_from_top1이 쓰는 1위)도 그 섹션으로 바꾼다. 값은 llm.rerank. 기본 끔
+    rerank: Literal["off", "context", "top1"]
     vote: bool
     scaffold_state_rule: bool
     # 대행 신호가 잡히면 answer·scaffold를 academic 고정 문장으로(숨김에서도, 주 호출 실패
@@ -221,6 +225,30 @@ class SoftJailbreak(_Strict):
     margin_s: PositiveFloat  # 초안은 요청 마감 − 이 값 안에서 끝난다
 
 
+class Rerank(_Strict):
+    """`toggles.rerank` 호출(nano 1회, 재시도 0). 마감은 min(띄운 때 + timeout_s, 요청 마감 −
+    margin_s)이고, union의 질의 임베딩 대기도 그 안에 든다."""
+
+    timeout_s: PositiveFloat
+    margin_s: PositiveFloat  # 요청 마감 − 이 값 안에서 끝낸다(주 호출 몫을 남긴다)
+    reasoning_effort: Literal["low", "medium"]  # minimal 금지(TU-13)
+    max_completion_tokens: Annotated[int, Field(ge=1, le=PROXY_MAX_COMPLETION_TOKENS)]
+    candidates: Annotated[int, Field(ge=2, le=8)]  # 검색 상위 몇 개를 후보로 주나
+    snippet_chars: PositiveInt  # 후보 본문 앞부분 길이 상한(글자)
+    # bm25: 검색 상위 candidates개(영어 발화는 지금처럼 임베딩 상위). union: 한국어 발화도 질의
+    # 임베딩 상위 candidates개를 구해 BM25 순서 → 벡터에만 있는 것 순으로 합친다(최대
+    # candidates_max). 임베딩이 없거나(기동 때 못 만듦) 실패·늦으면 bm25 후보
+    candidate_source: Literal["bm25", "union"]
+    candidates_max: Annotated[int, Field(ge=2, le=8)]
+    embedding_timeout_s: PositiveFloat  # union 질의 임베딩 상한(게이트 대기 포함)
+
+    @model_validator(mode="after")
+    def _sizes(self) -> "Rerank":
+        if self.candidates_max < self.candidates:
+            raise ValueError("llm.rerank.candidates_max는 candidates 이상이어야 한다")
+        return self
+
+
 class Llm(_Strict):
     reasoning_effort: Literal["low", "medium"]  # minimal 금지(TU-13)
     # 튜터 주 호출 상한(가드 판정 호출과 따로). 프록시 상한을 넘으면 로드에서 실패한다
@@ -229,6 +257,7 @@ class Llm(_Strict):
     multi_draft: MultiDraft
     reverse_question: ReverseQuestion
     soft_jailbreak_draft: SoftJailbreak
+    rerank: Rerank
 
 
 class EvalCfg(_Strict):
@@ -248,22 +277,34 @@ class TutorConfig(_Strict):
     llm: Llm
     eval: EvalCfg
 
+    def _stage_calls(self) -> int:
+        """실험 단계가 더하는 호출: rq는 answer에만(2), sj는 탈옥 거절에만(1)이라 한 요청에서 둘 중
+        하나만 돈다(flow.answer_v2). 그래서 둘의 큰 쪽만 더한다."""
+        t = self.toggles
+        return max(2 * (t.reverse_question != "off"), int(t.soft_jailbreak_draft != "off"))
+
+    def max_nano_calls(self) -> int:
+        """요청당 nano 최대 호출 수(아래 검증이 실험 상한 8과 견주는 값).
+
+        초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E + 실험 단계
+        + 1위 다시 쓰기 + 섹션 재순위(rerank). 임베딩 호출(union)은 nano가 아니라 세지 않는다."""
+        md, t = self.llm.multi_draft, self.toggles
+        calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
+        calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
+        calls += self._stage_calls() + (md.enabled and md.top1_redraft != "off")
+        return calls + (t.rerank != "off")
+
     @model_validator(mode="after")
     def _multi_draft_calls(self) -> "TutorConfig":
         md, t = self.llm.multi_draft, self.toggles
-        # 실험 단계가 더하는 호출: rq는 answer에만(2), sj는 탈옥 거절에만(1)이라 한 요청에서 둘 중
-        # 하나만 돈다(flow.answer_v2). 그래서 둘의 큰 쪽만 더한다
-        stages = max(2 * (t.reverse_question != "off"), int(t.soft_jailbreak_draft != "off"))
-        if not md.enabled and not stages:
+        stages = self._stage_calls()
+        if not md.enabled and not stages and t.rerank == "off":
             return self
         if md.enabled and self.llm.reasoning_effort != "low":
             # 요청 전체 medium은 시간 초과로 무너진다(64–68 대 90). medium은 초안 하나에만 쓴다
             raise ValueError("multi_draft를 켜면 llm.reasoning_effort는 low여야 한다")
-        # 초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E + 실험 단계.
         # 실험 브랜치 한정 상한 8: TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
-        calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
-        calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
-        calls += stages + (md.enabled and md.top1_redraft != "off")
+        calls = self.max_nano_calls()
         early = md.enabled and md.top1_redraft == "parallel"
         if early and not (t.cite_top1 and t.top1_dialog_query):
             # 1위를 주 호출 앞에서 알아야 한다: 규칙 A 검색(top1_dialog_query)으로만 미리 찾는다
@@ -273,7 +314,7 @@ class TutorConfig(_Strict):
         if calls > MULTI_DRAFT_MAX_CALLS:
             cap = MULTI_DRAFT_MAX_CALLS
             raise ValueError(
-                f"multi_draft·실험 단계: 요청당 nano {calls}회라 쓸 수 없다(실험 상한 {cap})"
+                f"multi_draft·실험 단계·rerank: 요청당 nano {calls}회라 쓸 수 없다(실험 상한 {cap})"
             )
         return self
 

@@ -138,6 +138,10 @@ class InputCfg(_Strict):
     # act = nano는 요청 유형을 고르고 코드가 범주로 대응
     # flags = 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔. results/2026-11-16-input-flags.md)
     label_mode: Literal["category", "act", "flags"]
+    # 1차를 3표(지금 1차·요청 유형·예시 없음)로. 실험, 기본 끔(results/2026-11-19-zero-call-checks)
+    ensemble: bool = False  # 기본 끔: 기존 설정 파일(default·gate128·baseline)은 이 키 없이 그대로
+    # 1차가 jailbreak_injection·off_topic일 때만 B·C를 더 불러 둘 다 허용이면 푼다. 실험, 기본 끔
+    block_veto: bool = False
     window_last: int
     max_chars: int
     max_answer_chars: int
@@ -213,6 +217,8 @@ class GuardConfig(_Strict):
         if t.third_call and not (t.knn_vote and t.lr):
             raise ValueError("toggles.third_call은 knn_vote·lr이 둘 다 켜졌을 때만 켤 수 있다")
         # rules.py는 요청 때 NotImplementedError를 낸다. 기동 때 막는다(rules를 import하면 순환)
+        if self.input.ensemble and self.input.block_veto:
+            raise ValueError("input.ensemble과 input.block_veto는 함께 켤 수 없다")
         o = self.output
         if "bare_numeral" in o.rule_extra_tokens:
             raise ValueError("output.rule_extra_tokens의 bare_numeral은 미구현이다")
@@ -318,10 +324,19 @@ def load_prompt(cfg: GuardConfig, name: str) -> tuple[str, str]:
     return str(head["version"]), text[m.end() :]
 
 
+def _hash_view(dumped: dict[str, Any]) -> dict[str, Any]:
+    """input.ensemble·block_veto(실험, 기본 끔)가 둘 다 끔이면 해시에서 뺀다: 키가 생기기 전 설정의
+    config_hash가 그대로 남는다(G0 실측 기록과 견줄 수 있게). 하나라도 켜면 넣는다."""
+    inp = dumped.get("input", {})
+    if not inp.get("ensemble") and not inp.get("block_veto"):
+        dumped["input"] = {k: v for k, v in inp.items() if k not in ("ensemble", "block_veto")}
+    return dumped
+
+
 def config_hash(cfg: GuardConfig) -> str:
     """설정 값 + prompts 각 파일의 머리말 version. 프롬프트 본문은 넣지 않는다(version을 올린다)."""
     payload = {
-        "config": cfg.model_dump(mode="json"),
+        "config": _hash_view(cfg.model_dump(mode="json")),
         "prompts": {name: load_prompt(cfg, name)[0] for name in sorted(cfg.prompts)},
     }
     dumped = json.dumps(payload, sort_keys=True, ensure_ascii=False)

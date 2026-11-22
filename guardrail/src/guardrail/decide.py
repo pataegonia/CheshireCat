@@ -3,6 +3,7 @@
 입출력만 있고 부작용이 없다. 호출·마감·기록은 guard.py가 한다.
 """
 
+from collections import Counter
 from collections.abc import Sequence
 from typing import Literal
 
@@ -11,6 +12,8 @@ from guardrail.schema import Category
 from guardrail.signals import Signals
 
 Tier = Literal[1, 2, 3, 4]
+# input.block_veto가 B·C를 부르는 1차 범주
+VETO_FIRST: frozenset[Category] = frozenset({"jailbreak_injection", "off_topic"})
 
 
 def fallback_category(knn_major: Category | None, lr_pred: Category | None) -> Category:
@@ -19,6 +22,37 @@ def fallback_category(knn_major: Category | None, lr_pred: Category | None) -> C
     둘이 같으면 그 범주, 다르면 LR, 한쪽만 있으면 그쪽, 둘 다 없으면 normal.
     """
     return lr_pred or knn_major or "normal"
+
+
+def ensemble_vote(votes: Sequence[Category | None], block: frozenset[Category]) -> Category | None:
+    """input.ensemble: 투표자 A·B·C 순서의 범주(None = 무효)를 하나로. 모두 무효면 None.
+
+    차단 여부는 유효 표의 다수결, 동수(유효 2표가 갈림)면 첫 유효 표(A, A가 무효면 B) 쪽.
+    차단이면 차단 표 가운데 가장 많은 범주(동수면 투표자 순서). 허용이면 A가 허용이었을 때 A의
+    범주, 아니면 허용 표 가운데 가장 많은 범주(동수면 B, C 순서). 유효 표가 A 하나면 A 그대로.
+    """
+    valid = [v for v in votes if v is not None]
+    if not valid:
+        return None
+    blocks = [v for v in valid if v in block]
+    allows = [v for v in valid if v not in block]
+    is_block = len(blocks) > len(allows) or (len(blocks) == len(allows) and valid[0] in block)
+    first = votes[0]
+    if not is_block and first is not None and first not in block:
+        return first
+    side = blocks if is_block else allows
+    counts = Counter(side)
+    return max(side, key=counts.__getitem__)  # max는 동수면 앞의 것(투표자 순서)을 낸다
+
+
+def veto_release(
+    first: Category, b: Category | None, c: Category | None, block: frozenset[Category]
+) -> Category | None:
+    """input.block_veto: 1차(A)가 jailbreak_injection·off_topic이고 B·C가 둘 다 유효한 허용이면 C의
+    범주(허용이 확인됐으니 B로 대신할 일이 없다). 아니면 None(A 그대로)."""
+    if first not in VETO_FIRST or b is None or c is None or b in block or c in block:
+        return None
+    return c
 
 
 def request_category(first: Category, asks_kinds: Sequence[str]) -> Category | None:

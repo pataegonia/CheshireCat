@@ -162,6 +162,9 @@ class TutorLLM:
         self.calls: Counter[str] = Counter()  # 보낸 호출 수(역할별, 하네스가 센다)
         self.unexpected: Counter[str] = Counter()  # 분류 밖 예외의 클래스 이름별 수(메시지 없음)
         self.max_calls: int | None = None  # 하네스 예산(넘으면 error="budget", 보내지 않음)
+        # 요청당 시도 상한(재시도 포함, 설정 llm.multi_draft.max_calls). 요청의 SENT 합이 이 값에
+        # 닿으면 보내지 않는다(error="budget"). None이면 요청 단위로 막지 않는다
+        self.request_cap: int | None = None
         self.blocked: Counter[str] = Counter()  # 예산에 막혀 보내지 못한 호출 수(역할별)
         # 오류로 끝난 호출 수((역할, 최종 오류 코드)별, 하네스가 센다). complete 한 번이 1회다:
         # 재시도 뒤 최종 오류·게이트 대기 초과도 1회(calls는 보낸 시도 수라 단위가 다르다).
@@ -304,11 +307,14 @@ class TutorLLM:
                     waited.append(self._now() - g0)
             if self.max_calls is not None and sum(self.calls.values()) >= self.max_calls:
                 return "budget", None
+            sent = SENT.get()
+            cap = self.request_cap
+            if sent is not None and cap is not None and sum(sent.values()) >= cap:
+                return "budget", None  # 요청 상한: 세기와 더하기 사이에 await가 없다(예약)
             left = deadline - self._now()
             if retrying and limit > left:  # 가드와 같이: 게이트 대기 뒤 다시 보낼 시간이 모자람
                 return "no_time", None
             self.calls[role] += 1
-            sent = SENT.get()
             if sent is not None:
                 sent[role] += 1
             cap = min(limit, left)
@@ -468,7 +474,10 @@ def build_llm(app_state: Any, cfg: TutorConfig) -> TutorLLM:
         "max_completion_tokens": cfg.llm.max_completion_tokens,
     }
     model = (os.environ.get("OPENAI_MODEL") or "").strip()  # .env 줄 끝 공백
-    return TutorLLM(_openai_send(), gate, model=model, base=base, overrides=overrides)
+    llm = TutorLLM(_openai_send(), gate, model=model, base=base, overrides=overrides)
+    md = cfg.llm.multi_draft
+    llm.request_cap = md.max_calls if md.enabled else None
+    return llm
 
 
 API_ENV = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")  # 튜터 LLM이 부를 때 필요한 것

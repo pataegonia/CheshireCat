@@ -21,8 +21,10 @@ DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
-# multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다)
+# multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다).
+# 설정 `llm.multi_draft.max_calls`의 기본값이다. 후보 T5(초안 5개)만 설정에서 9까지 올린다
 MULTI_DRAFT_MAX_CALLS = 8
+MULTI_DRAFT_HARD_CAP = 9  # max_calls로 올릴 수 있는 끝(후보 T5·T5-H2의 최악 9회)
 Stage = Literal["off", "shadow", "on"]  # 실험 단계(tutor.judge.specialists). shadow는 기록만
 
 
@@ -211,8 +213,12 @@ class MultiDraft(_Strict):
     # 후보 N1(실험, tutor.judge.gate_hint): last면 마지막 초안을 자료 밖 확인 E 결과를 기다렸다가
     # 보내고, E가 found=true이며 그 quote가 근거 묶음 섹션 원문에 있으면 단서 블록을 더해 보낸다.
     # 기다리는 끝 = min(초안 시작 + wait_s, 요청 마감 − margin_s) − gate_hint_gen_s. 호출 수 그대로
-    gate_hint: Literal["off", "last"] = "off"
+    # last2(후보 T5-H2)는 마지막 두 초안에 같은 E의 단서를 준다(E 추가 호출 없음, 두 표는 독립 아님)
+    gate_hint: Literal["off", "last", "last2"] = "off"
     gate_hint_gen_s: PositiveFloat = 6.0  # 단서 초안이 생성에 쓸 최소 시간(초기 실험값, 실측 아님)
+    # 요청당 튜터 nano 시도 상한(재시도 포함). 로드에서 최악 호출 수와 견주고, 요청 안에서는 보내기
+    # 직전에 센다(tutor.runtime.llm, 넘으면 보내지 않는다). 기본 8은 지금 설정 그대로
+    max_calls: Annotated[int, Field(ge=1, le=MULTI_DRAFT_HARD_CAP)] = MULTI_DRAFT_MAX_CALLS
 
     @model_validator(mode="after")
     def _shape(self) -> "MultiDraft":
@@ -220,6 +226,10 @@ class MultiDraft(_Strict):
             raise ValueError("multi_draft.drafts[0](초안 A = 지금의 주 호출)은 low여야 한다")
         if sum(d.effort == "medium" and not d.stream for d in self.drafts) > 1:
             raise ValueError("multi_draft.drafts의 스트림 아닌 medium은 하나까지다")
+        if self.gate_hint == "last2" and len(self.drafts) < 4:
+            raise ValueError(
+                "gate_hint: last2는 초안 4개 이상에서만 쓴다(단서 없는 초안이 둘 넘게)"
+            )
         return self
 
 
@@ -279,23 +289,29 @@ class TutorConfig(_Strict):
         if md.enabled and self.llm.reasoning_effort != "low":
             # 요청 전체 medium은 시간 초과로 무너진다(64–68 대 90). medium은 초안 하나에만 쓴다
             raise ValueError("multi_draft를 켜면 llm.reasoning_effort는 low여야 한다")
-        # 초안 A 2(재시도) + 다른 초안 1씩 + T + classify 최대 2 + judge_output + E + 실험 단계.
-        # 실험 브랜치 한정 상한 8: TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)
-        calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
-        calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
-        calls += stages + (md.enabled and md.top1_redraft != "off")
+        calls = self.worst_calls()
         early = md.enabled and md.top1_redraft == "parallel"
         if early and not (t.cite_top1 and t.top1_dialog_query):
             # 1위를 주 호출 앞에서 알아야 한다: 규칙 A 검색(top1_dialog_query)으로만 미리 찾는다
             raise ValueError(
                 "top1_redraft: parallel은 toggles.cite_top1·top1_dialog_query가 필요하다"
             )
-        if calls > MULTI_DRAFT_MAX_CALLS:
-            cap = MULTI_DRAFT_MAX_CALLS
+        cap = md.max_calls if md.enabled else MULTI_DRAFT_MAX_CALLS
+        if calls > cap:
             raise ValueError(
                 f"multi_draft·실험 단계: 요청당 nano {calls}회라 쓸 수 없다(실험 상한 {cap})"
             )
         return self
+
+    def worst_calls(self) -> int:
+        """요청당 튜터 nano 최악 시도 수(재시도 포함). 초안 A 2(재시도) + 다른 초안 1씩 + T +
+        classify 최대 2 + judge_output + E + 실험 단계 + top1 재작성. T·E·다른 초안·재작성은
+        재시도 0이다. 실험 브랜치 한정: TU-13(nano 4회)을 넘는다(튜터 담당 동의 필요)."""
+        md, t = self.llm.multi_draft, self.toggles
+        stages = max(2 * (t.reverse_question != "off"), int(t.soft_jailbreak_draft != "off"))
+        calls = 2 + (len(md.drafts) - 1 if md.enabled else 0) + (t.intent_override != "off")
+        calls += 2 * (t.guard_classify != "off") + (t.verify == "guard") + (t.oom_gate != "off")
+        return calls + stages + (md.enabled and md.top1_redraft != "off")
 
 
 def resolve_path(path: str | Path) -> Path:

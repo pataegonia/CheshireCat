@@ -11,11 +11,13 @@ user = `<examples>` → `<conversation>` → `<target>` → (`oom_kb_snippet`) `
 없다(공개 400행에 태그 문자가 든 발화는 0건).
 """
 
+import asyncio
 import html
 from collections.abc import Sequence
 
 from guardrail.config import GuardConfig, load_prompt
 from guardrail.data import LabeledRow
+from guardrail.decide import VETO_FIRST, ensemble_vote, veto_release
 from guardrail.judges.schemas import (
     ACT_TO_CATEGORY,
     InputActOut,
@@ -31,6 +33,9 @@ from guardrail.preprocess import clip, decode_tags
 from guardrail.schema import Category, Message
 
 _ROLES = frozenset({"user", "assistant"})
+# input.ensemble 투표자 B의 프롬프트(머리말 id가 input_judge라 prompts 키를 따로 두지 않는다).
+# shortcut: 이 파일의 version은 config_hash에 들지 않는다. 채택하면 설정 키로 옮긴다
+ACT_PROMPT = "input_judge_act.md"
 # 프로세스당 한 번 읽는다(요청마다 디스크 읽기·YAML 파싱을 하지 않고, 평가 중 파일이 바뀌어도
 # 같은 system 메시지). 키 = (프롬프트 폴더, 파일 이름)
 _SYSTEM_PROMPTS: dict[tuple[str, str], str] = {}
@@ -118,6 +123,7 @@ async def judge_input(
     kb_snippet: str | None = None,
     retries: int | None = None,
     trace: dict[str, str | None] | None = None,
+    voters: bool = False,
 ) -> Category | None:
     """마지막 학습자 발화의 범주. 실패(재시도 후)·스키마 불일치·마감이면 None(기본값은 S2.8).
 
@@ -125,7 +131,114 @@ async def judge_input(
     일시적 오류에만 `retries`회(None이면 `llm.retries`) 한다.
     trace를 넘기면 2차 판정을 부른 경우 `trace["jb_check"]`에 결과(apply·study, 실패면 None)를
     남긴다. 호출자가 호출 수·오류를 센다.
+    voters면 설정의 실험을 따른다(`/guard`·--input-only만 켠다). input.ensemble이면 1차를
+    3표(`_ensemble`)로 내고 탈옥 2차는 합친 결과에 건다. input.block_veto면 1차가 차단(탈옥·
+    off_topic)일 때만 B·C를 불러(`_veto`) 풀리면 허용 범주로 이어 간다(탈옥 2차는 건너뛴다).
     """
+    if voters and cfg.input.ensemble:
+        category = await _ensemble(
+            window, target, examples, llm, cfg, deadline, kb_snippet, retries, trace
+        )
+    else:
+        category = await _ask(window, target, examples, llm, cfg, deadline, kb_snippet, retries)
+        if voters and cfg.input.block_veto and category in VETO_FIRST:
+            category = await _veto(category, window, target, llm, cfg, deadline, kb_snippet, trace)
+    if category == "jailbreak_injection" and cfg.toggles.jb_check:
+        try:
+            verdict = await check_jailbreak(
+                window, target, llm, cfg, deadline=deadline, retries=retries
+            )
+        except Exception:  # noqa: BLE001 - 2차가 깨져도 1차(차단)를 지킨다. 이름은 trace로 센다
+            verdict = None
+        if trace is not None:
+            trace["jb_check"] = verdict
+        if verdict == "study":
+            return "normal"
+    return category
+
+
+def act_config(cfg: GuardConfig) -> GuardConfig:
+    """앙상블 투표자 B의 설정: 요청 유형 프롬프트(S3.2 F `s-f-act`)와 label_mode act."""
+    return cfg.model_copy(
+        update={
+            "prompts": {**cfg.prompts, "input_judge": ACT_PROMPT},
+            "input": cfg.input.model_copy(update={"label_mode": "act"}),
+        }
+    )
+
+
+async def _ensemble(
+    window: list[Message],
+    target: str,
+    examples: list[LabeledRow],
+    llm: LLM,
+    cfg: GuardConfig,
+    deadline: float,
+    kb_snippet: str | None,
+    retries: int | None,
+    trace: dict[str, str | None] | None,
+) -> Category | None:
+    """A(지금 1차 그대로)·B(요청 유형, 예시 없음)·C(A에서 예시만 뺌)를 함께 보내 `ensemble_vote`.
+
+    B·C는 재시도 없이 같은 마감. 예외는 그 표만 무효로 본다. 셋 다 무효이고 A가 예외였으면 그
+    예외를 그대로 올린다(오류 코드가 지금과 같게). trace["ensemble"] = 표 "A,B,C"(무효는 -).
+    """
+    if trace is not None:
+        trace["ensemble"] = None  # 호출을 시작했다(마감으로 끊겨도 호출 수를 센다)
+    got = await asyncio.gather(
+        _ask(window, target, examples, llm, cfg, deadline, kb_snippet, retries),
+        _ask(window, target, [], llm, act_config(cfg), deadline, kb_snippet, 0),
+        _ask(window, target, [], llm, cfg, deadline, kb_snippet, 0),
+        return_exceptions=True,
+    )
+    votes = [None if isinstance(g, BaseException) else g for g in got]
+    if trace is not None:
+        trace["ensemble"] = ",".join(v or "-" for v in votes)
+    category = ensemble_vote(votes, frozenset(cfg.block_categories))
+    if category is None and isinstance(got[0], BaseException):
+        raise got[0]
+    return category
+
+
+async def _veto(
+    first: Category,
+    window: list[Message],
+    target: str,
+    llm: LLM,
+    cfg: GuardConfig,
+    deadline: float,
+    kb_snippet: str | None,
+    trace: dict[str, str | None] | None,
+) -> Category:
+    """input.block_veto: B(요청 유형)·C(예시 없음)를 재시도 없이 같은 마감으로 함께 부른다.
+
+    둘 다 유효한 허용이면 `veto_release` 범주, 아니면(예외·무효 포함) 1차 그대로.
+    trace["ensemble"] = 표 "A,B,C"(무효는 -).
+    """
+    if trace is not None:
+        trace["ensemble"] = None  # 호출을 시작했다(마감으로 끊겨도 호출 수를 센다)
+    got = await asyncio.gather(
+        _ask(window, target, [], llm, act_config(cfg), deadline, kb_snippet, 0),
+        _ask(window, target, [], llm, cfg, deadline, kb_snippet, 0),
+        return_exceptions=True,
+    )
+    b, c = (None if isinstance(g, BaseException) else g for g in got)
+    if trace is not None:
+        trace["ensemble"] = ",".join(v or "-" for v in (first, b, c))
+    return veto_release(first, b, c, frozenset(cfg.block_categories)) or first
+
+
+async def _ask(
+    window: list[Message],
+    target: str,
+    examples: list[LabeledRow],
+    llm: LLM,
+    cfg: GuardConfig,
+    deadline: float,
+    kb_snippet: str | None,
+    retries: int | None,
+) -> Category | None:
+    """1차 판정 호출 하나(label_mode에 따라 스키마가 다르다). 실패면 None."""
     messages = build_messages(window, target, examples, cfg, kb_snippet)
     if cfg.input.label_mode == "act":  # 요청 유형을 받아 범주로 대응시킨다(S3.2 선별용 변형)
         result = await llm.complete(
@@ -145,17 +258,6 @@ async def judge_input(
             "input_judge", messages, InputOut, deadline=deadline, retries=retries
         )
         category = result.parsed.category if isinstance(result.parsed, InputOut) else None
-    if category == "jailbreak_injection" and cfg.toggles.jb_check:
-        try:
-            verdict = await check_jailbreak(
-                window, target, llm, cfg, deadline=deadline, retries=retries
-            )
-        except Exception:  # noqa: BLE001 - 2차가 깨져도 1차(차단)를 지킨다. 이름은 trace로 센다
-            verdict = None
-        if trace is not None:
-            trace["jb_check"] = verdict
-        if verdict == "study":
-            return "normal"
     return category
 
 

@@ -424,7 +424,7 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None], seen: dict[str, 
         if shadow is not None:  # 안전망 시간 초과로 빠져나가도 칸이 남게 보내기 전에 센다
             shadow.started += len(md.drafts)
         cut = min(start + md.wait_s, deadline - md.margin_s)
-        hinted = len(md.drafts) - 1 if md.gate_hint == "last" else None
+        hinted = hinted_drafts(len(md.drafts), md.gate_hint)
         tasks = []
         for i, spec in enumerate(md.drafts):
             low = spec.effort == "low"
@@ -439,7 +439,7 @@ def _multi_complete(state: Any, runs: list[MainCallOut | None], seen: dict[str, 
             }
             role = MAIN_ROLE if i == 0 else f"{MAIN_ROLE}_{multi_draft.LETTERS[i]}"
             call = partial(send, role, schema, kwargs)
-            if i == hinted:
+            if i in hinted:
                 until = cut - md.gate_hint_gen_s
                 tasks.append(asyncio.ensure_future(_hinted_draft(call, messages, seen, until)))
             else:
@@ -480,11 +480,18 @@ async def _hinted_draft(
     더한 메시지로, 없으면 같은 메시지로 한 번 보낸다. 상태 코드만 로그·기록에 남긴다."""
     seen = {} if seen is None else seen
     hint, code = await gate_hint.await_hint(seen.get("gate"), seen.get("sections"), until)
-    draft_log.info("multi_draft hint=%s", code)  # 코드만(본문 없음)
+    draft_log.info("multi_draft hint=%s", code)  # 코드만(본문 없음). last2면 요청당 두 줄
     shadow = multi_draft.SHADOW.get()
     if shadow is not None:
-        shadow.hint = code
+        shadow.hint = shadow.hint or code  # 접근 로그 칸은 첫 단서 초안 코드(같은 E라 대개 같다)
+        shadow.hints.append(code)
     return await call(messages if hint is None else gate_hint.with_hint(messages, hint))
+
+
+def hinted_drafts(count: int, mode: str) -> frozenset[int]:
+    """E 단서를 받는 초안 번호. last = 마지막 하나, last2 = 마지막 둘(후보 T5-H2), off = 없음."""
+    take = {"last": 1, "last2": 2}.get(mode, 0)
+    return frozenset(range(count - take, count))
 
 
 # 초안이 하나도 끝나지 않았을 때(요청 마감) run_main_call에 돌려주는 실패 결과
@@ -516,6 +523,11 @@ def _pick_draft(state: Any, draft: Draft, runs: Sequence[MainCallOut | None]) ->
         shadow.a_action = runs[0].action if runs and runs[0] is not None else None
         shadow.chosen_action = None if chosen is None else runs[chosen].action  # type: ignore[union-attr]
         shadow.bundle = [s.id for s in draft.sections]  # 측정 전용: 근거 묶음 섹션(검색 순위 순)
+        if len(runs) > multi_draft.BASE_DRAFTS:  # 후보 T5: 앞 3개만으로 골랐다면(측정 전용)
+            head = list(runs[: multi_draft.BASE_DRAFTS])
+            pick3 = multi_draft.select(head, efforts[: multi_draft.BASE_DRAFTS], sections)
+            shadow.valid3 = sum(o is not None for o in head)
+            shadow.pick3_action = None if pick3 is None else head[pick3].action  # type: ignore[union-attr]
     out = None if chosen is None else runs[chosen]
     return Draft(sections=draft.sections, out=out)
 

@@ -90,7 +90,7 @@ from tutor.judge.specialists import STAGE_ROLES
 from tutor.retrieval import retrieve
 from tutor.retrieval.embedding import openai_embed
 from tutor.runtime.config import PROXY_MAX_COMPLETION_TOKENS, ROOT, TutorConfig, load_config
-from tutor.runtime.llm import TOKEN_BUCKET, missing_api_env
+from tutor.runtime.llm import SENT, TOKEN_BUCKET, missing_api_env
 from tutor.startup import build_embedding, prepare
 
 PRESETS = ("tutor", "reference", "reference_top1")
@@ -186,6 +186,9 @@ async def _collect(
             sent_token = gate.REQUEST_CALLS.set(sent)
             shadow = Shadow()  # 이 행(요청) 하나의 초안 기록
             shadow_token = SHADOW.set(shadow)
+            llm_sent_token = SENT.set(
+                shadow.sent
+            )  # 요청 상한(llm.multi_draft.max_calls)도 서버처럼
             try:
                 response = await _respond(preset, row, own)
             except Exception as exc:  # 로컬 채점기처럼 실패한 호출은 응답 없음(형식 오류)
@@ -194,6 +197,7 @@ async def _collect(
             finally:
                 EVIDENCE_CHECK_PROBE.reset(token)
                 gate.REQUEST_CALLS.reset(sent_token)
+                SENT.reset(llm_sent_token)
                 SHADOW.reset(shadow_token)
             if shadows is not None:
                 shadows[row["id"]] = shadow
@@ -832,6 +836,9 @@ def row_records(
                     md_redraft_action=shadow.redraft_action,
                     md_bundle=shadow.bundle,
                     md_cite_path=shadow.cite_path,
+                    md_hints=list(shadow.hints),
+                    md_pick3_action=shadow.pick3_action,
+                    md_valid3=shadow.valid3,
                     stages={key: asdict(rec) for key, rec in shadow.stages.items()},
                 )
             out.append(rec)

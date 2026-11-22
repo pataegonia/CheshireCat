@@ -132,12 +132,17 @@ class InputOnlyGuard:
             cfg,
             deadline=time.monotonic() + cfg.budget_s,
             trace=trace,
+            voters=True,
         )
-        calls = 1 + ("jb_check" in trace)  # 탈옥 2차 판정을 불렀으면 2
+        first = 1 + 2 * ("ensemble" in trace)  # input.ensemble·block_veto로 B·C를 불렀으면 +2
+        calls = first + ("jb_check" in trace)  # 탈옥 2차 판정을 불렀으면 +1
+        votes = trace.get("ensemble")
         if category is None:
-            return self._result(req, "normal", "default", calls=1, errors=("input_judge",), **side)
+            return self._result(
+                req, "normal", "default", calls=first, errors=("input_judge",), votes=votes, **side
+            )
         errors = ("jb_check",) if trace.get("jb_check", "") is None else ()
-        return self._result(req, category, "nano", calls=calls, errors=errors, **side)
+        return self._result(req, category, "nano", calls=calls, errors=errors, votes=votes, **side)
 
     @staticmethod
     def _result(
@@ -150,6 +155,7 @@ class InputOnlyGuard:
         errors: tuple[str, ...] = (),
         knn_major: Category | None = None,
         lr_pred: Category | None = None,
+        votes: str | None = None,
     ) -> Judgement:
         output = OutputVerdict(True, (), True) if req.has_candidate else None
         return Judgement(
@@ -163,6 +169,7 @@ class InputOnlyGuard:
             calls=calls,
             errors=errors,
             latency_ms={},
+            input_votes=votes,
         )
 
 
@@ -294,6 +301,7 @@ def calls_per_row(cfg: GuardConfig, has_candidate: bool) -> int:
     # 입력 판정(+ 탈옥 2차·자료 밖 확인·요청 재확인: 한 요청에 하나만 부른다. 상한이라 늘 센다)
     t = cfg.toggles
     n = 1 + (t.jb_check or t.oom_check or t.request_check or t.block_recheck)
+    n += 2 * (cfg.input.ensemble or cfg.input.block_veto)  # 투표자 B·C(block_veto는 상한)
     out = cfg.output
     if has_candidate and (
         out.mode == "baseline" or cfg.toggles.nano_tier3 or out.call_nano_when_unused
@@ -321,7 +329,8 @@ def estimate_calls(
     total = 0
     for cfg in configs.values():
         if input_only:
-            total += len(rows) * (1 + cfg.toggles.jb_check)
+            extra = 2 * (cfg.input.ensemble or cfg.input.block_veto)
+            total += len(rows) * (1 + extra + cfg.toggles.jb_check)
             continue
         if output_only:
             total += sum(bool(r.candidate_answer) for r in rows)
@@ -961,6 +970,7 @@ async def _measure(
                     "nano_refuses": j.nano_refuses,
                     "quote_repaired": j.quote_repaired,
                     "calls": j.calls,
+                    "votes": j.input_votes,
                     "errors": list(j.errors),
                     "knn_major": j.knn_major,
                     "lr_pred": j.lr_pred,

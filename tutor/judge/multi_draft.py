@@ -86,6 +86,10 @@ class Shadow:
     cite_path: bool = False
     # 후보 N1 단서 초안 상태(gate_hint 코드: used·no_gate·late·failed·absent·no_quote). 끔이면 None
     hint: str | None = None
+    hints: list[str] = field(default_factory=list)  # 단서 초안마다의 코드(last2면 둘)
+    # 후보 T5 측정 전용(로그에는 같은지만): 앞 BASE_DRAFTS개만으로 골랐을 때의 action·유효 수
+    pick3_action: str | None = None
+    valid3: int | None = None
 
     def log_field(self) -> str | None:
         """접근 로그 끝 칸. 초안을 하나도 보내지 않았으면 None(칸 없음).
@@ -118,10 +122,17 @@ class Shadow:
             parts.append(f"rd=1/{same}/{code}/{self.redraft_ms:.0f}")
         if self.hint is not None:
             parts.append(f"md_hint={self.hint}")
+            if len(self.hints) > 1:
+                parts.append(f"md_hint2={self.hints[1]}")
+        if self.valid3 is not None:  # action 값은 내지 않는다(md_a_same과 같은 방식)
+            same = int(self.pick3_action == self.chosen_action)
+            parts.append(f"md_ok3={self.valid3};md_p3_same={same}")
         for key, rec in self.stages.items():
             parts += rec.log_parts(key)
         return ";".join(parts)
 
+
+BASE_DRAFTS = 3  # 후보 T5 비교의 기준 초안 수(R = N1의 초안 3개)
 
 SHADOW: ContextVar[Shadow | None] = ContextVar("tutor_multi_draft", default=None)
 

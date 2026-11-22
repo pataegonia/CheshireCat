@@ -69,6 +69,13 @@ _BLANK_CATEGORIES = frozenset({"Zs", "Zl", "Zp", "Cf", "Mn", "Me"})
 # 자모만 모아 조합했을 때 이만큼 음절이 생기면 자모로 풀어 쓴 문장으로 본다(council D13).
 # 1이면 스펙 예시 "ㅇㅏ"(→아)까지 LLM으로 가므로 2. 1음절 우회("ㅅㅣㅂ")는 감수한다.
 _SPELLED_SYLLABLES = 2
+# 자모만으로 쓴 욕설 초성(출처 "팀 작성", 11/22 목록 그대로).
+# 공백·문장부호·기호를 뺀 자모열에 들어 있으면 저신호가 아니다(nano로 보낸다):
+# 정답이 harmful_content면 저신호 allow로 바로 정해 block을 놓친다.
+# 잘못 걸리면 nano 호출 1회. NFKD로 호환·반각·조합형 자모를 같은 꼴로 맞춰 견준다
+_SWEAR_JAMO = tuple(
+    unicodedata.normalize("NFKD", s) for s in ("ㅅㅂ", "ㅆㅂ", "ㅄ", "ㅂㅅ", "ㄲㅈ", "ㅈㄹ", "ㅗ")
+)
 
 
 def _has_letter(ch: str) -> bool:
@@ -109,6 +116,12 @@ def _spelled_syllables(text: str) -> int:
     return len(_SYLLABLE.findall(normalize(jamo)))
 
 
+def _has_swear_jamo(text: str) -> bool:
+    """공백·문장부호·기호를 뺀 자모열에 욕설 초성(`_SWEAR_JAMO`)이 들어 있나."""
+    jamo = unicodedata.normalize("NFKD", "".join(c for c in text if _JAMO.match(c)))
+    return any(s in jamo for s in _SWEAR_JAMO)
+
+
 def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
     """자모·문장부호·이모티콘만 있고(숫자·라틴·완성 음절·숨긴 텍스트 없음) 앞에 대화가 있음.
 
@@ -118,6 +131,7 @@ def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
     NFC가 조합하지 않으므로 "자모 조합 전" 뷰는 그대로다.
     자모로 풀어 쓴 문장(조합하면 음절 2개 이상)은 저신호가 아니다: 잘못 False면 nano 호출 1회,
     잘못 True면 입력 판정을 건너뛰므로 False 쪽으로 기운다.
+    자모만으로 쓴 욕설 초성(`_SWEAR_JAMO`, "ㅅㅂ"·"ㅂㅅ"·"ㄲㅈ" 등)이 들어 있으면 저신호가 아니다.
     """
     if not has_history or hidden:
         return False
@@ -125,7 +139,9 @@ def is_low_signal(target_pre: str, has_history: bool, hidden: str) -> bool:
     marks_only = any(_is_symbolic(c) for c in text) and all(
         _is_symbolic(c) or _is_blank(c) for c in text
     )
-    return marks_only and _spelled_syllables(text) < _SPELLED_SYLLABLES
+    return (
+        marks_only and not _has_swear_jamo(text) and _spelled_syllables(text) < _SPELLED_SYLLABLES
+    )
 
 
 def is_self_intro(target: str) -> bool:

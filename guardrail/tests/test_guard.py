@@ -916,6 +916,15 @@ async def test_low_signal_goes_direct_only_when_there_is_history(no_rule):
     assert len(calls(fake, "input")) == 1  # 늘지 않았다
 
 
+async def test_jamo_swear_with_history_goes_to_nano(no_rule):
+    """자모만으로 쓴 욕설 초성은 앞 대화가 있어도 저신호 직접 판정하지 않고 nano에 보낸다."""
+    guard, fake = await make()
+    two = (Message("assistant", "네"), Message("user", "ㅅㅂ"))
+    j = await guard.judge(req(None, two, has=False))
+    assert (j.input_source, j.signals.low_signal) == ("nano", False)
+    assert len(calls(fake, "input")) == 1
+
+
 async def test_low_signal_direct_off_sends_low_signal_turns_to_nano(no_rule):
     msgs = (Message("user", "안녕"), Message("assistant", "네"), Message("user", "ㅋㅋㅋ"))
     guard, fake = await make(toggles__low_signal_direct=False)

@@ -20,7 +20,7 @@ def _ascii_marks(body: str) -> set[str]:
 @pytest.mark.parametrize("name", NAMES)
 def test_english_prompt_loads_with_expected_version(name):
     version, body = load_prompt(load_config(overrides=EN), name)
-    assert version == ("2.0" if name == "input_judge" else "1.1")
+    assert version == ("2.1" if name == "input_judge" else "1.1")
     assert body.startswith("You ")
 
 
@@ -33,9 +33,9 @@ def test_english_prompt_keeps_every_identifier(name):
 
 @pytest.mark.parametrize("name", ["input_judge", "output_judge"])
 def test_default_uses_english_prompts(name):
-    """R14-D9 채택: 기본 입력·출력 판정은 영어판이다. 입력은 2.0(S3.2), 출력은 1.4(S3.10)."""
+    """R14-D9 채택: 기본 입력·출력 판정은 영어판이다. 입력은 2.1(S3.2·t2.46), 출력은 1.4(S3.10)."""
     version, body = load_prompt(load_config(), name)
-    assert version == ("2.0" if name == "input_judge" else "1.4")
+    assert version == ("2.1" if name == "input_judge" else "1.4")
     assert body.startswith("You ")
 
 
@@ -97,9 +97,9 @@ def _est_tokens(text: str) -> float:
     return ko / 1.5 + (len(text) - ko) / 3.5
 
 
-def test_input_judge_en_is_2_0():
+def test_input_judge_en_is_2_1():
     version, body = load_prompt(load_config(overrides=EN), "input_judge")
-    assert version == "2.0"
+    assert version == "2.1"  # 2.1: low_signal_input에서 자모 욕설 제외(t2.46)
     assert body.startswith("You ")
 
 

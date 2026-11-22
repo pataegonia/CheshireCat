@@ -52,7 +52,7 @@ def _diff(a: GuardConfig, b: GuardConfig) -> set[str]:
 def test_default_loads_section_4_4_model():
     cfg = load_config("configs/default.yaml")
     assert isinstance(cfg, GuardConfig)
-    assert cfg.version == "6.0.12"
+    assert cfg.version == "6.0.14"
     assert cfg.budget_s == 24
     assert cfg.block_categories == [
         "jailbreak_injection",

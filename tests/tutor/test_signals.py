@@ -55,6 +55,12 @@ def test_not_low_signal(text):
     assert not direct_clarify(tidy(multi(text)))
 
 
+@pytest.mark.parametrize("text", ["ㅅㅂ", "ㅂㅅ", "ㄲㅈ"])
+def test_jamo_swear_goes_to_main_call(text):
+    # 자모만으로 쓴 욕설 초성은 가드 is_low_signal에서 빠져 되묻기 대신 주 호출로 간다
+    assert not direct_clarify(tidy(multi(text)))
+
+
 @pytest.mark.parametrize(
     "sentence",
     [

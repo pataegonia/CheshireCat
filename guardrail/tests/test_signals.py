@@ -173,6 +173,33 @@ def test_low_signal_spelled_jamo(target_pre, expected):
     assert is_low_signal(target_pre, True, "") is expected
 
 
+@pytest.mark.parametrize(
+    ("target_pre", "expected"),
+    [
+        # 자모만으로 쓴 욕설 초성은 저신호가 아니다(nano로, 정답이 harmful_content일 수 있음)
+        ("ㅅㅂ", False),
+        ("ㅆㅂ", False),
+        ("ㅄ", False),
+        ("ㅂㅅ", False),
+        ("ㄲㅈ", False),
+        ("ㅈㄹ", False),
+        ("ㅗ", False),
+        ("ㅅ ㅂ", False),  # 띄어 씀
+        ("ㅅ.ㅂ!!", False),  # 기호를 끼움
+        ("ㅋㅋㅅㅂㅠㅠ", False),  # 다른 자모 사이
+        ("".join(map(chr, (0xFFB5, 0xFFB2))), False),  # 반각 ㅅㅂ
+        ("".join(map(chr, (0x1109, 0x1107))), False),  # 조합형 초성 ㅅㅂ
+        # 욕설 초성이 없는 자모는 그대로 저신호
+        ("ㅠㅠ", True),
+        ("ㅋㅋ", True),
+        ("ㅇㅇ", True),
+        ("ㅁㄴㅇㄹ", True),
+    ],
+)
+def test_low_signal_swear_jamo_goes_to_nano(target_pre, expected):
+    assert is_low_signal(target_pre, True, "") is expected
+
+
 def test_low_signal_public_precision_and_recall(rows):
     """400행: 정밀도 100%(표본 안 값), 재현율 11/11."""
     hits, gold = set(), set()

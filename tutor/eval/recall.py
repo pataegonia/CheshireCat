@@ -17,7 +17,7 @@ import os
 import sys
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -245,6 +245,7 @@ class RerankRow:
     ms: float
     cand_bm25: tuple[str, ...]
     cand_union: tuple[str, ...] | None  # union 후보(질의 임베딩이 됐을 때만)
+    fail: str | None = None  # failed의 갈래(rerank.judge_detail)
 
 
 @dataclass(frozen=True)
@@ -261,6 +262,7 @@ class RerankReport:
     cand_recall_bm25: float
     cand_recall_union: float | None  # union 후보를 잰 행만(없으면 None)
     union_rows: int
+    fails: dict[str, int] = field(default_factory=dict)  # failed 갈래 → 행 수
 
 
 def _changes(rows: Sequence[RerankRow], base: Callable[[RerankRow], str | None]) -> tuple[int, ...]:
@@ -275,8 +277,12 @@ def summarize_rerank(rows: Sequence[RerankRow]) -> RerankReport:
     if not rows:
         raise ValueError("측정할 행이 없다")
     codes: dict[str, int] = {}
+    fails: dict[str, int] = {}
     for r in rows:
         codes[r.code] = codes.get(r.code, 0) + 1
+        if r.code == "failed":
+            kind = r.fail or "exception"
+            fails[kind] = fails.get(kind, 0) + 1
     unions = [r for r in rows if r.cand_union is not None]
     return RerankReport(
         rows=len(rows),
@@ -295,6 +301,7 @@ def summarize_rerank(rows: Sequence[RerankRow]) -> RerankReport:
             else None
         ),
         union_rows=len(unions),
+        fails=fails,
     )
 
 
@@ -342,6 +349,7 @@ async def _rerank_one(
         ms=outcome.ms,
         cand_bm25=tuple(s.id for s in bundle[: rr.candidates]),
         cand_union=outcome.candidates if outcome.union else None,
+        fail=outcome.fail,
     )
 
 
@@ -403,8 +411,26 @@ def _pct(values: Sequence[float], q: float) -> str:
     return f"{_percentile(values, q):.0f}" if values else "-"
 
 
-def write_rerank(reports: Sequence[RerankReport], source: str, out: Any) -> None:
-    """집계 숫자만 쓴다(문항 본문·행 id 없음)."""
+FAIL_LABELS = {
+    "format": "형식 오류",
+    "length": "잘림(finish_reason=length)",
+    "out_of_candidates": "후보 밖 id",
+    "exception": "예외",
+}
+
+
+def fail_line(fails: dict[str, int]) -> str:
+    """failed 갈래별 수. 네 갈래는 0이어도 쓰고, 그 밖의 API 오류는 코드별로 덧붙인다."""
+    parts = [f"{label} {fails.get(kind, 0)}" for kind, label in FAIL_LABELS.items()]
+    api = sorted((k, v) for k, v in fails.items() if k not in FAIL_LABELS)
+    parts += [f"API 오류 {k.removeprefix('api:')} {v}" for k, v in api]
+    return f"실패 종류: {' · '.join(parts)}(합 {sum(fails.values())})\n"
+
+
+def write_rerank(
+    reports: Sequence[RerankReport], source: str, out: Any, *, fail_detail: bool = False
+) -> None:
+    """집계 숫자만 쓴다(문항 본문·행 id 없음). fail_detail이면 failed를 갈래별로도 쓴다."""
     for i, r in enumerate(reports, 1):
         n = r.rows
         out.write(f"[실행 {i}/{len(reports)}] 행 {n}개 · 후보 {source}\n")
@@ -429,6 +455,8 @@ def write_rerank(reports: Sequence[RerankReport], source: str, out: Any) -> None
             f"후보 recall: bm25 {r.cand_recall_bm25:.3f} · union {union}"
             f"(union 후보를 만든 행 {r.union_rows}개)\n"
         )
+        if fail_detail:
+            out.write(fail_line(r.fails))
 
 
 def _rerank_main(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
@@ -456,7 +484,7 @@ def _rerank_main(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         reports = measure_rerank(rows, llm=llm, runs=args.runs, source=args.source, build=build)
     except KbEmbeddingError as exc:
         ap.error(f"KB 임베딩을 만들지 못했다: {exc}")
-    write_rerank(reports, args.source, out)
+    write_rerank(reports, args.source, out, fail_detail=args.fail_detail)
     out.write(f"튜터 LLM 호출 {sum(llm.calls.values())}회(역할: {', '.join(sorted(llm.calls))})\n")
     if counted is not None:
         out.write(f"임베딩 호출 {counted.calls}회(실패 {counted.failures}회)\n")
@@ -487,7 +515,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="bm25",
         help="--rerank 후보: bm25(검색 상위) | union(질의 임베딩 상위를 합침)",
     )
+    ap.add_argument(
+        "--fail-detail",
+        action="store_true",
+        help="--rerank의 실패를 형식 오류·잘림·후보 밖 id·예외(·API 오류)별 수로도 낸다",
+    )
     args = ap.parse_args(argv)
+    if args.fail_detail and not args.rerank:
+        ap.error("--fail-detail은 --rerank와 함께 쓴다")
     if args.rerank:
         return _rerank_main(ap, args)
     build, counted = _embedding(ap) if args.embedding else (None, None)

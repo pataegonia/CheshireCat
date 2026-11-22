@@ -79,7 +79,7 @@ llm:
     timeout_s: 6               # 띄운 때부터 센다. 마감 = min(띄운 때 + 6초, 요청 마감 − margin_s). union의 질의 임베딩 대기도 이 안에 든다
     margin_s: 8                # 요청 마감 − 8초 안에 끝낸다(주 호출이 쓸 시간을 남긴다)
     reasoning_effort: low      # low | medium. minimal 금지(TU-13)
-    max_completion_tokens: 600 # 출력은 이유 한 문장 + id 하나. 추론 토큰 포함 상한
+    max_completion_tokens: 2000 # 출력은 이유 한 문장 + id 하나지만 추론 토큰이 상한을 먹는다. 600에서 올렸다(비스트림 프록시 상한 2000까지)
     candidates: 5              # 검색 상위 몇 개를 후보로 주나(근거 묶음 retrieval.k와 같다)
     snippet_chars: 400         # 후보 본문 앞부분 길이 상한(글자). 제목은 따로 준다
     candidate_source: bm25     # bm25 | union. bm25 = 검색 상위 candidates개(영어 발화는 지금처럼 임베딩 상위). union = 한국어 발화도 질의 임베딩(기동 때 만든 tutor_emb, 섹션 벡터 그대로) 상위 candidates개를 구해 BM25 순서 → 벡터에만 있는 것 순으로 합친다(임베딩 호출 +1). 임베딩이 없거나 실패·늦으면 bm25 후보

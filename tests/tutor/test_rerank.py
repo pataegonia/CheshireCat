@@ -536,3 +536,69 @@ def test_expected_rerank_calls():
     assert recall.expected_rerank_calls(10, 3, union=False, embedding=False) == (30, 0)
     nano, emb = recall.expected_rerank_calls(10, 3, union=True, embedding=True)
     assert nano == 30 and emb == recall.kb_embedding_batches() + 60
+
+
+# --- failed 갈래(recall --rerank --fail-detail) ---
+
+
+@pytest.mark.parametrize(
+    "reply, kind",
+    [
+        (res(error="bad_json", finish="stop"), "format"),
+        (res(parsed=None), "format"),  # 오류 없이 스키마 밖
+        (res(error="bad_json", finish="length"), "length"),
+        (res(parsed=None, finish="length"), "length"),
+        (pick("ZZ-99"), "out_of_candidates"),
+        (res(error="server"), "api:server"),
+    ],
+)
+def test_judge_detail_names_the_failure_kind(reply, kind):
+    code, best, fail = rerank.judge_detail(reply, ["A-01"])
+    assert (code, best, fail) == ("failed", None, kind)
+    assert rerank.judge(reply, ["A-01"]) == ("failed", None)  # 기존 judge는 그대로
+
+
+def test_judge_detail_has_no_kind_outside_failed():
+    assert rerank.judge_detail(pick("A-01"), ["A-01"]) == ("called", "A-01", None)
+    assert rerank.judge_detail(pick("none"), ["A-01"])[2] is None
+    assert rerank.judge_detail(res(error="timeout"), ["A-01"])[2] is None
+
+
+class RaisingLLM:
+    async def complete(self, *_a, **_kw):
+        raise RuntimeError("가짜 예외")
+
+
+def test_measure_counts_failures_by_kind_and_prints_only_numbers(capsys):
+    ids = bundle_ids()
+    row = {"messages": [{"role": "user", "content": QUESTION}], "labels": {"evidence": [ids[0]]}}
+    replies = iter(
+        [
+            res(error="bad_json", finish="stop"),
+            res(error="bad_json", finish="length"),
+            pick("ZZ-99"),
+            res(error="rate_limit"),
+            pick(ids[1]),
+        ]
+    )
+    r = recall.measure_rerank([row] * 5, llm=MeasureLLM(lambda _c: next(replies)))[0]
+    assert r.fails == {"format": 1, "length": 1, "out_of_candidates": 1, "api:rate_limit": 1}
+    assert r.codes == {"failed": 4, "called": 1}
+    boom = recall.measure_rerank([row], llm=RaisingLLM())[0]
+    assert boom.fails == {"exception": 1}
+    recall.write_rerank([r], "bm25", __import__("sys").stdout, fail_detail=True)
+    printed = capsys.readouterr().out
+    assert "형식 오류 1 · 잘림(finish_reason=length) 1 · 후보 밖 id 1 · 예외 0" in printed
+    assert "API 오류 rate_limit 1(합 4)" in printed
+    assert QUESTION not in printed and ids[0] not in printed
+    recall.write_rerank([r], "bm25", __import__("sys").stdout)
+    assert "실패 종류" not in capsys.readouterr().out  # 옵션 없이는 지금 출력 그대로
+
+
+def test_fail_detail_needs_rerank():
+    with pytest.raises(SystemExit):
+        recall.main(["--fail-detail"])
+
+
+def test_rerank_token_cap_is_2000_in_the_repo_config():
+    assert load_config(ROOT / "config" / "tutor.yaml").llm.rerank.max_completion_tokens == 2000

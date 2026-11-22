@@ -98,18 +98,34 @@ def union_ids(bm25: Sequence[str], vector: Sequence[str], limit: int) -> list[st
 
 def judge(result: Any, ids: Sequence[str]) -> tuple[Code, str | None]:
     """호출 결과 → (코드, 고른 id). 고른 id는 후보 안의 id일 때만."""
+    code, best, _fail = judge_detail(result, ids)
+    return code, best
+
+
+# failed의 갈래(측정 전용, recall --rerank --fail-detail). 값은 고정 낱말과 오류 코드뿐이다
+# format: 스키마에 안 맞음(JSON 아님·필드 틀림). length: finish_reason=length(잘림).
+# out_of_candidates: 후보 밖 id. exception: 호출이 예외를 냈다. api:<코드>: 그 밖의 API 오류
+FAIL_KINDS = ("format", "length", "out_of_candidates", "exception")
+
+
+def judge_detail(result: Any, ids: Sequence[str]) -> tuple[Code, str | None, str | None]:
+    """`judge`와 같고, failed면 그 갈래(`FAIL_KINDS` 또는 `api:<오류 코드>`)도 낸다."""
     if result.error == "timeout":
-        return "timeout", None
-    if result.error is not None or result.finish_reason == "length":
-        return "failed", None
+        return "timeout", None, None
+    if result.finish_reason == "length":
+        return "failed", None, "length"
+    if result.error == "bad_json":
+        return "failed", None, "format"
+    if result.error is not None:
+        return "failed", None, f"api:{result.error}"
     if not isinstance(result.parsed, RerankOut):
-        return "failed", None
+        return "failed", None, "format"
     best = result.parsed.best.strip()
     if best.lower() == NONE:
-        return "none", None
+        return "none", None, None
     if best not in ids:
-        return "failed", None  # 후보 밖 id
-    return "called", best  # 쓸 수 있는 답(same·changed는 apply가 정한다)
+        return "failed", None, "out_of_candidates"
+    return "called", best, None  # 쓸 수 있는 답(same·changed는 apply가 정한다)
 
 
 @dataclass
@@ -121,6 +137,7 @@ class Outcome:
     candidates: tuple[str, ...] = ()
     union: bool = False  # 후보에 질의 임베딩 상위를 합쳤나
     embed_calls: int = 0  # 이 rerank가 부른 질의 임베딩 수(0·1)
+    fail: str | None = None  # failed의 갈래(judge_detail). 측정 전용, 로그에 내지 않는다
     ms: float = 0.0
 
 
@@ -198,7 +215,10 @@ async def _run(
         raise
     except Exception:  # 메시지는 남기지 않는다
         result = None
-    out.code, out.best = ("failed", None) if result is None else judge(result, ids)
+    if result is None:
+        out.code, out.best, out.fail = "failed", None, "exception"
+    else:
+        out.code, out.best, out.fail = judge_detail(result, ids)
     out.ms = (loop.time() - t0) * 1000
     return out
 

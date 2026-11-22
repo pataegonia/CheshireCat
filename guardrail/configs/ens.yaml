@@ -1,4 +1,4 @@
-# 실험 판(t2.45): default.yaml과 같고 input.ensemble만 켬(가드 서버를 GUARD_CONFIG=guardrail/configs/ens.yaml로 띄운다).
+# 실험 판(t2.45): default.yaml에서 input.ensemble을 켜고 gate를 128로(gate128.yaml과 같은 값, 1차 3표로 늘어난 호출이 출력 판정 자리를 막지 않게). 가드 서버를 GUARD_CONFIG=guardrail/configs/ens.yaml로 띄운다.
 # 가드 기본 설정. master-plan §4.4 블록을 그대로 옮겼다. 바꾸려면 §4.4를 먼저 고친다.
 # 키·주소는 여기에 쓰지 않는다(환경변수, §4.4 끝).
 version: "6.0.12"                   # 설정·프롬프트·분할을 바꾸면 올린다. config_hash에 `prompts` 각 파일의 머리말 version도 든다
@@ -15,7 +15,7 @@ llm:                               # 파라미터는 모두 null 가능(null = �
   timeout_s: {connect: 3, read: 11, write: 5, pool: 5}
   retries: 1
   retry_jitter_s: [0.2, 0.5]
-  gate: 64
+  gate: 128
   per_role: {output_judge_medium: {reasoning_effort: medium, max_completion_tokens: 6000, read_s: 20, stream: true}}   # 호출별 값(없는 호출은 위 공통 값). output_judge_medium은 output.medium_parallel의 medium 출력 판정. 운영진 프록시는 비스트림 요청의 토큰을 2000까지만 받고(넘으면 400), 2000에서는 medium이 추론에 토큰을 다 써 11–19%가 length로 잘렸다(11/20) → stream: true로 6000. read 16초는 스트림 전체에 걸린다(마감 − 0.5초가 더 이르면 마감)
 toggles:                           # GR-11. 모두 false + output.mode: baseline = "nano 단독" 베이스라인(configs/baseline.yaml)
   knn_fewshot: true                # GR-05 few-shot 예시만 끈다(kNN 다수결은 knn_vote)

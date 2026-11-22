@@ -139,9 +139,9 @@ class InputCfg(_Strict):
     # flags = 범주 앞 예/아니오 두 칸(S3.8 실험 변형, 기본 끔. results/2026-11-16-input-flags.md)
     label_mode: Literal["category", "act", "flags"]
     # 1차를 3표(지금 1차·요청 유형·예시 없음)로. 실험, 기본 끔(results/2026-11-19-zero-call-checks)
-    ensemble: bool = False  # 기본 끔: 기존 설정 파일(default·gate128·baseline)은 이 키 없이 그대로
+    ensemble: bool
     # 1차가 jailbreak_injection·off_topic일 때만 B·C를 더 불러 둘 다 허용이면 푼다. 실험, 기본 끔
-    block_veto: bool = False
+    block_veto: bool
     window_last: int
     max_chars: int
     max_answer_chars: int

@@ -21,8 +21,9 @@ DEFAULT_CONFIG = "config/tutor.yaml"
 CONFIG_ENV = "TUTOR_CONFIG"
 # 운영진 프록시는 스트리밍이 아닌 응답의 출력 상한을 2000토큰으로 묶는다(넘기면 400, 11/12 런박스)
 PROXY_MAX_COMPLETION_TOKENS = 2000
-# multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 exp/tutor-multidraft 한정, TU-13 4회를 넘는다)
-MULTI_DRAFT_MAX_CALLS = 8
+# multi_draft를 켰을 때 요청당 nano 상한(실험 브랜치 한정, TU-13 4회를 넘는다).
+# t2.45 실험: 초안 5개 + T + E + top1_redraft = 9회라 8에서 9로 올림
+MULTI_DRAFT_MAX_CALLS = 9
 Stage = Literal["off", "shadow", "on"]  # 실험 단계(tutor.judge.specialists). shadow는 기록만
 
 

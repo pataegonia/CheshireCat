@@ -355,13 +355,14 @@ def test_global_medium_is_rejected_with_multi_draft():
         cfg(**{"llm.reasoning_effort": "medium"})
 
 
-def test_call_cap_is_eight_with_multi_draft():
-    # 주 호출 A 2(재시도) + 나머지 초안 4 + T 1 + E 1 = 8: 초안 5개까지 로드, 6개는 9회라 거절
+def test_call_cap_is_nine_with_multi_draft():
+    # 주 호출 A 2(재시도) + 나머지 초안 5 + T 1 + E 1 = 9: 초안 6개까지 로드, 7개는 10회라 거절
+    # (t2.45 실험: 상한 8 → 9)
     on = {"toggles.intent_override": "serial", "toggles.oom_gate": "all"}
-    c = cfg(**on, **{"llm.multi_draft.drafts": [{"effort": "low"}] * 5})
-    assert len(c.llm.multi_draft.drafts) == 5
+    c = cfg(**on, **{"llm.multi_draft.drafts": [{"effort": "low"}] * 6})
+    assert len(c.llm.multi_draft.drafts) == 6
     with pytest.raises(ValueError):
-        cfg(**on, **{"llm.multi_draft.drafts": [{"effort": "low"}] * 6})
+        cfg(**on, **{"llm.multi_draft.drafts": [{"effort": "low"}] * 7})
 
 
 # --- 서버 경로: 접근 로그 끝 칸 · 로컬 측정 행별 결과 ---
@@ -399,14 +400,15 @@ def test_router_appends_the_draft_field_to_the_tutor_access_line(tmp_path, monke
     with TestClient(tutor_testlib.make_app()) as c:
         r = c.post("/tutor", json=body, headers={"Authorization": f"Bearer {tutor_testlib.TOKEN}"})
     assert r.status_code == 200 and r.json()["action"] == "answer"
-    assert [k.get("reasoning_effort") for k in sent] == ["low", "low", "low"]
+    assert [k.get("reasoning_effort") for k in sent] == ["low"] * 5  # 저장소 설정 초안 5개(t2.45)
     lines = [x.getMessage() for x in caplog.records if x.name == "guardrail.access"]
     line = next(x for x in lines if " /tutor " in x)
     assert ACCESS_LINE.fullmatch(line), line
     tail = line.rsplit(" ", 1)[1]
     assert re.fullmatch(
-        r"calls=3;md_n=3;md_ok=3;md_split=0;md_pick=0;md_a_same=1"
-        r";low_a=\d+/1/-/\d+;low_b=\d+/1/-/\d+;low_c=\d+/1/-/\d+",
+        r"calls=5;md_n=5;md_ok=5;md_split=0;md_pick=0;md_a_same=1"
+        r";low_a=\d+/1/-/\d+;low_b=\d+/1/-/\d+;low_c=\d+/1/-/\d+"
+        r";low_d=\d+/1/-/\d+;low_e=\d+/1/-/\d+",
         tail,
     ), tail
     from guardrail.eval.load import _fields
@@ -450,7 +452,7 @@ def test_run_local_rows_jsonl_has_ids_scores_and_draft_record(tmp_path, monkeypa
     keys = {"id", "points", "action", "action_ok", "citation_f1", "facts", "faithful", "complied"}
     assert keys <= set(recs[0])
     drafted = [r for r in recs if r["md_n"]]
-    assert drafted and all(r["md_n"] == 3 and r["md_ok"] == 3 for r in drafted)
+    assert drafted and all(r["md_n"] == 5 and r["md_ok"] == 5 for r in drafted)  # 초안 5개(t2.45)
     assert all(r["md_a_action"] == r["md_pick_action"] == "answer" for r in drafted)
     text = rows.read_text(encoding="utf-8")
     assert "자료를 바탕으로" not in text  # 답변 본문은 남기지 않는다

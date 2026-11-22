@@ -95,8 +95,10 @@ def test_stage_calls_count_toward_the_cap():
     }
     load_config(overrides=big)
     load_config(overrides={**big, "toggles.soft_jailbreak_draft": "on"})  # + 1 = 8
-    with pytest.raises(ValueError, match="nano 9회"):
-        load_config(overrides={**big, "toggles.reverse_question": "shadow"})  # + 2 = 9
+    load_config(overrides={**big, "toggles.reverse_question": "shadow"})  # + 2 = 9(t2.45 상한 9)
+    six = {**big, "llm.multi_draft.drafts": [{"effort": "low"}] * 6}  # A 2 + 5 + T 1 = 8
+    with pytest.raises(ValueError, match="nano 10회"):
+        load_config(overrides={**six, "toggles.reverse_question": "shadow"})  # + 2 = 10
 
 
 # --- 가짜 LLM ---

@@ -498,8 +498,10 @@ def test_redraft_call_counts_toward_the_cap(monkeypatch):
     on = {"toggles.intent_override": "serial", "toggles.oom_gate": "all", RD: "on"}
     four = {"llm.multi_draft.enabled": True, "llm.multi_draft.drafts": [{"effort": "low"}] * 4}
     assert load_config(overrides={**on, **four}).llm.multi_draft.top1_redraft == "on"  # 8회
-    with pytest.raises(ValueError):  # 초안 5개 + T + E + 다시 쓰기 = 9회
-        load_config(overrides={**on, **four, "llm.multi_draft.drafts": [{"effort": "low"}] * 5})
+    five = {**on, **four, "llm.multi_draft.drafts": [{"effort": "low"}] * 5}
+    assert load_config(overrides=five).llm.multi_draft.top1_redraft == "on"  # 9회(t2.45 상한 9)
+    with pytest.raises(ValueError):  # 초안 6개 + T + E + 다시 쓰기 = 10회
+        load_config(overrides={**five, "llm.multi_draft.drafts": [{"effort": "low"}] * 6})
     monkeypatch.delenv("TUTOR_CONFIG", raising=False)
     assert load_config(overrides={RD: "on"}).llm.multi_draft.top1_redraft == "on"  # 저장소 설정
     for bad in ("shadow", True):

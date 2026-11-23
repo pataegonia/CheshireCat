@@ -9,8 +9,6 @@ A knowledge-grounded learning agent and its guardrail, served from one FastAPI a
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](app.py)
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9)](https://github.com/astral-sh/uv)
 [![Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](pyproject.toml)
-[![Guardrail CI](https://github.com/pataegonia/CheshireCat/actions/workflows/guardrail-ci.yml/badge.svg)](https://github.com/pataegonia/CheshireCat/actions/workflows/guardrail-ci.yml)
-[![Integration CI](https://github.com/pataegonia/CheshireCat/actions/workflows/integration-ci.yml/badge.svg)](https://github.com/pataegonia/CheshireCat/actions/workflows/integration-ci.yml)
 
 [Overview](#-overview) •
 [Results](#-results) •

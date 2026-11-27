@@ -11,3 +11,4 @@ data/raw/
 harness/runs/
 harness/redteam/draft.jsonl
 harness/redteam/reviewed.jsonl
+competition/
